@@ -83,9 +83,11 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
 2. Public core headers contain no OpenUSD, Hydra, Vulkan, Slang, windowing or
    DCC type. Backend headers share `include/lotus/` but expose no Vulkan type
    either: the backend hands out plain C++ results, and Vulkan stays in its
-   `.cpp` files. `validation/check-core-boundary.cmake.in` enforces it for the
-   headers it lists; **a new public core header is added to that list in the
-   same change.**
+   `.cpp` files. `validation/check-core-boundary.cmake.in` discovers all public
+   `.h`, `.hpp`, `.hh`, `.hxx` and `.inl` files recursively under
+   `include/lotus/` at test time, including the backend headers. New headers
+   need no manual registration. It rejects foreign dependency tokens; it is
+   a source check, not a C++ type-system proof.
 3. A backend depends on `core/`, never on an adapter or on another backend.
 4. OpenUSD appears only under `adapters/hydra2/`. GLFW appears only under
    `adapters/viewport/`.

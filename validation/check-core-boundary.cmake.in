@@ -1,7 +1,17 @@
-set(core_headers
-  "@PROJECT_SOURCE_DIR@/include/lotus/render_world.hpp"
-  "@PROJECT_SOURCE_DIR@/include/lotus/extraction.hpp")
-set(forbidden_tokens "vulkan/" "pxr/" "Qt" "windows.h" "d3d" "Metal/")
+# Scan at test time so a newly added header is checked without reconfiguring.
+# Backend public headers live here too and share the same type boundary.
+if(NOT DEFINED PUBLIC_HEADER_ROOT)
+  set(PUBLIC_HEADER_ROOT "@PROJECT_SOURCE_DIR@/include/lotus")
+endif()
+file(GLOB_RECURSE core_headers LIST_DIRECTORIES FALSE
+  "${PUBLIC_HEADER_ROOT}/*.h" "${PUBLIC_HEADER_ROOT}/*.hpp"
+  "${PUBLIC_HEADER_ROOT}/*.hh" "${PUBLIC_HEADER_ROOT}/*.hxx"
+  "${PUBLIC_HEADER_ROOT}/*.inl")
+if(NOT core_headers)
+  message(FATAL_ERROR "core boundary check found no public headers: ${PUBLIC_HEADER_ROOT}")
+endif()
+set(forbidden_tokens "vulkan/" "pxr/" "Qt" "windows.h" "d3d" "Metal/"
+  "GLFW/" "SDL" "slang.h" "slang-com-ptr.h")
 
 foreach(header IN LISTS core_headers)
   file(READ "${header}" source)
