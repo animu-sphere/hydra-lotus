@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Host-neutral CPU mesh geometry and placement in `LotusScene`, immutable
+  frame snapshots, and Hydra coarse-mesh extraction with dirty updates,
+  winding/hole handling and removal. CPU and Hydra tests cover snapshot
+  lifetime, malformed input and multi-triangle bootstrap AOV compatibility.
+  GPU scene upload and ray tracing remain unimplemented.
+
 - Source CI contracts for runtime-free core checks and digest-pinned Hydra
   builds, registered with OpenStrata as an external renderer workflow.
 - A capability gate for the usdview smoke test: explicit GPU SKIPs skip the

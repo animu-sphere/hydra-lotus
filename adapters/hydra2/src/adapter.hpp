@@ -12,6 +12,8 @@
 #include <mutex>
 #include <vector>
 
+#include <lotus/render_world.hpp>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 // CPU-readable AOV storage is the portable Hydra presentation baseline. A
@@ -87,6 +89,8 @@ public:
   void DestroyBprim(HdBprim* bprim) override;
   void CommitResources(HdChangeTracker* tracker) override;
   HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
+  // CPU scene inspection uses the same immutable snapshot as rendering.
+  [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();
 
 private:
   class Impl;
