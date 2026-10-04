@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -198,13 +199,26 @@ int main(int argc, char** argv) {
   Lotus::OffscreenTarget target;
   target.width = 64;
   target.height = 64;
-  const Lotus::GpuFrameEvidence frame = Lotus::RenderOffscreen(
-      draw, target, (shader_directory / "triangle.vert.spv").string(),
-      (shader_directory / "triangle.frag.spv").string(), 1000);
+  Lotus::FrameStatus setup_status = Lotus::FrameStatus::Fail;
+  std::string setup_error;
+  const std::unique_ptr<Lotus::OffscreenRenderer> renderer =
+      Lotus::CreateOffscreenRenderer(
+          (shader_directory / "triangle.vert.spv").string(),
+          (shader_directory / "triangle.frag.spv").string(), setup_status,
+          setup_error);
+  Lotus::GpuFrameEvidence frame;
+  if (renderer) {
+    frame = renderer->Render(draw, target, 1000);
+  } else {
+    frame.status = setup_status;
+    frame.detail = setup_error;
+  }
 
   bool color_ok = false;
   bool depth_ok = false;
   bool persistence_ok = false;
+  // The renderer's validation count covers every frame it rendered.
+  Lotus::GpuFrameEvidence last = frame;
   if (frame.status == Lotus::FrameStatus::Pass) {
     const std::size_t center =
         (frame.color.height / 2U) * frame.color.row_pitch +
@@ -232,7 +246,28 @@ int main(int argc, char** argv) {
                frame.depth.payload[depth_center] > 0.0F &&
                frame.depth.payload[depth_center] < 0.9F &&
                frame.depth.payload.front() > 0.99F;
-    persistence_ok = frame.frames_rendered == 1000 && frame.completion == 1000;
+    // Another frame at the same size reuses the targets; a new size
+    // recreates them once.
+    const Lotus::GpuFrameEvidence again = renderer->Render(draw, target, 1);
+    Lotus::OffscreenTarget resized = target;
+    resized.width = 96;
+    resized.height = 48;
+    const Lotus::GpuFrameEvidence resized_frame =
+        renderer->Render(draw, resized, 1);
+    if (resized_frame.status == Lotus::FrameStatus::Pass) {
+      last = resized_frame;
+    }
+    persistence_ok =
+        frame.frames_rendered == 1000 && frame.completion == 1000 &&
+        frame.target_creations == 1 &&
+        again.status == Lotus::FrameStatus::Pass &&
+        again.completion == 1001 && again.target_creations == 1 &&
+        resized_frame.status == Lotus::FrameStatus::Pass &&
+        resized_frame.completion == 1002 &&
+        resized_frame.target_creations == 2 &&
+        resized_frame.color.width == 96 && resized_frame.color.height == 48 &&
+        resized_frame.color.payload.size() == 96U * 48U * 4U &&
+        resized_frame.depth.payload.size() == 96U * 48U;
   }
 
   std::vector<Check> checks;
@@ -241,17 +276,17 @@ int main(int argc, char** argv) {
   checks.push_back({"renderer.backend.capability",
       capability.available ? "pass" : "skip", capability.detail});
   checks.push_back({"renderer.gpu.frame", Status(frame.status), frame.detail});
-  if (frame.validation_available) {
+  if (last.validation_available) {
     checks.push_back({"renderer.validation.messages",
-        frame.validation_message_count == 0 ? "pass" : "fail",
-        frame.validation_message_count == 0
+        last.validation_message_count == 0 ? "pass" : "fail",
+        last.validation_message_count == 0
             ? ""
-            : frame.validation_detail});
+            : last.validation_detail});
   } else {
     checks.push_back({"renderer.validation.messages", "skip",
-        frame.validation_detail.empty()
+        last.validation_detail.empty()
             ? "Vulkan validation capture was unavailable"
-            : frame.validation_detail});
+            : last.validation_detail});
   }
   if (frame.status == Lotus::FrameStatus::Pass) {
     checks.push_back({"renderer.render_product.color", color_ok ? "pass" : "fail",
@@ -260,7 +295,9 @@ int main(int argc, char** argv) {
         depth_ok ? "" : "depth metadata or numeric payload mismatch"});
     checks.push_back({"renderer.frame.persistence",
         persistence_ok ? "pass" : "fail",
-        persistence_ok ? "" : "1,000-frame completion count mismatch"});
+        persistence_ok ? ""
+                       : "1,000-frame completion count, target reuse or "
+                         "resize mismatch"});
   } else {
     const std::string dependent = "renderer.gpu.frame did not pass: " + frame.detail;
     checks.push_back({"renderer.render_product.color", "skip", dependent});

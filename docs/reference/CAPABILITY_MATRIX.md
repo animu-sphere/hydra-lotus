@@ -17,7 +17,7 @@ Configurations each row was measured on are
 | Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
 | Offscreen colour (RGBA8) and depth (D32) render products, read back | 🧪 | the rasterized bootstrap triangle at the requested size, with a display and a data window; the headless runner renders 64×64; `renderer.render_product.color`, `.depth` |
-| Repeated frames on persistent resources | 🧪 | 1,000 deterministic frames; `renderer.gpu.frame`, `renderer.frame.persistence` |
+| Repeated frames on persistent resources | 🧪 | `Lotus::OffscreenRenderer`: the instance, device and pipeline outlive frames, and the targets are recreated only when their size changes; one frame in flight, read back each frame. 1,000 deterministic frames, another at the same size and a resize; `renderer.gpu.frame`, `renderer.frame.persistence`. The Hydra adapter keeps one renderer across frames (usdview smoke test) |
 | Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle |
 | Slang shaders compiled to SPIR-V | 🧪 | `backend/vulkan/shaders/triangle.slang` only |
 | Camera | ✅ | view and projection in the core, converted to Vulkan clip space by the backend; the headless runner's perspective camera is checked by `renderer.render_product.color`, `.depth` |

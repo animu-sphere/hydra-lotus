@@ -32,6 +32,14 @@ def _render(app_controller, phase):
     assert frames[-1]["width"] > 0 and frames[-1]["height"] > 0
     assert all(frame["validation_messages"] == 0 for frame in frames), \
         "Vulkan validation reported messages during a Hydra frame"
+    # One device and pipeline serve every frame, and the targets are
+    # recreated only when the AOV size changes.
+    assert all(frame["renderer_creations"] == 1 for frame in frames), \
+        "the Vulkan renderer was recreated between Hydra frames"
+    sizes = [(frame["width"], frame["height"]) for frame in frames]
+    size_changes = sum(1 for a, b in zip(sizes, sizes[1:]) if a != b)
+    assert frames[-1]["target_creations"] == 1 + size_changes, \
+        "the offscreen targets were not created exactly once per AOV size"
     return frames[-1]
 
 

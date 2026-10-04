@@ -23,6 +23,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   the backend converts to Vulkan clip space. The bootstrap triangle is now in
   world space, where the usdview smoke scene's mesh is, and the headless
   runner looks at it through a perspective camera.
+- `Lotus::OffscreenRenderer` (`CreateOffscreenRenderer`): a Vulkan instance,
+  device and pipeline that outlive frames, with targets recreated only when
+  their size changes. The Hydra adapter keeps one across frames instead of
+  creating a Vulkan instance, device and pipeline for every frame, and its
+  frame evidence records `renderer_creations` and `target_creations`, which
+  the usdview smoke test checks. `RenderOffscreen` remains as a one-shot
+  wrapper.
 
 ### Changed
 
