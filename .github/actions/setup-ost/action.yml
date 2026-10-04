@@ -1,0 +1,32 @@
+name: Set up OpenStrata
+description: Install the pinned Windows CLI and verify its published checksum
+inputs:
+  version:
+    description: OpenStrata release version
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap the pinned CLI
+      shell: pwsh
+      env:
+        OST_BOOTSTRAP_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $asset = 'ost-cli-x86_64-pc-windows-msvc.zip'
+        $base = "https://github.com/animu-sphere/open-strata/releases/download/v$env:OST_BOOTSTRAP_VERSION"
+        New-Item -ItemType Directory -Force .ost-ci/bootstrap-bin | Out-Null
+        Invoke-WebRequest "$base/$asset" -OutFile ".ost-ci/$asset"
+        Invoke-WebRequest "$base/$asset.sha256" -OutFile ".ost-ci/$asset.sha256"
+        $expected = ((Get-Content ".ost-ci/$asset.sha256" -Raw).Trim() -split '\s+')[0]
+        $actual = (Get-FileHash ".ost-ci/$asset" -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) { throw "OpenStrata archive checksum mismatch: $actual" }
+        Expand-Archive -LiteralPath ".ost-ci/$asset" -DestinationPath .ost-ci/bootstrap-bin -Force
+        $binary = Get-ChildItem .ost-ci/bootstrap-bin -Recurse -Filter ost.exe | Select-Object -First 1
+        if ($null -eq $binary) { throw 'No ost.exe in the release archive' }
+        $version = & $binary.FullName --version
+        if ($LASTEXITCODE -ne 0 -or $version -ne "ost $env:OST_BOOTSTRAP_VERSION") {
+          throw "Unexpected CLI version: $version"
+        }
+        $binary.DirectoryName >> $env:GITHUB_PATH
+        @{ version = $version; sha256 = $actual } | ConvertTo-Json | Set-Content .ost-ci/bootstrap.json

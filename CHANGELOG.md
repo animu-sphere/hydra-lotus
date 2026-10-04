@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Source CI contracts for runtime-free core checks and digest-pinned Hydra
+  builds, registered with OpenStrata as an external renderer workflow.
+- A capability gate for the usdview smoke test: explicit GPU SKIPs skip the
+  viewer, while failed or invalid evidence remains an error; regression checks
+  cover capability verdicts and preserve staging on a skip.
+
 - The Renderer Phase 0 AOV reference: colour/depth formats and CPU ID
   sentinels, with binding and clear-value validation, a Hydra AOV integration
   test and `renderer.aov.clears` GPU evidence.

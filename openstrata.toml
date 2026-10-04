@@ -10,3 +10,7 @@ profile = "core"
 # or `usd`); the default `core` build stays OpenUSD-free.
 [build.intents.hydra]
 cache = { LOTUS_ENABLE_HYDRA2 = { type = "BOOL", value = true } }
+
+# CI proves the core and install tree on a host with no GPU SDK or runtime.
+[build.intents.ci-core]
+cache = { LOTUS_ENABLE_VULKAN = { type = "BOOL", value = false } }

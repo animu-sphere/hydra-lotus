@@ -74,3 +74,38 @@ generator and the evidence bookkeeping. The options are `LOTUS_ENABLE_VULKAN`
 (default `ON`), `LOTUS_ENABLE_HYDRA2`, `LOTUS_ENABLE_VIEWPORT` and
 `LOTUS_BUILD_TESTS` (default `ON`). A plain-CMake tree is validated with
 `ost validate --build-dir <dir>`, which does not claim `ost` built it.
+
+## CI contracts
+
+Inspect and validate the CI cells from the repository root:
+
+```sh
+ost ci validate
+ost ci plan
+ost ci matrix --cell hydra-windows --json
+```
+
+The source workflow runs on pull requests, main pushes and manual dispatch.
+Its runtime pins live in `openstrata.ci.yaml`; `ost ci validate` also checks
+that the external workflow consumes them and uses the declared CLI version.
+Do not generate a plugin workspace workflow for this renderer: the generated
+graph gate requires descriptors this repository does not own.
+
+The core CI configuration deliberately proves operation without a runtime or
+Vulkan SDK:
+
+```sh
+ost build --without-runtime --intent ci-core --jobs auto
+ost test --without-runtime --intent ci-core
+```
+
+OpenStrata 0.23.14's `validate` cannot select that runtime-free target. CI
+checks the core and install-tree PASS assertions and the explained GPU SKIP
+in its report after `ost test`. The Hydra cell instead runs the ordinary
+`hydra` build, test and strict renderer-evidence validation against the pinned
+OpenUSD runtime, with matching Python and a checksum-verified Vulkan SDK.
+The usdview host test skips when headless evidence explicitly reports no GPU
+capability; failed or missing GPU evidence is an error.
+
+These are local checks; hosted execution remains unmeasured
+([CI report](../reports/2026-10-04-foundation-ci.md)).

@@ -7,6 +7,15 @@ foreach(required IN ITEMS
   endif()
 endforeach()
 
+# ost build runs headless first, so this is evidence from the same build.
+# Skip only an explicit capability verdict; missing/failed evidence is an error.
+include("${CMAKE_CURRENT_LIST_DIR}/check_gpu_evidence.cmake")
+lotus_check_gpu_evidence("${RENDERER_BUILD_DIR}/renderer-report.json" gpu_skip)
+if(NOT gpu_skip STREQUAL "")
+  message(STATUS "SKIP usdview smoke: ${gpu_skip}")
+  return()
+endif()
+
 file(REMOVE_RECURSE "${RENDERER_STAGE_DIR}")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --install "${RENDERER_BUILD_DIR}"

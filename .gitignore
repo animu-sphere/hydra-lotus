@@ -1,5 +1,7 @@
 # OpenStrata and out-of-source build products.
 /.strata/
+/.ost-ci/
+/.ost-ci-home/
 /build/
 /cmake-build-*/
 /dist/
