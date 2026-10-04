@@ -14,7 +14,7 @@ and the document is a bug. When a summary disagrees with
 | --- | --- | --- |
 | [design/](design/) | What the renderer is meant to be, why, and in what order it is built. | [DESIGN_POLICY.md](design/DESIGN_POLICY.md) · [ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | [architecture/](architecture/) | Which targets exist, where code goes, and how they depend on each other. | [PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
-| [reference/](reference/) | What is implemented now, and on what. | [CAPABILITY_MATRIX.md](reference/CAPABILITY_MATRIX.md) · [SUPPORTED_CONFIGURATIONS.md](reference/SUPPORTED_CONFIGURATIONS.md) |
+| [reference/](reference/) | What is implemented now, and on what. | [CAPABILITY_MATRIX.md](reference/CAPABILITY_MATRIX.md) · [SUPPORTED_CONFIGURATIONS.md](reference/SUPPORTED_CONFIGURATIONS.md) · [AOVS.md](reference/AOVS.md) |
 | [roadmap/](roadmap/) | What incomplete work remains. | [README.md](roadmap/README.md) · [current.md](roadmap/current.md) |
 | [guides/](guides/) | How to perform a task. | [BUILDING.md](guides/BUILDING.md) |
 | [releases/](releases/) | What shipped in a released version. | [README.md](releases/README.md) |
@@ -31,6 +31,7 @@ and the document is a bug. When a summary disagrees with
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/) |
+| Foundation AOV set, formats, storage and clear behaviour | [reference/AOVS.md](reference/AOVS.md) |
 | Incomplete work, and which release carries it | [roadmap/](roadmap/) |
 | Released history | [releases/](releases/) and the [CHANGELOG](../CHANGELOG.md) |
 | How documents here are maintained, and how they cite other repositories | [contributing/documentation.md](contributing/documentation.md) |

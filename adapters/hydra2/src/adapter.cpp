@@ -28,6 +28,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -116,28 +117,74 @@ Lotus::Camera ToLotusCamera(const HdRenderPassState& state) {
       ToLotusMatrix(state.GetProjectionMatrix())};
 }
 
-// The render buffers all bound to a pass share one size; render at the colour
-// buffer's, or else the first bound buffer's.
-bool TargetExtent(const HdRenderPassAovBindingVector& bindings,
-    std::uint32_t& width, std::uint32_t& height) {
-  const HdLotusRenderBuffer* chosen = nullptr;
+HdAovDescriptor AovDescriptor(const TfToken& name) {
+  if (name == HdAovTokens->color) {
+    return {HdFormatUNorm8Vec4, false, VtValue(GfVec4f(0.0F))};
+  }
+  if (name == HdAovTokens->depth) {
+    return {HdFormatFloat32, false, VtValue(1.0F)};
+  }
+  if (name == HdAovTokens->primId || name == HdAovTokens->instanceId ||
+      name == HdAovTokens->elementId) {
+    return {HdFormatInt32, false, VtValue(-1)};
+  }
+  return {};
+}
+
+// Validate the entire pass before rendering or writing any bound buffer.
+bool ConfigureTarget(const HdRenderPassAovBindingVector& bindings,
+    Lotus::OffscreenTarget& target) {
+  TfTokenVector names;
   for (const HdRenderPassAovBinding& binding : bindings) {
     const auto* buffer =
         dynamic_cast<const HdLotusRenderBuffer*>(binding.renderBuffer);
-    if (buffer == nullptr || buffer->GetWidth() == 0 ||
-        buffer->GetHeight() == 0) {
+    const HdAovDescriptor descriptor = AovDescriptor(binding.aovName);
+    if (buffer == nullptr || descriptor.format == HdFormatInvalid ||
+        buffer->GetFormat() != descriptor.format || buffer->GetDepth() != 1 ||
+        buffer->IsMultiSampled() || buffer->IsMapped() ||
+        buffer->GetWidth() == 0 || buffer->GetHeight() == 0 ||
+        std::find(names.begin(), names.end(), binding.aovName) != names.end()) {
+      TF_RUNTIME_ERROR("Invalid Lotus AOV binding: %s", binding.aovName.GetText());
+      return false;
+    }
+    names.push_back(binding.aovName);
+    if (target.width == 0) {
+      target.width = buffer->GetWidth();
+      target.height = buffer->GetHeight();
+    } else if (target.width != buffer->GetWidth() ||
+               target.height != buffer->GetHeight()) {
+      TF_RUNTIME_ERROR("Lotus AOV buffers must have the same extent");
+      return false;
+    }
+    if (binding.clearValue.IsEmpty()) {
+      if (binding.aovName == HdAovTokens->color) {
+        target.clear_color_enabled = false;
+      } else if (binding.aovName == HdAovTokens->depth) {
+        target.clear_depth_enabled = false;
+      }
       continue;
     }
-    if (chosen == nullptr || binding.aovName == HdAovTokens->color) {
-      chosen = buffer;
+    const VtValue& clear = binding.clearValue;
+    if (binding.aovName == HdAovTokens->color && clear.IsHolding<GfVec4f>()) {
+      const GfVec4f& value = clear.UncheckedGet<GfVec4f>();
+      std::copy(value.data(), value.data() + 4, target.clear_color.begin());
+      if (std::all_of(target.clear_color.begin(), target.clear_color.end(),
+              [](float component) { return std::isfinite(component); })) {
+        continue;
+      }
+    } else if (binding.aovName == HdAovTokens->depth && clear.IsHolding<float>()) {
+      target.clear_depth = clear.UncheckedGet<float>();
+      if (std::isfinite(target.clear_depth) && target.clear_depth >= 0.0F &&
+          target.clear_depth <= 1.0F) {
+        continue;
+      }
+    } else if (descriptor.format == HdFormatInt32 && clear.IsHolding<int>()) {
+      continue;
     }
-  }
-  if (chosen == nullptr) {
+    TF_RUNTIME_ERROR("Invalid Lotus AOV clear value: %s", binding.aovName.GetText());
     return false;
   }
-  width = chosen->GetWidth();
-  height = chosen->GetHeight();
-  return true;
+  return target.width != 0;
 }
 
 // CameraUtilFraming's windows are in pixels with y down, which is the
@@ -175,21 +222,16 @@ public:
   void Render(const HdRenderPassState& state) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
+    for (const HdRenderPassAovBinding& binding : bindings) {
+      if (auto* buffer = dynamic_cast<HdLotusRenderBuffer*>(binding.renderBuffer)) {
+        buffer->SetConverged(false);
+      }
+    }
     world_.SetCamera(ToLotusCamera(state));
     const Lotus::FrameSnapshot snapshot = world_.Commit();
     const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(snapshot);
-    if (draw.triangle_count == 0) {
-      for (const HdRenderPassAovBinding& binding : bindings) {
-        if (auto* buffer =
-                dynamic_cast<HdLotusRenderBuffer*>(binding.renderBuffer)) {
-          buffer->SetConverged(false);
-        }
-      }
-      return;
-    }
-
     Lotus::OffscreenTarget target;
-    if (!TargetExtent(bindings, target.width, target.height)) {
+    if (!ConfigureTarget(bindings, target)) {
       return;
     }
     ApplyFraming(state, target);
@@ -234,7 +276,10 @@ public:
       } else if (binding.aovName == HdAovTokens->primId ||
                  binding.aovName == HdAovTokens->instanceId ||
                  binding.aovName == HdAovTokens->elementId) {
-        wrote = buffer->WriteIds(-1);
+        // No geometry IDs exist yet. An empty clear preserves the buffer;
+        // otherwise the requested sentinel is written across the image.
+        wrote = binding.clearValue.IsEmpty() ||
+                buffer->WriteIds(binding.clearValue.UncheckedGet<int>());
       }
       buffer->SetConverged(wrote);
       if (wrote) {
@@ -344,7 +389,9 @@ bool HdLotusRenderBuffer::Allocate(const GfVec3i& dimensions,
     bool multi_sampled) {
   std::scoped_lock lock(mutex_);
   if (map_count_ != 0 || dimensions[0] < 0 || dimensions[1] < 0 ||
-      dimensions[2] < 0 || multi_sampled || format == HdFormatInvalid) {
+      dimensions[2] != 1 || multi_sampled ||
+      (format != HdFormatUNorm8Vec4 && format != HdFormatFloat32 &&
+          format != HdFormatInt32)) {
     return false;
   }
   const std::size_t pixel_size = HdDataSizeOfFormat(format);
@@ -598,17 +645,7 @@ void HdLotusRenderDelegate::CommitResources(HdChangeTracker* tracker) {
 
 HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
     const TfToken& name) const {
-  if (name == HdAovTokens->color) {
-    return {HdFormatUNorm8Vec4, false, VtValue(GfVec4f(0.0F))};
-  }
-  if (name == HdAovTokens->depth) {
-    return {HdFormatFloat32, false, VtValue(1.0F)};
-  }
-  if (name == HdAovTokens->primId || name == HdAovTokens->instanceId ||
-      name == HdAovTokens->elementId) {
-    return {HdFormatInt32, false, VtValue(-1)};
-  }
-  return {};
+  return AovDescriptor(name);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -2,6 +2,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -218,6 +219,7 @@ struct Targets {
   VkDeviceMemory depth_readback_memory = VK_NULL_HANDLE;
   bool depth_readback_coherent = false;
   void* depth_mapped = nullptr;
+  bool initialized = false;
 };
 
 class VulkanOffscreenRenderer final : public OffscreenRenderer {
@@ -266,9 +268,16 @@ public:
       return Evidence(FrameStatus::Fail,
           "the renderer failed earlier: " + failure_);
     }
-    if (draw.draw_count != 1 || draw.triangle_count != 1) {
+    if (!((draw.draw_count == 1 && draw.triangle_count == 1) ||
+          (draw.draw_count == 0 && draw.triangle_count == 0))) {
       return Evidence(FrameStatus::Fail,
-          "bootstrap extraction did not produce one triangle draw");
+          "bootstrap extraction must be empty or produce one triangle draw");
+    }
+    if (!std::isfinite(target.clear_depth) || target.clear_depth < 0.0F ||
+        target.clear_depth > 1.0F ||
+        !std::all_of(target.clear_color.begin(), target.clear_color.end(),
+            [](float value) { return std::isfinite(value); })) {
+      return Evidence(FrameStatus::Fail, "invalid offscreen clear values");
     }
     if (frame_count == 0) {
       return Evidence(FrameStatus::Fail, "frame_count must be at least 1");
@@ -309,6 +318,7 @@ public:
         return Evidence(FrameStatus::Fail, detail);
       }
       ++completion_;
+      targets_.initialized = true;
     }
     if (!InvalidateIfNeeded(device_, targets_.color_readback_memory,
             targets_.color_readback_coherent, detail) ||
@@ -477,19 +487,19 @@ private:
     VkAttachmentDescription attachments[2]{};
     attachments[0].format = kColorFormat;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     attachments[1].format = kDepthFormat;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     attachments[1].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     VkAttachmentReference color_reference{0,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -510,6 +520,8 @@ private:
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependencies[0].dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependencies[1].srcSubpass = 0;
@@ -751,24 +763,58 @@ private:
             "vkBeginCommandBuffer", detail)) {
       return false;
     }
-    VkClearValue clear[2]{};
-    clear[0].color.float32[0] = 0.05F;
-    clear[0].color.float32[1] = 0.10F;
-    clear[0].color.float32[2] = 0.15F;
-    clear[0].color.float32[3] = 1.0F;
-    clear[1].depthStencil = {1.0F, 0};
+    if (!targets_.initialized) {
+      // LOAD preserves previous frames. Fresh images first need a defined
+      // layout, then initialization inside the render pass below.
+      VkImageMemoryBarrier barriers[2]{};
+      for (auto& barrier : barriers) {
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+      }
+      barriers[0].image = targets_.color_image;
+      barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      barriers[1].image = targets_.depth_image;
+      barriers[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+          2, barriers);
+    }
     VkRenderPassBeginInfo render_begin{
         VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     render_begin.renderPass = render_pass_;
     render_begin.framebuffer = targets_.framebuffer;
     render_begin.renderArea.offset = {0, 0};
     render_begin.renderArea.extent = {targets_.width, targets_.height};
-    render_begin.clearValueCount = 2;
-    render_begin.pClearValues = clear;
     vkCmdBeginRenderPass(command_, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
+    VkClearAttachment clears[2]{};
+    std::uint32_t clear_count = 0;
+    if (target.clear_color_enabled || !targets_.initialized) {
+      auto& clear = clears[clear_count++];
+      clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      std::copy(target.clear_color.begin(), target.clear_color.end(),
+          clear.clearValue.color.float32);
+    }
+    if (target.clear_depth_enabled || !targets_.initialized) {
+      auto& clear = clears[clear_count++];
+      clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+      clear.clearValue.depthStencil = {target.clear_depth, 0};
+    }
+    if (clear_count != 0) {
+      VkClearRect rect{};
+      rect.rect.extent = {targets_.width, targets_.height};
+      rect.layerCount = 1;
+      vkCmdClearAttachments(command_, clear_count, clears, 1, &rect);
+    }
     const VkViewport viewport = DisplayViewport(target);
     const VkRect2D scissor = DataScissor(target);
-    if (scissor.extent.width != 0 && scissor.extent.height != 0) {
+    if (draw.triangle_count != 0 && scissor.extent.width != 0 &&
+        scissor.extent.height != 0) {
       const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
       vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
       vkCmdSetViewport(command_, 0, 1, &viewport);

@@ -4,6 +4,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -217,6 +218,7 @@ int main(int argc, char** argv) {
   bool color_ok = false;
   bool depth_ok = false;
   bool persistence_ok = false;
+  bool clears_ok = false;
   // The renderer's validation count covers every frame it rendered.
   Lotus::GpuFrameEvidence last = frame;
   if (frame.status == Lotus::FrameStatus::Pass) {
@@ -268,6 +270,58 @@ int main(int argc, char** argv) {
         resized_frame.color.width == 96 && resized_frame.color.height == 48 &&
         resized_frame.color.payload.size() == 96U * 48U * 4U &&
         resized_frame.depth.payload.size() == 96U * 48U;
+    // A cropped frame clears the entire target, and an empty scene replaces
+    // the previous triangle. Clear changes must not recreate the targets.
+    Lotus::OffscreenTarget cropped = target;
+    cropped.clear_color = {0.25F, 0.5F, 0.75F, 1.0F};
+    cropped.data_window = {0, 0, 8, 8};
+    const auto crop = renderer->Render(draw, cropped, 1);
+    Lotus::OffscreenTarget empty_target = cropped;
+    empty_target.clear_depth = 0.375F;
+    const auto empty = renderer->Render(Lotus::DrawSummary{}, empty_target, 1);
+    if (empty.status == Lotus::FrameStatus::Pass) {
+      last = empty;
+    }
+    const std::vector<std::uint8_t> clear_pixel{64, 128, 191, 255};
+    // UNORM conversion may round a half-integer either way (0.5 -> 127/128).
+    const auto near_byte = [](std::uint8_t expected, std::uint8_t actual) {
+      return std::abs(int(expected) - int(actual)) <= 1;
+    };
+    clears_ok = crop.status == Lotus::FrameStatus::Pass &&
+                crop.color.payload.size() == 64U * 64U * 4U &&
+                std::equal(clear_pixel.begin(), clear_pixel.end(),
+                    crop.color.payload.begin() + center, near_byte) &&
+                crop.depth.payload[depth_center] == 1.0F &&
+                empty.status == Lotus::FrameStatus::Pass &&
+                empty.target_creations == crop.target_creations &&
+                empty.color.payload.size() == 64U * 64U * 4U &&
+                empty.depth.payload.size() == 64U * 64U;
+    for (std::size_t pixel = 0; clears_ok && pixel < 64U * 64U; ++pixel) {
+      clears_ok = std::equal(clear_pixel.begin(), clear_pixel.end(),
+                      empty.color.payload.begin() + pixel * 4U, near_byte) &&
+                  empty.depth.payload[pixel] == 0.375F;
+    }
+    if (!clears_ok) {
+      std::cerr << "crop: " << crop.detail << "; empty: " << empty.detail << '\n';
+      if (empty.color.payload.size() >= 4) {
+        std::cerr << "empty clear: " << int(empty.color.payload[0]) << ','
+                  << int(empty.color.payload[1]) << ','
+                  << int(empty.color.payload[2]) << ','
+                  << int(empty.color.payload[3]) << '\n';
+      }
+    }
+    empty_target.clear_color_enabled = false;
+    empty_target.clear_depth_enabled = false;
+    empty_target.clear_color = {};
+    empty_target.clear_depth = 1.0F;
+    const auto preserved = renderer->Render(Lotus::DrawSummary{}, empty_target, 1);
+    clears_ok = clears_ok && preserved.status == Lotus::FrameStatus::Pass &&
+                preserved.color.payload == empty.color.payload &&
+                preserved.depth.payload == empty.depth.payload &&
+                preserved.target_creations == empty.target_creations;
+    if (preserved.status == Lotus::FrameStatus::Pass) {
+      last = preserved;
+    }
   }
 
   std::vector<Check> checks;
@@ -298,11 +352,14 @@ int main(int argc, char** argv) {
         persistence_ok ? ""
                        : "1,000-frame completion count, target reuse or "
                          "resize mismatch"});
+    checks.push_back({"renderer.aov.clears", clears_ok ? "pass" : "fail",
+        clears_ok ? "" : "crop, empty-scene clear or target reuse mismatch"});
   } else {
     const std::string dependent = "renderer.gpu.frame did not pass: " + frame.detail;
     checks.push_back({"renderer.render_product.color", "skip", dependent});
     checks.push_back({"renderer.render_product.depth", "skip", dependent});
     checks.push_back({"renderer.frame.persistence", "skip", dependent});
+    checks.push_back({"renderer.aov.clears", "skip", dependent});
   }
   checks.push_back({"renderer.install_tree", install_tree ? "pass" : "skip",
       install_tree ? "" : "run the renderer install-tree CTest"});
