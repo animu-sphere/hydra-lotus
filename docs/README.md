@@ -12,7 +12,7 @@ and the document is a bug. When a summary disagrees with
 
 | Category | Answers | Start here |
 | --- | --- | --- |
-| [design/](design/) | What the renderer is meant to be, and why. | [DESIGN_POLICY.md](design/DESIGN_POLICY.md) |
+| [design/](design/) | What the renderer is meant to be, why, and in what order it is built. | [DESIGN_POLICY.md](design/DESIGN_POLICY.md) · [ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | [architecture/](architecture/) | Which targets exist, where code goes, and how they depend on each other. | [PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | [reference/](reference/) | What is implemented now, and on what. | [CAPABILITY_MATRIX.md](reference/CAPABILITY_MATRIX.md) · [SUPPORTED_CONFIGURATIONS.md](reference/SUPPORTED_CONFIGURATIONS.md) |
 | [roadmap/](roadmap/) | What incomplete work remains. | [README.md](roadmap/README.md) · [current.md](roadmap/current.md) |
@@ -26,7 +26,8 @@ and the document is a bug. When a summary disagrees with
 
 | Question | Owner |
 | --- | --- |
-| Purpose, principles, renderer architecture, light transport order, Renderer Phase 0–10 | [design/DESIGN_POLICY.md](design/DESIGN_POLICY.md) |
+| Purpose, principles, renderer architecture, light transport design | [design/DESIGN_POLICY.md](design/DESIGN_POLICY.md) |
+| Renderer Phase 0–10: goals, scope, exit criteria; milestones; testing strategy; near-term priority | [design/ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/) |
@@ -35,8 +36,8 @@ and the document is a bug. When a summary disagrees with
 | How documents here are maintained, and how they cite other repositories | [contributing/documentation.md](contributing/documentation.md) |
 
 Where the design documents overlap, the narrower one wins:
-INTEGRATION_SCOPE_POLICY.md over DESIGN_POLICY.md on its subject, and neither
-over PROJECT_LAYOUT.md on structure.
+INTEGRATION_SCOPE_POLICY.md and ROADMAP_POLICY.md over DESIGN_POLICY.md on
+their subjects, and none of them over PROJECT_LAYOUT.md on structure.
 
 ## Owned elsewhere
 

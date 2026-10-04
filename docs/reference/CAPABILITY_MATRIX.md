@@ -26,20 +26,27 @@ Configurations each row was measured on are
 
 ## Light transport
 
+Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
+
 | Capability | Status | Phase |
 | --- | --- | --- |
+| Mesh extraction; vertex, index and instance buffers; GPU scene upload | ⬜ | Renderer Phase 1 |
 | BLAS / TLAS, ray query traversal | ⬜ | Renderer Phase 1 |
 | Primary rays, triangle intersection, multiple bounces, Russian roulette | ⬜ | Renderer Phase 1 |
-| Lambert, GGX, emissive surfaces | ⬜ | Renderer Phase 1 |
+| Lambert, minimal GGX, emissive surfaces | ⬜ | Renderer Phase 1 |
 | Environment light | ⬜ | Renderer Phase 1 |
+| HDR accumulation; deterministic reference images — the reference path tracer | ⬜ | Renderer Phase 1 |
+| Minimal material IR; basic `UsdPreviewSurface` translation | ⬜ | Renderer Phase 1.5 |
 | Wavefront queues, compaction, indirect dispatch | ⬜ | Renderer Phase 2 |
-| NEE, MIS — the reference path tracer | ⬜ | Renderer Phase 3 |
+| NEE, MIS, environment importance sampling | ⬜ | Renderer Phase 3 |
 | Temporal infrastructure: motion vectors, history, validation, accumulation | ⬜ | Renderer Phase 4 |
 | ReSTIR DI | ⬜ | Renderer Phase 5 |
-| SVGF denoising | ⬜ | Renderer Phase 6 |
-| ReSTIR GI / PT | ⬜ | Renderer Phase 7 |
-| `UsdPreviewSurface`, MaterialX, OpenPBR; textures | ⬜ | Renderer Phase 8 |
-| RT pipeline traversal backend | ⬜ | unscheduled ([design policy §6](../design/DESIGN_POLICY.md#6-ray-tracing-backend)) |
+| SVGF-class denoising | ⬜ | Renderer Phase 6 |
+| ReSTIR GI / advanced reservoir transport | ⬜ | Renderer Phase 7 |
+| Full `UsdPreviewSurface`, OpenPBR, MaterialX Standard Surface; textures | ⬜ | Renderer Phase 8 |
+| Adaptive sampling, sorting, light tree, path guiding | ⬜ | Renderer Phase 9 |
+| Spectral transport | ⬜ | Renderer Phase 10 |
+| RT pipeline or CPU reference traversal backend | ⬜ | unscheduled ([roadmap policy §6](../design/ROADMAP_POLICY.md#6-backend-strategy)) |
 | Debug AOVs beyond colour / depth / primId | ⬜ | [design policy §25](../design/DESIGN_POLICY.md#25-debug-and-validation) |
 
 ## Hydra adapter (`hdLotus`)

@@ -10,59 +10,83 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | Renderer Phase 0's open items, what Renderer Phase 1 needs first, and project infrastructure. |
+| [current.md](current.md) | Renderer Phase 0's open items, the Renderer Phase 1 vertical slice, and project infrastructure. |
 
 ## Sequences
 
-Two sequences are live, both defined in the design policy:
+Two sequences are live:
 
-- **Renderer Phase 0–10**
-  ([design policy §36–§46](../design/DESIGN_POLICY.md#36-renderer-phase-0--bootstrap)) —
-  the core milestones. A reference is always qualified — "Renderer Phase 1",
-  never a bare "Phase 1" — because every sibling repository has phases of
-  its own.
+- **Renderer Phase 0–10**, with Renderer Phase 1.5
+  ([roadmap policy §4](../design/ROADMAP_POLICY.md#4-roadmap)) — the core
+  milestones: each phase's goal, scope and exit criteria. A reference is
+  always qualified — "Renderer Phase 1", never a bare "Phase 1" — because
+  every sibling repository has phases of its own.
 - **The research track**
-  ([§27](../design/DESIGN_POLICY.md#27-advanced-research-track)) — kept
-  separate from the core milestones. Its items enter Renderer Phase 9 and 10
-  as experimental integrators or passes and are not scheduled until the
-  foundation they build on exists.
+  ([design policy §27](../design/DESIGN_POLICY.md#27-advanced-research-track)) —
+  kept separate from the core milestones. Its items enter Renderer Phase 7, 9
+  and 10 as experimental integrators or passes and are not scheduled until the
+  foundation they build on exists. Neural features are optional components
+  throughout ([roadmap policy §5](../design/ROADMAP_POLICY.md#5-neural-features)).
 
 ## Status at a glance
 
 **This table is the single source of truth for which release a phase lands
-in.** Other documents name a phase and defer the version here. The design
-policy's version sketch ([§47](../design/DESIGN_POLICY.md#47-versioning-guide))
-is indicative; a phase gets a version here when its predecessor is done, and
-Renderer Phase 1–2 and 5–6 wait on
-[DES-Q1 and DES-Q2](../design/DESIGN_POLICY.md#53-open-questions).
+in.** Other documents name a phase and defer the version here. Version
+numbers follow the implementation
+([roadmap policy §8](../design/ROADMAP_POLICY.md#8-milestones)): a phase gets
+a version here when its predecessor is done.
 
 | Phase | Status | Target |
 | --- | --- | --- |
-| Renderer Phase 0 — Bootstrap | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
-| Renderer Phase 1 — Baseline path tracer | ⬜ | unscheduled |
-| Renderer Phase 2 — Wavefront | ⬜ | unscheduled |
-| Renderer Phase 3 — NEE / MIS (reference path tracer) | ⬜ | unscheduled |
+| Renderer Phase 0 — Foundation | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
+| Renderer Phase 1 — Reference path tracer | ⬜ | unscheduled |
+| Renderer Phase 1.5 — Minimal material IR | ⬜ | unscheduled |
+| Renderer Phase 2 — Wavefront path tracing | ⬜ | unscheduled |
+| Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |
 | Renderer Phase 4 — Temporal infrastructure | ⬜ | unscheduled |
 | Renderer Phase 5 — ReSTIR DI | ⬜ | unscheduled |
-| Renderer Phase 6 — SVGF / denoising | ⬜ | unscheduled |
-| Renderer Phase 7 — ReSTIR GI / PT | ⬜ | unscheduled |
-| Renderer Phase 8 — Material and production scene support | ⬜ | unscheduled |
-| Renderer Phase 9 — Advanced sampling research | ⬜ | unscheduled |
-| Renderer Phase 10 — Quality / spectral research | ⬜ | unscheduled |
+| Renderer Phase 6 — Denoising / SVGF-class pipeline | ⬜ | unscheduled |
+| Renderer Phase 7 — ReSTIR GI / advanced reservoir transport | ⬜ | unscheduled |
+| Renderer Phase 8 — Production material support | ⬜ | unscheduled |
+| Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | unscheduled |
+| Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
+
+## Milestones
+
+The [roadmap policy's milestones](../design/ROADMAP_POLICY.md#8-milestones).
+A milestone is reached when its correctness evidence is a
+[report](../reports/), not when a release ships.
+
+| Milestone | Reached in | Status |
+| --- | --- | --- |
+| Foundation | Renderer Phase 0 | 🚧 |
+| First ray-traced triangle | Renderer Phase 1 | ⬜ |
+| First physically correct image | Renderer Phase 1 | ⬜ |
+| Reference path tracer | Renderer Phase 1 | ⬜ |
+| Wavefront path tracer | Renderer Phase 2 | ⬜ |
+| NEE / MIS renderer | Renderer Phase 3 | ⬜ |
+| Temporal renderer | Renderer Phase 4 | ⬜ |
+| ReSTIR DI renderer | Renderer Phase 5 | ⬜ |
+| Interactive denoised renderer | Renderer Phase 6 | ⬜ |
+| Production material renderer | Renderer Phase 8 | ⬜ |
+| Advanced / spectral research renderer | Renderer Phase 9–10 | ⬜ |
 
 ## Quality bar (applies to every phase)
 
 - A faster mode is checked against the reference path tracer, on a
   deterministic run, before it is called correct
-  ([design policy §10, §26](../design/DESIGN_POLICY.md#10-nee--mis)).
+  ([roadmap policy §2.1, §7](../design/ROADMAP_POLICY.md#21-correctness-before-performance)).
+- A research feature is adopted on a measurement against the reference, not
+  because it works
+  ([roadmap policy §2.5](../design/ROADMAP_POLICY.md#25-research-features-stay-measurable)).
 - Public core headers stay free of OpenUSD, Hydra, Vulkan and windowing types,
   and CI enforces it ([PROJECT_LAYOUT.md §4](../architecture/PROJECT_LAYOUT.md#4-dependency-directions)).
 - An unchanged scene costs almost no CPU time; no pipeline is created inside
-  the render loop ([§23](../design/DESIGN_POLICY.md#23-cpu-performance)).
+  the render loop ([design policy §23](../design/DESIGN_POLICY.md#23-cpu-performance)).
 - A new pass carries its GPU timestamp and its debug AOV from the change that
-  adds it ([§24–§25](../design/DESIGN_POLICY.md#24-gpu-profiling)).
+  adds it ([design policy §24–§25](../design/DESIGN_POLICY.md#24-gpu-profiling)).
 - A research feature never breaks the RGB interactive path
-  ([§51](../design/DESIGN_POLICY.md#51-decision-principles)).
+  ([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles)).
 - A performance or quality claim cites a measurement, and a measurement is a
   [report](../reports/).
 - Every documented command is one that has actually been run.

@@ -83,12 +83,17 @@ canonical: X.md        # superseded only: the replacement, relative
 
 ## Naming
 
-- Phase identifiers are always qualified by their sequence: Renderer Phase 1.
-  A sibling's sequence carries the sibling's name ("`hydra-toon` Renderer
-  Phase 1").
+- Phase identifiers are always qualified by their sequence: Renderer Phase 1,
+  Renderer Phase 1.5. A sibling's sequence carries the sibling's name
+  ("`hydra-toon` Renderer Phase 1").
 - Section numbers in design documents are stable, so they can be cited.
   [DESIGN_POLICY.md](../design/DESIGN_POLICY.md) keeps the implementation
-  direction's §1–§51 numbering.
+  direction's §1–§51 numbering, and
+  [ROADMAP_POLICY.md](../design/ROADMAP_POLICY.md) the roadmap policy's
+  §1–§10. A superseded section keeps its heading and points to its
+  replacement.
+- "The reference path tracer" is the Renderer Phase 1 brute-force path
+  tracer; "the NEE / MIS renderer" is Renderer Phase 3.
 
 ## Language and form
 

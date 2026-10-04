@@ -1,8 +1,8 @@
 # Hydra Lotus
 
-> A research-oriented GPU path tracer for OpenUSD, behind a thin Hydra
-> adapter: an experimental and practical renderer for current GPU light
-> transport.
+> A GPU light transport research renderer for OpenUSD / Hydra: physically
+> based path tracing, built on a reference path tracer that every faster mode
+> is checked against.
 
 ## Scope
 
@@ -10,8 +10,9 @@
 rendering**: Vulkan first, wavefront path tracing, NEE / MIS, ReSTIR,
 temporal reconstruction and denoising, with room for advanced sampling and
 spectral research on top. It is built in a fixed order — correctness, then
-architecture, then reuse, then denoising, then advanced sampling — and keeps a
-reference path tracer to check every faster mode against.
+measurement, then optimization, then research — and keeps a reference path
+tracer to check every faster mode against
+([roadmap policy](docs/design/ROADMAP_POLICY.md)).
 
 It **owns** the renderer: the Hydra-independent core, the Vulkan backend, the
 `hdLotus` Hydra adapter, the integrators, the sampling, reuse and denoising
@@ -56,6 +57,7 @@ is [PROJECT_LAYOUT.md](docs/architecture/PROJECT_LAYOUT.md).
 ## Documentation
 
 [docs/](docs/README.md) — [design](docs/design/DESIGN_POLICY.md),
+[roadmap policy](docs/design/ROADMAP_POLICY.md),
 [layout](docs/architecture/PROJECT_LAYOUT.md),
 [capabilities](docs/reference/CAPABILITY_MATRIX.md),
 [roadmap](docs/roadmap/README.md), [building](docs/guides/BUILDING.md),
