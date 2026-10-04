@@ -1,0 +1,20 @@
+{
+  "Plugins": [
+    {
+      "Info": {
+        "Types": {
+          "HdLotusRendererPlugin": {
+            "bases": ["HdRendererPlugin"],
+            "displayName": "Lotus",
+            "priority": 0
+          }
+        }
+      },
+      "LibraryPath": "@LOTUS_HYDRA_LIBRARY_NAME@",
+      "Name": "hdLotus",
+      "ResourcePath": ".",
+      "Root": "..",
+      "Type": "library"
+    }
+  ]
+}

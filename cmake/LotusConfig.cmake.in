@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+if(@LOTUS_WITH_VULKAN@)
+  find_dependency(Vulkan 1.3)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/LotusTargets.cmake")

@@ -1,0 +1,9 @@
+schema: openstrata.scaffold/v1alpha1
+template:
+  id: renderer
+  version: 0.5.4
+generator:
+  name: ost
+  version: 0.23.14
+inputs:
+  name: lotus

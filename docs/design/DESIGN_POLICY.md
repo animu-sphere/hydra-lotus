@@ -1,0 +1,633 @@
+---
+status: accepted
+owner: hydra-lotus
+---
+
+# hydra-lotus — design policy
+
+> Status: **accepted** as the project's design policy, 2026-10-04. Nothing
+> below is implemented beyond the OpenStrata renderer scaffold;
+> [reference/CAPABILITY_MATRIX.md](../reference/CAPABILITY_MATRIX.md) is the
+> only document that says what is implemented.
+>
+> This is the canonical, long-form policy: what the renderer is for, how it is
+> shaped, and the order it is built in. It is distilled from the 2026-10-04
+> implementation direction, whose section numbers it keeps so either can be
+> cited by number. Where this repository departs from that direction, §52
+> records it; where the direction is not yet decided, §53 does. Focused
+> documents own the detail of one area each, and **on its own area the
+> focused document wins**:
+>
+> | Area | Owning document |
+> | --- | --- |
+> | What this repository owns, and what it consumes from whom | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) |
+> | Targets, directories and dependency directions | [architecture/PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) |
+> | Which release carries which phase | [roadmap/README.md](../roadmap/README.md) |
+
+---
+
+## 1. Purpose
+
+`hydra-lotus` is a **high-performance, research-oriented GPU path tracing
+render delegate** for OpenUSD / Hydra. It is not merely "path tracing shown
+through Hydra". It is a rendering foundation on which the following can be
+implemented and verified continuously:
+
+- GPU path tracing on Vulkan;
+- wavefront path tracing;
+- next event estimation (NEE), multiple importance sampling (MIS) and
+  Russian roulette;
+- ReSTIR DI, GI and PT, with temporal and spatial reuse;
+- progressive rendering;
+- SVGF-family denoising, and later neural denoising;
+- current Monte Carlo sampling and light transport research;
+- later, spectral rendering, BDPT and other advanced sampling experiments;
+- a vendor-neutral implementation that runs on NVIDIA, AMD and Intel.
+
+Among the sibling renderers, `hydra-merlin` is a real-time raster renderer and
+`hydra-toon` a toon / avatar renderer. `hydra-lotus`'s ground is **physically
+based, Monte Carlo, path-traced** rendering.
+
+## 2. Core concept
+
+### 2.1 The role of Lotus
+
+```text
+OpenUSD scene
+    │
+    ▼
+Hydra
+    │
+    ▼
+hydra-lotus
+    ├── interactive path tracing
+    ├── progressive path tracing
+    ├── ReSTIR
+    ├── denoising
+    └── research / quality mode
+```
+
+> **A renderer in which current GPU light transport algorithms can be
+> exercised on OpenUSD / Hydra scenes.**
+
+## 3. Design principles
+
+### 3.1 Hydra is a scene integration layer
+
+Hydra-specific state management does not spread through the renderer core.
+
+```text
+OpenUSD / Hydra → Hydra adapter → LotusScene → GpuScene → path tracing core → AOV / denoise / presentation
+```
+
+The Hydra adapter is responsible for: mesh, curves and points extraction;
+transforms; instancing; camera; lights; materials; textures; dirty tracking;
+AOVs; render settings.
+
+The rendering algorithms are independent of Hydra, so that a standalone
+viewport, a benchmark executable, a headless renderer and a test-scene runner
+can all drive the same Lotus core.
+
+## 4. Renderer core
+
+### 4.1 LotusScene
+
+The CPU-side, renderer-neutral scene representation:
+
+```text
+LotusScene
+ ├── Geometry
+ ├── Instances
+ ├── Materials
+ ├── Textures
+ ├── Lights
+ ├── Cameras
+ └── RenderSettings
+```
+
+Hydra's `HdRprim`, `HdSprim` and related types are never exposed through the
+renderer core's interfaces.
+
+### 4.2 GpuScene
+
+The scene representation optimized for the GPU:
+
+```text
+GpuScene
+ ├── vertex buffer      ├── light buffer
+ ├── index buffer       ├── texture table
+ ├── material buffer    ├── BLAS
+ ├── instance buffer    └── TLAS
+```
+
+Bindless / descriptor indexing is the long-term baseline. Policy:
+
+- GPU resources are persistent;
+- only dirty resources are updated, and a full scene rebuild is avoided;
+- BLAS / TLAS **update** and **rebuild** are distinct operations;
+- material, transform and light updates are separate from geometry upload.
+
+Where `GpuScene` lives in this repository is §52.
+
+## 5. GPU backend
+
+### 5.1 Vulkan first
+
+The first — and reference — backend is **Vulkan**, for: Windows and Linux;
+NVIDIA, AMD and Intel; ray query; the ray tracing pipeline; descriptor
+indexing; subgroup operations; timeline semaphores; and a mature profiling
+ecosystem.
+
+### 5.2 Slang
+
+The shader language is **Slang**, for: shader code sharing; structured GPU
+programming; Vulkan / SPIR-V; later backends; and a reusable BSDF and sampling
+library. The Lotus core is not tightly coupled to the Slang runtime (§52).
+
+## 6. Ray tracing backend
+
+> **Compute + ray query is the main path; the RT pipeline stays available as
+> a selectable backend.**
+
+| | Compute + ray query | RT pipeline |
+| --- | --- | --- |
+| Why | suits wavefront; queue-driven architecture is easy to build; control over shader execution flow; integrates with ReSTIR and temporal passes | comparison benchmarks; straightforward use of hardware traversal; cases where a platform or GPU favours it |
+
+The two are not separate renderers. They are abstracted as a
+`TraversalBackend`.
+
+## 7. Wavefront path tracing
+
+The core architecture is **wavefront path tracing**: path state is split into
+queues rather than run as one megakernel.
+
+```text
+Generate primary rays
+        │
+        ▼
+    Ray queue
+        │
+        ▼
+    Intersect
+        │
+        ▼
+    Hit queue
+   ╱          ╲
+Miss         Surface
+                │
+                ▼
+          Shade / BSDF
+          ╱          ╲
+ Shadow queue      Next-ray queue
+      │                  │
+      ▼                  │
+ Visibility              │
+      └──────────────────┘
+```
+
+Representative queues: `RayQueue`, `HitQueue`, `MissQueue`, `ShadowQueue`,
+`ScatterQueue`, `TerminatedQueue`.
+
+## 8. Path state
+
+At minimum:
+
+```cpp
+struct PathState {
+    Ray ray;
+    float3 throughput;
+    float3 radiance;
+
+    uint32_t pixelIndex;
+    uint32_t depth;
+    uint32_t rngState;
+
+    float lastPdf;
+    uint32_t flags;
+};
+```
+
+RGB throughput is **not** fixed into the renderer-wide interface, so a
+spectral representation can follow (§28). The first implementation is RGB.
+
+## 9. Baseline path tracer
+
+Before any research feature:
+
+> **An ordinary path tracer that is entirely correct.**
+
+Required: camera rays; triangle intersection; surface normals; Lambert; GGX;
+emissive surfaces; environment light; multiple bounces; Russian roulette.
+Then NEE and MIS are added. The reference light transport is
+
+```text
+BSDF sampling  +  light sampling  →  MIS
+```
+
+## 10. NEE / MIS
+
+**NEE + MIS is completed as the reference renderer before ReSTIR**, because
+it is the correctness baseline ReSTIR is compared against, it isolates
+sampling bugs, it remains the offline / progressive quality mode, and it is
+the benchmark baseline. The first MIS weight is the power heuristic.
+
+## 11. ReSTIR
+
+ReSTIR is one of Lotus's main differentiators. Order of introduction:
+
+```text
+ReSTIR DI → temporal reuse → spatial reuse → ReSTIR GI → ReSTIR PT
+```
+
+GI is not attempted first.
+
+## 12. Reservoir
+
+```cpp
+struct Reservoir {
+    Sample y;
+    float wSum;
+    float targetPdf;
+    uint32_t M;
+};
+```
+
+Extended as needed with the selected sample, source light, visibility,
+age and confidence. Reservoir storage stays GPU-friendly.
+
+## 13. ReSTIR DI
+
+The first ReSTIR milestone. Temporal and spatial reuse are designed on direct
+illumination first.
+
+```text
+Initial candidates → local reservoir ─┬─→ temporal reuse ─┐
+                                      └─→ spatial reuse  ─┴─→ final reservoir → visibility test → shading
+```
+
+## 14. ReSTIR GI / PT
+
+GI follows once DI is stable, for low-spp indirect illumination, path reuse,
+temporal reuse and interactive global illumination. ReSTIR PT comes later
+still. Interactive path tracing in Lotus is the combination
+
+```text
+low spp + sample reuse + temporal accumulation + denoising
+```
+
+## 15. Temporal system
+
+ReSTIR and denoising share one temporal history infrastructure. Minimum
+buffers: depth; normal; motion vector; material / instance identity;
+previous radiance; reservoir; moments / variance; sample count.
+
+**History validation is a separate, shared function.** Rejection conditions:
+disocclusion; depth discontinuity; normal discontinuity; material change;
+instance change; camera cut; large motion.
+
+## 16. Denoising
+
+| Phase | Content |
+| --- | --- |
+| 1 | a lightweight temporal denoiser on the GPU |
+| 2 | SVGF: noisy radiance → temporal reprojection → moment / variance estimation → à-trous filter → final image |
+| 3 | neural denoising |
+
+Required AOVs: depth, normal, albedo, motion, roughness, and direct / indirect
+separation where needed. The renderer core never depends on a neural
+denoiser; denoisers are interchangeable behind a `DenoiserBackend`.
+
+## 17. Material
+
+Initial priority: 1. Lambert, 2. GGX dielectric, 3. GGX metallic,
+4. emissive, 5. transmission, 6. clearcoat.
+
+Long-term inputs from Hydra / USD: `UsdPreviewSurface`, MaterialX, OpenPBR.
+
+## 18. Material IR
+
+Hydra and MaterialX shader graphs are not the path tracer's internal
+representation:
+
+```text
+Hydra material → material translator → Lotus material IR → GPU material
+```
+
+This separates the backend and shader architecture from the authoring schema.
+
+## 19. Lighting
+
+Order: 1. environment, 2. point, 3. directional, 4. area light,
+5. emissive mesh. For ReSTIR DI, many lights and emissive geometry matter
+most. The structure allows comparing a light tree, hierarchical light
+sampling, RIS and ReSTIR.
+
+## 20. Acceleration structure
+
+```text
+Geometry → BLAS → instance → TLAS
+```
+
+Priorities: static BLAS; dynamic BLAS; refit vs rebuild; instancing; motion
+and transform updates; a compact GPU memory layout. Hydra dirty bits drive the
+acceleration-structure update policy.
+
+## 21. Interactive and progressive mode
+
+| | Interactive mode | Progressive mode |
+| --- | --- | --- |
+| For | viewport, camera operation, look development | still frames, quality evaluation, reference, research comparison |
+| Character | low spp; ReSTIR; temporal reuse; denoising; aggressive history reuse | unbiased or low-bias; high sample count; NEE / MIS; minimal dependence on temporal heuristics |
+
+## 22. Performance target
+
+Long-term guide: **1920 × 1080, 1 spp, 2–4 bounces, ReSTIR, temporal reuse
+and denoising at 30–60+ FPS** interactive. 60 FPS is not an absolute
+requirement. What matters: stable frame time; low CPU overhead; a scalable GPU
+architecture; good scaling with scene size.
+
+## 23. CPU performance
+
+In a Hydra renderer, CPU submit cost matters as much as GPU time. Goals: near
+zero CPU cost when the scene is unchanged; pipeline creation outside the
+render loop; minimal descriptor rebuilds; upload of dirty resources only; a
+persistent command and resource architecture; a shader and pipeline cache.
+
+## 24. GPU profiling
+
+Per-pass GPU timestamps exist **from the start**: TLAS update, primary ray,
+intersect, shade, shadow, ReSTIR temporal, ReSTIR spatial, denoise, tone
+mapping, presentation. Performance is never judged by FPS alone. Recorded:
+GPU frame time; CPU frame time; ray count; path count; shadow ray count;
+average path depth; queue occupancy; reservoir reuse rate; denoiser cost;
+memory usage.
+
+## 25. Debug and validation
+
+Correctness is hard to see in a path tracer, so debug AOVs are a first-class
+feature: world normal; geometric normal; albedo; roughness; depth; instance
+ID; primitive ID; path depth; throughput; direct; indirect; emission; sample
+count; reservoir weight; reservoir M; temporal validity.
+
+## 26. Reference / deterministic mode
+
+A deterministic mode exists for regression testing: fixed RNG seed, fixed
+spp, fixed camera, fixed frame index. Golden-image tests run on it.
+
+## 27. Advanced research track
+
+After the foundation is complete, research is taken in step by step: ReSTIR
+PT; ReSTIR path guiding; reservoir splatting; area ReSTIR; multi-layer
+ReSTIR; control variates; MCMC-based reuse; advanced path guiding; BDPT;
+ReSTIR BDPT; difficult light transport and caustics; volumes.
+
+These form a **research track kept separate from the core milestones**.
+
+## 28. Spectral rendering
+
+Spectral rendering is not an initial requirement: a complete RGB renderer
+comes first; the material and texture pipeline gets more complex; and
+introducing it alongside ReSTIR, wavefront and denoising would make
+verification hard. The research path stays open:
+
+> **The first implementation is RGB; the internal interfaces do not block a
+> later spectrum representation.**
+
+Spectral work, if it comes, is a quality / research mode, introduced in
+steps:
+
+```text
+RGB → hero wavelength → wavelength sampling → dispersion / thin film → full spectral experiments
+```
+
+## 29. Volumes
+
+Out of initial scope. The architecture leaves room for `UsdVol`, OpenVDB,
+homogeneous and heterogeneous volumes, and delta / ratio tracking as research
+subjects.
+
+## 30. Relationship with hydra-merlin
+
+Lotus and Merlin are not merged into one renderer: Merlin is raster, Lotus is
+path tracing. Low-level utilities are **candidates** for sharing; sharing is
+not a dependency today (§53 DES-Q4).
+
+| May be shared | Not shared |
+| --- | --- |
+| Vulkan initialization; allocator; shader compilation; descriptor helpers; pipeline cache; GPU timers; image / buffer abstraction; debug utilities | scene representation; material runtime; render graph policy; renderer-specific scheduling; the Hydra synchronization core |
+
+Over-generalizing into a common core is avoided.
+
+## 31. Relationship with hydra-toon
+
+`hydra-toon` is optimized for the VRM / MMD / MToon look and a low-latency
+viewport; Lotus for physically based light transport. They are not
+integrated. The ideal is a USD scene from which any of `hydra-toon`,
+`hydra-merlin` and `hydra-lotus` can be selected as the render delegate.
+
+## 32. Use of OpenUSD / Hydra
+
+First: `HdMesh`, `HdInstancer`, `HdMaterial`, `HdLight`, `HdCamera`, AOVs,
+render settings. Later: curves, points, volumes, procedurals. Hydra dirty
+tracking is used, but the renderer core is never designed around the
+convenience of the Hydra API.
+
+## 33. Repository structure
+
+The direction sketches `src/hdLotus/`, `src/lotus/` and `src/vulkan/`, and a
+root `shaders/` tree. This repository uses the OpenStrata renderer layout
+instead and keeps the same separation; the mapping is
+[PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §3, and the departure
+is §52.
+
+## 34. API boundaries
+
+These are kept distinct:
+
+```text
+Hydra → Hydra adapter → LotusScene → GpuScene → Integrator → backend
+```
+
+The integrator is an interface, for example
+
+```cpp
+class Integrator {
+public:
+    virtual void Render(const GpuScene&, const Camera&, RenderTargets&) = 0;
+};
+```
+
+so that a `ReferencePathTracer`, a `WavefrontPathTracer` and a
+`ReSTIRPathTracer` can be switched.
+
+## 35. Render graph
+
+A lightweight render graph is introduced **when pass dependencies start to
+grow**, not after the renderer has become complicated:
+
+```text
+scene update → AS update → path trace → ReSTIR → temporal → denoise → tone map → AOV / present
+```
+
+What matters is that resource lifetime and synchronization are explicit.
+
+## 36–46. Implementation phases
+
+This sequence is **Renderer Phase 0–10**. A phase is not a release; which
+release carries it is the [roadmap](../roadmap/README.md).
+
+### 36. Renderer Phase 0 — Bootstrap
+
+Goal: **a minimal Hydra render delegate on a Vulkan backend.** Plugin
+registration; `HdRenderDelegate`; render pass; camera; Vulkan device; image
+output; triangle; basic AOVs.
+
+Done when: **Lotus can be selected from usdview or a dedicated test harness
+and produces a GPU-rendered image.**
+
+### 37. Renderer Phase 1 — Baseline path tracer
+
+BLAS / TLAS; primary rays; triangle intersection; Lambert; GGX; emissive;
+environment; multiple bounces; Russian roulette. Correctness first.
+
+### 38. Renderer Phase 2 — Wavefront
+
+Persistent `PathState`; ray, hit, miss and shadow queues; compaction;
+indirect dispatch. The GPU architecture's foundation is set here.
+
+### 39. Renderer Phase 3 — NEE / MIS
+
+Explicit light sampling; BSDF sampling; shadow rays; MIS; emissive geometry.
+This phase makes Lotus's **reference path tracer**.
+
+### 40. Renderer Phase 4 — Temporal infrastructure
+
+Motion vectors; history buffers; reprojection; disocclusion detection;
+history validation; accumulation. The shared base for ReSTIR and denoising.
+
+### 41. Renderer Phase 5 — ReSTIR DI
+
+Initial reservoirs; temporal reuse; spatial reuse; visibility; reservoir
+debug AOVs. Lotus's first large feature milestone.
+
+### 42. Renderer Phase 6 — SVGF / denoising
+
+Temporal accumulation; moments; variance; à-trous; edge stopping. Low-spp
+interactive rendering becomes practical here.
+
+### 43. Renderer Phase 7 — ReSTIR GI / PT
+
+ReSTIR GI, then research and implementation of ReSTIR PT. From here Lotus is
+less a path tracer than a **real-time Monte Carlo research renderer**.
+
+### 44. Renderer Phase 8 — Material and production scene support
+
+`UsdPreviewSurface`; MaterialX; OpenPBR; textures; normal maps;
+transmission; clearcoat; instancing; large scenes; emissive meshes.
+
+### 45. Renderer Phase 9 — Advanced sampling research
+
+Path guiding; ReSTIR path guiding; reservoir splatting; control variates;
+advanced reuse; caustic sampling; MCMC. Research features are separated
+behind feature flags or as experimental integrators.
+
+### 46. Renderer Phase 10 — Quality / spectral research
+
+Considered once the need is clear: hero wavelength; spectral BSDFs;
+dispersion; thin film; spectral MIS; BDPT; ReSTIR BDPT. **The RGB interactive
+path is never broken for it.**
+
+## 47. Versioning guide
+
+An indicative sketch, not a schedule:
+
+| Version | Content |
+| --- | --- |
+| v0.1 | Hydra / Vulkan bootstrap |
+| v0.2 | basic ray tracing |
+| v0.3 | wavefront diffuse path tracer |
+| v0.4 | GGX / materials / textures |
+| v0.5 | NEE |
+| v0.6 | MIS / reference path tracer |
+| v0.7 | temporal accumulation |
+| v0.8 | SVGF |
+| v0.9 | ReSTIR DI |
+| v0.10 | ReSTIR GI / PT experiments |
+| v0.11+ | MaterialX / OpenPBR / large scenes / advanced research |
+
+The numbers matter less than the order: **correctness → architecture → reuse
+→ denoise → advanced sampling.** The sketch and the phase order disagree in
+two places (§53 DES-Q1, DES-Q2); the
+[roadmap](../roadmap/README.md#status-at-a-glance) is the only place a phase
+gets a version.
+
+## 48. Not done first
+
+- spectral rendering from the start;
+- ReSTIR GI before ReSTIR DI;
+- a neural denoiser as a required dependency;
+- Vulkan, WebGPU and Metal at the same time;
+- a renderer core shared with `hydra-merlin`;
+- a large project-specific material schema;
+- optimizing the RT pipeline and ray query paths at the same time;
+- complete production material support first.
+
+## 49. Development order
+
+```text
+Hydra delegate → Vulkan → BLAS / TLAS → basic path tracing → wavefront → NEE → MIS
+  → temporal infrastructure → ReSTIR DI → SVGF → ReSTIR GI / PT → MaterialX / OpenPBR
+  → advanced sampling research
+```
+
+## 50. Direction
+
+`hydra-lotus` does not aim to be a production renderer from day one. It
+grows as
+
+> **an experimental and practical renderer for cutting-edge GPU light
+> transport, entered through OpenUSD / Hydra.**
+
+Its core is OpenUSD / Hydra + Vulkan + wavefront path tracing + NEE / MIS +
+ReSTIR + temporal reconstruction + denoising. Once that foundation is
+complete, ReSTIR PT, path guiding, reservoir splatting, control variates,
+BDPT, difficult light transport, spectral experiments and neural
+reconstruction can be stacked on it safely.
+
+## 51. Decision principles
+
+When a decision is unclear, prefer in this order:
+
+1. **Correctness before cleverness.**
+2. **Baseline before ReSTIR.**
+3. **Wavefront before premature micro-optimization.**
+4. **Thin Hydra adapter.**
+5. **Hydra-independent renderer core.**
+6. **Vulkan first.**
+7. **Cross-vendor design.**
+8. **AOVs, profiler and deterministic tests early.**
+9. **Research features as independent integrators or passes.**
+10. **Never break the practical RGB renderer for an advanced feature.**
+
+---
+
+## 52. Where this repository departs from the implementation direction
+
+Each departure is `proposed` until the phase that first depends on it lands,
+and binding from then.
+
+| Direction | Here | Why | Status |
+| --- | --- | --- | --- |
+| §33 — `src/{hdLotus,lotus,vulkan}`, root `shaders/` | The OpenStrata renderer layout: `core/`, `backend/`, `adapters/`, `include/lotus/`, `validation/` ([PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §2–3) | The scaffold's layout is what `ost build`, `ost validate` and the renderer evidence contract are wired to, and its core-boundary check enforces §3.1 and §4.1 mechanically. The direction's separation — Hydra adapter / renderer core / Vulkan / shaders — is kept one-to-one. | proposed (Renderer Phase 0) |
+| §32, §36 — "the Hydra adapter", `src/hdLotus/` | The adapter lives at `adapters/hydra2/` and is named `hydra2` in `openstrata.renderer.yaml` | That is OpenStrata's name for the Hydra scene-input slot. The code is a classic `HdRenderDelegate` + `HdRendererPlugin`; the directory name claims nothing about the Hydra 2.0 renderer interface. | proposed (Renderer Phase 0) |
+| §4.2, §34 — `GpuScene` and the integrators are part of the renderer core | `GpuScene`, the traversal backends and the integrator implementations live in the Vulkan backend. The core owns `LotusScene`, the host-neutral update plan that tells the backend what changed, and the integrator *selection* and settings. | `GpuScene` holds BLAS / TLAS and Vulkan buffers, and the core's public headers may not carry Vulkan types (§3.1; [PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §4). The integrators are GPU passes over that scene. The direction's boundary — the core does not know Hydra, Hydra does not reach the GPU scene — is unchanged. | proposed (Renderer Phase 1) |
+| §5.2 — Slang is a strong candidate | Slang is the shader language from Renderer Phase 0, compiled offline to SPIR-V by `slangc` at build time | The scaffold already builds its shaders this way, and offline compilation keeps the core free of the Slang runtime, which is the coupling §5.2 warns against. | proposed (Renderer Phase 0) |
+
+## 53. Open questions
+
+| ID | Question | Blocks |
+| --- | --- | --- |
+| DES-Q1 | **SVGF before or after ReSTIR DI?** §41–§42 and §49 put ReSTIR DI (Renderer Phase 5) before SVGF (Phase 6); the §47 sketch puts SVGF at v0.8 and ReSTIR DI at v0.9. The phase order is used until this is settled. | versioning Renderer Phase 5–6 |
+| DES-Q2 | **Is GGX in the baseline?** §9 and §37 put GGX in Renderer Phase 1, before wavefront; the §47 sketch has a "wavefront diffuse path tracer" at v0.3 and GGX at v0.4. The phase order is used until this is settled. | versioning Renderer Phase 1–2 |
+| DES-Q3 | **What keeps the RGB interface open to spectra (§8, §28)?** A spectrum type in the shader library that is RGB today, or RGB throughout with a later migration. Decided before `PathState` is written. | Renderer Phase 1 |
+| DES-Q4 | **How are low-level Vulkan utilities shared with `hydra-merlin` (§30)?** Copy, a shared package, or not at all. Until decided, nothing is shared and there is no dependency. | nothing yet |
