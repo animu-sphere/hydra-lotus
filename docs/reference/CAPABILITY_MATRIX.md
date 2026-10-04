@@ -15,6 +15,7 @@ Configurations each row was measured on are
 | Capability | Status | Evidence / notes |
 | --- | --- | --- |
 | Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` recursively discovers all public headers, including backend headers. `lotus-renderer-core-boundary-discovery` checks newly added nested headers against foreign dependencies |
+| Core and Hydra source CI definition | 🧪 | Registered external workflow and `openstrata.ci.yaml`; matrix and pinned artifact verified locally, core 6/6 and Hydra 11/11 tests pass. GitHub-hosted execution is not measured ([CI report](../reports/2026-10-04-foundation-ci.md)) |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
 | Offscreen colour (RGBA8) and depth (D32) render products, read back | 🧪 | the rasterized bootstrap triangle at the requested size, with a display and a data window; the headless runner renders 64×64; `renderer.render_product.color`, `.depth` |
 | Foundation AOV formats and clears | ✅ | [AOV reference](AOVS.md); transparent-black colour, window depth 1, CPU ID sentinels. `renderer.aov.clears` checks full-target clears, empty scenes and preservation across frames; [measured run](../reports/2026-10-04-foundation-aovs.md) |
@@ -59,6 +60,7 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | CPU colour / depth / primId `HdRenderBuffer`s | ✅ | `renderer.render_buffer.cpu`; `lotus-renderer-hydra-render-buffer` checks descriptors, formats, map guards and row order. IDs are clear sentinels only ([AOV reference](AOVS.md)) |
 | AOV binding validation and empty-scene output | ✅ | `lotus-renderer-hydra-aov`: all bindings checked before rendering, host clear values, no-clear preservation at the same size, disappearance of the last mesh and depth-only recovery. GPU capability-gated CTest; [measured run](../reports/2026-10-04-foundation-aovs.md) |
 | First frame and a stable update in `testusdview` | 🧪 | `renderer.host.first_frame`, `.host.stable_update`; the bootstrap triangle at the AOV's resolution, through the Hydra camera and framing, with no Vulkan validation message |
+| GPU capability gate for `testusdview` | ✅ | Explicit `renderer.gpu.frame` SKIP returns before launching the viewer; CTest reports the host test as skipped. Failed, missing, malformed or unexplained evidence fails. `lotus-renderer-host-capability-gate` and [CI report](../reports/2026-10-04-foundation-ci.md) |
 | Supported prim types | 🧪 | `mesh` (read only to decide whether a visible mesh exists; none of it is drawn), `camera` (through the render pass state), `renderBuffer` |
 | Instancers, materials, lights, render settings | ⬜ | |
 

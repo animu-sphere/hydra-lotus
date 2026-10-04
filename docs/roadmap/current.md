@@ -35,9 +35,13 @@ Against the scope of
   reuse and a resize.
 - ✅ **Standalone viewport and headless runner.** Both draw the scaffold's
   bootstrap triangle.
-- ⬜ **CI boundary tests.** A generated OpenStrata CI lane: the `core` build
-  with the core boundary check and its GPU checks as capability-gated `SKIP`s
-  on hosted runners, and the `hydra` intent against a digest-pinned runtime.
+- 🚧 **CI boundary tests.** The registered renderer workflow consumes
+  `openstrata.ci.yaml`: runtime-free `ci-core` with boundary/install checks
+  and explained GPU `SKIP`s, and `hydra` against a digest-pinned runtime.
+  Local checks pass; the first GitHub-hosted run remains unmeasured. OpenStrata
+  0.23.14's generator requires plugin workspace descriptors and its `validate`
+  cannot select runtime-free targets; generator adoption awaits those upstream
+  fixes ([report](../reports/2026-10-04-foundation-ci.md)).
 
 ## Renderer Phase 1 — Reference path tracer
 

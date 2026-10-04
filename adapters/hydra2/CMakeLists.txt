@@ -161,6 +161,7 @@ if(LOTUS_BUILD_TESTS)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_usdview_smoke.cmake")
     set_tests_properties(lotus-renderer-usdview-host PROPERTIES
       LABELS "host-smoke;gpu"
+      SKIP_REGULAR_EXPRESSION "SKIP usdview smoke:"
       TIMEOUT 60
       RUN_SERIAL TRUE)
   else()

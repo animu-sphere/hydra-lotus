@@ -1,0 +1,160 @@
+# Renderer-specific execution; pins are validated against openstrata.ci.yaml.
+name: renderer-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: renderer-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  OST_VERSION: "0.23.14"
+  OST_HOME: ${{ github.workspace }}/.ost-ci-home
+jobs:
+  core:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-ost
+        with:
+          version: ${{ env.OST_VERSION }}
+      - name: Validate the support matrix
+        run: ost ci validate
+      - name: Resolve the core cell
+        id: cell
+        shell: pwsh
+        run: ost ci matrix --cell core-windows --github-output >> $env:GITHUB_OUTPUT
+      - name: Build and test without a runtime or GPU SDK
+        shell: pwsh
+        env:
+          OST_CI_CELL: ${{ steps.cell.outputs.name }}
+          CI_PLATFORM: ${{ steps.cell.outputs.platform }}
+          CI_PROFILE: ${{ steps.cell.outputs.profile }}
+          CI_INTENT: ${{ steps.cell.outputs.intent }}
+        run: |
+          Write-Host "::notice title=Hosted runner usage::$env:OST_CI_CELL uses GitHub-hosted infrastructure; private repositories may incur Actions charges."
+          ost build --without-runtime --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --jobs auto
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost test --without-runtime --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 0.23.14's validate command cannot select a runtime-free target.
+          # ost test already verifies its completion; check our fallback here.
+          $reports = @(Get-ChildItem build -Recurse -Filter renderer-report.json |
+            Where-Object { $_.Directory.Name -like '*-runtime-free--ci-core' })
+          if ($reports.Count -ne 1) { throw 'Expected one core CI renderer report' }
+          $report = Get-Content $reports[0].FullName -Raw | ConvertFrom-Json
+          if (@($report.checks | Where-Object status -eq 'fail').Count -ne 0) { throw 'Renderer evidence failed' }
+          foreach ($id in @('renderer.core.boundary', 'renderer.install_tree')) {
+            $checks = @($report.checks | Where-Object id -eq $id)
+            if ($checks.Count -ne 1 -or $checks[0].status -ne 'pass') { throw "$id did not pass" }
+          }
+          $gpu = @($report.checks | Where-Object id -eq 'renderer.gpu.frame')
+          if ($gpu.Count -ne 1 -or $gpu[0].status -ne 'skip' -or -not $gpu[0].detail) {
+            throw 'Expected an explained GPU SKIP in the core CI build'
+          }
+          Write-Host "GPU SKIP: $($gpu[0].detail)"
+      - name: Upload reports and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: core-windows-evidence
+          path: |
+            .ost-ci/
+            .strata/targets/
+            build/**/renderer*report.json
+            build/**/Testing/Temporary/
+  hydra:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup-ost
+        with:
+          version: ${{ env.OST_VERSION }}
+      - name: Validate the support matrix
+        run: ost ci validate
+      - name: Resolve the Hydra cell
+        id: cell
+        shell: pwsh
+        run: ost ci matrix --cell hydra-windows --github-output >> $env:GITHUB_OUTPUT
+      # 0.23.14's --github-output omits the Python and OpenUSD selectors.
+      - name: Resolve the runtime requirements
+        id: runtime
+        shell: pwsh
+        run: |
+          $contract = ost ci matrix --cell hydra-windows --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cell = $contract.data.cells[0]
+          "host_python=$($cell.host_python)" >> $env:GITHUB_OUTPUT
+          "require_openusd=$($cell.require_openusd)" >> $env:GITHUB_OUTPUT
+          "require_openusd_version=$($cell.require_openusd_version)" >> $env:GITHUB_OUTPUT
+      - name: Set up the runtime Python ABI
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ steps.runtime.outputs.host_python }}
+      - name: Install the Vulkan SDK and Slang compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.4.350.0'
+          $expected = '855b27ba05d2d8119c5114c5d4ff870ca38f2c632b11e1bb9923b9b7e6ecfe7b'
+          $installer = "vulkansdk-windows-X64-$version.exe"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$version/windows/$installer" -OutFile ".ost-ci/$installer"
+          $actual = (Get-FileHash ".ost-ci/$installer" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Vulkan SDK installer checksum mismatch' }
+          $root = "C:\VulkanSDK\$version"
+          $process = Start-Process -FilePath ".ost-ci/$installer" -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+            '--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
+          if ($process.ExitCode -ne 0) { throw "Vulkan SDK install failed: $($process.ExitCode)" }
+          if (-not (Test-Path "$root\Bin\slangc.exe")) { throw 'Slang compiler is missing' }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+      - name: Verify and adopt the pinned runtime
+        shell: pwsh
+        env:
+          OST_CI_CELL: ${{ steps.cell.outputs.name }}
+          OST_CI_RUNTIME_ARTIFACT: ${{ steps.cell.outputs.runtime_artifact }}
+          OST_CI_RUNTIME_REMOTE: ${{ steps.cell.outputs.runtime_remote }}
+          CI_PLATFORM: ${{ steps.cell.outputs.platform }}
+          CI_PROFILE: ${{ steps.cell.outputs.profile }}
+          CI_OPENUSD: ${{ steps.runtime.outputs.require_openusd }}
+          CI_OPENUSD_VERSION: ${{ steps.runtime.outputs.require_openusd_version }}
+        run: |
+          Write-Host "::notice title=Hosted runner usage::$env:OST_CI_CELL uses GitHub-hosted infrastructure; private repositories may incur Actions charges."
+          ost artifact pull $env:OST_CI_RUNTIME_REMOTE --expect-artifact $env:OST_CI_RUNTIME_ARTIFACT --require-kind runtime --require-openusd $env:CI_OPENUSD --require-openusd-version $env:CI_OPENUSD_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost artifact verify $env:OST_CI_RUNTIME_ARTIFACT --minimum-trust local --require-sbom --require-provenance
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost runtime pull $env:CI_PLATFORM --profile $env:CI_PROFILE --from-artifact $env:OST_CI_RUNTIME_ARTIFACT --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost runtime validate $env:CI_PLATFORM --profile $env:CI_PROFILE
+          exit $LASTEXITCODE
+      - name: Build, test and validate Hydra
+        shell: pwsh
+        env:
+          CI_PLATFORM: ${{ steps.cell.outputs.platform }}
+          CI_PROFILE: ${{ steps.cell.outputs.profile }}
+          CI_INTENT: ${{ steps.cell.outputs.intent }}
+        run: |
+          ost build --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --jobs auto
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost test --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost validate --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --strict-renderer-evidence
+          exit $LASTEXITCODE
+      - name: Upload reports, images and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: hydra-windows-evidence
+          path: |
+            .ost-ci/
+            .strata/targets/
+            build/**/renderer*report.json
+            build/**/Testing/Temporary/
+            build/**/hydra-host-evidence.log
+            build/**/usdview-*.png

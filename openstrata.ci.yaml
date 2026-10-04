@@ -1,0 +1,41 @@
+# Renderer source CI consumes these cells through the registered external
+# workflow. ost 0.23.14's generated workspace jobs require plugin descriptors;
+# this renderer has none (PROJECT_LAYOUT.md section 1).
+schema: 1
+bootstrap:
+  ost:
+    version: "0.23.14"
+    repository: animu-sphere/open-strata
+runners:
+  windows-hosted:
+    kind: github-hosted
+    image: windows-2022
+    billing:
+      acknowledgement: required
+external_workflows:
+  - path: .github/workflows/renderer-ci.yml
+    cells: [core-windows, hydra-windows]
+cells:
+  - name: core-windows
+    kind: workspace
+    lane: pull_request
+    runner: windows-hosted
+    platform: cy2026
+    profile: core
+    intent: ci-core
+    verify: test
+  - name: hydra-windows
+    kind: workspace
+    lane: pull_request
+    runner: windows-hosted
+    platform: cy2026
+    profile: lookdev
+    intent: hydra
+    verify: test
+    host_python: "3.13"
+    require_openusd: cy2026/windows/x86_64/gl
+    require_openusd_version: "26.08"
+    runtime_artifact: sha256:b982656c07dd9147973e3c7197d9b050ee48dd1ac291988f7e6025c76c4a785b
+    runtime_remote:
+      uri: oci://ghcr.io/animu-sphere/openstrata-runtime-cy2026-lookdev@sha256:b840ed4690aa39d4582bc03c0a09fa7bab717216635b55a4eb718482dbfb196b
+      expected_oci_digest: sha256:b840ed4690aa39d4582bc03c0a09fa7bab717216635b55a4eb718482dbfb196b

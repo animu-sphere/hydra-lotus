@@ -99,12 +99,20 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
 | Build | How | Runtime profile | OpenUSD |
 | --- | --- | --- | --- |
 | default | `ost build` | `core` (from `openstrata.toml`) | none |
+| core CI | `ost build --without-runtime --intent ci-core` | none; Vulkan disabled | none |
 | Hydra adapter | `ost build --profile lookdev --intent hydra` | `lookdev` or `usd` (a real runtime) | yes |
 | standalone viewport | `ost renderer viewport` | `core` | none |
 
 The `hydra` intent is declared in `openstrata.toml`
 (`LOTUS_ENABLE_HYDRA2=ON`). `ost renderer view` requests the same adapter
 through `OST_RENDERER_ADAPTERS=hydra2`.
+
+`openstrata.ci.yaml` owns the CI cells and runtime artifact pins. The registered
+external workflow `.github/workflows/renderer-ci.yml` consumes their resolved
+values through `ost ci matrix`, runs both cells on Windows hosted runners for
+PRs, main pushes and manual dispatch, and uploads reports and test logs.
+OpenStrata's plugin workspace generator is not used for this renderer
+([measured limitations](../reports/2026-10-04-foundation-ci.md)).
 
 ## 6. Install tree
 
