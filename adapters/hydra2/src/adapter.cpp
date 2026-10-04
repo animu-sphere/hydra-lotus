@@ -78,7 +78,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
     std::uint32_t width, std::uint32_t height,
     std::size_t buffers_written,
     std::uint64_t scene_revision,
-    std::uint64_t renderer_creations) {
+    std::uint64_t renderer_creations,
+    const Lotus::GpuSceneStats& scene) {
   const char* path = std::getenv("LOTUS_HYDRA_EVIDENCE");
   if (path == nullptr || *path == '\0') {
     return;
@@ -96,6 +97,9 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " buffers_written=" << buffers_written
          << " renderer_creations=" << renderer_creations
          << " target_creations=" << frame.target_creations
+         << " gpu_geometries=" << scene.resident_geometries
+         << " gpu_instances=" << scene.instance_count
+         << " geometry_uploads=" << scene.geometry_uploads
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 
@@ -227,6 +231,11 @@ public:
     return world_.Commit();
   }
 
+  Lotus::GpuSceneStats GetGpuSceneStats() {
+    std::scoped_lock lock(mutex_);
+    return scene_stats_;
+  }
+
   void Render(const HdRenderPassState& state) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
@@ -257,6 +266,17 @@ public:
         return;
       }
       ++renderer_creations_;
+      // A new renderer starts with an empty GPU scene.
+      extraction_.Reset();
+    }
+    const Lotus::GpuSceneEvidence scene =
+        renderer_->UpdateScene(extraction_.Update(snapshot));
+    scene_stats_ = scene.stats;
+    if (scene.status != Lotus::FrameStatus::Pass) {
+      TF_RUNTIME_ERROR("Lotus GPU scene update failed: %s",
+          scene.detail.c_str());
+      renderer_.reset();
+      return;
     }
     const Lotus::GpuFrameEvidence frame = renderer_->Render(draw, target, 1);
     if (frame.status != Lotus::FrameStatus::Pass) {
@@ -296,7 +316,7 @@ public:
     }
     ++frame_index_;
     AppendHostEvidence(frame_index_, frame, target.width, target.height,
-        buffers_written, snapshot.revision, renderer_creations_);
+        buffers_written, snapshot.revision, renderer_creations_, scene_stats_);
   }
 
 private:
@@ -305,6 +325,9 @@ private:
   // Created on the first frame and kept across frames (design policy
   // section 23).
   std::unique_ptr<Lotus::OffscreenRenderer> renderer_;
+  // Plans the renderer's GPU scene updates; reset with each new renderer.
+  Lotus::SceneExtraction extraction_;
+  Lotus::GpuSceneStats scene_stats_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
 };
@@ -727,6 +750,10 @@ HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
   return impl_->state->GetFrameSnapshot();
+}
+
+Lotus::GpuSceneStats HdLotusRenderDelegate::GetGpuSceneStats() {
+  return impl_->state->GetGpuSceneStats();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

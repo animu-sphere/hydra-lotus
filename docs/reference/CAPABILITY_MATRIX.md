@@ -33,7 +33,7 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | Capability | Status | Phase |
 | --- | --- | --- |
 | CPU mesh extraction, geometry and ordinary mesh placement | ✅ | [Scene reference](SCENE.md); dirty points/topology/transform/visibility, coarse triangulation and immutable snapshots; [measured tests](../reports/2026-10-05-cpu-mesh-extraction.md) |
-| Vertex, index and instance buffers; GPU scene upload | ⬜ | Renderer Phase 1 |
+| Vertex, index and instance buffers; GPU scene upload | ✅ | [Scene reference](SCENE.md#gpu-scene): an incremental plan from snapshot changes, one device buffer per geometry and an instance buffer. CTest `lotus-renderer-scene-update`; `renderer.scene.upload` compares read-back buffers with the CPU scene; [measured run](../reports/2026-10-05-gpu-scene-upload.md). No pass reads them yet |
 | BLAS / TLAS, ray query traversal | ⬜ | Renderer Phase 1 |
 | Primary rays, triangle intersection, multiple bounces, Russian roulette | ⬜ | Renderer Phase 1 |
 | Lambert, minimal GGX, emissive surfaces | ⬜ | Renderer Phase 1 |
@@ -62,7 +62,7 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | AOV binding validation and empty-scene output | ✅ | `lotus-renderer-hydra-aov`: all bindings checked before rendering, host clear values, no-clear preservation at the same size, disappearance of the last mesh and depth-only recovery. GPU capability-gated CTest; [measured run](../reports/2026-10-04-foundation-aovs.md) |
 | First frame and a stable update in `testusdview` | 🧪 | `renderer.host.first_frame`, `.host.stable_update`; the bootstrap triangle at the AOV's resolution, through the Hydra camera and framing, with no Vulkan validation message |
 | GPU capability gate for `testusdview` | ✅ | Explicit `renderer.gpu.frame` SKIP returns before launching the viewer; CTest reports the host test as skipped. Failed, missing, malformed or unexplained evidence fails. `lotus-renderer-host-capability-gate` and [CI report](../reports/2026-10-04-foundation-ci.md) |
-| Supported prim types | 🧪 | `mesh` (coarse geometry and ordinary placement extracted into the CPU scene; the backend still draws the fixed bootstrap triangle), `camera` (through the render pass state), `renderBuffer` |
+| Supported prim types | 🧪 | `mesh` (coarse geometry and ordinary placement extracted into the CPU scene and uploaded to the GPU scene; the backend still draws the fixed bootstrap triangle), `camera` (through the render pass state), `renderBuffer` |
 | Instancers, materials, lights, render settings | ⬜ | |
 
 ## Hosts

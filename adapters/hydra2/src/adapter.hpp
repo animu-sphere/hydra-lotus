@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <lotus/render_world.hpp>
+#include <lotus/vulkan_backend.hpp>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -91,6 +92,8 @@ public:
   HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();
+  // The GPU scene after the latest render pass; empty before the first.
+  [[nodiscard]] Lotus::GpuSceneStats GetGpuSceneStats();
 
 private:
   class Impl;

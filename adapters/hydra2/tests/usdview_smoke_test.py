@@ -58,3 +58,8 @@ def testUsdviewInputFunction(appController):
     updated = _render(appController, "stable-update")
     assert updated["frame"] > first["frame"]
     assert updated["scene_revision"] > first["scene_revision"]
+    # The smoke scene's one mesh is resident and instanced once; the point
+    # edit replaces its geometry buffer instead of adding one.
+    assert first["gpu_geometries"] == 1 and first["gpu_instances"] == 1
+    assert updated["gpu_geometries"] == 1 and updated["gpu_instances"] == 1
+    assert updated["geometry_uploads"] == first["geometry_uploads"] + 1

@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- The scene update plan (`SceneExtraction`, `SceneUpdate`) and the GPU
+  scene: incremental geometry uploads and releases and instance rewrites
+  into device-local buffers owned by `OffscreenRenderer`, with a
+  `renderer.scene.upload` check that compares read-back buffers with the
+  CPU scene. The Hydra adapter uploads its extracted meshes on every pass.
+  No pass reads the buffers yet.
+
 - Host-neutral CPU mesh geometry and placement in `LotusScene`, immutable
   frame snapshots, and Hydra coarse-mesh extraction with dirty updates,
   winding/hole handling and removal. CPU and Hydra tests cover snapshot

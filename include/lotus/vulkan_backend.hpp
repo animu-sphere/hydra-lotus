@@ -85,6 +85,54 @@ struct OffscreenTarget {
   bool clear_depth_enabled = true;
 };
 
+// What the renderer's GPU scene holds. Counts after "Lifetime" accumulate
+// since the renderer was created.
+struct GpuSceneStats {
+  std::uint64_t source_revision = 0;
+  std::uint32_t resident_geometries = 0;
+  std::uint32_t instance_count = 0;
+  // Device bytes of the geometry buffers and of the instances in use.
+  std::uint64_t geometry_bytes = 0;
+  std::uint64_t instance_bytes = 0;
+  // Lifetime: geometry buffers created and destroyed, instance buffer
+  // rewrites, upload submissions and bytes copied through staging. An empty
+  // update changes none of them.
+  std::uint64_t geometry_uploads = 0;
+  std::uint64_t geometry_releases = 0;
+  std::uint64_t instance_writes = 0;
+  std::uint64_t upload_submissions = 0;
+  std::uint64_t uploaded_bytes = 0;
+};
+
+struct GpuSceneEvidence {
+  FrameStatus status = FrameStatus::Skip;
+  std::string detail;
+  GpuSceneStats stats;
+  // Messages since the renderer was created, as in GpuFrameEvidence.
+  std::uint32_t validation_message_count = 0;
+};
+
+// A copy of the GPU scene's device buffers, for validation. A slot is the
+// geometry's index in the GPU scene's geometry table.
+struct GpuGeometryContents {
+  std::uint32_t slot = 0;
+  std::vector<std::array<float, 3>> positions;
+  std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
+struct GpuInstanceContents {
+  Matrix4 world_from_object = IdentityMatrix();
+  std::uint32_t geometry_slot = 0;
+};
+
+struct GpuSceneContents {
+  FrameStatus status = FrameStatus::Skip;
+  std::string detail;
+  // Resident geometry in slot order, and the instances in update order.
+  std::vector<GpuGeometryContents> geometries;
+  std::vector<GpuInstanceContents> instances;
+};
+
 // This is a capability probe, not a renderer implementation. Generated source
 // never reports a GPU frame until the project implements and validates one.
 [[nodiscard]] BackendCapability ProbeVulkanBackend();
@@ -94,6 +142,10 @@ struct OffscreenTarget {
 // when the target size changes (design policy section 23). One frame is in
 // flight: Render returns after the GPU has finished and the products are read
 // back.
+//
+// The renderer also owns the GPU scene: one device-local buffer per resident
+// geometry and one instance buffer, changed only by UpdateScene. The
+// bootstrap draw does not read them yet.
 class OffscreenRenderer {
 public:
   virtual ~OffscreenRenderer() = default;
@@ -103,6 +155,17 @@ public:
   // create a new one.
   [[nodiscard]] virtual GpuFrameEvidence Render(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
+
+  // Apply one SceneExtraction plan; plans are applied in order. Returns after
+  // the uploads have completed. An empty plan records no GPU work. After a
+  // failure the renderer stays failed, as after a failed frame: create a new
+  // renderer and reset the extraction.
+  [[nodiscard]] virtual GpuSceneEvidence UpdateScene(
+      const SceneUpdate& update) = 0;
+
+  // Copy the GPU scene's buffers back to the host. Validation only: it
+  // allocates a readback buffer and waits for the copy.
+  [[nodiscard]] virtual GpuSceneContents ReadBackScene() = 0;
 };
 
 // Creates the device and pipeline, enabling Vulkan validation capture

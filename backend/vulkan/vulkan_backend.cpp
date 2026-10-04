@@ -13,6 +13,7 @@
 #if defined(LOTUS_HAS_VULKAN)
 #include <vulkan/vulkan.h>
 
+#include "gpu_scene.hpp"
 #include "vulkan_internal.hpp"
 #endif
 
@@ -49,6 +50,7 @@ using vulkan_internal::CreateInstanceWithValidation;
 using vulkan_internal::CreateShader;
 using vulkan_internal::DestroyInstance;
 using vulkan_internal::FindMemoryType;
+using vulkan_internal::GpuScene;
 using vulkan_internal::InstanceState;
 using vulkan_internal::kFrameConstantsSize;
 using vulkan_internal::LoadSpirv;
@@ -228,6 +230,7 @@ public:
     if (device_ != VK_NULL_HANDLE) {
       vkDeviceWaitIdle(device_);
       DestroyTargets();
+      scene_.Destroy();
       vkDestroyFence(device_, fence_, nullptr);
       vkDestroyPipeline(device_, pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
@@ -254,6 +257,8 @@ public:
       return false;
     }
     if (!SelectDevice(status, detail) || !CreateDevice(detail) ||
+        !scene_.Initialize(physical_device_, device_, queue_, queue_family_,
+            detail) ||
         !CreateRenderPass(detail) ||
         !CreatePipeline(vertex_words, fragment_words, detail)) {
       return false;
@@ -371,6 +376,37 @@ public:
             << device_properties_.deviceName;
     evidence.detail = success.str();
     return evidence;
+  }
+
+  GpuSceneEvidence UpdateScene(const SceneUpdate& update) override {
+    GpuSceneEvidence evidence;
+    if (!failure_.empty()) {
+      evidence.status = FrameStatus::Fail;
+      evidence.detail = "the renderer failed earlier: " + failure_;
+    } else if (std::string detail; !scene_.Apply(update, detail)) {
+      // A partly applied plan leaves the scene unknown to the extraction.
+      failure_ = detail;
+      evidence.status = FrameStatus::Fail;
+      evidence.detail = detail;
+    } else {
+      evidence.status = FrameStatus::Pass;
+    }
+    evidence.stats = scene_.Stats();
+    evidence.validation_message_count = validation_.message_count;
+    return evidence;
+  }
+
+  GpuSceneContents ReadBackScene() override {
+    GpuSceneContents contents;
+    if (!failure_.empty()) {
+      contents.status = FrameStatus::Fail;
+      contents.detail = "the renderer failed earlier: " + failure_;
+    } else if (std::string detail; !scene_.ReadBack(contents, detail)) {
+      failure_ = detail;
+      contents.status = FrameStatus::Fail;
+      contents.detail = detail;
+    }
+    return contents;
   }
 
 private:
@@ -874,6 +910,7 @@ private:
   VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
   VkPipeline pipeline_ = VK_NULL_HANDLE;
   Targets targets_;
+  GpuScene scene_;
   std::uint32_t target_creations_ = 0;
   std::uint64_t completion_ = 0;
   std::string failure_;

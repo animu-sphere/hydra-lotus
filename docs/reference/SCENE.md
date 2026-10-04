@@ -1,4 +1,4 @@
-# CPU scene snapshots
+# Scene snapshots and the GPU scene
 
 `include/lotus/render_world.hpp` owns the host-neutral CPU scene interface.
 `RenderWorld` remains the mutable entry point; `LotusScene` is its mesh state,
@@ -36,7 +36,64 @@ does not traverse or copy the meshes.
 explicit bootstrap triangles. Counts exceeding uint32 throw
 `std::overflow_error`. The current `DrawSummary` still describes the
 bootstrap raster pass: it selects one fixed triangle when any visible
-triangle exists. It does not upload or draw the stored scene geometry.
+triangle exists. It does not draw the stored scene geometry; the scene
+reaches the GPU through the update plan below.
+
+## Update plan
+
+`include/lotus/extraction.hpp` owns the host-neutral update plan.
+`SceneExtraction::Update` compares a snapshot's scene with the one it last
+planned and returns a `SceneUpdate`:
+
+- `geometry_releases`: geometry buffers the scene no longer references, in
+  the previous scene's key order;
+- `geometry_uploads`: geometry buffers that become resident, in key order;
+- `instances`: when `instances_changed`, the complete replacement list,
+  one `SceneInstance` (geometry and `world_from_object`) per visible mesh
+  with triangles, in key order.
+
+A geometry buffer is identified by its address. Every mesh with triangles
+keeps its geometry resident, hidden or not, so visibility and transform
+changes rewrite only the instances. Geometry without triangles is never
+resident or instanced. The extraction holds a reference to every resident
+buffer, so an address is not reused before its release.
+
+An unchanged scene pointer, including a camera-only commit, returns an
+empty plan without traversing the scene. Every plan must be applied in
+order. `Reset` is for a lost GPU scene: the next plan uploads everything
+again and releases nothing.
+
+## GPU scene
+
+The Vulkan backend owns the GPU scene inside `Lotus::OffscreenRenderer`
+(`include/lotus/vulkan_backend.hpp`); its Vulkan objects stay in
+`backend/vulkan/`. `UpdateScene` validates the whole plan, then releases,
+creates and uploads, and returns after the uploads have completed. An
+empty plan records no GPU work.
+
+- Each resident geometry has one device-local buffer: the positions as
+  tightly packed float triples, then, at an offset aligned to the device's
+  storage-buffer offset alignment, the triangles as uint32 triples.
+- Geometry occupies a slot in the GPU scene's geometry table. A released
+  slot is reused lowest first, so slots are deterministic for a
+  deterministic sequence of plans.
+- One device-local instance buffer holds an 80-byte std430 record per
+  instance: the column-major `world_from_object` and the geometry slot.
+  It grows when needed and is rewritten only when the instances change.
+- Uploads go through a persistent, grow-only host-visible staging buffer,
+  in one submission per plan, followed by a barrier that makes them
+  visible to later shader reads and transfers.
+
+`GpuSceneStats` reports resident geometry, instances, bytes and lifetime
+upload counts. `ReadBackScene` copies the device buffers back for
+validation. A failed update or readback leaves the renderer failed, as a
+failed frame does: create a renderer and reset the extraction.
+
+No pass reads the buffers yet, and they carry neither device addresses
+nor acceleration-structure build usage; the bootstrap draw is unchanged.
+Source-face indices stay on the CPU. Every geometry buffer is its own
+device allocation, so an update fails with an explanation once a scene
+would exceed the device's allocation limit.
 
 ## Hydra extraction
 
@@ -58,6 +115,13 @@ that mesh. A later valid sync recovers it. Mesh destruction removes its scene
 record. `HdLotusRenderDelegate::GetFrameSnapshot` exposes the same CPU snapshot
 for inspection without creating a GPU renderer.
 
+Each Hydra render pass plans and applies a scene update before its frame,
+and a newly created renderer resets the extraction.
+`HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
+latest pass.
+
 The CPU scene and Hydra extraction tests, plus multi-triangle bootstrap AOV
 regression coverage, are recorded in the
-[mesh extraction report](../reports/2026-10-05-cpu-mesh-extraction.md).
+[mesh extraction report](../reports/2026-10-05-cpu-mesh-extraction.md); the
+update plan and GPU scene tests in the
+[GPU scene upload report](../reports/2026-10-05-gpu-scene-upload.md).
