@@ -45,10 +45,12 @@ using vulkan_internal::CreateInstanceWithValidation;
 using vulkan_internal::CreateShader;
 using vulkan_internal::DestroyInstance;
 using vulkan_internal::InstanceState;
+using vulkan_internal::kFrameConstantsSize;
 using vulkan_internal::LoadSpirv;
 using vulkan_internal::SupportsShaderDrawParameters;
 using vulkan_internal::ValidationState;
 using vulkan_internal::VulkanOk;
+using vulkan_internal::VulkanWorldToClip;
 
 constexpr std::uint64_t kFrameTimeoutNs = 10'000'000'000ULL;
 
@@ -392,8 +394,12 @@ PresentSetupStatus VulkanPresentSession::Initialize(
       VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
   dynamic.dynamicStateCount = 2;
   dynamic.pDynamicStates = dynamic_states;
+  const VkPushConstantRange push_range{VK_SHADER_STAGE_VERTEX_BIT, 0,
+      kFrameConstantsSize};
   VkPipelineLayoutCreateInfo layout_create{
       VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  layout_create.pushConstantRangeCount = 1;
+  layout_create.pPushConstantRanges = &push_range;
   if (!VulkanOk(vkCreatePipelineLayout(device_, &layout_create, nullptr,
                     &pipeline_layout_),
           "vkCreatePipelineLayout", error)) {
@@ -630,6 +636,9 @@ bool VulkanPresentSession::RenderFrame(const DrawSummary& draw,
   const VkRect2D scissor{{0, 0}, extent_};
   vkCmdSetViewport(command_, 0, 1, &viewport);
   vkCmdSetScissor(command_, 0, 1, &scissor);
+  const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
+  vkCmdPushConstants(command_, pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+      0, kFrameConstantsSize, world_to_clip.data());
   vkCmdDraw(command_, draw.triangle_count * 3U, 1, 0, 0);
   vkCmdEndRenderPass(command_);
   if (!VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer", error)) {

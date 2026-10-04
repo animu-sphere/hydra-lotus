@@ -30,6 +30,8 @@ def _render(app_controller, phase):
     assert len(frames) > before, f"no Hydra frame completed for {phase}"
     assert frames[-1]["buffers_written"] >= 2
     assert frames[-1]["width"] > 0 and frames[-1]["height"] > 0
+    assert all(frame["validation_messages"] == 0 for frame in frames), \
+        "Vulkan validation reported messages during a Hydra frame"
     return frames[-1]
 
 

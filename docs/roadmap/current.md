@@ -18,11 +18,16 @@ What is left of
   `testusdview`.
 - ✅ **Vulkan device.** Device bring-up with validation layers, messages
   treated as errors.
-- 🚧 **Image output.** The Hydra path renders a fixed 64×64 offscreen image
-  and copies it into CPU `HdRenderBuffer`s, which usdview upscales.
-  - ⬜ Render at the AOV's resolution.
-- ⬜ **Camera.** Use the Hydra camera's view and projection; the `camera`
-  Sprim is accepted and ignored today.
+- ✅ **Image output.** The Hydra path renders offscreen at the AOV's
+  resolution and copies the products into CPU `HdRenderBuffer`s.
+- ✅ **Camera.** The Hydra camera's view and projection, and the framing's
+  display and data windows, place the bootstrap triangle; the headless runner
+  checks it through a perspective camera.
+- ⬜ **A persistent offscreen renderer.** Every Hydra frame creates a Vulkan
+  instance, device and pipeline, against
+  [§23](../design/DESIGN_POLICY.md#23-cpu-performance). The device and
+  pipeline outlive frames; the targets are recreated only when the AOV size
+  changes.
 - ✅ **Triangle.** The scaffold's hard-coded triangle, in the headless
   runner, the viewport and `testusdview`.
 - 🚧 **Basic AOVs.** Colour, depth and primId exist as CPU render buffers.

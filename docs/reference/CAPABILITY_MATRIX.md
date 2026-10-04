@@ -16,11 +16,11 @@ Configurations each row was measured on are
 | --- | --- | --- |
 | Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
-| Offscreen colour (RGBA8) and depth (D32) render products, read back | 🧪 | a fixed 64×64 rasterized bootstrap triangle; `renderer.render_product.color`, `.depth` |
+| Offscreen colour (RGBA8) and depth (D32) render products, read back | 🧪 | the rasterized bootstrap triangle at the requested size, with a display and a data window; the headless runner renders 64×64; `renderer.render_product.color`, `.depth` |
 | Repeated frames on persistent resources | 🧪 | 1,000 deterministic frames; `renderer.gpu.frame`, `renderer.frame.persistence` |
 | Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle |
 | Slang shaders compiled to SPIR-V | 🧪 | `backend/vulkan/shaders/triangle.slang` only |
-| Camera | ⬜ | the Hydra camera is accepted but not used for projection; Renderer Phase 0 |
+| Camera | ✅ | view and projection in the core, converted to Vulkan clip space by the backend; the headless runner's perspective camera is checked by `renderer.render_product.color`, `.depth` |
 | Per-pass GPU timestamps | ⬜ | [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling) |
 | Deterministic mode and golden-image tests | ⬜ | [design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode) |
 
@@ -49,8 +49,8 @@ Configurations each row was measured on are
 | Plugin discovery through `plugInfo.json` | ✅ | `renderer.plugin.discovery` |
 | Render delegate creation | ✅ | `renderer.delegate.creation`; measured against OpenUSD 26.08 (`HD_API_VERSION` 98) |
 | CPU colour / depth / primId `HdRenderBuffer`s | ✅ | `renderer.render_buffer.cpu` |
-| First frame and a stable update in `testusdview` | 🧪 | `renderer.host.first_frame`, `.host.stable_update`; the bootstrap triangle, upscaled from 64×64 |
-| Supported prim types | 🧪 | `mesh` (read only to decide whether a visible mesh exists; none of it is drawn), `camera`, `renderBuffer` |
+| First frame and a stable update in `testusdview` | 🧪 | `renderer.host.first_frame`, `.host.stable_update`; the bootstrap triangle at the AOV's resolution, through the Hydra camera and framing, with no Vulkan validation message |
+| Supported prim types | 🧪 | `mesh` (read only to decide whether a visible mesh exists; none of it is drawn), `camera` (through the render pass state), `renderBuffer` |
 | Instancers, materials, lights, render settings | ⬜ | |
 
 ## Hosts

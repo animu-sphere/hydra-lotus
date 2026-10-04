@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/vulkan_backend.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -40,13 +41,13 @@ using vulkan_internal::CreateShader;
 using vulkan_internal::DestroyInstance;
 using vulkan_internal::FindMemoryType;
 using vulkan_internal::InstanceState;
+using vulkan_internal::kFrameConstantsSize;
 using vulkan_internal::LoadSpirv;
 using vulkan_internal::SupportsShaderDrawParameters;
 using vulkan_internal::ValidationState;
 using vulkan_internal::VulkanOk;
+using vulkan_internal::VulkanWorldToClip;
 
-constexpr std::uint32_t kWidth = 64;
-constexpr std::uint32_t kHeight = 64;
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
@@ -58,6 +59,8 @@ GpuFrameEvidence Evidence(FrameStatus status, std::string detail) {
 }
 
 struct Context {
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
   InstanceState instance_state;
   ValidationState validation;
   VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -130,7 +133,7 @@ bool CreateImage(Context& context,
   VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   create.imageType = VK_IMAGE_TYPE_2D;
   create.format = format;
-  create.extent = {kWidth, kHeight, 1};
+  create.extent = {context.width, context.height, 1};
   create.mipLevels = 1;
   create.arrayLayers = 1;
   create.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -214,15 +217,45 @@ bool InvalidateIfNeeded(VkDevice device,
       "vkInvalidateMappedMemoryRanges", detail);
 }
 
+VkViewport DisplayViewport(const OffscreenTarget& target) {
+  const auto& window = target.display_window;
+  if (window[2] <= 0.0F || window[3] <= 0.0F) {
+    return {0.0F, 0.0F, static_cast<float>(target.width),
+        static_cast<float>(target.height), 0.0F, 1.0F};
+  }
+  return {window[0], window[1], window[2], window[3], 0.0F, 1.0F};
+}
+
+VkRect2D DataScissor(const OffscreenTarget& target) {
+  const auto& window = target.data_window;
+  if (window[2] <= 0 || window[3] <= 0) {
+    return {{0, 0}, {target.width, target.height}};
+  }
+  const std::int64_t x0 = std::max<std::int64_t>(window[0], 0);
+  const std::int64_t y0 = std::max<std::int64_t>(window[1], 0);
+  const std::int64_t x1 = std::min<std::int64_t>(
+      std::int64_t{window[0]} + window[2], target.width);
+  const std::int64_t y1 = std::min<std::int64_t>(
+      std::int64_t{window[1]} + window[3], target.height);
+  if (x1 <= x0 || y1 <= y0) {
+    return {{0, 0}, {0, 0}};
+  }
+  return {{static_cast<std::int32_t>(x0), static_cast<std::int32_t>(y0)},
+      {static_cast<std::uint32_t>(x1 - x0),
+          static_cast<std::uint32_t>(y1 - y0)}};
+}
+
 } // namespace
 #endif
 
 GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
+    const OffscreenTarget& target,
     const std::string& vertex_shader,
     const std::string& fragment_shader,
     std::uint32_t frame_count) {
 #if !defined(LOTUS_HAS_VULKAN)
   (void)draw;
+  (void)target;
   (void)vertex_shader;
   (void)fragment_shader;
   (void)frame_count;
@@ -240,6 +273,9 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   if (frame_count == 0) {
     return Evidence(FrameStatus::Fail, "frame_count must be at least 1");
   }
+  if (target.width == 0 || target.height == 0) {
+    return Evidence(FrameStatus::Fail, "the offscreen target is empty");
+  }
 
   std::string detail;
   std::vector<std::uint32_t> vertex_words;
@@ -250,6 +286,8 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   }
 
   Context context;
+  context.width = target.width;
+  context.height = target.height;
   if (!CreateInstanceWithValidation("lotus-headless", {}, &context.validation,
           context.instance_state, detail)) {
     return Evidence(FrameStatus::Skip, detail);
@@ -301,6 +339,18 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
       (depth_properties.optimalTilingFeatures & depth_required) != depth_required) {
     return Evidence(FrameStatus::Skip,
         "required RGBA8/depth32 attachment readback formats are unavailable");
+  }
+  VkPhysicalDeviceProperties device_properties{};
+  vkGetPhysicalDeviceProperties(context.physical_device, &device_properties);
+  const VkPhysicalDeviceLimits& limits = device_properties.limits;
+  if (target.width > std::min(limits.maxImageDimension2D,
+                         limits.maxFramebufferWidth) ||
+      target.height > std::min(limits.maxImageDimension2D,
+                          limits.maxFramebufferHeight)) {
+    std::ostringstream message;
+    message << "the offscreen target " << target.width << 'x'
+            << target.height << " exceeds the device's framebuffer limits";
+    return Evidence(FrameStatus::Fail, message.str());
   }
 
   const float priority = 1.0F;
@@ -364,8 +414,10 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
     return Evidence(FrameStatus::Fail, detail);
   }
 
-  const VkDeviceSize color_bytes = kWidth * kHeight * 4U;
-  const VkDeviceSize depth_bytes = kWidth * kHeight * sizeof(float);
+  const VkDeviceSize pixel_count =
+      VkDeviceSize{context.width} * context.height;
+  const VkDeviceSize color_bytes = pixel_count * 4U;
+  const VkDeviceSize depth_bytes = pixel_count * sizeof(float);
   if (!CreateReadbackBuffer(context, color_bytes, context.color_readback,
           context.color_readback_memory,
           context.color_readback_coherent, detail) ||
@@ -435,8 +487,8 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   framebuffer_create.renderPass = context.render_pass;
   framebuffer_create.attachmentCount = 2;
   framebuffer_create.pAttachments = framebuffer_attachments;
-  framebuffer_create.width = kWidth;
-  framebuffer_create.height = kHeight;
+  framebuffer_create.width = context.width;
+  framebuffer_create.height = context.height;
   framebuffer_create.layers = 1;
   if (!VulkanOk(vkCreateFramebuffer(context.device, &framebuffer_create, nullptr,
                     &context.framebuffer),
@@ -465,15 +517,16 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   VkPipelineInputAssemblyStateCreateInfo input_assembly{
       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
   input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-  VkViewport viewport{0.0F, 0.0F, static_cast<float>(kWidth),
-      static_cast<float>(kHeight), 0.0F, 1.0F};
-  VkRect2D scissor{{0, 0}, {kWidth, kHeight}};
   VkPipelineViewportStateCreateInfo viewport_state{
       VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
   viewport_state.viewportCount = 1;
-  viewport_state.pViewports = &viewport;
   viewport_state.scissorCount = 1;
-  viewport_state.pScissors = &scissor;
+  const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
+      VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dynamic{
+      VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+  dynamic.dynamicStateCount = 2;
+  dynamic.pDynamicStates = dynamic_states;
   VkPipelineRasterizationStateCreateInfo raster{
       VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
   raster.polygonMode = VK_POLYGON_MODE_FILL;
@@ -497,7 +550,11 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
       VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
   blend.attachmentCount = 1;
   blend.pAttachments = &blend_attachment;
+  const VkPushConstantRange push_range{VK_SHADER_STAGE_VERTEX_BIT, 0,
+      kFrameConstantsSize};
   VkPipelineLayoutCreateInfo layout_create{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  layout_create.pushConstantRangeCount = 1;
+  layout_create.pPushConstantRanges = &push_range;
   if (!VulkanOk(vkCreatePipelineLayout(context.device, &layout_create, nullptr,
                     &context.pipeline_layout),
           "vkCreatePipelineLayout", detail)) {
@@ -516,6 +573,7 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   pipeline_create.pMultisampleState = &multisample;
   pipeline_create.pDepthStencilState = &depth_state;
   pipeline_create.pColorBlendState = &blend;
+  pipeline_create.pDynamicState = &dynamic;
   pipeline_create.layout = context.pipeline_layout;
   pipeline_create.renderPass = context.render_pass;
   pipeline_create.subpass = 0;
@@ -553,25 +611,36 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
   render_begin.renderPass = context.render_pass;
   render_begin.framebuffer = context.framebuffer;
   render_begin.renderArea.offset = {0, 0};
-  render_begin.renderArea.extent = {kWidth, kHeight};
+  render_begin.renderArea.extent = {context.width, context.height};
   render_begin.clearValueCount = 2;
   render_begin.pClearValues = clear;
   vkCmdBeginRenderPass(command, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
-  vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, context.pipeline);
-  vkCmdDraw(command, draw.triangle_count * 3U, 1, 0, 0);
+  const VkViewport viewport = DisplayViewport(target);
+  const VkRect2D scissor = DataScissor(target);
+  if (scissor.extent.width != 0 && scissor.extent.height != 0) {
+    const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        context.pipeline);
+    vkCmdSetViewport(command, 0, 1, &viewport);
+    vkCmdSetScissor(command, 0, 1, &scissor);
+    vkCmdPushConstants(command, context.pipeline_layout,
+        VK_SHADER_STAGE_VERTEX_BIT, 0, kFrameConstantsSize,
+        world_to_clip.data());
+    vkCmdDraw(command, draw.triangle_count * 3U, 1, 0, 0);
+  }
   vkCmdEndRenderPass(command);
 
   VkBufferImageCopy color_copy{};
   color_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   color_copy.imageSubresource.layerCount = 1;
-  color_copy.imageExtent = {kWidth, kHeight, 1};
+  color_copy.imageExtent = {context.width, context.height, 1};
   vkCmdCopyImageToBuffer(command, context.color_image,
       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
       context.color_readback, 1, &color_copy);
   VkBufferImageCopy depth_copy{};
   depth_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
   depth_copy.imageSubresource.layerCount = 1;
-  depth_copy.imageExtent = {kWidth, kHeight, 1};
+  depth_copy.imageExtent = {context.width, context.height, 1};
   vkCmdCopyImageToBuffer(command, context.depth_image,
       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
       context.depth_readback, 1, &depth_copy);
@@ -650,28 +719,26 @@ GpuFrameEvidence RenderOffscreen(const DrawSummary& draw,
       context.validation.first_message.empty()
           ? context.instance_state.validation_detail
           : context.validation.first_message;
-  evidence.color.width = kWidth;
-  evidence.color.height = kHeight;
-  evidence.color.row_pitch = kWidth * 4U;
+  evidence.color.width = context.width;
+  evidence.color.height = context.height;
+  evidence.color.row_pitch = context.width * 4U;
   evidence.color.pixel_format = "rgba8-unorm";
   evidence.color.origin = "top-left";
   evidence.color.color_space = "linear";
   evidence.color.payload.resize(static_cast<std::size_t>(color_bytes));
   std::memcpy(evidence.color.payload.data(), color_data,
       evidence.color.payload.size());
-  evidence.depth.width = kWidth;
-  evidence.depth.height = kHeight;
-  evidence.depth.row_pitch = kWidth * sizeof(float);
+  evidence.depth.width = context.width;
+  evidence.depth.height = context.height;
+  evidence.depth.row_pitch = context.width * sizeof(float);
   evidence.depth.pixel_format = "d32-sfloat";
   evidence.depth.origin = "top-left";
-  evidence.depth.payload.resize(kWidth * kHeight);
+  evidence.depth.payload.resize(static_cast<std::size_t>(pixel_count));
   std::memcpy(evidence.depth.payload.data(), depth_data,
       static_cast<std::size_t>(depth_bytes));
   vkUnmapMemory(context.device, context.color_readback_memory);
   vkUnmapMemory(context.device, context.depth_readback_memory);
 
-  VkPhysicalDeviceProperties device_properties{};
-  vkGetPhysicalDeviceProperties(context.physical_device, &device_properties);
   evidence.device_name = device_properties.deviceName;
   evidence.vendor_id = device_properties.vendorID;
   evidence.device_id = device_properties.deviceID;

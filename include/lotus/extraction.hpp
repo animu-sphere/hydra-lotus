@@ -11,6 +11,8 @@ struct DrawSummary {
   std::uint64_t source_revision = 0;
   std::uint32_t draw_count = 0;
   std::uint32_t triangle_count = 0;
+  // camera.projection * camera.view: world space to OpenGL clip space.
+  Matrix4 world_to_clip = IdentityMatrix();
 };
 
 [[nodiscard]] DrawSummary ExtractDrawSummary(const FrameSnapshot& snapshot);
