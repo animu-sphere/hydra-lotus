@@ -34,15 +34,21 @@ public:
       : HdSceneDelegate(index, SdfPath("/scene")) {}
 
   bool visible = true;
+  bool quad = false;
   bool GetVisible(const SdfPath&) override { return visible; }
   HdMeshTopology GetMeshTopology(const SdfPath&) override {
+    if (quad) {
+      return HdMeshTopology(TfToken("none"), HdTokens->rightHanded,
+          VtIntArray{4}, VtIntArray{0, 1, 2, 3});
+    }
     return HdMeshTopology(TfToken("none"), HdTokens->rightHanded,
         VtIntArray{3}, VtIntArray{0, 1, 2});
   }
   VtValue Get(const SdfPath&, const TfToken& key) override {
     if (key == HdTokens->points) {
       return VtValue(VtVec3fArray{GfVec3f(-0.5F, -0.5F, 0),
-          GfVec3f(0.5F, -0.5F, 0), GfVec3f(0, 0.5F, 0)});
+          GfVec3f(0.5F, -0.5F, 0), GfVec3f(0, 0.5F, 0),
+          GfVec3f(-0.5F, 0.5F, 0)});
     }
     return {};
   }
@@ -105,6 +111,17 @@ int main(int argc, char** argv) {
   color.Unmap();
   if (!Check(triangle && color.IsConverged() && depth.IsConverged() &&
                  ids.IsConverged(), "triangle AOVs did not converge")) {
+    return 1;
+  }
+
+  // A multi-triangle scene must also work with the bootstrap raster backend.
+  scene.quad = true;
+  dirty = HdChangeTracker::DirtyTopology;
+  mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
+  pass->Execute(state, {});
+  if (!Check(delegate.GetFrameSnapshot().triangle_count == 2 &&
+      color.IsConverged() && depth.IsConverged(),
+      "multi-triangle scene broke the bootstrap AOV path")) {
     return 1;
   }
 

@@ -25,7 +25,7 @@ DrawSummary ExtractDrawSummary(const FrameSnapshot& snapshot) {
   return DrawSummary{
       snapshot.revision,
       snapshot.triangle_count == 0 ? 0U : 1U,
-      snapshot.triangle_count,
+      snapshot.triangle_count == 0 ? 0U : 1U,
       Multiply(snapshot.camera.projection, snapshot.camera.view),
   };
 }

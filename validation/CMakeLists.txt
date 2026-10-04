@@ -20,6 +20,10 @@ add_executable(lotus-viewport-camera-test viewport-camera-test.cpp)
 target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
+add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
+target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction)
+add_test(NAME lotus-renderer-scene-mesh COMMAND lotus-render-world-mesh-test)
+
 add_test(NAME lotus-renderer-host-capability-gate
   COMMAND "${CMAKE_COMMAND}"
     "-DGATE=${CMAKE_SOURCE_DIR}/adapters/hydra2/tests/check_gpu_evidence.cmake"

@@ -8,6 +8,8 @@
 namespace Lotus {
 
 struct DrawSummary {
+  // Bootstrap raster pass only: visible scene geometry selects a single
+  // scaffold triangle. GPU scene upload will consume FrameSnapshot::scene.
   std::uint64_t source_revision = 0;
   std::uint32_t draw_count = 0;
   std::uint32_t triangle_count = 0;

@@ -10,6 +10,7 @@ to measure.
 | [2026-10-04-foundation-camera-boundary.md](2026-10-04-foundation-camera-boundary.md) | Viewport camera integration and automatic public-header boundary discovery; core and viewport verification. |
 | [2026-10-04-foundation-aovs.md](2026-10-04-foundation-aovs.md) | Foundation AOV formats, binding validation, full-frame clears, attachment preservation and empty-scene output; core and Hydra verification. |
 | [2026-10-04-foundation-ci.md](2026-10-04-foundation-ci.md) | Renderer CI matrix and external workflow, pinned-runtime verification, local core/Hydra checks, host capability gating and OpenStrata CI limitations. |
+| [2026-10-05-cpu-mesh-extraction.md](2026-10-05-cpu-mesh-extraction.md) | CPU mesh snapshots and Hydra coarse-mesh extraction, dirty updates, malformed-input recovery and multi-triangle bootstrap AOV compatibility; core 7/7, Hydra 13/13 and strict evidence validation. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and

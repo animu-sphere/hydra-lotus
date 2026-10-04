@@ -49,10 +49,11 @@ The near-term priority is one complete vertical path
 ([roadmap policy §9](../design/ROADMAP_POLICY.md#9-near-term-priority)); the
 phase's full scope and exit criteria are
 [§4](../design/ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer).
-In order:
+CPU coarse-mesh extraction and ordinary mesh placement are implemented
+([scene reference](../reference/SCENE.md),
+[evidence](../reports/2026-10-05-cpu-mesh-extraction.md)). The GPU still draws
+the fixed bootstrap triangle. Remaining work, in order:
 
-- ⬜ **Hydra mesh → `LotusScene`.** Mesh extraction in the adapter; geometry
-  and instance data in `core/render-world/`.
 - ⬜ **`LotusScene` → `GpuScene`.** The update plan in
   `core/render-extraction/`; vertex, index and instance buffers uploaded in
   the backend.
@@ -72,6 +73,9 @@ Needed alongside the slice
 ([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles),
 principle 8):
 
+- ⬜ **Hydra instancers and render-pass selection.** Expand instance data
+  and respect collection/render-tag selection; current CPU meshes have one
+  ordinary placement each.
 - ⬜ **Ray query capability probe.** Report `VK_KHR_acceleration_structure`
   and `VK_KHR_ray_query` in `renderer-report.json` and `SKIP` the
   path-tracing checks with an explanation where they are missing.

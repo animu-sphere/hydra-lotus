@@ -11,6 +11,7 @@
 #include <pxr/imaging/hd/changeTracker.h>
 #include <pxr/imaging/hd/instancer.h>
 #include <pxr/imaging/hd/mesh.h>
+#include <pxr/imaging/hd/meshUtil.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPass.h>
 #include <pxr/imaging/hd/renderPassState.h>
@@ -38,7 +39,6 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -206,17 +206,25 @@ void ApplyFraming(const HdRenderPassState& state,
 
 class AdapterState {
 public:
-  void SyncMesh(const SdfPath& id, bool renderable) {
+  void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
+      const Lotus::MeshInstance& instance) {
     std::scoped_lock lock(mutex_);
-    meshes_[id.GetString()] = renderable;
-    world_.MarkChanged();
-    UpdateWorldLocked();
+    world_.SetMesh(id.GetString(), std::move(geometry), instance);
+  }
+
+  void SyncInstance(const SdfPath& id, const Lotus::MeshInstance& instance) {
+    std::scoped_lock lock(mutex_);
+    world_.SetMeshInstance(id.GetString(), instance);
   }
 
   void RemoveMesh(const SdfPath& id) {
     std::scoped_lock lock(mutex_);
-    meshes_.erase(id.GetString());
-    UpdateWorldLocked();
+    world_.RemoveMesh(id.GetString());
+  }
+
+  Lotus::FrameSnapshot GetFrameSnapshot() {
+    std::scoped_lock lock(mutex_);
+    return world_.Commit();
   }
 
   void Render(const HdRenderPassState& state) {
@@ -292,15 +300,7 @@ public:
   }
 
 private:
-  void UpdateWorldLocked() {
-    const bool any_renderable =
-        std::any_of(meshes_.begin(), meshes_.end(),
-            [](const auto& entry) { return entry.second; });
-    world_.SetTriangleCount(any_renderable ? 1U : 0U);
-  }
-
   std::mutex mutex_;
-  std::unordered_map<std::string, bool> meshes_;
   Lotus::RenderWorld world_;
   // Created on the first frame and kept across frames (design policy
   // section 23).
@@ -329,14 +329,41 @@ public:
       HdDirtyBits* dirty_bits, const TfToken& repr_token) override {
     (void)render_param;
     (void)repr_token;
-    const bool visible = delegate->GetVisible(GetId());
-    const HdMeshTopology topology = GetMeshTopology(delegate);
-    const bool has_face =
-        std::any_of(topology.GetFaceVertexCounts().begin(),
-            topology.GetFaceVertexCounts().end(),
-            [](int count) { return count >= 3; });
-    const bool has_points = !GetPoints(delegate).IsEmpty();
-    state_->SyncMesh(GetId(), visible && has_face && has_points);
+    const HdDirtyBits bits = *dirty_bits;
+    if (bits == HdChangeTracker::Clean) {
+      return;
+    }
+    const bool geometry_dirty = !initialized_ ||
+        (bits & HdChangeTracker::DirtyTopology) ||
+        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points);
+    if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
+      topology_ = GetMeshTopology(delegate);
+    }
+    if (!initialized_ ||
+        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points)) {
+      const VtValue value = GetPoints(delegate);
+      points_ = value.IsHolding<VtVec3fArray>()
+          ? value.UncheckedGet<VtVec3fArray>() : VtVec3fArray{};
+    }
+    if (!initialized_ || HdChangeTracker::IsTransformDirty(bits, GetId())) {
+      instance_.world_from_object = ToLotusMatrix(delegate->GetTransform(GetId()));
+    }
+    if (!initialized_ || HdChangeTracker::IsVisibilityDirty(bits, GetId())) {
+      instance_.visible = delegate->GetVisible(GetId());
+    }
+    try {
+      if (geometry_dirty) {
+        state_->SyncMesh(GetId(), ExtractGeometry(), instance_);
+      } else {
+        state_->SyncInstance(GetId(), instance_);
+      }
+      initialized_ = true;
+    } catch (const std::invalid_argument& error) {
+      // Reject the entire malformed mesh, including formerly valid geometry.
+      TF_WARN("Lotus rejected mesh %s: %s", GetId().GetText(), error.what());
+      state_->RemoveMesh(GetId());
+      initialized_ = false;
+    }
     *dirty_bits = HdChangeTracker::Clean;
   }
 
@@ -351,7 +378,57 @@ protected:
   }
 
 private:
+  Lotus::MeshGeometry ExtractGeometry() const {
+    const auto& counts = topology_.GetFaceVertexCounts();
+    const auto& indices = topology_.GetFaceVertexIndices();
+    std::size_t corners = 0;
+    for (int count : counts) {
+      if (count < 0 || static_cast<std::size_t>(count) > indices.size() - corners) {
+        throw std::invalid_argument("face counts do not match index storage");
+      }
+      corners += static_cast<std::size_t>(count);
+    }
+    if (corners != indices.size()) {
+      throw std::invalid_argument("face counts do not match index storage");
+    }
+    for (int index : indices) {
+      if (index < 0 || static_cast<std::size_t>(index) >= points_.size()) {
+        throw std::invalid_argument("face vertex index is out of range");
+      }
+    }
+    for (int hole : topology_.GetHoleIndices()) {
+      if (hole < 0 || static_cast<std::size_t>(hole) >= counts.size()) {
+        throw std::invalid_argument("hole face index is out of range");
+      }
+    }
+    VtVec3iArray triangles;
+    VtIntArray primitive_params;
+    HdMeshUtil(&topology_, GetId()).ComputeTriangleIndices(
+        &triangles, &primitive_params);
+    Lotus::MeshGeometry geometry;
+    geometry.positions.reserve(points_.size());
+    for (const GfVec3f& point : points_) {
+      geometry.positions.push_back({point[0], point[1], point[2]});
+    }
+    geometry.triangles.reserve(triangles.size());
+    geometry.source_faces.reserve(primitive_params.size());
+    for (const GfVec3i& triangle : triangles) {
+      geometry.triangles.push_back({static_cast<std::uint32_t>(triangle[0]),
+          static_cast<std::uint32_t>(triangle[1]),
+          static_cast<std::uint32_t>(triangle[2])});
+    }
+    for (int param : primitive_params) {
+      geometry.source_faces.push_back(static_cast<std::uint32_t>(
+          HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(param)));
+    }
+    return geometry;
+  }
+
   std::shared_ptr<AdapterState> state_;
+  HdMeshTopology topology_;
+  VtVec3fArray points_;
+  Lotus::MeshInstance instance_;
+  bool initialized_ = false;
 };
 
 class HdLotusCamera final : public HdCamera {
@@ -646,6 +723,10 @@ void HdLotusRenderDelegate::CommitResources(HdChangeTracker* tracker) {
 HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
     const TfToken& name) const {
   return AovDescriptor(name);
+}
+
+Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
+  return impl_->state->GetFrameSnapshot();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE
