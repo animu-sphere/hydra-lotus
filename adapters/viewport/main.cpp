@@ -4,6 +4,7 @@
 // as a GPU smoke test (`--hidden --frames N`). Exit codes: 0 success, 1
 // failure, 77 skip (the environment cannot present).
 #include "window.hpp"
+#include "camera.hpp"
 
 #include <lotus/extraction.hpp>
 #include <lotus/render_world.hpp>
@@ -111,8 +112,6 @@ int main(int argc, char** argv) {
 
     Lotus::RenderWorld world;
     world.SetBootstrapTriangle();
-    const Lotus::FrameSnapshot snapshot = world.Commit();
-    const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(snapshot);
 
     std::unique_ptr<Lotus::viewport::Window> window;
     Lotus::PresentSurfaceProvider provider;
@@ -174,6 +173,8 @@ int main(int argc, char** argv) {
         window->WaitForEvent();
         continue;
       }
+      world.SetCamera(Lotus::viewport::BootstrapCamera(width, height));
+      const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(world.Commit());
       bool presented = false;
       if (!session->RenderFrame(draw, width, height, presented, error)) {
         std::cerr << "lotus-viewport: " << error << '\n';

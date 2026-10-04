@@ -11,6 +11,15 @@ add_test(NAME lotus-renderer-core-boundary
   COMMAND "${CMAKE_COMMAND}"
     -P "${CMAKE_CURRENT_BINARY_DIR}/check-core-boundary.cmake")
 
+add_test(NAME lotus-renderer-core-boundary-discovery
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCHECKER=${CMAKE_CURRENT_BINARY_DIR}/check-core-boundary.cmake"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/core-boundary-test.cmake")
+
+add_executable(lotus-viewport-camera-test viewport-camera-test.cpp)
+target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction)
+add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
+
 add_test(NAME lotus-renderer-evidence
   COMMAND "$<TARGET_FILE:lotus-headless>"
     --report "${CMAKE_BINARY_DIR}/renderer-ctest-report.json")

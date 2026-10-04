@@ -43,16 +43,6 @@ Against the scope of
 - ⬜ **CI boundary tests.** A generated OpenStrata CI lane: the `core` build
   with the core boundary check and its GPU checks as capability-gated `SKIP`s
   on hosted runners, and the `hydra` intent against a digest-pinned runtime.
-  - ⬜ The core boundary check lists its headers by name
-    ([PROJECT_LAYOUT.md §4](../architecture/PROJECT_LAYOUT.md#4-dependency-directions));
-    it should find every public core header itself.
-- 🚧 **Exit criterion: all three entry points start the same renderer core.**
-  The headless runner, the viewport and `hdLotus` all commit a
-  `Lotus::RenderWorld` and run the render extraction before the backend. The
-  viewport's present session does not take a `Lotus::Camera` yet, so it does
-  not draw through the core's camera as the other two do.
-  - ⬜ Give the viewport the core's camera, or record why the viewport stays
-    outside it until Renderer Phase 1.
 
 ## Renderer Phase 1 — Reference path tracer
 

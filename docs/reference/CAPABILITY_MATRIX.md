@@ -14,13 +14,13 @@ Configurations each row was measured on are
 
 | Capability | Status | Evidence / notes |
 | --- | --- | --- |
-| Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` |
+| Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` recursively discovers all public headers, including backend headers. `lotus-renderer-core-boundary-discovery` checks newly added nested headers against foreign dependencies |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
 | Offscreen colour (RGBA8) and depth (D32) render products, read back | 🧪 | the rasterized bootstrap triangle at the requested size, with a display and a data window; the headless runner renders 64×64; `renderer.render_product.color`, `.depth` |
 | Repeated frames on persistent resources | 🧪 | `Lotus::OffscreenRenderer`: the instance, device and pipeline outlive frames, and the targets are recreated only when their size changes; one frame in flight, read back each frame. 1,000 deterministic frames, another at the same size and a resize; `renderer.gpu.frame`, `renderer.frame.persistence`. The Hydra adapter keeps one renderer across frames (usdview smoke test) |
-| Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle |
+| Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle through the core camera, with its perspective aspect updated from the framebuffer extent |
 | Slang shaders compiled to SPIR-V | 🧪 | `backend/vulkan/shaders/triangle.slang` only |
-| Camera | ✅ | view and projection in the core, converted to Vulkan clip space by the backend; the headless runner's perspective camera is checked by `renderer.render_product.color`, `.depth` |
+| Camera | ✅ | view and projection in the core, converted to Vulkan clip space by the backend; all three entry points supply it. The headless runner's perspective camera is checked by `renderer.render_product.color`, `.depth`; `lotus-viewport-camera` checks square, landscape and portrait projection and scene revisions on resize ([foundation follow-up](../reports/2026-10-04-foundation-camera-boundary.md)) |
 | Per-pass GPU timestamps | ⬜ | [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling) |
 | Deterministic mode and golden-image tests | ⬜ | [design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode) |
 

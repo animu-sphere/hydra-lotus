@@ -7,6 +7,7 @@ to measure.
 | Document | Contents |
 | --- | --- |
 | [ost/](ost/) | The `ost` dogfooding series — one report per version exercised. Append-only; the newest report carries the live upstream ask list. |
+| [2026-10-04-foundation-camera-boundary.md](2026-10-04-foundation-camera-boundary.md) | Viewport camera integration and automatic public-header boundary discovery; core and viewport verification. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and

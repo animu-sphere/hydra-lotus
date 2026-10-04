@@ -39,6 +39,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- The viewport supplies a perspective `Lotus::Camera` through `RenderWorld`
+  and render extraction, updating its aspect from the framebuffer size.
+  CPU tests check projection on square, landscape and portrait extents,
+  resize revisions and unchanged-camera stability.
+- The core boundary test discovers all public headers recursively at test
+  time, including backend headers, and rejects GLFW, SDL and Slang
+  dependencies alongside the existing checks. A regression test checks
+  forbidden dependencies introduced in newly added nested headers.
 - The Hydra adapter renders at the AOV's resolution instead of upscaling a
   64×64 image, honours the framing's display and data windows, and writes
   rows bottom-up as Hydra's render buffers expect. `RenderOffscreen` takes
