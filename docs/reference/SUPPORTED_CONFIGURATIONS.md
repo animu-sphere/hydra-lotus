@@ -25,6 +25,6 @@ local run, and the report named in the row holds its detail.
 | GLFW | 3.4 | standalone viewport only; `find_package`, else a pinned FetchContent |
 
 Nothing here needs ray tracing hardware yet. Renderer Phase 1 adds the
-ray query requirement ([roadmap](../roadmap/current.md#before-renderer-phase-1)).
+ray query requirement ([roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer)).
 
 Linux, macOS, AMD and Intel GPUs are not measured.

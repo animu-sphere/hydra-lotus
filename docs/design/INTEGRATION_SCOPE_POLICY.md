@@ -16,8 +16,11 @@ owner: hydra-lotus
 
 It parses no source format, links no format repository's plugin or library,
 and reads no project-specific material schema. Material input is
-`UsdPreviewSurface`, MaterialX and OpenPBR
-([design policy §17](DESIGN_POLICY.md#17-material)); a format repository's
+`UsdPreviewSurface`, OpenPBR and MaterialX
+([design policy §17](DESIGN_POLICY.md#17-material),
+[roadmap policy §4](ROADMAP_POLICY.md#renderer-phase-8--production-material-support));
+how the roadmap policy's glTF PBR–compatible mapping fits this rule is
+[DES-Q6](DESIGN_POLICY.md#53-open-questions). A format repository's
 own material semantics reach Lotus only through the standard realizations
 that repository authors. Lotus defines no USD schema of its own
 ([design policy §48](DESIGN_POLICY.md#48-not-done-first)).
@@ -70,9 +73,11 @@ Each subject is linked to its owner and never restated here
 2. **No link-time edge to a format repository.** Lotus renders what the
    composed stage expresses in standard schemas.
 3. **No required neural or vendor-specific dependency.** A neural denoiser
-   is an optional `DenoiserBackend`; a vendor SDK is optional, and the
-   reference path runs on any Vulkan device with ray query
-   ([§16](DESIGN_POLICY.md#16-denoising), [§48](DESIGN_POLICY.md#48-not-done-first)).
+   is an optional `DenoiserBackend`; an inference runtime (ONNX Runtime or a
+   vendor's) and a vendor SDK are optional, and the reference path runs on
+   any Vulkan device with ray query
+   ([§16](DESIGN_POLICY.md#16-denoising), [§48](DESIGN_POLICY.md#48-not-done-first),
+   [roadmap policy §5](ROADMAP_POLICY.md#5-neural-features)).
 4. **The core stays host-neutral.** OpenUSD appears only under
    `adapters/hydra2/`, Vulkan only under `backend/vulkan/`
    ([PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §4).

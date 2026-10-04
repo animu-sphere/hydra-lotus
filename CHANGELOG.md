@@ -17,6 +17,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 - Documentation: the design policy and integration scope; the project
   layout; the capability matrix and measured configurations; the roadmap;
   the building guide; and the first `ost` dogfooding report.
+- The roadmap policy (`docs/design/ROADMAP_POLICY.md`), which now owns the
+  Renderer Phase 0–10 sequence: Renderer Phase 1 is the reference path
+  tracer (with a minimal GGX), a Renderer Phase 1.5 brings a minimal material
+  IR forward, version numbers follow milestones, and the near-term priority
+  is the Hydra-mesh-to-AOV vertical slice. It resolves the design policy's
+  DES-Q1 and DES-Q2 and opens DES-Q5 and DES-Q6.
 
 - A camera in the core (`Lotus::Camera`: view and projection, OpenGL
   conventions) that the Hydra adapter fills from the render pass state and

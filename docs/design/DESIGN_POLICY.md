@@ -22,6 +22,7 @@ owner: hydra-lotus
 > | --- | --- |
 > | What this repository owns, and what it consumes from whom | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) |
 > | Targets, directories and dependency directions | [architecture/PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) |
+> | The Renderer Phase 0–10 sequence: goals, scope, exit criteria, milestones, testing strategy, near-term priority | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) |
 > | Which release carries which phase | [roadmap/README.md](../roadmap/README.md) |
 
 ---
@@ -46,7 +47,9 @@ implemented and verified continuously:
 
 Among the sibling renderers, `hydra-merlin` is a real-time raster renderer and
 `hydra-toon` a toon / avatar renderer. `hydra-lotus`'s ground is **physically
-based, Monte Carlo, path-traced** rendering.
+based, Monte Carlo, path-traced** rendering — physically based GPU light
+transport and a rendering research platform
+([roadmap policy §10](ROADMAP_POLICY.md#10-long-term-identity)).
 
 ## 2. Core concept
 
@@ -154,7 +157,9 @@ library. The Lotus core is not tightly coupled to the Slang runtime (§52).
 | Why | suits wavefront; queue-driven architecture is easy to build; control over shader execution flow; integrates with ReSTIR and temporal passes | comparison benchmarks; straightforward use of hardware traversal; cases where a platform or GPU favours it |
 
 The two are not separate renderers. They are abstracted as a
-`TraversalBackend`.
+`TraversalBackend`. Which backends are primary and which are comparative —
+including a CPU reference traversal — is the
+[roadmap policy §6](ROADMAP_POLICY.md#6-backend-strategy).
 
 ## 7. Wavefront path tracing
 
@@ -218,7 +223,10 @@ Before any research feature:
 
 Required: camera rays; triangle intersection; surface normals; Lambert; GGX;
 emissive surfaces; environment light; multiple bounces; Russian roulette.
-Then NEE and MIS are added. The reference light transport is
+This brute-force path tracer is Lotus's **reference path tracer**, the one
+every faster mode is compared with
+([roadmap policy §2.1](ROADMAP_POLICY.md#21-correctness-before-performance)).
+Then NEE and MIS are added. The light transport ReSTIR is measured against is
 
 ```text
 BSDF sampling  +  light sampling  →  MIS
@@ -226,10 +234,11 @@ BSDF sampling  +  light sampling  →  MIS
 
 ## 10. NEE / MIS
 
-**NEE + MIS is completed as the reference renderer before ReSTIR**, because
-it is the correctness baseline ReSTIR is compared against, it isolates
-sampling bugs, it remains the offline / progressive quality mode, and it is
-the benchmark baseline. The first MIS weight is the power heuristic.
+**NEE + MIS is completed before ReSTIR**, because it is the baseline ReSTIR
+is compared against, it isolates sampling bugs, it remains the offline /
+progressive quality mode, and it is the benchmark baseline. It is itself
+checked against the brute-force reference path tracer (§9). The first MIS
+weight is the power heuristic.
 
 ## 11. ReSTIR
 
@@ -302,7 +311,11 @@ denoiser; denoisers are interchangeable behind a `DenoiserBackend`.
 Initial priority: 1. Lambert, 2. GGX dielectric, 3. GGX metallic,
 4. emissive, 5. transmission, 6. clearcoat.
 
-Long-term inputs from Hydra / USD: `UsdPreviewSurface`, MaterialX, OpenPBR.
+Long-term inputs from Hydra / USD, in priority order: `UsdPreviewSurface`,
+OpenPBR, MaterialX Standard Surface, then a glTF PBR–compatible mapping. The
+basic `UsdPreviewSurface` parameters come early, as the minimal material IR of
+Renderer Phase 1.5
+([roadmap policy §4](ROADMAP_POLICY.md#renderer-phase-15--minimal-material-ir)).
 
 ## 18. Material IR
 
@@ -360,7 +373,9 @@ intersect, shade, shadow, ReSTIR temporal, ReSTIR spatial, denoise, tone
 mapping, presentation. Performance is never judged by FPS alone. Recorded:
 GPU frame time; CPU frame time; ray count; path count; shadow ray count;
 average path depth; queue occupancy; reservoir reuse rate; denoiser cost;
-memory usage.
+memory usage. What a research feature is measured on, and the performance
+tests, are the
+[roadmap policy §2.5 and §7](ROADMAP_POLICY.md#25-research-features-stay-measurable).
 
 ## 25. Debug and validation
 
@@ -372,7 +387,9 @@ count; reservoir weight; reservoir M; temporal validity.
 ## 26. Reference / deterministic mode
 
 A deterministic mode exists for regression testing: fixed RNG seed, fixed
-spp, fixed camera, fixed frame index. Golden-image tests run on it.
+spp, fixed camera, fixed frame index. Golden-image tests run on it. The
+reference images and the testing strategy are the
+[roadmap policy §4 (Renderer Phase 1) and §7](ROADMAP_POLICY.md#7-testing-strategy).
 
 ## 27. Advanced research track
 
@@ -473,93 +490,66 @@ What matters is that resource lifetime and synchronization are explicit.
 
 ## 36–46. Implementation phases
 
-This sequence is **Renderer Phase 0–10**. A phase is not a release; which
-release carries it is the [roadmap](../roadmap/README.md).
+> **Superseded** by the [roadmap policy §4](ROADMAP_POLICY.md#4-roadmap),
+> 2026-10-04. The headings stay so citations resolve; where each phase's
+> items went is [roadmap policy §12](ROADMAP_POLICY.md#12-how-the-design-policys-phases-map-here).
 
 ### 36. Renderer Phase 0 — Bootstrap
 
-Goal: **a minimal Hydra render delegate on a Vulkan backend.** Plugin
-registration; `HdRenderDelegate`; render pass; camera; Vulkan device; image
-output; triangle; basic AOVs.
-
-Done when: **Lotus can be selected from usdview or a dedicated test harness
-and produces a GPU-rendered image.**
+Now Renderer Phase 0 — Foundation.
 
 ### 37. Renderer Phase 1 — Baseline path tracer
 
-BLAS / TLAS; primary rays; triangle intersection; Lambert; GGX; emissive;
-environment; multiple bounces; Russian roulette. Correctness first.
+Now Renderer Phase 1 — Reference path tracer, followed by Renderer Phase
+1.5 — Minimal material IR.
 
 ### 38. Renderer Phase 2 — Wavefront
 
-Persistent `PathState`; ray, hit, miss and shadow queues; compaction;
-indirect dispatch. The GPU architecture's foundation is set here.
+Now Renderer Phase 2 — Wavefront path tracing.
 
 ### 39. Renderer Phase 3 — NEE / MIS
 
-Explicit light sampling; BSDF sampling; shadow rays; MIS; emissive geometry.
-This phase makes Lotus's **reference path tracer**.
+Now Renderer Phase 3 — Direct lighting / NEE / MIS.
 
 ### 40. Renderer Phase 4 — Temporal infrastructure
 
-Motion vectors; history buffers; reprojection; disocclusion detection;
-history validation; accumulation. The shared base for ReSTIR and denoising.
+Unchanged in name.
 
 ### 41. Renderer Phase 5 — ReSTIR DI
 
-Initial reservoirs; temporal reuse; spatial reuse; visibility; reservoir
-debug AOVs. Lotus's first large feature milestone.
+Unchanged in name.
 
 ### 42. Renderer Phase 6 — SVGF / denoising
 
-Temporal accumulation; moments; variance; à-trous; edge stopping. Low-spp
-interactive rendering becomes practical here.
+Now Renderer Phase 6 — Denoising / SVGF-class pipeline.
 
 ### 43. Renderer Phase 7 — ReSTIR GI / PT
 
-ReSTIR GI, then research and implementation of ReSTIR PT. From here Lotus is
-less a path tracer than a **real-time Monte Carlo research renderer**.
+Now Renderer Phase 7 — ReSTIR GI / advanced reservoir transport.
 
 ### 44. Renderer Phase 8 — Material and production scene support
 
-`UsdPreviewSurface`; MaterialX; OpenPBR; textures; normal maps;
-transmission; clearcoat; instancing; large scenes; emissive meshes.
+Now Renderer Phase 8 — Production material support.
 
 ### 45. Renderer Phase 9 — Advanced sampling research
 
-Path guiding; ReSTIR path guiding; reservoir splatting; control variates;
-advanced reuse; caustic sampling; MCMC. Research features are separated
-behind feature flags or as experimental integrators.
+Now Renderer Phase 9 — Advanced sampling and scheduling.
 
 ### 46. Renderer Phase 10 — Quality / spectral research
 
-Considered once the need is clear: hero wavelength; spectral BSDFs;
-dispersion; thin film; spectral MIS; BDPT; ReSTIR BDPT. **The RGB interactive
-path is never broken for it.**
+Now Renderer Phase 10 — Spectral rendering research. **The RGB interactive
+path is never broken for it** (§51).
 
 ## 47. Versioning guide
 
-An indicative sketch, not a schedule:
+> **Superseded** by the milestones of the
+> [roadmap policy §8](ROADMAP_POLICY.md#8-milestones), 2026-10-04. The
+> direction's version sketch is no longer used; a phase gets a version only
+> in the [roadmap](../roadmap/README.md#status-at-a-glance).
 
-| Version | Content |
-| --- | --- |
-| v0.1 | Hydra / Vulkan bootstrap |
-| v0.2 | basic ray tracing |
-| v0.3 | wavefront diffuse path tracer |
-| v0.4 | GGX / materials / textures |
-| v0.5 | NEE |
-| v0.6 | MIS / reference path tracer |
-| v0.7 | temporal accumulation |
-| v0.8 | SVGF |
-| v0.9 | ReSTIR DI |
-| v0.10 | ReSTIR GI / PT experiments |
-| v0.11+ | MaterialX / OpenPBR / large scenes / advanced research |
-
-The numbers matter less than the order: **correctness → architecture → reuse
-→ denoise → advanced sampling.** The sketch and the phase order disagree in
-two places (§53 DES-Q1, DES-Q2); the
-[roadmap](../roadmap/README.md#status-at-a-glance) is the only place a phase
-gets a version.
+The order still holds: **correctness → architecture → reuse → denoise →
+advanced sampling**, which the roadmap policy states as **correctness →
+measurement → optimization → research**.
 
 ## 48. Not done first
 
@@ -574,10 +564,12 @@ gets a version.
 
 ## 49. Development order
 
+The order is the [roadmap policy's summary](ROADMAP_POLICY.md#summary):
+
 ```text
-Hydra delegate → Vulkan → BLAS / TLAS → basic path tracing → wavefront → NEE → MIS
-  → temporal infrastructure → ReSTIR DI → SVGF → ReSTIR GI / PT → MaterialX / OpenPBR
-  → advanced sampling research
+Foundation → reference path tracer → minimal material IR → wavefront → NEE / MIS
+  → temporal infrastructure → ReSTIR DI → denoising → ReSTIR GI / advanced reservoirs
+  → production materials → advanced sampling → spectral / neural research
 ```
 
 ## 50. Direction
@@ -627,7 +619,9 @@ and binding from then.
 
 | ID | Question | Blocks |
 | --- | --- | --- |
-| DES-Q1 | **SVGF before or after ReSTIR DI?** §41–§42 and §49 put ReSTIR DI (Renderer Phase 5) before SVGF (Phase 6); the §47 sketch puts SVGF at v0.8 and ReSTIR DI at v0.9. The phase order is used until this is settled. | versioning Renderer Phase 5–6 |
-| DES-Q2 | **Is GGX in the baseline?** §9 and §37 put GGX in Renderer Phase 1, before wavefront; the §47 sketch has a "wavefront diffuse path tracer" at v0.3 and GGX at v0.4. The phase order is used until this is settled. | versioning Renderer Phase 1–2 |
+| DES-Q1 | ~~SVGF before or after ReSTIR DI?~~ **Resolved 2026-10-04** by the [roadmap policy](ROADMAP_POLICY.md#4-roadmap): ReSTIR DI (Renderer Phase 5) comes before denoising (Phase 6), and the §47 sketch that disagreed is superseded. | — |
+| DES-Q2 | ~~Is GGX in the baseline?~~ **Resolved 2026-10-04** by the [roadmap policy](ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer): a minimal GGX BSDF is part of Renderer Phase 1, before wavefront. | — |
 | DES-Q3 | **What keeps the RGB interface open to spectra (§8, §28)?** A spectrum type in the shader library that is RGB today, or RGB throughout with a later migration. Decided before `PathState` is written. | Renderer Phase 1 |
 | DES-Q4 | **How are low-level Vulkan utilities shared with `hydra-merlin` (§30)?** Copy, a shared package, or not at all. Until decided, nothing is shared and there is no dependency. | nothing yet |
+| DES-Q5 | **What does "statistically matches the reference" mean?** Renderer Phase 2 must match the Renderer Phase 1 reference statistically, and later phases are compared with it too. The metric (per-pixel error against the reference's estimated variance, a mean-error bound, …), its threshold, and the spp it is measured at are decided before the first comparison. | Renderer Phase 2 exit |
+| DES-Q6 | **How does a glTF PBR–compatible mapping reach Lotus?** The roadmap policy lists it as Renderer Phase 8's fourth material target; the [integration scope](INTEGRATION_SCOPE_POLICY.md#1-the-rule) allows only standard schemas on the composed stage and no source-format parsing. One reading is MaterialX's glTF PBR node definition; that is not decided. | Renderer Phase 8 |
