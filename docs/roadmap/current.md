@@ -35,11 +35,6 @@ Against the scope of
   reuse and a resize.
 - ✅ **Standalone viewport and headless runner.** Both draw the scaffold's
   bootstrap triangle.
-- 🚧 **Render buffer and AOV bootstrap.** Colour, depth and primId exist as
-  CPU render buffers.
-  - ⬜ Decide the Renderer Phase 0 AOV set and its formats with the debug
-    AOVs of [design policy §25](../design/DESIGN_POLICY.md#25-debug-and-validation)
-    in mind.
 - ⬜ **CI boundary tests.** A generated OpenStrata CI lane: the `core` build
   with the core boundary check and its GPU checks as capability-gated `SKIP`s
   on hosted runners, and the `hydra` intent against a digest-pinned runtime.
@@ -84,6 +79,13 @@ principle 8):
 - ⬜ **Settle [DES-Q5](../design/DESIGN_POLICY.md#53-open-questions)**: how
   "statistically matches the reference" is measured, before Renderer Phase 2
   compares against it.
+
+## Adapter follow-up
+
+- ⬜ **No-clear restoration when switching AOV buffer sets.** The foundation
+  renderer retains one colour/depth attachment pair at a time; preservation
+  currently assumes successive passes reuse their bound buffers
+  ([AOV reference](../reference/AOVS.md#clears-and-successive-frames)).
 
 ## Testing infrastructure
 

@@ -75,6 +75,14 @@ struct OffscreenTarget {
   // The pixels that are rendered, clamped to the image; the rest keep the
   // clear values. Empty means the whole image.
   std::array<std::int32_t, 4> data_window{};
+  // Full-frame clears, including pixels outside the data window. Color is
+  // linear RGBA; depth is Vulkan window depth in [0, 1].
+  std::array<float, 4> clear_color{};
+  float clear_depth = 1.0F;
+  // False preserves the preceding frame's attachment, until a size change.
+  // Newly created targets are initialized to the clear values either way.
+  bool clear_color_enabled = true;
+  bool clear_depth_enabled = true;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source

@@ -29,6 +29,7 @@ validation:
     - renderer.render_product.color
     - renderer.render_product.depth
     - renderer.frame.persistence
+    - renderer.aov.clears
     - renderer.install_tree
     - renderer.plugin.discovery
     - renderer.delegate.creation

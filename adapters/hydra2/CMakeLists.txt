@@ -97,6 +97,13 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX
     _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 
+  add_executable(lotus-hydra2-aov-test tests/aov_test.cpp)
+  target_link_libraries(lotus-hydra2-aov-test
+    PRIVATE lotus-hydra2-runtime Lotus::Vulkan)
+  target_compile_definitions(lotus-hydra2-aov-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-aov-test hdLotus)
+
   if(PXR_INCLUDE_DIRS)
     list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
     get_filename_component(LOTUS_PXR_ROOT
@@ -119,10 +126,14 @@ if(LOTUS_BUILD_TESTS)
       "$<TARGET_FILE_DIR:hdLotus>/resources")
   add_test(NAME lotus-renderer-hydra-render-buffer
     COMMAND lotus-hydra2-render-buffer-test)
+  add_test(NAME lotus-renderer-hydra-aov COMMAND lotus-hydra2-aov-test)
+  set_tests_properties(lotus-renderer-hydra-aov PROPERTIES
+    LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
     lotus-renderer-plugin-discovery
     lotus-renderer-delegate-creation
     lotus-renderer-hydra-render-buffer
+    lotus-renderer-hydra-aov
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 

@@ -9,6 +9,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- The Renderer Phase 0 AOV reference: colour/depth formats and CPU ID
+  sentinels, with binding and clear-value validation, a Hydra AOV integration
+  test and `renderer.aov.clears` GPU evidence.
+
 - The project, generated with `ost init --template renderer --name lotus`
   (OpenStrata 0.23.14, template 0.5.4): the host-neutral core, the Vulkan
   backend, the headless runner, the standalone viewport and the `hdLotus`
@@ -38,6 +42,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   wrapper.
 
 ### Changed
+
+- Offscreen colour clears match the AOV descriptor's transparent black.
+  Hydra colour/depth clear values reach the GPU; clears cover the whole
+  target, and empty scenes converge with cleared output. Empty clear values
+  preserve the preceding attachments at the same size; clear changes reuse
+  targets.
 
 - The viewport supplies a perspective `Lotus::Camera` through `RenderWorld`
   and render extraction, updating its aspect from the framebuffer size.

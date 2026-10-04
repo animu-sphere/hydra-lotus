@@ -384,6 +384,9 @@ feature: world normal; geometric normal; albedo; roughness; depth; instance
 ID; primitive ID; path depth; throughput; direct; indirect; emission; sample
 count; reservoir weight; reservoir M; temporal validity.
 
+The foundation subset, formats and clear behaviour are owned by the
+[AOV reference](../reference/AOVS.md).
+
 ## 26. Reference / deterministic mode
 
 A deterministic mode exists for regression testing: fixed RNG seed, fixed

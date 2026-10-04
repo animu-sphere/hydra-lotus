@@ -33,10 +33,10 @@ that moment every file is project-owned; the template is not re-applied.
 | --- | --- | --- | --- |
 | `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral scene state |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | scene changes → GPU update work |
-| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: offscreen frame, swapchain presentation, Slang shaders |
+| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, swapchain presentation, Slang shaders |
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json` |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
-| `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter; optional (`LOTUS_ENABLE_HYDRA2`) |
+| `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |
 | `validation/` | CTest only | — | core boundary, evidence and install-tree checks |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
