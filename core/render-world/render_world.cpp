@@ -10,6 +10,13 @@ void RenderWorld::SetTriangleCount(std::uint32_t triangle_count) {
   }
 }
 
+void RenderWorld::SetCamera(const Camera& camera) {
+  if (camera_ != camera) {
+    camera_ = camera;
+    dirty_ = true;
+  }
+}
+
 void RenderWorld::MarkChanged() {
   dirty_ = true;
 }
@@ -23,7 +30,7 @@ FrameSnapshot RenderWorld::Commit() {
     ++revision_;
     dirty_ = false;
   }
-  return FrameSnapshot{revision_, triangle_count_};
+  return FrameSnapshot{revision_, triangle_count_, camera_};
 }
 
 } // namespace Lotus

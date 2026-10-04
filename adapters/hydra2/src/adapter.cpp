@@ -3,7 +3,9 @@
 
 #include <pxr/pxr.h>
 
+#include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/tf/diagnostic.h>
+#include <pxr/imaging/cameraUtil/framing.h>
 #include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/changeTracker.h>
@@ -89,7 +91,67 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " scene_revision=" << scene_revision
          << " width=" << width
          << " height=" << height
-         << " buffers_written=" << buffers_written << '\n';
+         << " buffers_written=" << buffers_written
+         << " validation_messages=" << frame.validation_message_count << '\n';
+}
+
+// GfMatrix4d is row-major and multiplies row vectors, so its memory is the
+// column-major layout of the same transform for column vectors.
+Lotus::Matrix4 ToLotusMatrix(const GfMatrix4d& matrix) {
+  Lotus::Matrix4 result{};
+  const double* data = matrix.data();
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    result[index] = static_cast<float>(data[index]);
+  }
+  return result;
+}
+
+// The render pass state's matrices already conform the camera to the framing
+// (or, without one, to the viewport), with OpenGL clip conventions.
+Lotus::Camera ToLotusCamera(const HdRenderPassState& state) {
+  return Lotus::Camera{ToLotusMatrix(state.GetWorldToViewMatrix()),
+      ToLotusMatrix(state.GetProjectionMatrix())};
+}
+
+// The render buffers all bound to a pass share one size; render at the colour
+// buffer's, or else the first bound buffer's.
+bool TargetExtent(const HdRenderPassAovBindingVector& bindings,
+    std::uint32_t& width, std::uint32_t& height) {
+  const HdLotusRenderBuffer* chosen = nullptr;
+  for (const HdRenderPassAovBinding& binding : bindings) {
+    const auto* buffer =
+        dynamic_cast<const HdLotusRenderBuffer*>(binding.renderBuffer);
+    if (buffer == nullptr || buffer->GetWidth() == 0 ||
+        buffer->GetHeight() == 0) {
+      continue;
+    }
+    if (chosen == nullptr || binding.aovName == HdAovTokens->color) {
+      chosen = buffer;
+    }
+  }
+  if (chosen == nullptr) {
+    return false;
+  }
+  width = chosen->GetWidth();
+  height = chosen->GetHeight();
+  return true;
+}
+
+// CameraUtilFraming's windows are in pixels with y down, which is the
+// backend's product origin. Without a valid framing the whole image is the
+// display and data window, as for HdEmbree.
+void ApplyFraming(const HdRenderPassState& state,
+    Lotus::OffscreenTarget& target) {
+  const CameraUtilFraming& framing = state.GetFraming();
+  if (!framing.IsValid()) {
+    return;
+  }
+  const GfRange2f& display = framing.displayWindow;
+  target.display_window = {display.GetMin()[0], display.GetMin()[1],
+      display.GetSize()[0], display.GetSize()[1]};
+  const GfRect2i& data = framing.dataWindow;
+  target.data_window = {data.GetMinX(), data.GetMinY(), data.GetWidth(),
+      data.GetHeight()};
 }
 
 class AdapterState {
@@ -107,8 +169,10 @@ public:
     UpdateWorldLocked();
   }
 
-  void Render(const HdRenderPassAovBindingVector& bindings) {
+  void Render(const HdRenderPassState& state) {
+    const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
+    world_.SetCamera(ToLotusCamera(state));
     const Lotus::FrameSnapshot snapshot = world_.Commit();
     const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(snapshot);
     if (draw.triangle_count == 0) {
@@ -121,9 +185,15 @@ public:
       return;
     }
 
+    Lotus::OffscreenTarget target;
+    if (!TargetExtent(bindings, target.width, target.height)) {
+      return;
+    }
+    ApplyFraming(state, target);
+
     const std::filesystem::path shaders = PluginDirectory() / "shaders";
     const Lotus::GpuFrameEvidence frame = Lotus::RenderOffscreen(
-        draw, (shaders / "triangle.vert.spv").string(),
+        draw, target, (shaders / "triangle.vert.spv").string(),
         (shaders / "triangle.frag.spv").string(), 1);
     if (frame.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus Hydra frame failed: %s", frame.detail.c_str());
@@ -131,16 +201,12 @@ public:
     }
 
     std::size_t buffers_written{};
-    std::uint32_t width{};
-    std::uint32_t height{};
     for (const HdRenderPassAovBinding& binding : bindings) {
       auto* buffer =
           dynamic_cast<HdLotusRenderBuffer*>(binding.renderBuffer);
       if (buffer == nullptr) {
         continue;
       }
-      width = std::max(width, buffer->GetWidth());
-      height = std::max(height, buffer->GetHeight());
       bool wrote = false;
       if (binding.aovName == HdAovTokens->color) {
         wrote = buffer->WriteColor(frame.color.payload, frame.color.width,
@@ -159,8 +225,8 @@ public:
       }
     }
     ++frame_index_;
-    AppendHostEvidence(frame_index_, frame, width, height, buffers_written,
-        snapshot.revision);
+    AppendHostEvidence(frame_index_, frame, target.width, target.height,
+        buffers_written, snapshot.revision);
   }
 
 private:
@@ -240,7 +306,7 @@ private:
   void _Execute(const HdRenderPassStateSharedPtr& render_pass_state,
       const TfTokenVector& render_tags) override {
     (void)render_tags;
-    state_->Render(render_pass_state->GetAovBindings());
+    state_->Render(*render_pass_state);
   }
 
   std::shared_ptr<AdapterState> state_;
@@ -339,51 +405,36 @@ bool HdLotusRenderBuffer::WriteColor(
     const std::vector<std::uint8_t>& rgba8, std::uint32_t source_width,
     std::uint32_t source_height) {
   std::scoped_lock lock(mutex_);
-  const std::uint32_t width = static_cast<std::uint32_t>(dimensions_[0]);
-  const std::uint32_t height = static_cast<std::uint32_t>(dimensions_[1]);
-  if (map_count_ != 0 || format_ != HdFormatUNorm8Vec4 ||
-      dimensions_[2] != 1 || source_width == 0 || source_height == 0 ||
-      rgba8.size() != static_cast<std::size_t>(source_width) * source_height * 4U ||
-      data_.size() != static_cast<std::size_t>(width) * height * 4U) {
-    return false;
-  }
-  for (std::uint32_t y = 0; y < height; ++y) {
-    const std::uint32_t source_y = y * source_height / height;
-    for (std::uint32_t x = 0; x < width; ++x) {
-      const std::uint32_t source_x = x * source_width / width;
-      const std::size_t source =
-          (static_cast<std::size_t>(source_y) * source_width + source_x) * 4U;
-      const std::size_t target =
-          (static_cast<std::size_t>(y) * width + x) * 4U;
-      std::copy_n(rgba8.data() + source, 4, data_.data() + target);
-    }
-  }
-  return true;
+  return WriteRowsFlippedLocked(rgba8.data(), rgba8.size(), source_width,
+      source_height, HdFormatUNorm8Vec4);
 }
 
 bool HdLotusRenderBuffer::WriteDepth(const std::vector<float>& depth,
     std::uint32_t source_width,
     std::uint32_t source_height) {
   std::scoped_lock lock(mutex_);
-  const std::uint32_t width = static_cast<std::uint32_t>(dimensions_[0]);
-  const std::uint32_t height = static_cast<std::uint32_t>(dimensions_[1]);
-  if (map_count_ != 0 || format_ != HdFormatFloat32 || dimensions_[2] != 1 ||
-      source_width == 0 || source_height == 0 ||
-      depth.size() != static_cast<std::size_t>(source_width) * source_height ||
-      data_.size() != static_cast<std::size_t>(width) * height * sizeof(float)) {
+  return WriteRowsFlippedLocked(
+      reinterpret_cast<const std::uint8_t*>(depth.data()),
+      depth.size() * sizeof(float), source_width, source_height,
+      HdFormatFloat32);
+}
+
+bool HdLotusRenderBuffer::WriteRowsFlippedLocked(const std::uint8_t* source,
+    std::size_t source_bytes, std::uint32_t source_width,
+    std::uint32_t source_height, HdFormat source_format) {
+  const std::size_t pixel_size = HdDataSizeOfFormat(source_format);
+  const std::size_t width = static_cast<std::size_t>(dimensions_[0]);
+  const std::size_t height = static_cast<std::size_t>(dimensions_[1]);
+  if (map_count_ != 0 || format_ != source_format || dimensions_[2] != 1 ||
+      source_width != width || source_height != height ||
+      source_bytes != width * height * pixel_size ||
+      data_.size() != source_bytes) {
     return false;
   }
-  for (std::uint32_t y = 0; y < height; ++y) {
-    const std::uint32_t source_y = y * source_height / height;
-    for (std::uint32_t x = 0; x < width; ++x) {
-      const std::uint32_t source_x = x * source_width / width;
-      const float value = depth[static_cast<std::size_t>(source_y) *
-                                    source_width +
-                                source_x];
-      const std::size_t target =
-          (static_cast<std::size_t>(y) * width + x) * sizeof(float);
-      std::memcpy(data_.data() + target, &value, sizeof(value));
-    }
+  const std::size_t row_bytes = width * pixel_size;
+  for (std::size_t y = 0; y < height; ++y) {
+    std::memcpy(data_.data() + (height - 1U - y) * row_bytes,
+        source + y * row_bytes, row_bytes);
   }
   return true;
 }

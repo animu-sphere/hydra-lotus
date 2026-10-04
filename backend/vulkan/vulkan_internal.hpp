@@ -4,6 +4,7 @@
 // headers only.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -13,6 +14,8 @@
 #include <vector>
 
 #include <vulkan/vulkan.h>
+
+#include <lotus/render_world.hpp>
 
 namespace Lotus::vulkan_internal {
 
@@ -252,6 +255,24 @@ inline VkShaderModule CreateShader(VkDevice device,
     return VK_NULL_HANDLE;
   }
   return shader;
+}
+
+// The bootstrap shaders' push constants: one float4x4, world to clip.
+constexpr std::uint32_t kFrameConstantsSize = sizeof(Matrix4);
+
+// The core hands out OpenGL clip space (y up, z in [-w, w]); Vulkan's is
+// y down with z in [0, w]. Folding the change into the matrix keeps the
+// shaders free of either convention.
+inline Matrix4 VulkanWorldToClip(const Matrix4& opengl) {
+  Matrix4 vulkan = opengl;
+  for (int column = 0; column < 4; ++column) {
+    const float y = opengl[column * 4 + 1];
+    const float z = opengl[column * 4 + 2];
+    const float w = opengl[column * 4 + 3];
+    vulkan[column * 4 + 1] = -y;
+    vulkan[column * 4 + 2] = 0.5F * (z + w);
+  }
+  return vulkan;
 }
 
 } // namespace Lotus::vulkan_internal

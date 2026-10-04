@@ -34,6 +34,8 @@ public:
   void Resolve() override;
   bool IsConverged() const override;
 
+  // The source is a backend product: the buffer's size, rows top-down. Hydra
+  // render buffers store rows bottom-up, so the rows are flipped on the way in.
   bool WriteColor(const std::vector<std::uint8_t>& rgba8,
       std::uint32_t source_width, std::uint32_t source_height);
   bool WriteDepth(const std::vector<float>& depth,
@@ -45,6 +47,10 @@ protected:
   void _Deallocate() override;
 
 private:
+  bool WriteRowsFlippedLocked(const std::uint8_t* source,
+      std::size_t source_bytes, std::uint32_t source_width,
+      std::uint32_t source_height, HdFormat source_format);
+
   mutable std::mutex mutex_;
   GfVec3i dimensions_{0};
   HdFormat format_{HdFormatInvalid};

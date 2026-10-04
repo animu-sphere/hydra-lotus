@@ -22,20 +22,26 @@ bool Check(bool condition, const char* message) {
 
 int main() {
   HdLotusRenderBuffer color(SdfPath("/color"));
-  if (!Check(color.Allocate(GfVec3i(4, 4, 1), HdFormatUNorm8Vec4, false),
+  if (!Check(color.Allocate(GfVec3i(2, 2, 1), HdFormatUNorm8Vec4, false),
           "color allocation failed")) {
     return 1;
   }
+  // Top-down source rows: red, green over blue, white.
   const std::vector<std::uint8_t> source{
       255, 0, 0, 255, 0, 255, 0, 255,
       0, 0, 255, 255, 255, 255, 255, 255};
-  if (!Check(color.WriteColor(source, 2, 2), "color write failed")) {
+  if (!Check(!color.WriteColor(source, 1, 4),
+          "a color source of another size was accepted") ||
+      !Check(color.WriteColor(source, 2, 2), "color write failed")) {
     return 1;
   }
   color.SetConverged(true);
   const auto* pixels = static_cast<const std::uint8_t*>(color.Map());
-  if (!Check(pixels != nullptr && pixels[0] == 255 && pixels[3] == 255,
-          "scaled color payload is incorrect") ||
+  // Hydra's rows are bottom-up: blue, white first, then red, green.
+  if (!Check(pixels != nullptr && pixels[0] == 0 && pixels[2] == 255 &&
+                 pixels[4] == 255 && pixels[8] == 255 && pixels[9] == 0 &&
+                 pixels[13] == 255 && pixels[15] == 255,
+          "color rows were not flipped") ||
       !Check(color.IsMapped(), "color map state is incorrect") ||
       !Check(color.IsConverged(), "color did not converge")) {
     return 1;
@@ -43,15 +49,16 @@ int main() {
   color.Unmap();
 
   HdLotusRenderBuffer depth(SdfPath("/depth"));
-  if (!Check(depth.Allocate(GfVec3i(2, 2, 1), HdFormatFloat32, false),
+  if (!Check(depth.Allocate(GfVec3i(1, 2, 1), HdFormatFloat32, false),
           "depth allocation failed") ||
-      !Check(depth.WriteDepth({0.25F}, 1, 1), "depth write failed")) {
+      !Check(!depth.WriteDepth({0.25F}, 1, 1),
+          "a depth source of another size was accepted") ||
+      !Check(depth.WriteDepth({0.25F, 0.75F}, 1, 2), "depth write failed")) {
     return 1;
   }
   const auto* depths = static_cast<const float*>(depth.Map());
-  if (!Check(depths != nullptr && depths[0] == 0.25F &&
-                 depths[3] == 0.25F,
-          "scaled depth payload is incorrect")) {
+  if (!Check(depths != nullptr && depths[0] == 0.75F && depths[1] == 0.25F,
+          "depth rows were not flipped")) {
     return 1;
   }
   depth.Unmap();

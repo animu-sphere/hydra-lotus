@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,6 +57,19 @@ struct GpuFrameEvidence {
   DepthProduct depth;
 };
 
+// The image an offscreen frame renders into. Rectangles are {x, y, width,
+// height} in pixels with the products' top-left origin.
+struct OffscreenTarget {
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  // Where normalized device coordinates [-1, 1]^2 land: a host's display
+  // window. It may extend past the image. Empty means the whole image.
+  std::array<float, 4> display_window{};
+  // The pixels that are rendered, clamped to the image; the rest keep the
+  // clear values. Empty means the whole image.
+  std::array<std::int32_t, 4> data_window{};
+};
+
 // This is a capability probe, not a renderer implementation. Generated source
 // never reports a GPU frame until the project implements and validates one.
 [[nodiscard]] BackendCapability ProbeVulkanBackend();
@@ -65,6 +79,7 @@ struct GpuFrameEvidence {
 // same backend code without source-tree fallbacks.
 [[nodiscard]] GpuFrameEvidence RenderOffscreen(
     const DrawSummary& draw,
+    const OffscreenTarget& target,
     const std::string& vertex_shader,
     const std::string& fragment_shader,
     std::uint32_t frame_count);

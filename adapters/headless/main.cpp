@@ -130,6 +130,22 @@ bool WriteReport(const std::string& path,
   return true;
 }
 
+// A perspective camera 3 units in front of the bootstrap triangle, looking
+// down -Z: 45 degree vertical field of view, square aspect, clipping range
+// [1, 10]. A transposed or misapplied matrix moves the triangle off the
+// centre pixel or its depth out of range, so the product checks catch it.
+Lotus::Camera BootstrapCamera() {
+  constexpr float kFocal = 2.41421356F; // 1 / tan(22.5 degrees)
+  constexpr float kNear = 1.0F;
+  constexpr float kFar = 10.0F;
+  Lotus::Camera camera;
+  camera.view[14] = -3.0F;
+  camera.projection = {kFocal, 0.0F, 0.0F, 0.0F, 0.0F, kFocal, 0.0F, 0.0F,
+      0.0F, 0.0F, (kFar + kNear) / (kNear - kFar), -1.0F,
+      0.0F, 0.0F, 2.0F * kFar * kNear / (kNear - kFar), 0.0F};
+  return camera;
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -169,6 +185,7 @@ int main(int argc, char** argv) {
 
   Lotus::RenderWorld world;
   world.SetBootstrapTriangle();
+  world.SetCamera(BootstrapCamera());
   const Lotus::FrameSnapshot first = world.Commit();
   const Lotus::FrameSnapshot unchanged = world.Commit();
   const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(first);
@@ -178,8 +195,11 @@ int main(int argc, char** argv) {
   const Lotus::BackendCapability capability = Lotus::ProbeVulkanBackend();
   const std::filesystem::path shader_directory =
       std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+  Lotus::OffscreenTarget target;
+  target.width = 64;
+  target.height = 64;
   const Lotus::GpuFrameEvidence frame = Lotus::RenderOffscreen(
-      draw, (shader_directory / "triangle.vert.spv").string(),
+      draw, target, (shader_directory / "triangle.vert.spv").string(),
       (shader_directory / "triangle.frag.spv").string(), 1000);
 
   bool color_ok = false;
