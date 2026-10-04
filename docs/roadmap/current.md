@@ -23,11 +23,13 @@ What is left of
 - ✅ **Camera.** The Hydra camera's view and projection, and the framing's
   display and data windows, place the bootstrap triangle; the headless runner
   checks it through a perspective camera.
-- ⬜ **A persistent offscreen renderer.** Every Hydra frame creates a Vulkan
-  instance, device and pipeline, against
-  [§23](../design/DESIGN_POLICY.md#23-cpu-performance). The device and
-  pipeline outlive frames; the targets are recreated only when the AOV size
-  changes.
+- ✅ **A persistent offscreen renderer.** `Lotus::OffscreenRenderer` keeps
+  the Vulkan instance, device and pipeline across frames and recreates its
+  targets only when the AOV size changes
+  ([§23](../design/DESIGN_POLICY.md#23-cpu-performance)). The usdview smoke
+  test checks that one renderer serves every Hydra frame and that the targets
+  are created once per AOV size; the headless runner checks reuse and a
+  resize.
 - ✅ **Triangle.** The scaffold's hard-coded triangle, in the headless
   runner, the viewport and `testusdview`.
 - 🚧 **Basic AOVs.** Colour, depth and primId exist as CPU render buffers.

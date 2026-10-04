@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,9 +44,15 @@ struct DepthProduct {
 struct GpuFrameEvidence {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
+  // Frames completed since the renderer was created, this call's included.
   std::uint64_t completion = 0;
+  // Frames this call rendered.
   std::uint32_t frames_rendered = 0;
+  // How many times the renderer has created its targets: once, plus once per
+  // change of target size.
+  std::uint32_t target_creations = 0;
   bool validation_available = false;
+  // Messages since the renderer was created.
   std::uint32_t validation_message_count = 0;
   std::string validation_detail;
   std::string device_name;
@@ -74,9 +81,34 @@ struct OffscreenTarget {
 // never reports a GPU frame until the project implements and validates one.
 [[nodiscard]] BackendCapability ProbeVulkanBackend();
 
-// Render a deterministic bootstrap draw through the project extraction output.
-// Shader paths are explicit so build-tree and install-tree layouts exercise the
-// same backend code without source-tree fallbacks.
+// A Vulkan instance, device and pipeline that outlive frames. The targets and
+// their readback buffers are created on the first frame and recreated only
+// when the target size changes (design policy section 23). One frame is in
+// flight: Render returns after the GPU has finished and the products are read
+// back.
+class OffscreenRenderer {
+public:
+  virtual ~OffscreenRenderer() = default;
+
+  // Render the bootstrap draw `frame_count` times into `target` and read the
+  // products back. After a failed submission the renderer stays failed;
+  // create a new one.
+  [[nodiscard]] virtual GpuFrameEvidence Render(const DrawSummary& draw,
+      const OffscreenTarget& target, std::uint32_t frame_count) = 0;
+};
+
+// Creates the device and pipeline, enabling Vulkan validation capture
+// whenever the loader offers it. Returns nullptr with `status`/`error`
+// describing why: the core-only configuration and missing device capability
+// report Skip, real failures Fail. Shader paths are explicit so build-tree and
+// install-tree layouts exercise the same backend code without source-tree
+// fallbacks.
+[[nodiscard]] std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(
+    const std::string& vertex_shader, const std::string& fragment_shader,
+    FrameStatus& status, std::string& error);
+
+// One-shot convenience: create a renderer, render `frame_count` frames and
+// destroy it.
 [[nodiscard]] GpuFrameEvidence RenderOffscreen(
     const DrawSummary& draw,
     const OffscreenTarget& target,

@@ -76,7 +76,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
     const Lotus::GpuFrameEvidence& frame,
     std::uint32_t width, std::uint32_t height,
     std::size_t buffers_written,
-    std::uint64_t scene_revision) {
+    std::uint64_t scene_revision,
+    std::uint64_t renderer_creations) {
   const char* path = std::getenv("LOTUS_HYDRA_EVIDENCE");
   if (path == nullptr || *path == '\0') {
     return;
@@ -92,6 +93,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " width=" << width
          << " height=" << height
          << " buffers_written=" << buffers_written
+         << " renderer_creations=" << renderer_creations
+         << " target_creations=" << frame.target_creations
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 
@@ -191,12 +194,26 @@ public:
     }
     ApplyFraming(state, target);
 
-    const std::filesystem::path shaders = PluginDirectory() / "shaders";
-    const Lotus::GpuFrameEvidence frame = Lotus::RenderOffscreen(
-        draw, target, (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), 1);
+    if (!renderer_) {
+      const std::filesystem::path shaders = PluginDirectory() / "shaders";
+      Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
+      std::string error;
+      renderer_ = Lotus::CreateOffscreenRenderer(
+          (shaders / "triangle.vert.spv").string(),
+          (shaders / "triangle.frag.spv").string(), status, error);
+      if (!renderer_) {
+        TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",
+            error.c_str());
+        return;
+      }
+      ++renderer_creations_;
+    }
+    const Lotus::GpuFrameEvidence frame = renderer_->Render(draw, target, 1);
     if (frame.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus Hydra frame failed: %s", frame.detail.c_str());
+      // A failed submission leaves the renderer unusable; the next frame
+      // creates a new one.
+      renderer_.reset();
       return;
     }
 
@@ -226,7 +243,7 @@ public:
     }
     ++frame_index_;
     AppendHostEvidence(frame_index_, frame, target.width, target.height,
-        buffers_written, snapshot.revision);
+        buffers_written, snapshot.revision, renderer_creations_);
   }
 
 private:
@@ -240,6 +257,10 @@ private:
   std::mutex mutex_;
   std::unordered_map<std::string, bool> meshes_;
   Lotus::RenderWorld world_;
+  // Created on the first frame and kept across frames (design policy
+  // section 23).
+  std::unique_ptr<Lotus::OffscreenRenderer> renderer_;
+  std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
 };
 
