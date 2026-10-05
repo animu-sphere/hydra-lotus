@@ -26,6 +26,7 @@
 #include <pxr/imaging/hd/renderPass.h>
 #include <pxr/imaging/hd/renderPassState.h>
 #include <pxr/imaging/hd/resourceRegistry.h>
+#include <pxr/imaging/hd/rprimCollection.h>
 #include <pxr/imaging/hd/tokens.h>
 
 #include <lotus/extraction.hpp>
@@ -51,6 +52,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -242,6 +244,9 @@ void ApplyFraming(const HdRenderPassState& state,
 // environment, so the default UsdPreviewSurface grey shows its albedo.
 constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 
+// The scene keys of the meshes a render pass does not trace.
+using MeshExclusion = std::unordered_set<std::string>;
+
 class AdapterState {
 public:
   AdapterState() {
@@ -274,6 +279,11 @@ public:
     return scene_stats_;
   }
 
+  Lotus::FrameSnapshot GetSelectedSnapshot() {
+    std::scoped_lock lock(mutex_);
+    return selected_snapshot_;
+  }
+
   // Whether the latest pass finished its image. A failed pass counts as
   // finished, so a host waiting for convergence does not wait forever.
   bool IsConverged() {
@@ -283,8 +293,9 @@ public:
 
   // Each pass adds one radiance sample per pixel until the accumulation
   // holds `converged_samples`; the backend restarts it when the scene,
-  // camera or framing changes.
-  void Render(const HdRenderPassState& state, int converged_samples) {
+  // camera or framing changes. The meshes in `exclusion` are not traced.
+  void Render(const HdRenderPassState& state, int converged_samples,
+      const std::shared_ptr<const MeshExclusion>& exclusion) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
     converged_ = true;
@@ -294,7 +305,8 @@ public:
       }
     }
     world_.SetCamera(ToLotusCamera(state));
-    const Lotus::FrameSnapshot snapshot = world_.Commit();
+    const Lotus::FrameSnapshot snapshot = Select(world_.Commit(), exclusion);
+    selected_snapshot_ = snapshot;
     const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(snapshot);
     Lotus::OffscreenTarget target;
     if (!ConfigureTarget(bindings, target)) {
@@ -381,8 +393,46 @@ public:
   }
 
 private:
+  // The snapshot with every mesh in `exclusion` hidden. The hidden copy of
+  // the scene is made only when the world's scene or the exclusion changes,
+  // and not at all when the exclusion hides nothing, so an unchanged frame
+  // plans no GPU work. A hidden mesh's geometry stays resident: a selection
+  // change rewrites only the instances.
+  Lotus::FrameSnapshot Select(Lotus::FrameSnapshot snapshot,
+      const std::shared_ptr<const MeshExclusion>& exclusion) {
+    if (snapshot.scene != selection_source_ || exclusion != exclusion_) {
+      selection_source_ = snapshot.scene;
+      exclusion_ = exclusion;
+      selected_scene_ = snapshot.scene;
+      hidden_triangles_ = 0;
+      std::shared_ptr<Lotus::LotusScene> scene;
+      for (const auto& [id, mesh] : snapshot.scene->meshes) {
+        if (!mesh.instance.visible || !exclusion->contains(id)) {
+          continue;
+        }
+        if (!scene) {
+          scene = std::make_shared<Lotus::LotusScene>(*snapshot.scene);
+          selected_scene_ = scene;
+        }
+        scene->meshes.at(id).instance.visible = false;
+        hidden_triangles_ += static_cast<std::uint32_t>(
+            mesh.geometry->triangles.size() *
+            Lotus::PlacementTransforms(mesh.instance).size());
+      }
+    }
+    snapshot.scene = selected_scene_;
+    snapshot.triangle_count -= hidden_triangles_;
+    return snapshot;
+  }
+
   std::mutex mutex_;
   Lotus::RenderWorld world_;
+  // The latest pass's exclusion, the scene it selected from and the result.
+  std::shared_ptr<const MeshExclusion> exclusion_;
+  std::shared_ptr<const Lotus::LotusScene> selection_source_;
+  std::shared_ptr<const Lotus::LotusScene> selected_scene_;
+  std::uint32_t hidden_triangles_{};
+  Lotus::FrameSnapshot selected_snapshot_;
   // Created on the first frame and kept across frames (design policy
   // section 23).
   std::unique_ptr<Lotus::OffscreenRenderer> renderer_;
@@ -695,14 +745,61 @@ public:
 private:
   void _Execute(const HdRenderPassStateSharedPtr& render_pass_state,
       const TfTokenVector& render_tags) override {
-    (void)render_tags;
     state_->Render(*render_pass_state,
         GetRenderIndex()->GetRenderDelegate()->GetRenderSetting<int>(
             HdRenderSettingsTokens->convergedSamplesPerPixel,
-            kDefaultConvergedSamples));
+            kDefaultConvergedSamples),
+        Exclusion(render_tags));
+  }
+
+  void _MarkCollectionDirty() override {
+    exclusion_.reset();
+  }
+
+  // The render index's rprims that the pass does not trace: those under none
+  // of the collection's root paths or under one of its exclude paths, and
+  // those whose render tag is not one of `render_tags` (when there are any).
+  // The collection's material tag is ignored: a path tracer traces every
+  // material in one pass. The exclusion is recomputed only when the
+  // collection, the tags, the set of rprims or an rprim's render tag changes.
+  std::shared_ptr<const MeshExclusion> Exclusion(
+      const TfTokenVector& render_tags) {
+    HdRenderIndex& index = *GetRenderIndex();
+    const HdChangeTracker& tracker = index.GetChangeTracker();
+    const unsigned rprim_version = tracker.GetRprimIndexVersion();
+    const unsigned tag_version = tracker.GetRenderTagVersion();
+    if (exclusion_ && render_tags == render_tags_ &&
+        rprim_version == rprim_version_ && tag_version == tag_version_) {
+      return exclusion_;
+    }
+    const HdRprimCollection& collection = GetRprimCollection();
+    const auto under = [](const SdfPath& id, const SdfPathVector& roots) {
+      return std::any_of(roots.begin(), roots.end(),
+          [&](const SdfPath& root) { return id.HasPrefix(root); });
+    };
+    auto exclusion = std::make_shared<MeshExclusion>();
+    for (const SdfPath& id : index.GetRprimIds()) {
+      if (!under(id, collection.GetRootPaths()) ||
+          under(id, collection.GetExcludePaths()) ||
+          (!render_tags.empty() &&
+              std::find(render_tags.begin(), render_tags.end(),
+                  index.GetRenderTag(id)) == render_tags.end())) {
+        exclusion->insert(id.GetString());
+      }
+    }
+    exclusion_ = std::move(exclusion);
+    render_tags_ = render_tags;
+    rprim_version_ = rprim_version;
+    tag_version_ = tag_version;
+    return exclusion_;
   }
 
   std::shared_ptr<AdapterState> state_;
+  // Cached until _MarkCollectionDirty or a change Exclusion detects.
+  std::shared_ptr<const MeshExclusion> exclusion_;
+  TfTokenVector render_tags_;
+  unsigned rprim_version_{};
+  unsigned tag_version_{};
 };
 
 } // namespace
@@ -1023,6 +1120,10 @@ Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
 
 Lotus::GpuSceneStats HdLotusRenderDelegate::GetGpuSceneStats() {
   return impl_->state->GetGpuSceneStats();
+}
+
+Lotus::FrameSnapshot HdLotusRenderDelegate::GetSelectedSnapshot() {
+  return impl_->state->GetSelectedSnapshot();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -351,9 +351,7 @@ Coarse polygons use OpenUSD's
 [`HdMeshUtil` triangulation](https://openusd.org/dev/api/class_hd_mesh_util.html):
 fan triangles, winding normalization, hole-face exclusion and coarse-face
 mapping. Subdivision refinement, general concave-polygon tessellation,
-normals, face-varying primvars and materials are not implemented. The
-existing render pass also does not filter geometry by collection or render
-tag.
+normals, face-varying primvars and materials are not implemented.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -375,6 +373,35 @@ surface occludes shows its 0.18 albedo. The host evidence log identifies the cho
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
 
+### Render-pass selection
+
+A render pass traces the meshes of its collection whose render tag it was
+given. A render-index rprim under none of the collection's root paths, under
+one of its exclude paths, or with a render tag outside the pass's render
+tags is hidden for that pass; with no render tags every tag is traced, as
+`HdRenderPass` specifies. The collection's material tag is ignored, as a
+path tracer traces every material in one pass. Hydra syncs only rprims
+whose tag some task requests, so an rprim it never synced is absent, while
+one that was synced and then deselected stays in the CPU scene with its
+geometry.
+
+Selection hides rather than removes: the pass's snapshot is the CPU
+snapshot with the excluded meshes' `visible` cleared, so their geometry and
+BLASes stay resident and a selection change, such as usdview's proxy or
+guide purpose toggles, rewrites only the instances and restarts the
+accumulation. The selection is computed only when the collection, the render
+tags, the render index's rprims or an rprim's render tag changes, and the
+hidden copy of the scene only when that selection or the CPU scene changes
+and hides a visible mesh; an unchanged frame neither traverses the scene nor
+plans GPU work. `HdLotusRenderDelegate::GetSelectedSnapshot` returns the
+latest pass's snapshot, recorded before the pass checks its AOVs, while
+`GetFrameSnapshot` remains the whole CPU scene.
+
+Every render pass of a delegate shares one renderer and GPU scene, so two
+passes with different selections, like two with different cameras, restart
+each other's accumulation. A mesh synced directly by a test, outside any
+render index, is traced by every pass.
+
 The CPU scene and Hydra extraction tests, plus multi-triangle bootstrap AOV
 regression coverage, are recorded in the
 [mesh extraction report](../reports/2026-10-05-cpu-mesh-extraction.md); the
@@ -391,7 +418,9 @@ progressive Hydra convergence in the
 reference images and the statistical match in the
 [reference images report](../reports/2026-10-05-reference-images.md);
 instancer placements against UsdGeom, and their GPU instances, in the
-[Hydra instancers report](../reports/2026-10-05-hydra-instancers.md).
+[Hydra instancers report](../reports/2026-10-05-hydra-instancers.md);
+collection and render-tag selection in the
+[render-pass selection report](../reports/2026-10-05-render-pass-selection.md).
 
 ### Instancers
 

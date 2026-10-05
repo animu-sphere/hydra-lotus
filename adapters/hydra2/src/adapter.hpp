@@ -98,6 +98,10 @@ public:
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();
   // The GPU scene after the latest render pass; empty before the first.
   [[nodiscard]] Lotus::GpuSceneStats GetGpuSceneStats();
+  // The snapshot the latest render pass traced: the CPU scene with every mesh
+  // outside the pass's collection or render tags hidden. Recorded before the
+  // pass validates its AOVs or creates a renderer; empty before the first.
+  [[nodiscard]] Lotus::FrameSnapshot GetSelectedSnapshot();
 
 private:
   class Impl;

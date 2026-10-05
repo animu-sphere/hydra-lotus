@@ -9,6 +9,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Render-pass selection. A Hydra render pass traces only the meshes under
+  its collection's root paths and outside its exclude paths whose render
+  tag it was given (any, without tags). Excluded meshes are hidden for the
+  pass with their geometry resident, so toggling a purpose in usdview
+  rewrites only the instances. `HdLotusRenderDelegate::GetSelectedSnapshot`
+  returns the snapshot the latest pass traced.
+  `lotus-renderer-hydra-render-pass` syncs a USD stage through UsdImaging
+  and checks the traced meshes across render-tag, purpose, visibility and
+  collection changes; `lotus-renderer-hydra-render-pass-gpu` also checks
+  the GPU scene's instances and that deselection uploads nothing.
+
 - Hydra instancers. `HdLotusInstancer` places an instancer's prototypes
   from its translation, rotation, scale and transform primvars, nested
   instancers included, so point instancers and native instancing render.
