@@ -116,12 +116,19 @@ if(LOTUS_BUILD_TESTS)
   target_compile_definitions(lotus-hydra2-mesh-test PRIVATE
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 
-  # Only this test reads a USD stage: it syncs one through UsdImaging.
+  # Only these tests read a USD stage: they sync one through UsdImaging.
   add_executable(lotus-hydra2-instancer-test tests/instancer_test.cpp)
   target_link_libraries(lotus-hydra2-instancer-test
     PRIVATE lotus-hydra2-runtime usdImaging usdGeom usd sdf)
   target_compile_definitions(lotus-hydra2-instancer-test PRIVATE
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+
+  add_executable(lotus-hydra2-render-pass-test tests/render_pass_test.cpp)
+  target_link_libraries(lotus-hydra2-render-pass-test
+    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usdGeom usd sdf)
+  target_compile_definitions(lotus-hydra2-render-pass-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-render-pass-test hdLotus)
 
   if(PXR_INCLUDE_DIRS)
     list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
@@ -149,8 +156,14 @@ if(LOTUS_BUILD_TESTS)
   add_test(NAME lotus-renderer-hydra-mesh COMMAND lotus-hydra2-mesh-test)
   add_test(NAME lotus-renderer-hydra-instancer
     COMMAND lotus-hydra2-instancer-test)
-  set_tests_properties(lotus-renderer-hydra-aov PROPERTIES
-    LABELS "gpu" SKIP_RETURN_CODE 77)
+  add_test(NAME lotus-renderer-hydra-render-pass
+    COMMAND lotus-hydra2-render-pass-test)
+  add_test(NAME lotus-renderer-hydra-render-pass-gpu
+    COMMAND lotus-hydra2-render-pass-test --gpu)
+  set_tests_properties(
+    lotus-renderer-hydra-aov
+    lotus-renderer-hydra-render-pass-gpu
+    PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
     lotus-renderer-plugin-discovery
     lotus-renderer-delegate-creation
@@ -158,6 +171,8 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-mesh
     lotus-renderer-hydra-instancer
+    lotus-renderer-hydra-render-pass
+    lotus-renderer-hydra-render-pass-gpu
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 

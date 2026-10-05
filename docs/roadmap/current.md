@@ -51,6 +51,8 @@ phase's full scope and exit criteria are
 [§4](../design/ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer).
 CPU coarse-mesh extraction, ordinary mesh placement and Hydra instancer
 placements ([instancer evidence](../reports/2026-10-05-hydra-instancers.md)),
+selected by the render pass's collection and render tags
+([render-pass selection evidence](../reports/2026-10-05-render-pass-selection.md)),
 the incremental
 upload of geometry and instance buffers, and a BLAS per geometry with a TLAS
 over the instances are implemented
@@ -79,9 +81,6 @@ Needed alongside the slice
 ([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles),
 principle 8):
 
-- ⬜ **Render-pass selection.** Respect the render pass's collection and
-  render tags; every synced mesh is traced today
-  ([scene reference](../reference/SCENE.md#hydra-extraction)).
 - ⬜ **Deterministic mode through Hydra**: a fixed RNG seed, spp, camera and
   frame index for a Hydra render. The headless runner's reference renders
   are deterministic already
