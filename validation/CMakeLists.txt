@@ -36,7 +36,8 @@ add_test(NAME lotus-renderer-host-capability-gate
 
 add_test(NAME lotus-renderer-evidence
   COMMAND "$<TARGET_FILE:lotus-headless>"
-    --report "${CMAKE_BINARY_DIR}/renderer-ctest-report.json")
+    --report "${CMAKE_BINARY_DIR}/renderer-ctest-report.json"
+    --images "${CMAKE_BINARY_DIR}/reference-images")
 
 add_test(NAME lotus-renderer-install-tree
   COMMAND "${CMAKE_COMMAND}"

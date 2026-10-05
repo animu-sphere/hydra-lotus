@@ -280,8 +280,58 @@ against radiance known in closed form or by independent quadrature
 `renderer.path.accumulation` checks the box filter's coverage against the
 projected triangle's area in each pixel, unclamped HDR output, split frames
 and the restart rules
-([report](../reports/2026-10-05-hdr-accumulation.md)). Reference images
-are [roadmap work](../roadmap/current.md).
+([report](../reports/2026-10-05-hdr-accumulation.md)).
+
+### Reference images
+
+The reference path tracer's images are of one fixed scene, rendered by
+`lotus-headless`
+([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
+
+- **Scene.** A Cornell box, 128×128 pixels, defined in
+  `adapters/headless/reference.cpp`. The box spans [-1, 1]³ and is open
+  towards the camera. Its walls are Lambert: white floor, ceiling and back,
+  a red left wall and a green right wall. Under the ceiling hangs a black
+  emitter with radiance (15, 13, 10). Inside stand a GGX metal block
+  (base (0.95, 0.85, 0.6), roughness 0.35) and a white Lambert block. The
+  environment is black, the bounce limit is the default 64, and the camera
+  is 3 units in front of the box with a 45° vertical field of view. Every
+  camera ray enters the box, so every pixel's alpha is 1.
+- **Deterministic mode.** An image is a function of its first sample index,
+  its sample count, the scene, the camera and the target
+  ([accumulation](#accumulation-and-the-pixel-filter)). `lotus-headless
+  --write-reference <directory>` renders the reference from sample index 0:
+  - `cornell-box-mean.pfm`: 1024 samples per pixel in one accumulation.
+  - `cornell-box-variance.pfm`: each pixel's per-sample variance,
+    estimated from 64 accumulations of 16 samples. These are the same
+    1024 samples.
+
+  Both files are committed in `validation/reference/`. Each is a
+  little-endian RGB portable float map, with rows from the bottom.
+- **The compared images.** `renderer.path.reference` renders one
+  accumulation from sample index 2²⁰, independent of the reference's
+  samples. It stops at 1, 16, 64, 256 and 1024 spp and compares each image
+  with the reference. `--images <directory>` writes the images as
+  `cornell-box-NNNNspp.pfm`. `ost build` and the evidence CTest write them
+  to `build/<target>/reference-images/`.
+- **Statistical match (DES-Q5).** For `N` samples against the reference's
+  `M`, a pixel's difference has variance `s²(1/N + 1/M)`, where `s²` is the
+  reference's per-sample variance. An image matches the reference when, in
+  every channel, two mean differences are within 5 standard errors:
+  - the mean difference over the whole image;
+  - the mean difference over every tile. A tile is 8×8 pixels, doubled
+    until it holds at least 1024 samples, so 32×32 at 1 spp.
+
+  A float-rounding floor of 10⁻⁶ + 10⁻⁵ of the reference's magnitude is
+  added to each standard error. For an estimator with less variance than
+  the reference's, such as NEE / MIS, `s²` overstates the variance, so the
+  test is conservative.
+- **Checks on the metric.** The same check renders the scene with the red
+  wall reflecting 10% more, at 1024 spp, and the comparison must reject
+  it. It also re-renders the reference's own samples and reports whether
+  they reproduce the committed mean bit for bit. That is expected only on
+  the device and build that wrote the reference, so it does not decide the
+  check.
 
 ## Hydra extraction
 
@@ -330,4 +380,6 @@ comparisons and Hydra silhouette checks in the
 environment and the path tracer in the
 [BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md); accumulation and
 progressive Hydra convergence in the
-[HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md).
+[HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md); the
+reference images and the statistical match in the
+[reference images report](../reports/2026-10-05-reference-images.md).

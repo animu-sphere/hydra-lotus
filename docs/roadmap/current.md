@@ -66,12 +66,12 @@ through a box-filtered point of its pixel, into an unclamped RGBA32F
 accumulation that Hydra receives as a float colour AOV and converges
 progressively
 ([HDR accumulation evidence](../reports/2026-10-05-hdr-accumulation.md)) —
-the *first physically correct image*. Remaining work:
-
-- ⬜ **Reference images.** A fixed deterministic test scene rendered by the
-  headless runner at 1, 16, 64, 256 and 1024 spp, compared in `validation/`
-  ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
-  The *reference path tracer* milestone.
+the *first physically correct image*. A fixed Cornell box, rendered by the
+headless runner at 1, 16, 64, 256 and 1024 spp, statistically matches a
+committed deterministic reference
+([reference images evidence](../reports/2026-10-05-reference-images.md)) —
+the *reference path tracer* milestone, which meets the phase's exit
+criteria.
 
 Needed alongside the slice
 ([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles),
@@ -80,16 +80,15 @@ principle 8):
 - ⬜ **Hydra instancers and render-pass selection.** Expand instance data
   and respect collection/render-tag selection; current CPU meshes have one
   ordinary placement each.
-- ⬜ **Deterministic mode**: fixed RNG seed, spp, camera and frame index.
-  A sample's randomness is already a function of the pixel and its sample
-  index alone, and an accumulation of a given spp is the same bytes however
-  its frames are split.
+- ⬜ **Deterministic mode through Hydra**: a fixed RNG seed, spp, camera and
+  frame index for a Hydra render. The headless runner's reference renders
+  are deterministic already
+  ([scene reference](../reference/SCENE.md#reference-images)). Hydra
+  always starts its accumulation at sample index 0 and has no setting for
+  it.
 - ⬜ **Extend per-pass GPU timestamps** beyond the scene pass to
   scene upload and BLAS/TLAS builds, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
-- ⬜ **Settle [DES-Q5](../design/DESIGN_POLICY.md#53-open-questions)**: how
-  "statistically matches the reference" is measured, before Renderer Phase 2
-  compares against it.
 
 ## Backend follow-up
 

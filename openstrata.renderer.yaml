@@ -33,6 +33,7 @@ validation:
     - renderer.path.bsdf
     - renderer.path.multibounce
     - renderer.path.accumulation
+    - renderer.path.reference
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

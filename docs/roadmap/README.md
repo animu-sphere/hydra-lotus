@@ -39,7 +39,7 @@ a version here when its predecessor is done.
 | Phase | Status | Target |
 | --- | --- | --- |
 | Renderer Phase 0 — Foundation | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
-| Renderer Phase 1 — Reference path tracer | 🚧 primary rays, BSDFs, multi-bounce transport and HDR accumulation implemented; reference images remain | unscheduled |
+| Renderer Phase 1 — Reference path tracer | ✅ exit criteria met ([reference images](../reports/2026-10-05-reference-images.md)); instancers, Hydra deterministic mode and timestamps remain alongside ([current](current.md#renderer-phase-1--reference-path-tracer)) | unscheduled |
 | Renderer Phase 1.5 — Minimal material IR | ⬜ | unscheduled |
 | Renderer Phase 2 — Wavefront path tracing | ⬜ | unscheduled |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |
@@ -62,7 +62,7 @@ A milestone is reached when its correctness evidence is a
 | Foundation | Renderer Phase 0 | 🚧 |
 | First ray-traced triangle | Renderer Phase 1 | ✅ [measured ray queries](../reports/2026-10-05-primary-rays.md) |
 | First physically correct image | Renderer Phase 1 | ✅ [measured accumulation](../reports/2026-10-05-hdr-accumulation.md) |
-| Reference path tracer | Renderer Phase 1 | ⬜ |
+| Reference path tracer | Renderer Phase 1 | ✅ [measured reference images](../reports/2026-10-05-reference-images.md) |
 | Wavefront path tracer | Renderer Phase 2 | ⬜ |
 | NEE / MIS renderer | Renderer Phase 3 | ⬜ |
 | Temporal renderer | Renderer Phase 4 | ⬜ |

@@ -9,6 +9,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Reference images, the reference path tracer milestone. `lotus-headless`
+  renders a fixed Cornell box at 1, 16, 64, 256 and 1024 spp
+  (`--images <directory>` writes them as PFM) and compares each image with
+  the committed reference in `validation/reference/`: a 1024-spp mean and a
+  per-pixel variance, written by deterministic mode
+  (`--write-reference <directory>`). The comparison settles DES-Q5. An image
+  matches when its mean difference over the whole image and over every tile
+  is within 5 standard errors. `renderer.path.reference` runs it, and also
+  checks that a brighter red wall is rejected. The installed product
+  carries the reference in `bin/reference/`.
+
 - HDR accumulation, the first physically correct image. `RenderScene`'s
   `Radiance` output adds `frame_count` samples per pixel to a persistent
   RGBA32F accumulation through a 1-pixel box filter and writes the
