@@ -1,7 +1,7 @@
 # Current
 
-Renderer Phase 0, the Renderer Phase 1 vertical slice, and the work around
-them. Which release carries a phase is the
+Renderer Phase 0, the Renderer Phase 1 vertical slice, Renderer Phase 1.5,
+and the work around them. Which release carries a phase is the
 [status table](README.md#status-at-a-glance).
 
 Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️ accepted workaround
@@ -95,6 +95,35 @@ principle 8):
   [evidence](../reports/2026-10-05-gpu-timestamps.md)). The scene pass
   still times its camera and radiance passes together.
 
+## Renderer Phase 1.5 — Minimal material IR
+
+Against the scope of
+[roadmap policy §4](../design/ROADMAP_POLICY.md#renderer-phase-15--minimal-material-ir):
+
+- ✅ **Lotus material IR and the GPU material.** `Lotus::Material` holds
+  constant base colour, roughness, metallic and emission; the scene keys
+  materials and meshes bind to the keys; the update plan carries a
+  material table that the path tracer reads through each instance's
+  material slot. The committed reference images are reproduced bit for bit
+  ([scene reference](../reference/SCENE.md#materials-and-environment),
+  [evidence](../reports/2026-10-05-material-ir.md)).
+- ✅ **`UsdPreviewSurface` translation through Hydra** of the constant
+  `diffuseColor`, `roughness`, `metallic` and `emissiveColor`, with mesh
+  material bindings
+  ([scene reference](../reference/SCENE.md#materials),
+  [evidence](../reports/2026-10-05-material-ir.md)).
+- ⬜ **Textures.** `UsdUVTexture` and `UsdPrimvarReader_float2` for the
+  translated inputs, which needs texture coordinates on the GPU scene and
+  texture residency.
+- ⬜ **Normal.** Authored normals, then `normal` maps, as shading normals.
+- ⬜ **Opacity and an alpha policy.** `opacity` and `opacityThreshold`,
+  which needs non-opaque geometry in the acceleration structures.
+- ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the
+  specular workflow
+  ([design policy §17](../design/DESIGN_POLICY.md#17-material), priority 2).
+  It changes the transport, so the reference images are regenerated with
+  it.
+
 ## Backend follow-up
 
 - ⬜ **GPU memory suballocation.** Each geometry buffer and each BLAS is
@@ -108,12 +137,11 @@ principle 8):
 
 ## Adapter follow-up
 
-- ⬜ **Hydra lights and materials.** The adapter reads no light or
-  material: every mesh has the default `SurfaceMaterial` under a constant
-  white fallback environment
+- ⬜ **Hydra lights.** The adapter reads no light: every surface is lit by
+  a constant white fallback environment
   ([scene reference](../reference/SCENE.md#hydra-extraction)). A dome
-  light's colour and intensity can feed the constant environment;
-  `UsdPreviewSurface` translation is Renderer Phase 1.5.
+  light's colour and intensity can feed the constant environment.
+  Materials are [Renderer Phase 1.5](#renderer-phase-15--minimal-material-ir).
 - ⬜ **No-clear restoration when switching AOV buffer sets.** The foundation
   renderer retains one colour/depth attachment pair at a time; preservation
   currently assumes successive passes reuse their bound buffers

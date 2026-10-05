@@ -100,15 +100,20 @@ struct GpuSceneStats {
   std::uint64_t source_revision = 0;
   std::uint32_t resident_geometries = 0;
   std::uint32_t instance_count = 0;
-  // Device bytes of the geometry buffers and of the instances in use.
+  // Entries in the material table, the default material included.
+  std::uint32_t material_count = 0;
+  // Device bytes of the geometry buffers, of the instances and of the
+  // material table in use.
   std::uint64_t geometry_bytes = 0;
   std::uint64_t instance_bytes = 0;
-  // Lifetime: geometry buffers created and destroyed, instance buffer
-  // rewrites, upload submissions and bytes copied through staging. An empty
-  // update changes none of them.
+  std::uint64_t material_bytes = 0;
+  // Lifetime: geometry buffers created and destroyed, instance buffer and
+  // material table rewrites, upload submissions and bytes copied through
+  // staging. An empty update changes none of them.
   std::uint64_t geometry_uploads = 0;
   std::uint64_t geometry_releases = 0;
   std::uint64_t instance_writes = 0;
+  std::uint64_t material_writes = 0;
   std::uint64_t upload_submissions = 0;
   std::uint64_t uploaded_bytes = 0;
 
@@ -139,8 +144,8 @@ struct GpuSceneTimings {
   // False when the call submitted no GPU work or the queue has no timestamp
   // support; the durations are then 0.
   bool available = false;
-  // Copying the staged geometry, instance records and TLAS build input; 0
-  // when there was nothing to copy.
+  // Copying the staged geometry, instance records, material table and TLAS
+  // build input; 0 when there was nothing to copy.
   double upload_gpu_ms = 0.0;
   // Building the uploaded geometries' BLASes; 0 when there were none.
   double blas_build_gpu_ms = 0.0;
@@ -169,7 +174,8 @@ struct GpuGeometryContents {
 struct GpuInstanceContents {
   Matrix4 world_from_object = IdentityMatrix();
   std::uint32_t geometry_slot = 0;
-  SurfaceMaterial material;
+  // The instance's index in GpuSceneContents::materials.
+  std::uint32_t material_slot = 0;
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three
@@ -188,6 +194,8 @@ struct GpuSceneContents {
   // Resident geometry in slot order, and the instances in update order.
   std::vector<GpuGeometryContents> geometries;
   std::vector<GpuInstanceContents> instances;
+  // The material table the instances index; empty until the first instances.
+  std::vector<Material> materials;
   // The TLAS build input in instance order; empty without acceleration
   // structures.
   std::vector<GpuTlasInstanceContents> tlas_instances;

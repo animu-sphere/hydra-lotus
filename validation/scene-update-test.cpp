@@ -36,8 +36,11 @@ int main() try {
       update.geometry_uploads[1].get() == b,
       "insertion did not upload non-empty geometry in key order");
   Check(update.instances_changed && update.instances.size() == 2 &&
-      update.instances[0].geometry == a && update.instances[1].geometry == b,
+      update.instances[0].geometry == a && update.instances[1].geometry == b &&
+      update.instances[0].material == 0 && update.instances[1].material == 0,
       "insertion did not list visible instances in key order");
+  Check(!update.materials_changed && update.materials.empty(),
+      "a scene without materials planned a material table");
 
   Check(extraction.Update(world.Commit()).Empty(),
       "an unchanged commit produced GPU work");
@@ -56,16 +59,56 @@ int main() try {
       update.instances[1].world_from_object[12] == 0,
       "a transform edit uploaded geometry or lost the new transform");
 
-  Lotus::SurfaceMaterial material;
-  material.metallic = 1.0F;
-  world.SetMeshMaterial("/b", material);
+  // The table is the default material, then the materials in key order.
+  Lotus::Material metal;
+  metal.metallic = 1.0F;
+  Lotus::Material glow;
+  glow.emission = {1.0F, 2.0F, 3.0F};
+  world.SetMaterial("/m/metal", metal);
+  world.SetMaterial("/m/glow", glow);
+  world.BindMaterial("/b", "/m/metal");
   update = extraction.Update(world.Commit());
   Check(update.geometry_uploads.empty() && update.geometry_releases.empty() &&
       !update.environment_changed && update.instances_changed &&
-      update.instances.size() == 2 &&
-      update.instances[0].material == Lotus::SurfaceMaterial{} &&
-      update.instances[1].material == material,
-      "a material edit uploaded geometry or lost the new material");
+      update.instances.size() == 2 && update.instances[0].material == 0 &&
+      update.instances[1].material == 2 && update.materials_changed &&
+      update.materials ==
+          std::vector<Lotus::Material>{Lotus::Material{}, glow, metal},
+      "a material binding uploaded geometry or planned the wrong table");
+
+  // A value edit rewrites the table and leaves the instances.
+  metal.roughness = 0.25F;
+  world.SetMaterial("/m/metal", metal);
+  update = extraction.Update(world.Commit());
+  Check(!update.instances_changed && update.materials_changed &&
+      update.materials.size() == 3 && update.materials[2] == metal,
+      "a material edit rewrote the instances or lost the new value");
+  world.BindMaterial("/a", "/m/glow");
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed && !update.materials_changed &&
+      update.instances[0].material == 1,
+      "a binding to an existing material rewrote the table");
+
+  // Removing a material shifts the later slots; its meshes fall back to
+  // the default until it returns.
+  world.RemoveMaterial("/m/glow");
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed && update.materials_changed &&
+      update.materials ==
+          std::vector<Lotus::Material>{Lotus::Material{}, metal} &&
+      update.instances[0].material == 0 && update.instances[1].material == 1,
+      "a material removal did not fall back to the default material");
+  world.SetMaterial("/m/glow", glow);
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed && update.materials_changed &&
+      update.instances[0].material == 1 && update.instances[1].material == 2,
+      "a returning material did not resume its binding");
+  world.BindMaterial("/a", "");
+  world.RemoveMaterial("/m/glow");
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed && update.materials_changed &&
+      update.instances[0].material == 0 && update.instances[1].material == 1,
+      "unbinding a mesh did not return it to the default material");
 
   world.SetEnvironment({1.0F, 0.5F, 0.25F});
   update = extraction.Update(world.Commit());
@@ -151,18 +194,22 @@ int main() try {
       update.geometry_releases.empty() &&
       update.geometry_uploads.size() == 1 &&
       update.geometry_uploads[0].get() == edited_a &&
-      update.instances_changed && update.instances.size() == 1,
+      update.instances_changed && update.instances.size() == 1 &&
+      update.materials_changed && update.materials.size() == 2,
       "reset did not re-upload the resident scene");
 
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
+  world.RemoveMaterial("/m/metal");
   world.SetEnvironment({});
   update = extraction.Update(world.Commit());
   Check(update.geometry_releases.size() == 1 &&
       update.geometry_releases[0] == edited_a &&
       update.instances_changed && update.instances.empty() &&
+      update.materials_changed && update.materials.size() == 1 &&
       update.environment_changed && update.environment == std::array<float, 3>{},
-      "removing the last mesh left resident geometry, instances or light");
+      "removing the last mesh left resident geometry, instances, materials "
+      "or light");
   Check(extraction.Update(Lotus::FrameSnapshot{}).Empty(),
       "a snapshot without a scene was not treated as empty");
   return 0;

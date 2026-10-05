@@ -11,7 +11,8 @@ endif()
 
 # The co-built runtime is implementation detail of the module. It is not an
 # independently packaged OpenStrata plugin bundle or renderer SDK component.
-add_library(lotus-hydra2-runtime STATIC src/adapter.cpp)
+add_library(lotus-hydra2-runtime STATIC src/adapter.cpp
+  src/material_translator.cpp)
 target_include_directories(lotus-hydra2-runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(lotus-hydra2-runtime
@@ -130,6 +131,13 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-render-pass-test hdLotus)
 
+  add_executable(lotus-hydra2-material-test tests/material_test.cpp)
+  target_link_libraries(lotus-hydra2-material-test
+    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
+  target_compile_definitions(lotus-hydra2-material-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-material-test hdLotus)
+
   add_executable(lotus-hydra2-deterministic-test tests/deterministic_test.cpp)
   target_link_libraries(lotus-hydra2-deterministic-test
     PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
@@ -170,10 +178,15 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-render-pass-test --gpu)
   add_test(NAME lotus-renderer-hydra-deterministic
     COMMAND lotus-hydra2-deterministic-test)
+  add_test(NAME lotus-renderer-hydra-material
+    COMMAND lotus-hydra2-material-test)
+  add_test(NAME lotus-renderer-hydra-material-gpu
+    COMMAND lotus-hydra2-material-test --gpu)
   set_tests_properties(
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
+    lotus-renderer-hydra-material-gpu
     PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
     lotus-renderer-plugin-discovery
@@ -185,6 +198,8 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-render-pass
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
+    lotus-renderer-hydra-material
+    lotus-renderer-hydra-material-gpu
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 

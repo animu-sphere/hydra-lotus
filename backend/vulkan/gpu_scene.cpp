@@ -22,6 +22,7 @@ constexpr VkDeviceSize kVec3Bytes = 3 * sizeof(float);
 static_assert(sizeof(std::array<float, 3>) == kVec3Bytes &&
               sizeof(std::array<std::uint32_t, 3>) == kVec3Bytes);
 constexpr VkDeviceSize kInstanceBytes = sizeof(GpuInstanceRecord);
+constexpr VkDeviceSize kMaterialBytes = sizeof(GpuMaterialRecord);
 constexpr VkDeviceSize kTlasInstanceBytes =
     sizeof(VkAccelerationStructureInstanceKHR);
 static_assert(kTlasInstanceBytes == 64);
@@ -128,7 +129,7 @@ bool ValidRadiance(const std::array<float, 3>& values) {
       [](float value) { return std::isfinite(value) && value >= 0.0F; });
 }
 
-bool ValidMaterial(const SurfaceMaterial& material) {
+bool ValidMaterial(const Material& material) {
   const auto unit = [](float value) { return value >= 0.0F && value <= 1.0F; };
   return std::all_of(material.base_color.begin(), material.base_color.end(),
              unit) &&
@@ -308,6 +309,7 @@ void GpuScene::Destroy() {
   tlas_transforms_.clear();
   tlas_built_ = false;
   DestroyBuffer(device_, instances_);
+  DestroyBuffer(device_, materials_);
   DestroyBuffer(device_, tlas_instances_);
   DestroyBuffer(device_, scratch_);
   DestroyBuffer(device_, staging_);
@@ -373,15 +375,38 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = "the scene update has more instances than uint32 counts";
     return false;
   }
+  if (update.materials_changed == update.materials.empty()) {
+    detail = update.materials_changed
+                 ? "the scene update's material table has no default material"
+                 : "the scene update lists materials without replacing them";
+    return false;
+  }
+  if (update.materials.size() > std::numeric_limits<std::uint32_t>::max()) {
+    detail = "the scene update has more materials than uint32 counts";
+    return false;
+  }
+  if (!std::all_of(update.materials.begin(), update.materials.end(),
+          ValidMaterial)) {
+    detail = "the scene update has a material value out of range";
+    return false;
+  }
+  const std::size_t material_count = update.materials_changed
+                                         ? update.materials.size()
+                                         : material_table_.size();
   for (const SceneInstance& instance : update.instances) {
     if (!resident(instance.geometry) && !uploaded.contains(instance.geometry)) {
       detail = "a scene instance references geometry that is not resident";
       return false;
     }
-    if (!ValidMaterial(instance.material)) {
-      detail = "a scene instance has a material value out of range";
+    if (instance.material >= material_count) {
+      detail = "a scene instance references a material outside the table";
       return false;
     }
+  }
+  if (!update.instances_changed && material_count < materials_used_) {
+    detail = "the scene update's material table drops materials that the "
+             "instances use";
+    return false;
   }
   if (update.environment_changed && !ValidRadiance(update.environment)) {
     detail = "the scene update's environment radiance is negative or not "
@@ -396,12 +421,12 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = message.str();
     return false;
   }
-  // One allocation per geometry, and one per BLAS, plus the instance and
-  // staging buffers and, with acceleration structures, the TLAS, its build
-  // input and the scratch buffer.
+  // One allocation per geometry, and one per BLAS, plus the instance,
+  // material and staging buffers and, with acceleration structures, the
+  // TLAS, its build input and the scratch buffer.
   const std::uint64_t geometries = static_cast<std::uint64_t>(slot_of_.size()) -
                                    released.size() + uploaded.size();
-  const std::uint64_t allocations = geometries * (acceleration_ ? 2 : 1) + 2 +
+  const std::uint64_t allocations = geometries * (acceleration_ ? 2 : 1) + 3 +
                                     (acceleration_ ? 3 : 0) +
                                     kReservedAllocations;
   if (allocations > max_allocations_) {
@@ -548,16 +573,25 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     // Host state: the scene pass reads it with each frame's constants.
     environment_ = update.environment;
   }
+  if (update.materials_changed) {
+    material_table_ = update.materials;
+    materials_current_ = false;
+  }
+  // Only instances read the table, so it waits for the first of them.
+  const bool has_instances = update.instances_changed
+                                 ? !update.instances.empty()
+                                 : instance_count_ != 0;
+  const bool write_materials = !materials_current_ && has_instances;
   if (update.geometry_releases.empty() && update.geometry_uploads.empty() &&
-      !update.instances_changed) {
+      !update.instances_changed && !write_materials) {
     return true;
   }
   for (const MeshGeometry* geometry : update.geometry_releases) {
     Release(geometry);
   }
 
-  // Staging holds the geometry uploads, the instance records, then the TLAS
-  // build input.
+  // Staging holds the geometry uploads, the instance records, the material
+  // table, then the TLAS build input.
   VkDeviceSize staging_bytes = 0;
   for (const auto& geometry : update.geometry_uploads) {
     staging_bytes +=
@@ -566,8 +600,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   }
   const VkDeviceSize instance_bytes =
       update.instances.size() * kInstanceBytes;
+  const VkDeviceSize material_bytes =
+      write_materials ? material_table_.size() * kMaterialBytes : 0;
   // A rewrite that keeps every instance's BLAS and transform, such as a
-  // material edit, leaves the TLAS as it is.
+  // material binding change, leaves the TLAS as it is.
   bool tlas_current =
       tlas_built_ && update.instances.size() == tlas_blas_ids_.size();
   for (std::size_t index = 0; tlas_current && index < update.instances.size();
@@ -582,7 +618,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       acceleration_ && update.instances_changed && !tlas_current;
   const VkDeviceSize tlas_input_bytes =
       build_tlas ? update.instances.size() * kTlasInstanceBytes : 0;
-  staging_bytes += instance_bytes + tlas_input_bytes;
+  staging_bytes += instance_bytes + material_bytes + tlas_input_bytes;
   if (staging_bytes != 0 && !EnsureStaging(staging_bytes, detail)) {
     return false;
   }
@@ -723,13 +759,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         record.positions = geometry.buffer.address;
         record.triangles = geometry.buffer.address + geometry.index_offset;
       }
-      const SurfaceMaterial& material = instance.material;
-      std::copy(material.base_color.begin(), material.base_color.end(),
-          record.base_color_roughness);
-      record.base_color_roughness[3] = material.roughness;
-      std::copy(material.emission.begin(), material.emission.end(),
-          record.emission_metallic);
-      record.emission_metallic[3] = material.metallic;
+      record.material_slot = instance.material;
       std::memcpy(staging + offset + index * kInstanceBytes, &record,
           kInstanceBytes);
     }
@@ -739,7 +769,47 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     }
     offset += instance_bytes;
     instance_count_ = static_cast<std::uint32_t>(update.instances.size());
+    materials_used_ = 0;
+    for (const SceneInstance& instance : update.instances) {
+      materials_used_ = std::max(materials_used_, instance.material + 1);
+    }
     ++stats_.instance_writes;
+  }
+
+  if (write_materials) {
+    if (material_bytes > materials_.size) {
+      const VkDeviceSize capacity =
+          std::max(material_bytes, materials_.size * 2);
+      DestroyBuffer(device_, materials_);
+      // The scene pass reads the table through its device address.
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      if (acceleration_) {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      }
+      if (!CreateDeviceBuffer(capacity, usage, materials_, detail)) {
+        return false;
+      }
+    }
+    for (std::size_t index = 0; index < material_table_.size(); ++index) {
+      const Material& material = material_table_[index];
+      GpuMaterialRecord record{};
+      std::copy(material.base_color.begin(), material.base_color.end(),
+          record.base_color_roughness);
+      record.base_color_roughness[3] = material.roughness;
+      std::copy(material.emission.begin(), material.emission.end(),
+          record.emission_metallic);
+      record.emission_metallic[3] = material.metallic;
+      std::memcpy(staging + offset + index * kMaterialBytes, &record,
+          kMaterialBytes);
+    }
+    copies.push_back(
+        {materials_.buffer, VkBufferCopy{offset, 0, material_bytes}});
+    offset += material_bytes;
+    material_count_ = static_cast<std::uint32_t>(material_table_.size());
+    materials_current_ = true;
+    ++stats_.material_writes;
   }
 
   if (build_tlas) {
@@ -947,6 +1017,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.resident_geometries = static_cast<std::uint32_t>(slot_of_.size());
   stats_.instance_count = instance_count_;
   stats_.instance_bytes = instance_count_ * kInstanceBytes;
+  stats_.material_count = material_count_;
+  stats_.material_bytes = material_count_ * kMaterialBytes;
   if (acceleration_) {
     stats_.blas_count = stats_.resident_geometries;
     stats_.tlas_instance_count =
@@ -959,10 +1031,11 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
   contents = GpuSceneContents{};
   contents.environment = environment_;
   const VkDeviceSize instance_bytes = instance_count_ * kInstanceBytes;
+  const VkDeviceSize material_bytes = material_count_ * kMaterialBytes;
   const VkDeviceSize tlas_input_bytes =
       tlas_built_ ? tlas_blas_ids_.size() * kTlasInstanceBytes : 0;
-  const VkDeviceSize total =
-      stats_.geometry_bytes + instance_bytes + tlas_input_bytes;
+  const VkDeviceSize total = stats_.geometry_bytes + instance_bytes +
+                             material_bytes + tlas_input_bytes;
   if (total == 0) {
     contents.status = FrameStatus::Pass;
     return true;
@@ -991,6 +1064,11 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     const VkBufferCopy region{0, offset, instance_bytes};
     vkCmdCopyBuffer(command_, instances_.buffer, readback.buffer, 1, &region);
     offset += instance_bytes;
+  }
+  if (material_bytes != 0) {
+    const VkBufferCopy region{0, offset, material_bytes};
+    vkCmdCopyBuffer(command_, materials_.buffer, readback.buffer, 1, &region);
+    offset += material_bytes;
   }
   if (tlas_input_bytes != 0) {
     const VkBufferCopy region{0, offset, tlas_input_bytes};
@@ -1036,16 +1114,23 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     std::copy(std::begin(record.world_from_object),
         std::end(record.world_from_object), instance.world_from_object.begin());
     instance.geometry_slot = record.geometry_slot;
-    SurfaceMaterial& material = instance.material;
+    instance.material_slot = record.material_slot;
+    contents.instances.push_back(instance);
+  }
+  offset += instance_bytes;
+  for (std::uint32_t index = 0; index < material_count_; ++index) {
+    GpuMaterialRecord record{};
+    std::memcpy(&record, bytes + offset + index * kMaterialBytes,
+        kMaterialBytes);
+    Material& material = contents.materials.emplace_back();
     std::copy(record.base_color_roughness, record.base_color_roughness + 3,
         material.base_color.begin());
     material.roughness = record.base_color_roughness[3];
     std::copy(record.emission_metallic, record.emission_metallic + 3,
         material.emission.begin());
     material.metallic = record.emission_metallic[3];
-    contents.instances.push_back(instance);
   }
-  offset += instance_bytes;
+  offset += material_bytes;
   for (VkDeviceSize index = 0; index * kTlasInstanceBytes < tlas_input_bytes;
       ++index) {
     VkAccelerationStructureInstanceKHR record{};

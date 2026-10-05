@@ -76,47 +76,68 @@ int main() try {
   invalid_instance.world_from_object[0] = std::numeric_limits<float>::infinity();
   Reject([&] { world.SetMeshInstance("/mesh", invalid_instance); });
   Reject([&] { world.SetMeshInstance("/missing", instance); });
-  Lotus::SurfaceMaterial material;
-  Check(edited.scene->meshes.at("/mesh").material == material &&
+  Lotus::Material material;
+  Check(edited.scene->meshes.at("/mesh").material.empty() &&
+      edited.scene->materials.empty() &&
       edited.scene->environment == std::array<float, 3>{},
-      "a new mesh or scene did not start with the default material and a "
-      "black environment");
+      "a new mesh or scene did not start unbound, without materials and "
+      "with a black environment");
   auto invalid_material = material;
   invalid_material.base_color[1] = 1.5F;
-  Reject([&] { world.SetMeshMaterial("/mesh", invalid_material); });
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
   invalid_material.roughness = -0.25F;
-  Reject([&] { world.SetMeshMaterial("/mesh", invalid_material); });
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
   invalid_material.metallic = std::numeric_limits<float>::quiet_NaN();
-  Reject([&] { world.SetMeshMaterial("/mesh", invalid_material); });
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
   invalid_material.emission[2] = -1.0F;
-  Reject([&] { world.SetMeshMaterial("/mesh", invalid_material); });
-  Reject([&] { world.SetMeshMaterial("/missing", material); });
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  Reject([&] { world.SetMaterial("", material); });
+  Reject([&] { world.BindMaterial("/missing", "/paint"); });
   Reject([&] { world.SetEnvironment({1.0F, -1.0F, 0.0F}); });
   Reject([&] {
     world.SetEnvironment({std::numeric_limits<float>::infinity(), 0.0F, 0.0F});
   });
-  world.SetMeshMaterial("/mesh", material);
+  world.BindMaterial("/mesh", "");
+  world.RemoveMaterial("/missing");
   world.SetEnvironment({});
   Check(world.Commit().revision == edited.revision,
       "rejected input or unchanged materials changed the scene revision");
 
+  // A binding may name a key before its material exists.
+  world.BindMaterial("/mesh", "/paint");
+  const auto bound = world.Commit();
+  Check(bound.revision == edited.revision + 1 &&
+      bound.scene->meshes.at("/mesh").geometry ==
+          edited.scene->meshes.at("/mesh").geometry &&
+      bound.scene->meshes.at("/mesh").material == "/paint" &&
+      edited.scene->meshes.at("/mesh").material.empty(),
+      "a material binding copied geometry or changed a retained snapshot");
   material.base_color = {0.5F, 0.25F, 1.0F};
   material.emission = {2.0F, 0.0F, 0.0F};
-  world.SetMeshMaterial("/mesh", material);
+  world.SetMaterial("/paint", material);
   const auto painted = world.Commit();
-  Check(painted.revision == edited.revision + 1 &&
-      painted.scene->meshes.at("/mesh").geometry ==
-          edited.scene->meshes.at("/mesh").geometry &&
-      painted.scene->meshes.at("/mesh").material == material &&
-      edited.scene->meshes.at("/mesh").material == Lotus::SurfaceMaterial{},
-      "a material edit copied geometry or changed a retained snapshot");
+  Check(painted.revision == bound.revision + 1 &&
+      painted.scene->materials.at("/paint") == material &&
+      bound.scene->materials.empty(),
+      "a material insertion was lost or changed a retained snapshot");
+  world.SetMaterial("/paint", material);
+  Check(world.Commit().revision == painted.revision,
+      "an unchanged material changed the scene revision");
   geometry.positions[1][2] = 3;
   world.SetMesh("/mesh", geometry, instance);
-  Check(world.Commit().scene->meshes.at("/mesh").material == material,
-      "replacing a mesh's geometry lost its material");
+  Check(world.Commit().scene->meshes.at("/mesh").material == "/paint",
+      "replacing a mesh's geometry lost its material binding");
+  world.RemoveMaterial("/paint");
+  const auto unpainted = world.Commit();
+  Check(unpainted.scene->materials.empty() &&
+      unpainted.scene->meshes.at("/mesh").material == "/paint" &&
+      painted.scene->materials.at("/paint") == material,
+      "removing a material dropped its binding or changed a retained "
+      "snapshot");
+  world.SetMaterial("/paint", material);
   world.SetEnvironment({0.25F, 0.5F, 4.0F});
   const auto lit = world.Commit();
   Check(lit.scene->environment == std::array<float, 3>{0.25F, 0.5F, 4.0F} &&

@@ -22,7 +22,13 @@ struct InstanceRecord {
   float3* positions;
   uint3* triangles;
   uint geometry_slot;
-  uint reserved[3];
+  uint material_slot;
+  uint reserved[2];
+};
+
+// Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
+// table, the Lotus material IR.
+struct MaterialRecord {
   float4 base_color_roughness;
   float4 emission_metallic;
 };
@@ -37,6 +43,7 @@ struct PathConstants {
   // ndc = pixel * xy + zw, from the display window.
   float4 ndc_from_pixel;
   InstanceRecord* instances;
+  MaterialRecord* materials;
   // The random sequence of the sample this frame adds.
   uint sample_index;
   // Samples already in the accumulation image; 0 restarts it.
@@ -45,7 +52,9 @@ struct PathConstants {
   uint add_sample;
   uint max_bounces;
   uint width;
-  uint reserved;
+  uint reserved0;
+  uint reserved1;
+  uint reserved2;
 };
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] ConstantBuffer<PathConstants> path_constants;
@@ -119,8 +128,8 @@ struct SurfaceHit {
   Spectrum emission;
 };
 
-// Surface hit reconstruction from the instance record and the geometry it
-// addresses. Interpolating the world-space corners keeps the position on
+// Surface hit reconstruction from the instance record and the geometry and
+// material it addresses. Interpolating the world-space corners keeps the position on
 // the triangle's plane.
 SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   const InstanceRecord instance = path_constants.instances[hit.instance];
@@ -136,10 +145,12 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
                      hit.barycentrics.y * (p2 - p0);
   const float3 normal = normalize(cross(p1 - p0, p2 - p0));
   surface.normal = dot(normal, direction) > 0.0 ? -normal : normal;
+  const MaterialRecord material =
+      path_constants.materials[instance.material_slot];
   surface.bsdf = MakeSurfaceBsdf(
-      SpectrumFromRgb(instance.base_color_roughness.xyz),
-      instance.base_color_roughness.w, instance.emission_metallic.w);
-  surface.emission = SpectrumFromRgb(instance.emission_metallic.xyz);
+      SpectrumFromRgb(material.base_color_roughness.xyz),
+      material.base_color_roughness.w, material.emission_metallic.w);
+  surface.emission = SpectrumFromRgb(material.emission_metallic.xyz);
   return surface;
 }
 

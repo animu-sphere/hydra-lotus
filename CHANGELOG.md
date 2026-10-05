@@ -9,6 +9,22 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- The Lotus material IR (Renderer Phase 1.5). `Lotus::Material`
+  (`include/lotus/material.hpp`) holds constant base colour, roughness,
+  metallic and emission. `LotusScene::materials` keys them; meshes bind to
+  a key with `RenderWorld::BindMaterial`, and an unbound mesh, or one bound
+  to a missing key, uses the default. The update plan carries a material
+  table (`SceneUpdate::materials`, the default at slot 0) and each
+  instance's slot, so a material's value edit rewrites only the table; the
+  GPU scene keeps it in a device buffer that the path tracer reads, reports
+  it in `GpuSceneStats` and reads it back in `GpuSceneContents::materials`.
+  The Hydra adapter supports the `material` sprim: it translates
+  `UsdPreviewSurface`'s constant `diffuseColor`, `roughness`, `metallic`
+  and `emissiveColor` and follows mesh material bindings.
+  `lotus-renderer-hydra-material` checks the translator and a UsdImaging
+  stage through edits, rebinding and removal, and its `-gpu` variant exact
+  Lambert radiance in a Hydra image.
+
 - Per-pass GPU timestamps for scene updates. Each `UpdateScene`
   submission times its copies, BLAS builds and TLAS build or refit
   separately: `GpuSceneEvidence::timings`, with
@@ -154,6 +170,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   wrapper.
 
 ### Changed
+
+- `SurfaceMaterial` and `RenderWorld::SetMeshMaterial` are replaced by the
+  material IR: `SetMaterial`, `RemoveMaterial` and `BindMaterial`.
+  `SceneInstance::material` and `GpuInstanceContents::material_slot` are
+  material table slots, and the GPU instance record shrinks from 128 to 96
+  bytes. The headless Cornell box shares one material among its white
+  surfaces and still reproduces the committed reference bit for bit.
 
 - Offscreen colour clears match the AOV descriptor's transparent black.
   Hydra colour/depth clear values reach the GPU; clears cover the whole

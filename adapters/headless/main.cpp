@@ -32,6 +32,13 @@
 
 namespace {
 
+// Gives a mesh a material of its own, keyed by the mesh's key.
+void Paint(Lotus::RenderWorld& world, const std::string& mesh,
+    const Lotus::Material& material) {
+  world.SetMaterial(mesh, material);
+  world.BindMaterial(mesh, mesh);
+}
+
 // Process id, for a session identifier that is unique among concurrent runs.
 long long CurrentProcessId() {
 #if defined(_WIN32)
@@ -158,10 +165,13 @@ Lotus::Camera BootstrapCamera() {
 }
 
 // Whether the GPU scene's buffers hold exactly the scene's resident geometry
-// and each placement of its visible meshes, in the update plan's order.
+// and each placement of its visible meshes, in the update plan's order, with
+// its material.
 bool SceneMatches(const Lotus::GpuSceneContents& contents,
     const Lotus::LotusScene& scene) {
-  if (contents.status != Lotus::FrameStatus::Pass) {
+  if (contents.status != Lotus::FrameStatus::Pass ||
+      (!contents.instances.empty() &&
+          contents.materials.size() != scene.materials.size() + 1)) {
     return false;
   }
   std::set<const Lotus::MeshGeometry*> resident;
@@ -181,6 +191,7 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
         return false;
       }
       const Lotus::GpuInstanceContents& gpu = contents.instances[instance++];
+      const auto material = scene.materials.find(mesh.material);
       const auto geometry = std::find_if(contents.geometries.begin(),
           contents.geometries.end(), [&](const Lotus::GpuGeometryContents& g) {
             return g.slot == gpu.geometry_slot;
@@ -189,7 +200,10 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
           geometry->positions != mesh.geometry->positions ||
           geometry->triangles != mesh.geometry->triangles ||
           gpu.world_from_object != placement ||
-          gpu.material != mesh.material) {
+          gpu.material_slot >= contents.materials.size() ||
+          contents.materials[gpu.material_slot] !=
+              (material == scene.materials.end() ? Lotus::Material{}
+                                                 : material->second)) {
         return false;
       }
     }
@@ -233,7 +247,8 @@ struct AccelerationVerdict {
 };
 
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
-// transform edit, a material edit, an environment edit, a hide, a point edit,
+// transform edit, a material binding, a material edit, a material removal,
+// an environment edit, a hide, a point edit,
 // instancer placements and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
 // Acceleration-structure mismatches go to `acceleration` instead.
 std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
@@ -320,22 +335,52 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       "transform edit", "expected a TLAS update and no build");
 
   const Lotus::GpuSceneStats moved = before;
-  Lotus::SurfaceMaterial material;
+  Lotus::Material material;
   material.base_color = {0.25F, 0.5F, 0.75F};
   material.roughness = 0.125F;
   material.metallic = 0.5F;
   material.emission = {1.0F, 2.0F, 3.0F};
-  world.SetMeshMaterial("/quad", material);
+  world.SetMaterial("/paint", material);
+  world.BindMaterial("/quad", "/paint");
+  if (auto failure = apply("material binding"); !failure.empty()) {
+    return failure;
+  }
+  if (before.geometry_uploads != 2 || before.material_count != 2 ||
+      before.instance_writes != moved.instance_writes + 1 ||
+      before.material_writes != moved.material_writes + 1) {
+    return "material binding: geometry was uploaded, or the instances or "
+           "the material table were not rewritten";
+  }
+  expect(before.tlas_builds == 1 && before.tlas_updates == 1,
+      "material binding", "the TLAS was built or updated");
+
+  const Lotus::GpuSceneStats bound = before;
+  material.base_color = {0.75F, 0.5F, 0.25F};
+  world.SetMaterial("/paint", material);
   if (auto failure = apply("material edit"); !failure.empty()) {
     return failure;
   }
-  if (before.geometry_uploads != 2 ||
-      before.instance_writes != moved.instance_writes + 1) {
-    return "material edit: geometry was uploaded or the instances were not "
-           "rewritten";
+  if (before.instance_writes != bound.instance_writes ||
+      before.material_writes != bound.material_writes + 1 ||
+      before.upload_submissions != bound.upload_submissions + 1) {
+    return "material edit: the instances were rewritten or the material "
+           "table was not";
   }
   expect(before.tlas_builds == 1 && before.tlas_updates == 1,
       "material edit", "the TLAS was built or updated");
+
+  // The binding stays; the mesh falls back to the default material.
+  const Lotus::GpuSceneStats edited = before;
+  world.RemoveMaterial("/paint");
+  if (auto failure = apply("material removal"); !failure.empty()) {
+    return failure;
+  }
+  if (before.material_count != 1 ||
+      before.instance_writes != edited.instance_writes + 1 ||
+      before.material_writes != edited.material_writes + 1) {
+    return "material removal: the instances or the material table were not "
+           "rewritten";
+  }
 
   const Lotus::GpuSceneStats painted = before;
   world.SetEnvironment({0.5F, 1.0F, 2.0F});
@@ -560,9 +605,17 @@ SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
         step("transform edit", Phase::Runs, Phase::Skipped, Phase::Runs);
   }
   if (verdict.failure.empty() && verdict.available) {
-    Lotus::SurfaceMaterial material;
+    Lotus::Material material;
     material.base_color = {0.25F, 0.5F, 0.75F};
-    world.SetMeshMaterial("/grid", material);
+    world.SetMaterial("/grid/paint", material);
+    world.BindMaterial("/grid", "/grid/paint");
+    verdict.failure =
+        step("material binding", Phase::Runs, Phase::Skipped, Phase::Skipped);
+  }
+  if (verdict.failure.empty() && verdict.available) {
+    Lotus::Material material;
+    material.base_color = {0.75F, 0.5F, 0.25F};
+    world.SetMaterial("/grid/paint", material);
     verdict.failure =
         step("material edit", Phase::Runs, Phase::Skipped, Phase::Skipped);
   }
@@ -1095,10 +1148,10 @@ std::string BsdfFailure(PathScenes& scenes) {
   triangle.source_faces = {0};
   Lotus::MeshInstance front;
   world.SetMesh("/panel", triangle, front);
-  Lotus::SurfaceMaterial lambert;
+  Lotus::Material lambert;
   lambert.base_color = {0.5F, 0.25F, 0.75F};
   lambert.emission = {0.1F, 0.05F, 0.0F};
-  world.SetMeshMaterial("/panel", lambert);
+  Paint(world, "/panel", lambert);
   world.SetEnvironment({0.8F, 0.6F, 0.4F});
   // Lambert under a constant environment reflects albedo * environment for
   // any sampled direction; emission adds to it.
@@ -1146,12 +1199,12 @@ std::string BsdfFailure(PathScenes& scenes) {
       {"GGX metal, roughness 0.25", {0.9, 0.5, 0.1}, 0.25F, 1.0F},
       {"half-metallic mixture", {0.9, 0.6, 0.3}, 0.5F, 0.5F}};
   for (const Case& entry : cases) {
-    Lotus::SurfaceMaterial material;
+    Lotus::Material material;
     for (int c = 0; c < 3; ++c)
       material.base_color[c] = static_cast<float>(entry.base[c]);
     material.roughness = entry.roughness;
     material.metallic = entry.metallic;
-    world.SetMeshMaterial("/plane", material);
+    Paint(world, "/plane", material);
     const Rgb metal = GgxAlbedo(entry.base, entry.roughness, cos_tilt);
     Rgb expected{};
     for (int c = 0; c < 3; ++c)
@@ -1178,10 +1231,10 @@ std::string MultibounceFailure(PathScenes& scenes) {
   world.SetMesh("/box", box, Lotus::MeshInstance{});
   const Rgb albedo{0.5, 0.25, 0.75};
   const Rgb emission{0.1, 0.15, 0.025};
-  Lotus::SurfaceMaterial material;
+  Lotus::Material material;
   material.base_color = {0.5F, 0.25F, 0.75F};
   material.emission = {0.1F, 0.15F, 0.025F};
-  world.SetMeshMaterial("/box", material);
+  Paint(world, "/box", material);
   world.SetEnvironment({1.0F, 1.0F, 1.0F});
   for (const std::uint32_t bounces : {0U, 1U, 3U}) {
     Rgb expected{};
@@ -1275,10 +1328,10 @@ std::string AccumulationFailure(PathScenes& scenes) {
   triangle.triangles = {{{0, 1, 2}}};
   triangle.source_faces = {0};
   world.SetMesh("/panel", triangle, Lotus::MeshInstance{});
-  Lotus::SurfaceMaterial material;
+  Lotus::Material material;
   material.base_color = {0.5F, 0.25F, 0.75F};
   material.emission = {2.5F, 1.25F, 0.5F};
-  world.SetMeshMaterial("/panel", material);
+  Paint(world, "/panel", material);
   world.SetEnvironment({2.0F, 1.0F, 0.5F});
   const Rgb radiance{0.5 * 2.0 + 2.5, 0.25 * 1.0 + 1.25, 0.75 * 0.5 + 0.5};
 
@@ -1354,7 +1407,7 @@ std::string AccumulationFailure(PathScenes& scenes) {
   // are the same image as 16 in one.
   material.metallic = 0.5F;
   material.roughness = 0.4F;
-  world.SetMeshMaterial("/panel", material);
+  Paint(world, "/panel", material);
   Lotus::GpuFrameEvidence whole;
   settings.sample_index = 1000;
   if (auto failure = scenes.Render(settings, whole, 16); !failure.empty())

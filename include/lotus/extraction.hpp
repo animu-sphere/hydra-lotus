@@ -28,7 +28,8 @@ struct SceneInstance {
   // A buffer from this or an earlier update's geometry_uploads.
   const MeshGeometry* geometry = nullptr;
   Matrix4 world_from_object = IdentityMatrix();
-  SurfaceMaterial material;
+  // The instance's material: its index in the GPU scene's material table.
+  std::uint32_t material = 0;
 
   bool operator==(const SceneInstance&) const = default;
 };
@@ -50,6 +51,11 @@ struct SceneUpdate {
   // order. Otherwise `instances` is empty.
   bool instances_changed = false;
   std::vector<SceneInstance> instances;
+  // When set, `materials` replaces the material table: the default Material
+  // at slot 0, then the scene's materials in key order. A GPU scene starts
+  // with the default alone. Otherwise `materials` is empty.
+  bool materials_changed = false;
+  std::vector<Material> materials;
   // When set, the scene's environment radiance replaces the GPU scene's. A
   // GPU scene starts with a black environment.
   bool environment_changed = false;
@@ -74,6 +80,7 @@ private:
   std::unordered_map<const MeshGeometry*, std::shared_ptr<const MeshGeometry>>
       resident_;
   std::vector<SceneInstance> instances_;
+  std::vector<Material> materials_{Material{}};
   std::array<float, 3> environment_{};
 };
 
