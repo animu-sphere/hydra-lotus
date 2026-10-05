@@ -15,13 +15,18 @@ a `SceneMesh` record. Keys iterate in deterministic order.
   indices and one authored coarse-face index per triangle (`source_faces`).
 - `MeshInstance` contains visibility and `world_from_object`, using the
   core's column-major matrix convention for column vectors.
-- `SceneMesh::geometry` shares an immutable geometry buffer. Each mesh has
-  one ordinary placement; Hydra instancers are not expanded yet.
+- Without `MeshInstance::instancer_transforms` a mesh has one ordinary
+  placement. With them it is an instancer prototype, placed once per entry,
+  in order, at the entry times `world_from_object`; an empty list places it
+  nowhere. `PlacementTransforms` returns each placement's composed
+  transform, and `Multiply` is the composition.
+- `SceneMesh::geometry` shares an immutable geometry buffer among all of a
+  mesh's placements.
 
 `SetMesh` validates and owns the geometry, inserting or replacing the keyed
-record. `SetMeshInstance` updates an existing placement without copying its
+record. Instancer transforms are copied with the record. `SetMeshInstance` updates an existing placement without copying its
 geometry. `RemoveMesh` removes the keyed record. Invalid indices, mismatched
-face mappings, non-finite positions/transforms, empty insertion keys and
+face mappings, non-finite positions or transforms (instancer transforms included), empty insertion keys and
 instance updates without geometry throw `std::invalid_argument` without
 changing the world.
 
@@ -32,7 +37,8 @@ geometry changes. Identical input and removal of a missing key do not advance
 the revision. Camera-only changes share the same scene. An unchanged commit
 does not traverse or copy the meshes.
 
-`FrameSnapshot::triangle_count` counts visible scene triangles plus any
+`FrameSnapshot::triangle_count` counts visible scene triangles, once per
+placement, plus any
 explicit bootstrap triangles. Counts exceeding uint32 throw
 `std::overflow_error`. `DrawSummary` describes the
 bootstrap raster pass: it selects one fixed triangle when any visible
@@ -69,15 +75,16 @@ planned and returns a `SceneUpdate`:
   the previous scene's key order;
 - `geometry_uploads`: geometry buffers that become resident, in key order;
 - `instances`: when `instances_changed`, the complete replacement list,
-  one `SceneInstance` (geometry, `world_from_object` and material) per
-  visible mesh with triangles, in key order;
+  one `SceneInstance` (geometry, composed `world_from_object` and material)
+  per placement of each visible mesh with triangles, in key order and then
+  placement order;
 - `environment`: when `environment_changed`, the scene's environment
   radiance. A GPU scene, and the extraction after `Reset`, start from
   black, so only a different environment is planned.
 
 A geometry buffer is identified by its address. Every mesh with triangles
-keeps its geometry resident, hidden or not, so visibility, transform and
-material changes rewrite only the instances. Geometry without triangles is never
+keeps its geometry resident, even hidden or placed nowhere, so visibility,
+transform, placement and material changes rewrite only the instances. Geometry without triangles is never
 resident or instanced. The extraction holds a reference to every resident
 buffer, so an address is not reused before its release.
 
@@ -336,17 +343,17 @@ The reference path tracer's images are of one fixed scene, rendered by
 ## Hydra extraction
 
 The adapter keys each mesh by its `SdfPath` string and reads points,
-topology, transform and visibility only when their dirty bits require it.
-Points and topology are cached so a transform or visibility update does not
-fetch or re-triangulate geometry.
+topology, transform, visibility and instancer placements only when their
+dirty bits require it. Points and topology are cached so a transform,
+visibility or instancer update does not fetch or re-triangulate geometry.
 
 Coarse polygons use OpenUSD's
 [`HdMeshUtil` triangulation](https://openusd.org/dev/api/class_hd_mesh_util.html):
 fan triangles, winding normalization, hole-face exclusion and coarse-face
 mapping. Subdivision refinement, general concave-polygon tessellation,
-normals, face-varying primvars, materials and instancer expansion are not
-implemented. The existing render pass also does not filter geometry by
-collection or render tag.
+normals, face-varying primvars and materials are not implemented. The
+existing render pass also does not filter geometry by collection or render
+tag.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -358,7 +365,7 @@ and a newly created renderer resets the extraction.
 On ray-query devices each pass adds one sample with `RenderScene`, with
 `max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
 default); the render pass and the colour buffer report convergence when the
-accumulation reaches it. Point, topology, transform and visibility edits,
+accumulation reaches it. Point, topology, transform, visibility and instancer edits,
 like camera and framing changes, restart the accumulation. Other devices
 retain the bootstrap path and converge after one pass. Materials and
 lights are not read yet: every mesh has the default `SurfaceMaterial`, and
@@ -382,4 +389,24 @@ environment and the path tracer in the
 progressive Hydra convergence in the
 [HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md); the
 reference images and the statistical match in the
-[reference images report](../reports/2026-10-05-reference-images.md).
+[reference images report](../reports/2026-10-05-reference-images.md);
+instancer placements against UsdGeom, and their GPU instances, in the
+[Hydra instancers report](../reports/2026-10-05-hydra-instancers.md).
+
+### Instancers
+
+`HdLotusInstancer` places an instancer's prototypes, with OpenUSD's
+hdEmbree instancer as the model. A prototype mesh syncs its instancer and
+the instancer's parents, then sets `instancer_transforms` to one transform
+per instance index the instancer gives it. For column vectors, an
+instance's transform is the instancer transform × translation × rotation ×
+scale × instance transform, each factor from its
+`hydra:instanceTranslations`, `hydra:instanceRotations`,
+`hydra:instanceScales` or `hydra:instanceTransforms` primvar when present,
+in half, single or double precision (matrices single or double); an index
+beyond a primvar's array leaves that factor out. A nested instancer's instances repeat for each
+instance of its parent, the parent's transform applied last. Point
+instancers, nested point instancers and native instancing reach the adapter
+this way through UsdImaging. Per-instance primvars other than these, such
+as a per-instance colour, are not read. A mesh without an instancer keeps
+its one ordinary placement.

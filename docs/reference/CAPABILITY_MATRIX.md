@@ -65,9 +65,10 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | AOV binding validation and empty-scene output | ✅ | `lotus-renderer-hydra-aov`: all bindings checked before rendering, host clear values, no-clear preservation at the same size, disappearance of the last mesh and depth-only recovery. GPU capability-gated CTest; [measured run](../reports/2026-10-04-foundation-aovs.md) |
 | First frame and a stable update in `testusdview` | ✅ | `renderer.host.first_frame`, `.host.stable_update`; progressive path tracing through the Hydra camera/framing to 64 spp on ray-query devices, bootstrap otherwise, with no Vulkan validation message; [measured run](../reports/2026-10-05-hdr-accumulation.md) |
 | GPU capability gate for `testusdview` | ✅ | Explicit `renderer.gpu.frame` SKIP returns before launching the viewer; CTest reports the host test as skipped. Failed, missing, malformed or unexplained evidence fails. `lotus-renderer-host-capability-gate` and [CI report](../reports/2026-10-04-foundation-ci.md) |
-| Supported prim types | ✅ | `mesh` (coarse geometry and ordinary placement extracted, uploaded and traced on ray-query devices), `camera` (through render pass state), `renderBuffer`; collection/render-tag filtering and instancers remain incomplete |
+| Supported prim types | ✅ | `mesh` (coarse geometry and ordinary or instanced placement extracted, uploaded and traced on ray-query devices), `camera` (through render pass state), `renderBuffer`; collection/render-tag filtering remains incomplete |
 | Render settings | 🧪 | `convergedSamplesPerPixel` only |
-| Instancers, materials, lights | ⬜ | every mesh has the default `SurfaceMaterial` under a white fallback environment |
+| Instancers | ✅ | `HdInstancer` placements: point, nested point and native instancing; translations, rotations, scales and instance transforms; one BLAS per geometry and one TLAS instance per placement ([scene reference](SCENE.md#instancers)). `lotus-renderer-hydra-instancer` compares UsdImaging-synced placements with UsdGeom's; the usdview smoke test traces a point instancer; [measured run](../reports/2026-10-05-hydra-instancers.md). Per-instance primvars are not read |
+| Materials, lights | ⬜ | every mesh has the default `SurfaceMaterial` under a white fallback environment |
 
 ## Hosts
 

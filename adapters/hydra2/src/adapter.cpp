@@ -4,7 +4,17 @@
 #include <pxr/pxr.h>
 
 #include <pxr/base/gf/matrix4d.h>
+#include <pxr/base/gf/matrix4f.h>
+#include <pxr/base/gf/quatd.h>
+#include <pxr/base/gf/quatf.h>
+#include <pxr/base/gf/quath.h>
+#include <pxr/base/gf/rotation.h>
+#include <pxr/base/gf/vec3d.h>
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/vec3h.h>
 #include <pxr/base/tf/diagnostic.h>
+#include <pxr/base/tf/hashmap.h>
+#include <pxr/base/vt/array.h>
 #include <pxr/imaging/cameraUtil/framing.h>
 #include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/camera.h>
@@ -38,9 +48,11 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -382,6 +394,132 @@ private:
   bool converged_ = true;
 };
 
+// Element `index` of an instance primvar holding a VtArray of one of Types,
+// converted to T; nothing when the value holds none of them or the index is
+// out of range.
+template <typename T, typename... Types>
+std::optional<T> InstanceValue(const VtValue& value, int index) {
+  std::optional<T> result;
+  const auto read = [&](const auto* array) {
+    if (array != nullptr && index >= 0 &&
+        static_cast<std::size_t>(index) < array->size()) {
+      result = T((*array)[static_cast<std::size_t>(index)]);
+    }
+  };
+  (read(value.IsHolding<VtArray<Types>>()
+            ? &value.UncheckedGet<VtArray<Types>>()
+            : nullptr),
+      ...);
+  return result;
+}
+
+// Places an instancer's prototypes. OpenUSD's hdEmbree instancer is the
+// model: for column vectors, an instance's transform is
+//   instancer transform * translation * rotation * scale * instance transform,
+// each factor from its hydra:instance* primvar when present, and a nested
+// instancer's instances repeat for each instance of its parent.
+class HdLotusInstancer final : public HdInstancer {
+public:
+  HdLotusInstancer(HdSceneDelegate* delegate, const SdfPath& id)
+      : HdInstancer(delegate, id) {
+  }
+
+  // _SyncInstancerAndParents serializes this and runs it before a
+  // prototype reads the primvars.
+  void Sync(HdSceneDelegate* delegate, HdRenderParam* render_param,
+      HdDirtyBits* dirty_bits) override {
+    (void)render_param;
+    _UpdateInstancer(delegate, dirty_bits);
+    if (!HdChangeTracker::IsAnyPrimvarDirty(*dirty_bits, GetId())) {
+      return;
+    }
+    // Only the instance primvars the delegate still describes are kept.
+    Primvars primvars;
+    for (const HdPrimvarDescriptor& primvar :
+        delegate->GetPrimvarDescriptors(GetId(), HdInterpolationInstance)) {
+      const auto found = primvars_.find(primvar.name);
+      primvars[primvar.name] =
+          found == primvars_.end() ||
+                  HdChangeTracker::IsPrimvarDirty(
+                      *dirty_bits, GetId(), primvar.name)
+              ? delegate->Get(GetId(), primvar.name)
+              : found->second;
+    }
+    primvars_ = std::move(primvars);
+  }
+
+  // The world transforms of the prototype's instances, to be applied after
+  // the prototype's own transform.
+  VtMatrix4dArray ComputeInstanceTransforms(const SdfPath& prototype) const {
+    HdSceneDelegate* delegate = GetDelegate();
+    const VtIntArray indices = delegate->GetInstanceIndices(GetId(), prototype);
+    VtMatrix4dArray transforms(
+        indices.size(), delegate->GetInstancerTransform(GetId()));
+    const VtValue* translations =
+        Primvar(HdInstancerTokens->instanceTranslations);
+    const VtValue* rotations = Primvar(HdInstancerTokens->instanceRotations);
+    const VtValue* scales = Primvar(HdInstancerTokens->instanceScales);
+    const VtValue* instance_transforms =
+        Primvar(HdInstancerTokens->instanceTransforms);
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+      // Gf matrices multiply row vectors: the left factor applies first.
+      GfMatrix4d& transform = transforms[i];
+      if (translations != nullptr) {
+        if (const auto value = InstanceValue<GfVec3d, GfVec3f, GfVec3d,
+                GfVec3h>(*translations, indices[i])) {
+          transform = GfMatrix4d(1.0).SetTranslate(*value) * transform;
+        }
+      }
+      if (rotations != nullptr) {
+        if (const auto value = InstanceValue<GfQuatd, GfQuath, GfQuatf,
+                GfQuatd>(*rotations, indices[i])) {
+          transform = GfMatrix4d(1.0).SetRotate(*value) * transform;
+        }
+      }
+      if (scales != nullptr) {
+        if (const auto value = InstanceValue<GfVec3d, GfVec3f, GfVec3d,
+                GfVec3h>(*scales, indices[i])) {
+          transform = GfMatrix4d(1.0).SetScale(*value) * transform;
+        }
+      }
+      if (instance_transforms != nullptr) {
+        if (const auto value = InstanceValue<GfMatrix4d, GfMatrix4d,
+                GfMatrix4f>(*instance_transforms, indices[i])) {
+          transform = *value * transform;
+        }
+      }
+    }
+    if (GetParentId().IsEmpty()) {
+      return transforms;
+    }
+    const auto* parent = dynamic_cast<const HdLotusInstancer*>(
+        delegate->GetRenderIndex().GetInstancer(GetParentId()));
+    if (parent == nullptr) {
+      TF_CODING_ERROR("Lotus found no parent instancer %s for %s",
+          GetParentId().GetText(), GetId().GetText());
+      return {};
+    }
+    const VtMatrix4dArray parents = parent->ComputeInstanceTransforms(GetId());
+    VtMatrix4dArray nested(parents.size() * transforms.size());
+    for (std::size_t i = 0; i < parents.size(); ++i) {
+      for (std::size_t j = 0; j < transforms.size(); ++j) {
+        nested[i * transforms.size() + j] = transforms[j] * parents[i];
+      }
+    }
+    return nested;
+  }
+
+private:
+  using Primvars = TfHashMap<TfToken, VtValue, TfToken::HashFunctor>;
+
+  const VtValue* Primvar(const TfToken& name) const {
+    const auto found = primvars_.find(name);
+    return found == primvars_.end() ? nullptr : &found->second;
+  }
+
+  Primvars primvars_;
+};
+
 class HdLotusMesh final : public HdMesh {
 public:
   HdLotusMesh(const SdfPath& id, std::shared_ptr<AdapterState> state)
@@ -395,7 +533,8 @@ public:
   HdDirtyBits GetInitialDirtyBitsMask() const override {
     return HdChangeTracker::DirtyPoints | HdChangeTracker::DirtyTopology |
            HdChangeTracker::DirtyTransform | HdChangeTracker::DirtyVisibility |
-           HdChangeTracker::DirtyRenderTag;
+           HdChangeTracker::DirtyRenderTag | HdChangeTracker::DirtyInstancer |
+           HdChangeTracker::DirtyInstanceIndex;
   }
 
   void Sync(HdSceneDelegate* delegate, HdRenderParam* render_param,
@@ -425,6 +564,10 @@ public:
     if (!initialized_ || HdChangeTracker::IsVisibilityDirty(bits, GetId())) {
       instance_.visible = delegate->GetVisible(GetId());
     }
+    if (!initialized_ || HdChangeTracker::IsInstancerDirty(bits, GetId()) ||
+        HdChangeTracker::IsInstanceIndexDirty(bits, GetId())) {
+      instance_.instancer_transforms = InstancerTransforms(delegate, bits);
+    }
     try {
       if (geometry_dirty) {
         state_->SyncMesh(GetId(), ExtractGeometry(), instance_);
@@ -452,6 +595,32 @@ protected:
   }
 
 private:
+  // This mesh's placements as an instancer prototype, or nothing when no
+  // instancer places it.
+  std::optional<std::vector<Lotus::Matrix4>> InstancerTransforms(
+      HdSceneDelegate* delegate, HdDirtyBits bits) {
+    _UpdateInstancer(delegate, &bits);
+    const SdfPath& id = GetInstancerId();
+    if (id.IsEmpty()) {
+      return std::nullopt;
+    }
+    HdRenderIndex& index = delegate->GetRenderIndex();
+    HdInstancer::_SyncInstancerAndParents(index, id);
+    const auto* instancer =
+        dynamic_cast<const HdLotusInstancer*>(index.GetInstancer(id));
+    if (instancer == nullptr) {
+      TF_CODING_ERROR("Lotus found no instancer %s for %s", id.GetText(),
+          GetId().GetText());
+      return std::vector<Lotus::Matrix4>{};
+    }
+    std::vector<Lotus::Matrix4> transforms;
+    for (const GfMatrix4d& transform :
+        instancer->ComputeInstanceTransforms(GetId())) {
+      transforms.push_back(ToLotusMatrix(transform));
+    }
+    return transforms;
+  }
+
   Lotus::MeshGeometry ExtractGeometry() const {
     const auto& counts = topology_.GetFaceVertexCounts();
     const auto& indices = topology_.GetFaceVertexIndices();
@@ -772,9 +941,7 @@ HdRenderPassSharedPtr HdLotusRenderDelegate::CreateRenderPass(
 
 HdInstancer* HdLotusRenderDelegate::CreateInstancer(
     HdSceneDelegate* delegate, const SdfPath& id) {
-  (void)delegate;
-  (void)id;
-  return nullptr;
+  return new HdLotusInstancer(delegate, id);
 }
 
 void HdLotusRenderDelegate::DestroyInstancer(HdInstancer* instancer) {

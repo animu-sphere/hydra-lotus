@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -121,6 +122,43 @@ int main() try {
   Check(lit.scene->environment == std::array<float, 3>{0.25F, 0.5F, 4.0F} &&
       painted.scene->environment == std::array<float, 3>{},
       "an environment edit was lost or changed a retained snapshot");
+
+  // An instancer prototype is placed once per instancer transform, applied
+  // after its own transform; an empty list places it nowhere.
+  auto prototype = instance;
+  prototype.world_from_object = Lotus::IdentityMatrix();
+  prototype.world_from_object[0] = 2;
+  prototype.world_from_object[12] = 1;
+  Lotus::Matrix4 shifted = Lotus::IdentityMatrix();
+  shifted[13] = 5;
+  Lotus::Matrix4 turned{0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  prototype.instancer_transforms = std::vector<Lotus::Matrix4>{shifted, turned};
+  world.SetMeshInstance("/mesh", prototype);
+  const auto instanced = world.Commit();
+  const auto placements = Lotus::PlacementTransforms(
+      instanced.scene->meshes.at("/mesh").instance);
+  Check(instanced.revision == lit.revision + 1 && instanced.triangle_count == 2 &&
+      placements.size() == 2 &&
+      placements[0] == Lotus::Matrix4{2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+          1, 5, 0, 1} &&
+      placements[1] == Lotus::Matrix4{0, 2, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0,
+          0, 1, 0, 1} &&
+      Lotus::PlacementTransforms(instance) ==
+          std::vector<Lotus::Matrix4>{instance.world_from_object},
+      "instancer placements were not composed after the mesh transform");
+  prototype.instancer_transforms->clear();
+  world.SetMeshInstance("/mesh", prototype);
+  Check(world.Commit().triangle_count == 0,
+      "an instancer prototype without instances was placed");
+  invalid_instance = prototype;
+  invalid_instance.instancer_transforms->push_back(shifted);
+  invalid_instance.instancer_transforms->back()[3] =
+      std::numeric_limits<float>::quiet_NaN();
+  Reject([&] { world.SetMeshInstance("/mesh", invalid_instance); });
+  world.SetMeshInstance("/mesh", instance);
+  Check(world.Commit().triangle_count == 1 &&
+      instanced.scene->meshes.at("/mesh").instance.instancer_transforms->size() == 2,
+      "an ordinary placement was not restored or changed a retained snapshot");
 
   world.SetMesh("/other", geometry, instance);
   const auto multiple = world.Commit();

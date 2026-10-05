@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,9 @@ using Matrix4 = std::array<float, 16>;
   return {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
       0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F};
 }
+
+// left * right: right's transform is applied first.
+[[nodiscard]] Matrix4 Multiply(const Matrix4& left, const Matrix4& right);
 
 // The camera as a host supplies it. `view` maps world space to a right-handed
 // view space looking down -Z; `projection` maps view space to OpenGL clip
@@ -38,13 +42,22 @@ struct MeshGeometry {
   bool operator==(const MeshGeometry&) const = default;
 };
 
-// One ordinary mesh placement. Hydra instancer expansion is a later step.
+// Where a mesh is placed. Without `instancer_transforms` it is one ordinary
+// placement at `world_from_object`. With them it is an instancer prototype,
+// placed once per entry, in order, at entry * world_from_object; an empty
+// list places it nowhere.
 struct MeshInstance {
   Matrix4 world_from_object = IdentityMatrix();
   bool visible = true;
+  std::optional<std::vector<Matrix4>> instancer_transforms;
 
   bool operator==(const MeshInstance&) const = default;
 };
+
+// The world_from_object of each of an instance's placements, in order,
+// whether or not it is visible.
+[[nodiscard]] std::vector<Matrix4> PlacementTransforms(
+    const MeshInstance& instance);
 
 // How a mesh's surface scatters and emits light: the reference path tracer's
 // parameters until the material IR (Renderer Phase 1.5) replaces them. Colours

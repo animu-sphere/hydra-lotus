@@ -9,6 +9,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Hydra instancers. `HdLotusInstancer` places an instancer's prototypes
+  from its translation, rotation, scale and transform primvars, nested
+  instancers included, so point instancers and native instancing render.
+  `MeshInstance::instancer_transforms` holds a prototype's placements, and
+  the update plan lists one instance per placement over one resident
+  geometry and BLAS. `lotus-renderer-hydra-instancer` syncs a USD stage
+  through UsdImaging and compares the placements with UsdGeom's;
+  `renderer.scene.upload`, `.scene.acceleration` and
+  `.ray_query.triangle` cover instanced placements.
+
 - Reference images, the reference path tracer milestone. `lotus-headless`
   renders a fixed Cornell box at 1, 16, 64, 256 and 1024 spp
   (`--images <directory>` writes them as PFM) and compares each image with

@@ -11,11 +11,20 @@ namespace Lotus {
 
 namespace {
 
+bool Finite(const Matrix4& matrix) {
+  return std::all_of(matrix.begin(), matrix.end(),
+      [](float value) { return std::isfinite(value); });
+}
+
 void ValidateInstance(const MeshInstance& instance) {
-  if (!std::all_of(instance.world_from_object.begin(),
-          instance.world_from_object.end(),
-          [](float value) { return std::isfinite(value); })) {
+  if (!Finite(instance.world_from_object)) {
     throw std::invalid_argument("mesh transform must be finite");
+  }
+  if (instance.instancer_transforms &&
+      !std::all_of(instance.instancer_transforms->begin(),
+          instance.instancer_transforms->end(),
+          [](const Matrix4& matrix) { return Finite(matrix); })) {
+    throw std::invalid_argument("instancer transforms must be finite");
   }
 }
 
@@ -65,6 +74,32 @@ void ValidateGeometry(const MeshGeometry& geometry) {
 }
 
 } // namespace
+
+Matrix4 Multiply(const Matrix4& left, const Matrix4& right) {
+  Matrix4 result{};
+  for (int column = 0; column < 4; ++column) {
+    for (int row = 0; row < 4; ++row) {
+      float sum = 0.0F;
+      for (int index = 0; index < 4; ++index) {
+        sum += left[index * 4 + row] * right[column * 4 + index];
+      }
+      result[column * 4 + row] = sum;
+    }
+  }
+  return result;
+}
+
+std::vector<Matrix4> PlacementTransforms(const MeshInstance& instance) {
+  if (!instance.instancer_transforms) {
+    return {instance.world_from_object};
+  }
+  std::vector<Matrix4> placements;
+  placements.reserve(instance.instancer_transforms->size());
+  for (const Matrix4& transform : *instance.instancer_transforms) {
+    placements.push_back(Multiply(transform, instance.world_from_object));
+  }
+  return placements;
+}
 
 void RenderWorld::MakeSceneWritable() {
   if (scene_.use_count() != 1) {
@@ -168,7 +203,11 @@ FrameSnapshot RenderWorld::Commit() {
     for (const auto& [id, mesh] : scene_->meshes) {
       (void)id;
       if (mesh.instance.visible) {
-        count += mesh.geometry->triangles.size();
+        const std::uint64_t placements =
+            mesh.instance.instancer_transforms
+                ? mesh.instance.instancer_transforms->size()
+                : 1;
+        count += mesh.geometry->triangles.size() * placements;
       }
     }
     if (count > std::numeric_limits<std::uint32_t>::max()) {
