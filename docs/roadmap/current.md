@@ -87,9 +87,13 @@ principle 8):
   backend's deterministic image, whatever frames came before
   ([scene reference](../reference/SCENE.md#deterministic-mode-through-hydra),
   [evidence](../reports/2026-10-05-hydra-deterministic-mode.md)).
-- ⬜ **Extend per-pass GPU timestamps** beyond the scene pass to
-  scene upload and BLAS/TLAS builds, reported by the headless runner
-  ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
+- ✅ **Per-pass GPU timestamps** beyond the scene pass: a scene update's
+  copies, BLAS builds and TLAS build or refit are timed separately and
+  reported by the headless runner's `renderer.scene.timestamp`
+  ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling),
+  [scene reference](../reference/SCENE.md#scene-update-timestamps),
+  [evidence](../reports/2026-10-05-gpu-timestamps.md)). The scene pass
+  still times its camera and radiance passes together.
 
 ## Backend follow-up
 

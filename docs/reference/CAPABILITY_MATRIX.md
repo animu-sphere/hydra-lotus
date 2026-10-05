@@ -23,7 +23,7 @@ Configurations each row was measured on are
 | Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle through the core camera, with its perspective aspect updated from the framebuffer extent |
 | Slang shaders compiled to SPIR-V | ✅ | bootstrap `triangle.slang` and the scene pass `path_trace.slang`, which imports the `common/`, `bsdf/` and `sampling/` modules and explicitly enables `spvRayQueryKHR`. A shader change relinks the adapters that copy the SPIR-V |
 | Camera | ✅ | view and projection in the core, converted to Vulkan clip space by the backend; all three entry points supply it. The headless runner's perspective camera is checked by `renderer.render_product.color`, `.depth`; `lotus-viewport-camera` checks square, landscape and portrait projection and scene revisions on resize ([foundation follow-up](../reports/2026-10-04-foundation-camera-boundary.md)) |
-| Scene-pass GPU timestamps | ✅ | persistent query pool, queue capability gated; `GpuFrameEvidence::primary_ray_gpu_ms` and `renderer.ray_query.timestamp` (measured on the barycentric output). Other passes remain [roadmap work](../roadmap/current.md) |
+| Per-pass GPU timestamps | ✅ | persistent query pools, queue capability gated. The scene pass: `GpuFrameEvidence::primary_ray_gpu_ms` and `renderer.ray_query.timestamp` (measured on the barycentric output). A scene update's copies, BLAS builds and TLAS build or refit: `GpuSceneEvidence::timings` and `renderer.scene.timestamp` ([scene reference](SCENE.md#scene-update-timestamps), [measured run](../reports/2026-10-05-gpu-timestamps.md)). The camera and radiance passes are timed together |
 | Deterministic mode and golden-image tests | ✅ | [design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode): an image is a function of its first sample index, sample count, scene, camera and target. The headless runner's reference images ([scene reference](SCENE.md#reference-images)) are compared statistically, not bitwise; Hydra exposes the first sample index as `lotus:sampleIndex` ([scene reference](SCENE.md#deterministic-mode-through-hydra), [measured run](../reports/2026-10-05-hydra-deterministic-mode.md)) |
 
 ## Light transport
@@ -77,4 +77,4 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | --- | --- | --- |
 | Headless runner (`lotus-headless`) | ✅ | runs during `ost build`; writes `renderer-report.json` |
 | Standalone viewport (`lotus-viewport`) | 🧪 | `ost renderer viewport` |
-| `usdview` | 🧪 | `testusdview` in CTest; `ost renderer view` not yet run |
+| `usdview` | 🧪 | `testusdview` in CTest; `ost renderer view` opens the smoke scene interactively ([building guide](../guides/BUILDING.md#the-hydra-adapter)) |

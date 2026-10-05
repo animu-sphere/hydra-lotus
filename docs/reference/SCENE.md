@@ -166,6 +166,24 @@ also returns the TLAS build input decoded
 geometry slot. Primary-ray correctness is also checked against independently
 projected CPU triangles ([ray-query report](../reports/2026-10-05-primary-rays.md)).
 
+### Scene update timestamps
+
+Where the queue supports timestamps (`GpuSceneStats::timestamps_available`),
+the plan's submission writes one timestamp before its copies and one after
+each of its three phases: the copies, the BLAS builds and the TLAS build or
+refit. The barriers between the phases keep each from starting before the
+previous one finishes, so `GpuSceneEvidence::timings` gives each phase's
+GPU duration as `upload_gpu_ms`, `blas_build_gpu_ms` and
+`tlas_build_gpu_ms`. A phase the plan does not need reports 0, and a call
+that submits nothing, such as an empty or environment-only plan, reports
+`timings.available` false. `renderer.scene.timestamp` times a 131,072-triangle
+grid with 1,024 instancer placements through insertion, a transform edit
+(a TLAS refit), a material edit, an unchanged commit and removal: every
+phase a step runs must measure a positive duration, except the removal's
+empty TLAS build, and every other phase must report 0. Its detail lists the
+durations; it is a SKIP without timestamp support
+([evidence](../reports/2026-10-05-gpu-timestamps.md)).
+
 ## Primary rays
 
 `CreateOffscreenRenderer` accepts optional `RayQueryShaders` with explicit

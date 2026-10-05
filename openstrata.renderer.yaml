@@ -27,6 +27,7 @@ validation:
     - renderer.gpu.frame
     - renderer.scene.upload
     - renderer.scene.acceleration
+    - renderer.scene.timestamp
     - renderer.ray_query.capability
     - renderer.ray_query.triangle
     - renderer.ray_query.timestamp

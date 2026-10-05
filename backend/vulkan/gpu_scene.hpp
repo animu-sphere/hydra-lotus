@@ -83,6 +83,10 @@ public:
   [[nodiscard]] const GpuSceneStats& Stats() const {
     return stats_;
   }
+  // The last Apply's submission; unavailable when it submitted nothing.
+  [[nodiscard]] const GpuSceneTimings& Timings() const {
+    return timings_;
+  }
   [[nodiscard]] VkAccelerationStructureKHR Tlas() const {
     return tlas_built_ ? tlas_.handle : VK_NULL_HANDLE;
   }
@@ -174,7 +178,14 @@ private:
   bool tlas_built_ = false;
   DeviceBuffer scratch_;
 
+  // Timestamps before the copies and after the copies, the BLAS builds and
+  // the TLAS build; absent when the queue has no timestamp support.
+  VkQueryPool timestamps_ = VK_NULL_HANDLE;
+  std::uint32_t timestamp_bits_ = 0;
+  float timestamp_period_ = 0.0F;
+
   GpuSceneStats stats_;
+  GpuSceneTimings timings_;
 };
 
 } // namespace Lotus::vulkan_internal

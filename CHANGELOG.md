@@ -9,6 +9,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Per-pass GPU timestamps for scene updates. Each `UpdateScene`
+  submission times its copies, BLAS builds and TLAS build or refit
+  separately: `GpuSceneEvidence::timings`, with
+  `GpuSceneStats::timestamps_available` saying whether the queue supports
+  timestamps. The headless runner's `renderer.scene.timestamp` times a
+  131,072-triangle grid with 1,024 instancer placements through insertion,
+  a TLAS refit, a material edit, an unchanged commit and removal, and
+  reports the durations.
+
 - Deterministic mode through Hydra. The `lotus:sampleIndex` render setting
   (0 by default) sets the first sample index of the accumulation, which
   seeds its random numbers; changing it restarts the accumulation. With

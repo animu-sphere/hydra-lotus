@@ -447,6 +447,142 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   return {};
 }
 
+// The scene-update timestamps verdict: a SKIP without timestamp support,
+// otherwise the measured durations or the first mismatch.
+struct SceneTimestampVerdict {
+  bool available = false;
+  std::string detail;
+  std::string failure;
+};
+
+// Times an instanced grid's insertion, a transform edit, a material edit, an
+// unchanged commit and removal. A phase a step runs measures a positive
+// duration and one it skips reports 0; the empty TLAS of the removal is only
+// required to be finite.
+SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
+  constexpr std::uint32_t kQuads = 256;
+  constexpr std::uint32_t kPlacements = 32;
+  Lotus::MeshGeometry grid;
+  for (std::uint32_t y = 0; y <= kQuads; ++y) {
+    for (std::uint32_t x = 0; x <= kQuads; ++x) {
+      grid.positions.push_back({float(x) / kQuads, float(y) / kQuads, 0.0F});
+    }
+  }
+  for (std::uint32_t y = 0; y < kQuads; ++y) {
+    for (std::uint32_t x = 0; x < kQuads; ++x) {
+      const std::uint32_t corner = y * (kQuads + 1) + x;
+      grid.triangles.push_back({corner, corner + 1, corner + kQuads + 2});
+      grid.triangles.push_back({corner, corner + kQuads + 2, corner + kQuads + 1});
+      grid.source_faces.push_back(y * kQuads + x);
+      grid.source_faces.push_back(y * kQuads + x);
+    }
+  }
+  const std::size_t triangle_count = grid.triangles.size();
+  Lotus::MeshInstance placements;
+  placements.instancer_transforms.emplace();
+  for (std::uint32_t y = 0; y < kPlacements; ++y) {
+    for (std::uint32_t x = 0; x < kPlacements; ++x) {
+      Lotus::Matrix4 placement = Lotus::IdentityMatrix();
+      placement[12] = float(x);
+      placement[13] = float(y);
+      placements.instancer_transforms->push_back(placement);
+    }
+  }
+
+  SceneTimestampVerdict verdict;
+  Lotus::RenderWorld world;
+  Lotus::SceneExtraction extraction;
+  std::ostringstream summary;
+  summary << std::fixed << std::setprecision(4) << triangle_count
+          << " triangles x " << kPlacements * kPlacements << " placements:";
+  enum class Phase { Skipped, Runs, Finite };
+  // Returns the step's failure, or an empty string.
+  const auto step = [&](const char* name, Phase upload, Phase blas,
+                        Phase tlas) -> std::string {
+    const Lotus::GpuSceneEvidence evidence =
+        renderer.UpdateScene(extraction.Update(world.Commit()));
+    const std::string prefix = std::string(name) + ": ";
+    if (evidence.status != Lotus::FrameStatus::Pass) {
+      return prefix + evidence.detail;
+    }
+    verdict.available = evidence.stats.timestamps_available;
+    if (!verdict.available) {
+      return {};
+    }
+    // Without acceleration structures only the copies run.
+    if (!evidence.stats.acceleration_available) {
+      blas = Phase::Skipped;
+      tlas = Phase::Skipped;
+    }
+    const Lotus::GpuSceneTimings& timings = evidence.timings;
+    const bool submitted =
+        upload != Phase::Skipped || blas != Phase::Skipped || tlas != Phase::Skipped;
+    if (timings.available != submitted) {
+      return prefix + (submitted ? "the submission was not measured"
+                                 : "timings were reported without a submission");
+    }
+    const auto check = [&](Phase phase, double milliseconds,
+                           const char* field) -> std::string {
+      const bool ok = phase == Phase::Skipped ? milliseconds == 0.0
+                      : phase == Phase::Runs  ? std::isfinite(milliseconds) && milliseconds > 0.0
+                                              : std::isfinite(milliseconds) && milliseconds >= 0.0;
+      if (ok) {
+        return {};
+      }
+      return prefix + field + "=" + std::to_string(milliseconds) +
+             (phase == Phase::Skipped ? " for a phase that did not run"
+                                      : " is not a positive duration");
+    };
+    for (auto failure : {check(upload, timings.upload_gpu_ms, "upload_gpu_ms"),
+             check(blas, timings.blas_build_gpu_ms, "blas_build_gpu_ms"),
+             check(tlas, timings.tlas_build_gpu_ms, "tlas_build_gpu_ms")}) {
+      if (!failure.empty()) {
+        return failure;
+      }
+    }
+    if (submitted) {
+      summary << ' ' << name << " upload_gpu_ms=" << timings.upload_gpu_ms
+              << " blas_build_gpu_ms=" << timings.blas_build_gpu_ms
+              << " tlas_build_gpu_ms=" << timings.tlas_build_gpu_ms << ';';
+    }
+    return {};
+  };
+
+  world.SetMesh("/grid", std::move(grid), placements);
+  verdict.failure = step("insertion", Phase::Runs, Phase::Runs, Phase::Runs);
+  if (verdict.failure.empty() && verdict.available) {
+    // Moving every placement refits the TLAS.
+    for (Lotus::Matrix4& placement : *placements.instancer_transforms) {
+      placement[14] = 0.5F;
+    }
+    world.SetMeshInstance("/grid", placements);
+    verdict.failure =
+        step("transform edit", Phase::Runs, Phase::Skipped, Phase::Runs);
+  }
+  if (verdict.failure.empty() && verdict.available) {
+    Lotus::SurfaceMaterial material;
+    material.base_color = {0.25F, 0.5F, 0.75F};
+    world.SetMeshMaterial("/grid", material);
+    verdict.failure =
+        step("material edit", Phase::Runs, Phase::Skipped, Phase::Skipped);
+  }
+  if (verdict.failure.empty() && verdict.available) {
+    verdict.failure = step("unchanged commit", Phase::Skipped, Phase::Skipped,
+        Phase::Skipped);
+  }
+  // Leaves the GPU scene empty for the checks after this one.
+  world.RemoveMesh("/grid");
+  if (const std::string removal = step("removal", Phase::Skipped,
+          Phase::Skipped, Phase::Finite);
+      verdict.failure.empty()) {
+    verdict.failure = removal;
+  }
+  verdict.detail = verdict.available
+                       ? summary.str()
+                       : "the graphics queue has no timestamp support";
+  return verdict;
+}
+
 // The scene passes' RGBA32F colour product, four floats per pixel.
 std::vector<float> ColorValues(const Lotus::ColorProduct& color) {
   std::vector<float> values(color.payload.size() / sizeof(float));
@@ -1597,8 +1733,12 @@ int main(int argc, char** argv) {
   // The scene runs first, so the frames' validation count covers it too.
   std::string scene_failure;
   AccelerationVerdict acceleration;
+  SceneTimestampVerdict scene_timestamps;
   if (renderer) {
     scene_failure = SceneUploadFailure(*renderer, acceleration);
+    if (scene_failure.empty()) {
+      scene_timestamps = SceneTimestamps(*renderer);
+    }
   }
   Lotus::GpuFrameEvidence frame;
   if (renderer) {
@@ -1783,10 +1923,23 @@ int main(int argc, char** argv) {
           acceleration.failure.empty() ? "pass" : "fail",
           acceleration.failure});
     }
+    if (!scene_failure.empty()) {
+      checks.push_back({"renderer.scene.timestamp", "skip",
+          "renderer.scene.upload did not pass: " + scene_failure});
+    } else if (!scene_timestamps.failure.empty()) {
+      checks.push_back({"renderer.scene.timestamp", "fail",
+          scene_timestamps.failure});
+    } else {
+      checks.push_back({"renderer.scene.timestamp",
+          scene_timestamps.available ? "pass" : "skip",
+          scene_timestamps.detail});
+    }
   } else {
     checks.push_back({"renderer.scene.upload", Status(setup_status),
         setup_error});
     checks.push_back({"renderer.scene.acceleration", Status(setup_status),
+        setup_error});
+    checks.push_back({"renderer.scene.timestamp", Status(setup_status),
         setup_error});
   }
   if (last.validation_available) {

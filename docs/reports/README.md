@@ -20,6 +20,7 @@ to measure.
 | [2026-10-05-hydra-instancers.md](2026-10-05-hydra-instancers.md) | Hydra instancer placements: point, nested and native instancing synced through UsdImaging and compared with UsdGeom's transforms, GPU instance and TLAS counts, primary rays through instanced triangles, four fault injections; core 8/8, ci-core 8/8 and Hydra 15/15. |
 | [2026-10-05-render-pass-selection.md](2026-10-05-render-pass-selection.md) | Render-pass selection by collection root and exclude paths and render tags, through UsdImaging purposes, with excluded meshes hidden over resident geometry; four fault injections, one not detectable on OpenUSD 26.08; Hydra 17/17 and strict evidence validation. |
 | [2026-10-05-hydra-deterministic-mode.md](2026-10-05-hydra-deterministic-mode.md) | Deterministic mode through Hydra: the `lotus:sampleIndex` render setting, converged Hydra images compared bit for bit with the backend's across setting changes, camera moves and render delegates, and in usdview; three fault injections; Hydra 18/18 and strict evidence validation. |
+| [2026-10-05-gpu-timestamps.md](2026-10-05-gpu-timestamps.md) | Scene-update GPU timestamps: copies, BLAS builds and TLAS build or refit timed per submission on an instanced 131,072-triangle grid, zero for skipped phases, two fault injections; `ost renderer view` run; core 8/8, ci-core 8/8, Hydra 18/18 and strict evidence validation. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and
