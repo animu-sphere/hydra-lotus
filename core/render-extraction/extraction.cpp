@@ -34,7 +34,7 @@ DrawSummary ExtractDrawSummary(const FrameSnapshot& snapshot) {
 
 bool SceneUpdate::Empty() const {
   return geometry_releases.empty() && geometry_uploads.empty() &&
-         !instances_changed;
+         !instances_changed && !environment_changed;
 }
 
 SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
@@ -59,7 +59,8 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
         update.geometry_uploads.push_back(mesh.geometry);
       }
       if (mesh.instance.visible) {
-        instances.push_back({geometry, mesh.instance.world_from_object});
+        instances.push_back(
+            {geometry, mesh.instance.world_from_object, mesh.material});
       }
     }
   }
@@ -79,6 +80,13 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
     update.instances = instances;
     instances_ = std::move(instances);
   }
+  const std::array<float, 3> environment =
+      snapshot.scene ? snapshot.scene->environment : std::array<float, 3>{};
+  if (environment != environment_) {
+    update.environment_changed = true;
+    update.environment = environment;
+    environment_ = environment;
+  }
   resident_ = std::move(resident);
   scene_ = snapshot.scene;
   reset_ = false;
@@ -89,6 +97,7 @@ void SceneExtraction::Reset() {
   scene_.reset();
   resident_.clear();
   instances_.clear();
+  environment_ = {};
   reset_ = true;
 }
 

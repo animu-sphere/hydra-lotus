@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -27,6 +28,7 @@ struct SceneInstance {
   // A buffer from this or an earlier update's geometry_uploads.
   const MeshGeometry* geometry = nullptr;
   Matrix4 world_from_object = IdentityMatrix();
+  SurfaceMaterial material;
 
   bool operator==(const SceneInstance&) const = default;
 };
@@ -47,6 +49,10 @@ struct SceneUpdate {
   // triangles, in scene key order. Otherwise `instances` is empty.
   bool instances_changed = false;
   std::vector<SceneInstance> instances;
+  // When set, the scene's environment radiance replaces the GPU scene's. A
+  // GPU scene starts with a black environment.
+  bool environment_changed = false;
+  std::array<float, 3> environment{};
 
   // True when the GPU scene has nothing to do.
   [[nodiscard]] bool Empty() const;
@@ -67,6 +73,7 @@ private:
   std::unordered_map<const MeshGeometry*, std::shared_ptr<const MeshGeometry>>
       resident_;
   std::vector<SceneInstance> instances_;
+  std::array<float, 3> environment_{};
 };
 
 } // namespace Lotus

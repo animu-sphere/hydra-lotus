@@ -63,7 +63,7 @@ struct GpuFrameEvidence {
   ColorProduct color;
   DepthProduct depth;
   bool ray_query_used = false;
-  // GPU duration of the primary-ray pass, including clears, excluding readback.
+  // GPU duration of the RenderScene pass, including clears, excluding readback.
   bool primary_ray_timestamp_available = false;
   double primary_ray_gpu_ms = 0.0;
 };
@@ -143,6 +143,7 @@ struct GpuGeometryContents {
 struct GpuInstanceContents {
   Matrix4 world_from_object = IdentityMatrix();
   std::uint32_t geometry_slot = 0;
+  SurfaceMaterial material;
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three
@@ -164,6 +165,27 @@ struct GpuSceneContents {
   // The TLAS build input in instance order; empty without acceleration
   // structures.
   std::vector<GpuTlasInstanceContents> tlas_instances;
+  // The environment radiance the scene passes read.
+  std::array<float, 3> environment{};
+};
+
+// What RenderScene writes into the colour product.
+enum class SceneOutput {
+  // One path-traced sample of radiance per pixel, clamped to [0, 1].
+  Radiance,
+  // The closest triangle's barycentric weights: the intersection diagnostic.
+  Barycentrics,
+};
+
+// The reference path tracer's per-frame settings.
+struct PathTracingSettings {
+  SceneOutput output = SceneOutput::Radiance;
+  // Selects each pixel's random sequence together with the pixel's
+  // coordinates: the same index, scene and camera give the same image.
+  std::uint32_t sample_index = 0;
+  // Scattering events after the camera ray's hit; 0 keeps only the emission
+  // the camera sees directly.
+  std::uint32_t max_bounces = 64;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
@@ -178,7 +200,7 @@ struct GpuSceneContents {
 //
 // The renderer also owns the GPU scene: one device-local buffer and one BLAS
 // per resident geometry, an instance buffer and a TLAS, changed only by
-// UpdateScene. RenderScene traces their triangles; Render is the bootstrap.
+// UpdateScene. RenderScene path-traces them; Render is the bootstrap.
 class OffscreenRenderer {
 public:
   virtual ~OffscreenRenderer() = default;
@@ -190,12 +212,14 @@ public:
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
 
   [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
-  // Trace primary rays through the uploaded scene, using draw.world_to_clip
-  // as the camera (the bootstrap counts are ignored). Hits output triangle
-  // barycentrics as linear RGB and projected depth; misses retain clears.
-  // Missing ray-query support returns Skip. A singular camera returns Fail.
+  // Trace one camera path per pixel centre through the uploaded scene, using
+  // draw.world_to_clip as the camera (the bootstrap counts are ignored).
+  // Pixels whose camera ray hits output `settings.output` as linear RGB with
+  // alpha 1, and the hit's projected depth; misses retain clears. Missing
+  // ray-query support returns Skip. A singular camera returns Fail.
   [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,
-      const OffscreenTarget& target, std::uint32_t frame_count) = 0;
+      const OffscreenTarget& target, std::uint32_t frame_count,
+      const PathTracingSettings& settings = {}) = 0;
 
   // Apply one SceneExtraction plan; plans are applied in order. Returns after
   // the uploads have completed. An empty plan records no GPU work. After a

@@ -1,6 +1,6 @@
 # Foundation AOVs
 
-The Renderer Phase 0 AOV set, also used by the primary-ray diagnostic pass.
+The Renderer Phase 0 AOV set, also used by the ray-traced scene pass.
 The [capability matrix](CAPABILITY_MATRIX.md) owns implementation status;
 [design policy section 25](../design/DESIGN_POLICY.md#25-debug-and-validation)
 owns the later debug channels. The measured run is the
@@ -10,7 +10,7 @@ owns the later debug channels. The measured run is the
 
 | Hydra name | Hydra buffer format | Backend product | Default clear | Meaning today |
 | --- | --- | --- | --- | --- |
-| `color` | `HdFormatUNorm8Vec4` | `rgba8-unorm`, linear RGBA | `(0, 0, 0, 0)` | Primary-ray triangle barycentrics on ray-query devices; bootstrap colour otherwise. Channels in [0, 1], no tone mapping or HDR accumulation |
+| `color` | `HdFormatUNorm8Vec4` | `rgba8-unorm`, linear RGBA | `(0, 0, 0, 0)` | One path-traced radiance sample per pixel on ray-query devices ([scene reference](SCENE.md#path-tracing)); bootstrap colour otherwise. Linear radiance clamped to [0, 1], alpha 1 where the camera ray hits; no tone mapping or HDR accumulation |
 | `depth` | `HdFormatFloat32` | `d32-sfloat` | `1.0` | Vulkan window depth in [0, 1], near 0 and far 1; not linear distance |
 | `primId` | `HdFormatInt32` | CPU sentinel only | `-1` | No scene primitive identification yet |
 
@@ -23,9 +23,9 @@ products remain `color` and `depth`.
 
 All other names have an invalid default descriptor. Normal, albedo,
 roughness, path depth, throughput and the other debug channels are introduced
-with the renderer passes that produce them. Floating-point radiance and HDR
-accumulation belong to Renderer Phase 1; the RGBA8 foundation output makes no
-claim about light transport.
+with the renderer passes that produce them. The RGBA8 colour carries one
+clamped sample per frame; floating-point radiance and HDR accumulation are
+the next Renderer Phase 1 step.
 
 ## Storage and binding
 

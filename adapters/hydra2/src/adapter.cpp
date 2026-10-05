@@ -29,6 +29,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -213,8 +214,16 @@ void ApplyFraming(const HdRenderPassState& state,
       data.GetHeight()};
 }
 
+// Until dome lights are read, every surface is lit by a constant white
+// environment, so the default UsdPreviewSurface grey shows its albedo.
+constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
+
 class AdapterState {
 public:
+  AdapterState() {
+    world_.SetEnvironment(kFallbackEnvironment);
+  }
+
   void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
       const Lotus::MeshInstance& instance) {
     std::scoped_lock lock(mutex_);
@@ -265,8 +274,8 @@ public:
       renderer_ = Lotus::CreateOffscreenRenderer(
           (shaders / "triangle.vert.spv").string(),
           (shaders / "triangle.frag.spv").string(), status, error,
-          {(shaders / "primary_ray.vert.spv").string(),
-              (shaders / "primary_ray.frag.spv").string()});
+          {(shaders / "path_trace.vert.spv").string(),
+              (shaders / "path_trace.frag.spv").string()});
       if (!renderer_) {
         TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",
             error.c_str());

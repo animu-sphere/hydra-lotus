@@ -4,17 +4,21 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -179,12 +183,14 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
     if (geometry == contents.geometries.end() ||
         geometry->positions != mesh.geometry->positions ||
         geometry->triangles != mesh.geometry->triangles ||
-        gpu.world_from_object != mesh.instance.world_from_object) {
+        gpu.world_from_object != mesh.instance.world_from_object ||
+        gpu.material != mesh.material) {
       return false;
     }
   }
   return instance == contents.instances.size() &&
-         resident.size() == contents.geometries.size();
+         resident.size() == contents.geometries.size() &&
+         contents.environment == scene.environment;
 }
 
 // Whether the TLAS build input holds one instance per instance record, in
@@ -221,8 +227,8 @@ struct AccelerationVerdict {
 };
 
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
-// transform edit, a hide, a point edit and removal, comparing the device
-// buffers with the CPU scene after each. Returns an empty string on success.
+// transform edit, a material edit, an environment edit, a hide, a point edit
+// and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
 // Acceleration-structure mismatches go to `acceleration` instead.
 std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     AccelerationVerdict& acceleration) {
@@ -306,6 +312,35 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   expect(before.blas_builds == 2 && before.tlas_builds == 1 &&
              before.tlas_updates == 1,
       "transform edit", "expected a TLAS update and no build");
+
+  const Lotus::GpuSceneStats moved = before;
+  Lotus::SurfaceMaterial material;
+  material.base_color = {0.25F, 0.5F, 0.75F};
+  material.roughness = 0.125F;
+  material.metallic = 0.5F;
+  material.emission = {1.0F, 2.0F, 3.0F};
+  world.SetMeshMaterial("/quad", material);
+  if (auto failure = apply("material edit"); !failure.empty()) {
+    return failure;
+  }
+  if (before.geometry_uploads != 2 ||
+      before.instance_writes != moved.instance_writes + 1) {
+    return "material edit: geometry was uploaded or the instances were not "
+           "rewritten";
+  }
+  expect(before.tlas_builds == 1 && before.tlas_updates == 1,
+      "material edit", "the TLAS was built or updated");
+
+  const Lotus::GpuSceneStats painted = before;
+  world.SetEnvironment({0.5F, 1.0F, 2.0F});
+  if (auto failure = apply("environment edit"); !failure.empty()) {
+    return failure;
+  }
+  if (before.upload_submissions != painted.upload_submissions ||
+      before.instance_writes != painted.instance_writes) {
+    return "environment edit: the GPU scene recorded work";
+  }
+  world.SetEnvironment({});
 
   Lotus::MeshInstance hidden;
   hidden.visible = false;
@@ -482,12 +517,15 @@ std::string PrimaryRayFailure(Lotus::OffscreenRenderer& renderer,
   target.width = 64;
   target.height = 64;
   target.clear_color = {0.05F, 0.1F, 0.15F, 0.0F};
+  Lotus::PathTracingSettings barycentrics;
+  barycentrics.output = Lotus::SceneOutput::Barycentrics;
   const auto check = [&](const char* step) -> std::string {
     const auto snapshot = world.Commit();
     const auto upload = renderer.UpdateScene(extraction.Update(snapshot));
     if (upload.status != Lotus::FrameStatus::Pass)
       return std::string(step) + ": " + upload.detail;
-    last = renderer.RenderScene(Lotus::ExtractDrawSummary(snapshot), target, 1);
+    last = renderer.RenderScene(Lotus::ExtractDrawSummary(snapshot), target, 1,
+        barycentrics);
     const auto failure = PrimaryImageFailure(snapshot, target, last);
     if (!failure.empty())
       return std::string(step) + ": " + failure;
@@ -565,18 +603,352 @@ std::string PrimaryRayFailure(Lotus::OffscreenRenderer& renderer,
   // A rejected camera must not poison the renderer.
   auto singular = Lotus::ExtractDrawSummary(world.Commit());
   singular.world_to_clip = {};
-  if (renderer.RenderScene(singular, target, 1).status != Lotus::FrameStatus::Fail)
+  if (renderer.RenderScene(singular, target, 1, barycentrics).status !=
+      Lotus::FrameStatus::Fail)
     return "singular camera was accepted";
   world.RemoveMesh("triangle");
   if (auto error = check("removal and empty scene"); !error.empty())
     return error;
   target.clear_color_enabled = false;
   target.clear_depth_enabled = false;
-  const auto preserved = renderer.RenderScene(Lotus::ExtractDrawSummary(world.Commit()), target, 1);
+  const auto preserved = renderer.RenderScene(
+      Lotus::ExtractDrawSummary(world.Commit()), target, 1, barycentrics);
   if (preserved.status != Lotus::FrameStatus::Pass || preserved.color.payload != last.color.payload ||
       preserved.depth.payload != last.depth.payload)
     return "empty-scene no-clear preservation differs";
   last = preserved;
+  return {};
+}
+
+// A perspective camera at the origin looking down -Z: 90 degree vertical
+// field of view, square aspect, clipping range [0.1, 10].
+Lotus::Camera WideCamera() {
+  constexpr float kNear = 0.1F;
+  constexpr float kFar = 10.0F;
+  Lotus::Camera camera;
+  camera.projection = {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+      0.0F, 0.0F, (kFar + kNear) / (kNear - kFar), -1.0F,
+      0.0F, 0.0F, 2.0F * kFar * kNear / (kNear - kFar), 0.0F};
+  return camera;
+}
+
+// Linear RGB radiance.
+using Rgb = std::array<double, 3>;
+
+// The GGX metal's directional albedo for view angle `cos_view`, the integral
+// of f * cos over the hemisphere. A midpoint rule over the GGX distribution's
+// inverse CDF in half-vector space, independent of the shader's visible-
+// normal sampling: with h distributed as D(h) cos(theta_h),
+// E = integral of F G2 (wo.h) / (cos_view cos(theta_h)).
+Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view) {
+  constexpr int kSteps = 1024;
+  constexpr double kPi = 3.14159265358979323846;
+  const double alpha = std::max(roughness * roughness, 1.0e-3);
+  const double wo[3] = {std::sqrt(1.0 - cos_view * cos_view), 0.0, cos_view};
+  const auto lambda = [&](const double* w) {
+    const double tan2 = (1.0 - w[2] * w[2]) / (w[2] * w[2]);
+    return 0.5 * (std::sqrt(1.0 + alpha * alpha * tan2) - 1.0);
+  };
+  Rgb sum{};
+  for (int i = 0; i < kSteps; ++i) {
+    const double xi = (i + 0.5) / kSteps;
+    const double theta = std::atan(alpha * std::sqrt(xi / (1.0 - xi)));
+    for (int j = 0; j < kSteps; ++j) {
+      const double phi = 2.0 * kPi * (j + 0.5) / kSteps;
+      const double h[3] = {std::sin(theta) * std::cos(phi),
+          std::sin(theta) * std::sin(phi), std::cos(theta)};
+      const double cos_oh = wo[0] * h[0] + wo[1] * h[1] + wo[2] * h[2];
+      const double wi[3] = {2 * cos_oh * h[0] - wo[0], 2 * cos_oh * h[1] - wo[1],
+          2 * cos_oh * h[2] - wo[2]};
+      if (cos_oh <= 0.0 || wi[2] <= 0.0)
+        continue;
+      const double g2 = 1.0 / (1.0 + lambda(wo) + lambda(wi));
+      const double schlick = std::pow(1.0 - cos_oh, 5.0);
+      const double common = g2 * cos_oh / (cos_view * h[2]);
+      for (int c = 0; c < 3; ++c)
+        sum[c] += (f0[c] + (1.0 - f0[c]) * schlick) * common;
+    }
+  }
+  for (double& value : sum)
+    value /= double{kSteps} * kSteps;
+  return sum;
+}
+
+// The path-tracing scenes' world, camera and target, and the GPU scene
+// they are uploaded to.
+class PathScenes {
+public:
+  explicit PathScenes(Lotus::OffscreenRenderer& renderer) : renderer_(renderer) {
+    target_.width = 64;
+    target_.height = 64;
+    target_.clear_color = {0.05F, 0.1F, 0.15F, 0.0F};
+  }
+
+  Lotus::RenderWorld& World() {
+    return world_;
+  }
+
+  // Applies the world's update plan and renders it.
+  std::string Render(const Lotus::PathTracingSettings& settings,
+      Lotus::GpuFrameEvidence& frame) {
+    const auto snapshot = world_.Commit();
+    const auto upload = renderer_.UpdateScene(extraction_.Update(snapshot));
+    if (upload.status != Lotus::FrameStatus::Pass)
+      return upload.detail;
+    frame = renderer_.RenderScene(Lotus::ExtractDrawSummary(snapshot), target_, 1,
+        settings);
+    if (frame.status != Lotus::FrameStatus::Pass)
+      return frame.detail;
+    if (frame.validation_message_count != 0)
+      return frame.validation_detail;
+    return {};
+  }
+
+  // Every pixel the camera ray hits has `expected` radiance within one byte,
+  // and every pixel keeps the barycentric pass's coverage and depth.
+  std::string ExpectExact(std::uint32_t max_bounces, const Rgb& expected) {
+    Lotus::PathTracingSettings settings;
+    settings.output = Lotus::SceneOutput::Barycentrics;
+    Lotus::GpuFrameEvidence coverage;
+    Lotus::GpuFrameEvidence radiance;
+    if (auto failure = Render(settings, coverage); !failure.empty())
+      return failure;
+    settings.output = Lotus::SceneOutput::Radiance;
+    settings.max_bounces = max_bounces;
+    if (auto failure = Render(settings, radiance); !failure.empty())
+      return failure;
+    if (radiance.depth.payload != coverage.depth.payload)
+      return "radiance depth differs from the barycentric pass";
+    std::size_t hits = 0;
+    for (std::size_t pixel = 0; pixel * 4 < coverage.color.payload.size(); ++pixel) {
+      const std::uint8_t* covered = &coverage.color.payload[pixel * 4];
+      const std::uint8_t* actual = &radiance.color.payload[pixel * 4];
+      if (covered[3] != 255) {
+        if (!std::equal(covered, covered + 4, actual))
+          return "a missed pixel changed at " + std::to_string(pixel);
+        continue;
+      }
+      ++hits;
+      for (int c = 0; c < 3; ++c) {
+        const long want = std::lround(std::clamp(expected[c], 0.0, 1.0) * 255);
+        if (std::abs(want - long{actual[c]}) > 1)
+          return "radiance " + std::to_string(int(actual[c])) + " instead of " +
+                 std::to_string(want) + " in channel " + std::to_string(c) +
+                 " at pixel " + std::to_string(pixel);
+      }
+      if (actual[3] != 255)
+        return "a hit pixel's alpha is not 1";
+    }
+    return hits == 0 ? "the camera rays hit nothing" : "";
+  }
+
+  // The mean radiance of every hit pixel over sample indices 0..count-1 is
+  // `expected` within five standard errors plus half a byte of rounding.
+  // Each comparison is added to Summary().
+  std::string ExpectMean(const char* name, std::uint32_t count,
+      const Rgb& expected) {
+    Lotus::PathTracingSettings settings;
+    Rgb sum{};
+    Rgb squares{};
+    double samples = 0;
+    for (std::uint32_t index = 0; index < count; ++index) {
+      settings.sample_index = index;
+      Lotus::GpuFrameEvidence frame;
+      if (auto failure = Render(settings, frame); !failure.empty())
+        return failure;
+      for (std::size_t pixel = 0; pixel * 4 < frame.color.payload.size(); ++pixel) {
+        if (frame.color.payload[pixel * 4 + 3] != 255)
+          continue;
+        samples += 1;
+        for (int c = 0; c < 3; ++c) {
+          const double value = frame.color.payload[pixel * 4 + c] / 255.0;
+          sum[c] += value;
+          squares[c] += value * value;
+        }
+      }
+    }
+    if (samples < 2)
+      return "the camera rays hit nothing";
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(4) << name << ": "
+         << static_cast<long long>(samples) << " samples";
+    for (int c = 0; c < 3; ++c) {
+      const double mean = sum[c] / samples;
+      const double variance =
+          std::max(0.0, (squares[c] - samples * mean * mean) / (samples - 1));
+      const double tolerance = 5.0 * std::sqrt(variance / samples) + 0.5 / 255.0;
+      line << (c == 0 ? ", mean " : " ") << mean << '/' << expected[c] << "+-"
+           << tolerance;
+      if (std::abs(mean - expected[c]) > tolerance)
+        return "mean " + std::to_string(mean) + " instead of " +
+               std::to_string(expected[c]) + " +- " + std::to_string(tolerance) +
+               " in channel " + std::to_string(c);
+    }
+    summary_ += (summary_.empty() ? "" : "; ") + line.str();
+    return {};
+  }
+
+  // The mean comparisons since the last call: measured/expected+-tolerance.
+  std::string TakeSummary() {
+    return std::exchange(summary_, {});
+  }
+
+  // Removes every mesh and the environment from the world and the GPU scene.
+  std::string Clear() {
+    std::vector<std::string> keys;
+    const auto snapshot = world_.Commit();
+    for (const auto& [key, mesh] : snapshot.scene->meshes) {
+      (void)mesh;
+      keys.push_back(key);
+    }
+    for (const std::string& key : keys)
+      world_.RemoveMesh(key);
+    world_.SetEnvironment({});
+    const auto upload = renderer_.UpdateScene(extraction_.Update(world_.Commit()));
+    return upload.status == Lotus::FrameStatus::Pass ? "" : upload.detail;
+  }
+
+private:
+  Lotus::OffscreenRenderer& renderer_;
+  Lotus::RenderWorld world_;
+  Lotus::SceneExtraction extraction_;
+  Lotus::OffscreenTarget target_;
+  std::string summary_;
+};
+
+// Single-scattering scenes whose radiance is known: a lone triangle, which
+// no reflected ray can hit again, and a large tilted plane seen by an
+// orthographic camera, so every pixel has the same view angle.
+std::string BsdfFailure(PathScenes& scenes) {
+  Lotus::RenderWorld& world = scenes.World();
+  world.SetCamera(BootstrapCamera());
+  Lotus::MeshGeometry triangle;
+  triangle.positions = {{{-0.65F, -0.35F, 0}}, {{0.55F, -0.45F, 0}}, {{0.15F, 0.70F, 0}}};
+  triangle.triangles = {{{0, 1, 2}}};
+  triangle.source_faces = {0};
+  Lotus::MeshInstance front;
+  world.SetMesh("/panel", triangle, front);
+  Lotus::SurfaceMaterial lambert;
+  lambert.base_color = {0.5F, 0.25F, 0.75F};
+  lambert.emission = {0.1F, 0.05F, 0.0F};
+  world.SetMeshMaterial("/panel", lambert);
+  world.SetEnvironment({0.8F, 0.6F, 0.4F});
+  // Lambert under a constant environment reflects albedo * environment for
+  // any sampled direction; emission adds to it.
+  const Rgb lit{0.5 * 0.8 + 0.1, 0.25 * 0.6 + 0.05, 0.75 * 0.4};
+  if (auto failure = scenes.ExpectExact(64, lit); !failure.empty())
+    return "Lambert front face: " + failure;
+  if (auto failure = scenes.ExpectExact(0, {0.1, 0.05, 0.0}); !failure.empty())
+    return "emission without bounces: " + failure;
+  // Turned half a revolution about Y, the camera sees the other side.
+  Lotus::MeshInstance back;
+  back.world_from_object[0] = -1.0F;
+  back.world_from_object[10] = -1.0F;
+  world.SetMeshInstance("/panel", back);
+  if (auto failure = scenes.ExpectExact(64, lit); !failure.empty())
+    return "Lambert back face: " + failure;
+  world.RemoveMesh("/panel");
+
+  // An orthographic camera looking down -Z at a plane whose normal is
+  // tilted 60 degrees towards -Y, so cos(theta_o) = 0.5 at every pixel.
+  Lotus::Camera ortho = BootstrapCamera();
+  ortho.projection = Lotus::IdentityMatrix();
+  ortho.projection[10] = -2.0F / 9.0F;
+  ortho.projection[14] = -11.0F / 9.0F;
+  world.SetCamera(ortho);
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  Lotus::MeshGeometry plane;
+  plane.positions = {{{-4, -4, 0}}, {{4, -4, 0}}, {{4, 4, 0}}, {{-4, 4, 0}}};
+  plane.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+  plane.source_faces = {0, 0};
+  Lotus::MeshInstance tilted;
+  const float cos_tilt = 0.5F;
+  const float sin_tilt = 0.866025404F;
+  tilted.world_from_object[5] = cos_tilt;
+  tilted.world_from_object[6] = sin_tilt;
+  tilted.world_from_object[9] = -sin_tilt;
+  tilted.world_from_object[10] = cos_tilt;
+  world.SetMesh("/plane", plane, tilted);
+  struct Case {
+    const char* name;
+    Rgb base;
+    float roughness;
+    float metallic;
+  };
+  const Case cases[] = {{"GGX metal, roughness 0.5", {1.0, 0.6, 0.2}, 0.5F, 1.0F},
+      {"GGX metal, roughness 0.25", {0.9, 0.5, 0.1}, 0.25F, 1.0F},
+      {"half-metallic mixture", {0.9, 0.6, 0.3}, 0.5F, 0.5F}};
+  for (const Case& entry : cases) {
+    Lotus::SurfaceMaterial material;
+    for (int c = 0; c < 3; ++c)
+      material.base_color[c] = static_cast<float>(entry.base[c]);
+    material.roughness = entry.roughness;
+    material.metallic = entry.metallic;
+    world.SetMeshMaterial("/plane", material);
+    const Rgb metal = GgxAlbedo(entry.base, entry.roughness, cos_tilt);
+    Rgb expected{};
+    for (int c = 0; c < 3; ++c)
+      expected[c] = entry.metallic * metal[c] + (1.0 - entry.metallic) * entry.base[c];
+    if (auto failure = scenes.ExpectMean(entry.name, 16, expected); !failure.empty())
+      return std::string(entry.name) + ": " + failure;
+  }
+  return {};
+}
+
+// A closed Lambert box seen from inside: every path bounces until it ends,
+// and the environment must never reach it. Bounce-limited radiance is exact,
+// L = Le (1 + a + ... + a^n); the unlimited mean is Le / (1 - a).
+std::string MultibounceFailure(PathScenes& scenes) {
+  Lotus::RenderWorld& world = scenes.World();
+  world.SetCamera(WideCamera());
+  Lotus::MeshGeometry box;
+  box.positions = {{{-1, -1, -1}}, {{1, -1, -1}}, {{1, 1, -1}}, {{-1, 1, -1}},
+      {{-1, -1, 1}}, {{1, -1, 1}}, {{1, 1, 1}}, {{-1, 1, 1}}};
+  box.triangles = {{{0, 2, 1}}, {{0, 3, 2}}, {{4, 5, 6}}, {{4, 6, 7}},
+      {{0, 1, 5}}, {{0, 5, 4}}, {{3, 7, 6}}, {{3, 6, 2}},
+      {{0, 4, 7}}, {{0, 7, 3}}, {{1, 2, 6}}, {{1, 6, 5}}};
+  box.source_faces = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5};
+  world.SetMesh("/box", box, Lotus::MeshInstance{});
+  const Rgb albedo{0.5, 0.25, 0.75};
+  const Rgb emission{0.1, 0.15, 0.025};
+  Lotus::SurfaceMaterial material;
+  material.base_color = {0.5F, 0.25F, 0.75F};
+  material.emission = {0.1F, 0.15F, 0.025F};
+  world.SetMeshMaterial("/box", material);
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  for (const std::uint32_t bounces : {0U, 1U, 3U}) {
+    Rgb expected{};
+    for (int c = 0; c < 3; ++c) {
+      double term = emission[c];
+      for (std::uint32_t k = 0; k <= bounces; ++k, term *= albedo[c])
+        expected[c] += term;
+    }
+    if (auto failure = scenes.ExpectExact(bounces, expected); !failure.empty())
+      return std::to_string(bounces) + " bounces: " + failure;
+  }
+  Rgb converged{};
+  for (int c = 0; c < 3; ++c)
+    converged[c] = emission[c] / (1.0 - albedo[c]);
+  if (auto failure = scenes.ExpectMean("Russian roulette", 16, converged);
+      !failure.empty())
+    return "Russian roulette mean: " + failure;
+
+  // The same sample index repeats its image; another one does not.
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence first;
+  Lotus::GpuFrameEvidence again;
+  Lotus::GpuFrameEvidence other;
+  if (auto failure = scenes.Render(settings, first); !failure.empty())
+    return failure;
+  if (auto failure = scenes.Render(settings, again); !failure.empty())
+    return failure;
+  settings.sample_index = 1;
+  if (auto failure = scenes.Render(settings, other); !failure.empty())
+    return failure;
+  if (first.color.payload != again.color.payload)
+    return "a repeated sample index changed the image";
+  if (first.color.payload == other.color.payload)
+    return "another sample index repeated the image";
   return {};
 }
 
@@ -638,7 +1010,7 @@ int main(int argc, char** argv) {
       Lotus::CreateOffscreenRenderer(
           (shader_directory / "triangle.vert.spv").string(),
           (shader_directory / "triangle.frag.spv").string(), setup_status,
-          setup_error, {(shader_directory / "primary_ray.vert.spv").string(), (shader_directory / "primary_ray.frag.spv").string()});
+          setup_error, {(shader_directory / "path_trace.vert.spv").string(), (shader_directory / "path_trace.frag.spv").string()});
   // The scene runs first, so the frames' validation count covers it too.
   std::string scene_failure;
   AccelerationVerdict acceleration;
@@ -776,14 +1148,30 @@ int main(int argc, char** argv) {
           measured.primary_ray_timestamp_available
               ? "perspective insertion primary_ray_gpu_ms=" + std::to_string(measured.primary_ray_gpu_ms)
               : "the graphics queue has no timestamp support"});
+      // Each scene starts from, and leaves, an empty GPU scene.
+      PathScenes scenes(*renderer);
+      const auto run = [&](const char* id, std::string (*scenario)(PathScenes&)) {
+        std::string failure = scenario(scenes);
+        const std::string summary = scenes.TakeSummary();
+        if (auto cleared = scenes.Clear(); failure.empty())
+          failure = std::move(cleared);
+        checks.push_back({id, failure.empty() ? "pass" : "fail",
+            failure.empty() ? summary : failure});
+      };
+      run("renderer.path.bsdf", BsdfFailure);
+      run("renderer.path.multibounce", MultibounceFailure);
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.bsdf", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
     checks.push_back({"renderer.ray_query.triangle", Status(setup_status), setup_error});
     checks.push_back({"renderer.ray_query.timestamp", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.bsdf", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

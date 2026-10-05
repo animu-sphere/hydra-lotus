@@ -19,15 +19,21 @@
 
 namespace Lotus::vulkan_internal {
 
-// One instance buffer element, laid out for std430 storage buffers. The
-// shader-side mirror arrives with the first pass that reads it.
+// One instance buffer element. The scene pass reads it through the buffer's
+// device address; its mirror is `InstanceRecord` in shaders/path_trace.slang.
 struct GpuInstanceRecord {
   // Column-major, multiplying column vectors (Lotus::Matrix4).
   float world_from_object[16];
+  // Device addresses of the geometry's positions and triangles, or zero
+  // without acceleration structures.
+  std::uint64_t positions;
+  std::uint64_t triangles;
   std::uint32_t geometry_slot;
   std::uint32_t reserved[3];
+  float base_color_roughness[4];
+  float emission_metallic[4];
 };
-static_assert(sizeof(GpuInstanceRecord) == 80);
+static_assert(sizeof(GpuInstanceRecord) == 128);
 
 // Whether a physical device can build acceleration structures, decided
 // before the device is created. When `available`, the device must be
@@ -79,6 +85,14 @@ public:
   }
   [[nodiscard]] VkAccelerationStructureKHR Tlas() const {
     return tlas_built_ ? tlas_.handle : VK_NULL_HANDLE;
+  }
+  // The instance records' device address, valid until the next update; zero
+  // without acceleration structures or before the first instance.
+  [[nodiscard]] VkDeviceAddress InstanceAddress() const {
+    return instances_.address;
+  }
+  [[nodiscard]] const std::array<float, 3>& Environment() const {
+    return environment_;
   }
 
 private:
@@ -133,6 +147,7 @@ private:
   std::unordered_map<const MeshGeometry*, std::uint32_t> slot_of_;
   DeviceBuffer instances_;
   std::uint32_t instance_count_ = 0;
+  std::array<float, 3> environment_{};
   DeviceBuffer staging_;
 
   // Acceleration structures, when the device supports them.
@@ -154,6 +169,8 @@ private:
   // The BLAS of each TLAS instance when the TLAS was last built; an
   // identical list lets the next rewrite update the TLAS instead.
   std::vector<std::uint64_t> tlas_blas_ids_;
+  // Their transforms, so a rewrite that keeps both skips the TLAS.
+  std::vector<Matrix4> tlas_transforms_;
   bool tlas_built_ = false;
   DeviceBuffer scratch_;
 

@@ -36,6 +36,9 @@ target_link_libraries(lotus-viewport PRIVATE
 target_compile_features(lotus-viewport PRIVATE cxx_std_20)
 
 add_dependencies(lotus-viewport lotus-renderer-shaders)
+# A shader change relinks, so the copies below follow it.
+set_property(TARGET lotus-viewport APPEND PROPERTY LINK_DEPENDS
+  "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
 add_custom_command(TARGET lotus-viewport POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:lotus-viewport>/shaders"
