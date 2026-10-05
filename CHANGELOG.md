@@ -9,6 +9,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Deterministic mode through Hydra. The `lotus:sampleIndex` render setting
+  (0 by default) sets the first sample index of the accumulation, which
+  seeds its random numbers; changing it restarts the accumulation. With
+  `convergedSamplesPerPixel`, the camera and the AOV it fixes the converged
+  image. The host evidence log records each pass's `sample_index`.
+  `lotus-renderer-hydra-deterministic` compares converged Hydra images bit
+  for bit with the backend's own renders across setting changes, camera
+  moves and new render delegates, and the usdview smoke test changes the
+  setting in the viewer.
+
 - Render-pass selection. A Hydra render pass traces only the meshes under
   its collection's root paths and outside its exclude paths whose render
   tag it was given (any, without tags). Excluded meshes are hidden for the

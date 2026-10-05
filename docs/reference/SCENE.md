@@ -362,16 +362,39 @@ Each Hydra render pass plans and applies a scene update before its frame,
 and a newly created renderer resets the extraction.
 On ray-query devices each pass adds one sample with `RenderScene`, with
 `max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
+default) and `sample_index` to the `lotus:sampleIndex` render setting (0 by
 default); the render pass and the colour buffer report convergence when the
-accumulation reaches it. Point, topology, transform, visibility and instancer edits,
-like camera and framing changes, restart the accumulation. Other devices
+accumulation reaches its sample count. Point, topology, transform,
+visibility and instancer edits, like camera, framing and
+`lotus:sampleIndex` changes, restart the accumulation. Other devices
 retain the bootstrap path and converge after one pass. Materials and
 lights are not read yet: every mesh has the default `SurfaceMaterial`, and
 the adapter sets a constant white environment, so a surface no other
 surface occludes shows its 0.18 albedo. The host evidence log identifies the choice as
-`ray_query=1` or `0`, with each pass's `samples` and `converged`.
+`ray_query=1` or `0`, with each pass's `sample_index`, `samples` and
+`converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
+
+### Deterministic mode through Hydra
+
+A converged Hydra image is the backend's deterministic image
+([reference images](#reference-images)): a function of the
+`lotus:sampleIndex` and `convergedSamplesPerPixel` render settings, the
+scene the pass selects, the camera with its framing, and the colour AOV's
+size and clear colour. `lotus:sampleIndex` is the RNG seed: the first
+sample index, so the k-th pass's sample uses `lotus:sampleIndex + k`.
+Indices whose distance is less than the sample count share samples, as
+`renderer.path.reference` avoids by starting at 2²⁰. Negative values count
+as 0, and a sample count below 1 as 1. The bounce limit stays at the
+default 64.
+
+Hydra's frame count does not feed the random numbers, so the converged
+image does not depend on how many passes a host ran before, how it
+interrupted or restarted the accumulation, or which renderer instance
+traced it. One exception: lowering `convergedSamplesPerPixel` below the
+samples already accumulated keeps them, as `max_samples` does; the image
+is then that larger count's.
 
 ### Render-pass selection
 
@@ -420,7 +443,9 @@ reference images and the statistical match in the
 instancer placements against UsdGeom, and their GPU instances, in the
 [Hydra instancers report](../reports/2026-10-05-hydra-instancers.md);
 collection and render-tag selection in the
-[render-pass selection report](../reports/2026-10-05-render-pass-selection.md).
+[render-pass selection report](../reports/2026-10-05-render-pass-selection.md);
+deterministic Hydra renders against the backend's in the
+[Hydra deterministic mode report](../reports/2026-10-05-hydra-deterministic-mode.md).
 
 ### Instancers
 

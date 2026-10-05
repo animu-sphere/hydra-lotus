@@ -81,12 +81,12 @@ Needed alongside the slice
 ([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles),
 principle 8):
 
-- ⬜ **Deterministic mode through Hydra**: a fixed RNG seed, spp, camera and
-  frame index for a Hydra render. The headless runner's reference renders
-  are deterministic already
-  ([scene reference](../reference/SCENE.md#reference-images)). Hydra
-  always starts its accumulation at sample index 0 and has no setting for
-  it.
+- ✅ **Deterministic mode through Hydra**: the `lotus:sampleIndex` render
+  setting fixes the RNG seed and `convergedSamplesPerPixel` the spp; with
+  the host's camera and AOV, the converged image is bit for bit the
+  backend's deterministic image, whatever frames came before
+  ([scene reference](../reference/SCENE.md#deterministic-mode-through-hydra),
+  [evidence](../reports/2026-10-05-hydra-deterministic-mode.md)).
 - ⬜ **Extend per-pass GPU timestamps** beyond the scene pass to
   scene upload and BLAS/TLAS builds, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
