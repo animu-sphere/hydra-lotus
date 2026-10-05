@@ -130,6 +130,14 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-render-pass-test hdLotus)
 
+  add_executable(lotus-hydra2-deterministic-test tests/deterministic_test.cpp)
+  target_link_libraries(lotus-hydra2-deterministic-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
+      usdImaging usd sdf)
+  target_compile_definitions(lotus-hydra2-deterministic-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-deterministic-test hdLotus)
+
   if(PXR_INCLUDE_DIRS)
     list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
     get_filename_component(LOTUS_PXR_ROOT
@@ -160,9 +168,12 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-render-pass-test)
   add_test(NAME lotus-renderer-hydra-render-pass-gpu
     COMMAND lotus-hydra2-render-pass-test --gpu)
+  add_test(NAME lotus-renderer-hydra-deterministic
+    COMMAND lotus-hydra2-deterministic-test)
   set_tests_properties(
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-render-pass-gpu
+    lotus-renderer-hydra-deterministic
     PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
     lotus-renderer-plugin-discovery
@@ -173,6 +184,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-instancer
     lotus-renderer-hydra-render-pass
     lotus-renderer-hydra-render-pass-gpu
+    lotus-renderer-hydra-deterministic
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 

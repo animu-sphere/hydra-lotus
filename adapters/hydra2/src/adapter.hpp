@@ -92,7 +92,9 @@ public:
   void CommitResources(HdChangeTracker* tracker) override;
   HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
   // convergedSamplesPerPixel: the radiance samples per pixel at which a
-  // path-traced frame converges.
+  // path-traced frame converges. lotus:sampleIndex: the sample index of an
+  // accumulation's first sample, which selects its random numbers (0 by
+  // default).
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();

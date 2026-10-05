@@ -94,7 +94,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
     std::size_t buffers_written,
     std::uint64_t scene_revision,
     std::uint64_t renderer_creations,
-    const Lotus::GpuSceneStats& scene, bool converged) {
+    const Lotus::GpuSceneStats& scene, std::uint32_t sample_index,
+    bool converged) {
   const char* path = std::getenv("LOTUS_HYDRA_EVIDENCE");
   if (path == nullptr || *path == '\0') {
     return;
@@ -120,6 +121,7 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " tlas_instances=" << scene.tlas_instance_count
          << " blas_builds=" << scene.blas_builds
          << " ray_query=" << (frame.ray_query_used ? 1 : 0)
+         << " sample_index=" << sample_index
          << " samples=" << frame.samples_per_pixel
          << " converged=" << (converged ? 1 : 0)
          << " validation_messages=" << frame.validation_message_count << '\n';
@@ -146,6 +148,10 @@ Lotus::Camera ToLotusCamera(const HdRenderPassState& state) {
 // Until render settings say otherwise, a path-traced frame converges at
 // this many samples per pixel.
 constexpr int kDefaultConvergedSamples = 64;
+
+// The render setting that fixes an accumulation's first sample index, and so
+// its random numbers: PathTracingSettings::sample_index.
+const TfToken kSampleIndexSetting("lotus:sampleIndex");
 
 HdAovDescriptor AovDescriptor(const TfToken& name) {
   if (name == HdAovTokens->color) {
@@ -292,9 +298,11 @@ public:
   }
 
   // Each pass adds one radiance sample per pixel until the accumulation
-  // holds `converged_samples`; the backend restarts it when the scene,
-  // camera or framing changes. The meshes in `exclusion` are not traced.
-  void Render(const HdRenderPassState& state, int converged_samples,
+  // holds `settings.max_samples`; the backend restarts it when the scene,
+  // camera, framing or first sample index changes. The meshes in
+  // `exclusion` are not traced.
+  void Render(const HdRenderPassState& state,
+      const Lotus::PathTracingSettings& settings,
       const std::shared_ptr<const MeshExclusion>& exclusion) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
@@ -341,8 +349,6 @@ public:
       renderer_.reset();
       return;
     }
-    Lotus::PathTracingSettings settings;
-    settings.max_samples = static_cast<std::uint32_t>(std::max(converged_samples, 1));
     const bool trace = renderer_->RayQueryCapability().available;
     const Lotus::GpuFrameEvidence frame =
         trace ? renderer_->RenderScene(draw, target, 1, settings)
@@ -389,7 +395,7 @@ public:
     ++frame_index_;
     AppendHostEvidence(frame_index_, frame, target.width, target.height,
         buffers_written, snapshot.revision, renderer_creations_, scene_stats_,
-        converged_);
+        settings.sample_index, converged_);
   }
 
 private:
@@ -745,11 +751,23 @@ public:
 private:
   void _Execute(const HdRenderPassStateSharedPtr& render_pass_state,
       const TfTokenVector& render_tags) override {
-    state_->Render(*render_pass_state,
-        GetRenderIndex()->GetRenderDelegate()->GetRenderSetting<int>(
+    state_->Render(*render_pass_state, Settings(), Exclusion(render_tags));
+  }
+
+  // Deterministic mode: with the camera and the AOVs, these settings fix
+  // the converged image. Negative values count as 0, and a sample count
+  // below 1 as 1.
+  Lotus::PathTracingSettings Settings() const {
+    const HdRenderDelegate& delegate = *GetRenderIndex()->GetRenderDelegate();
+    Lotus::PathTracingSettings settings;
+    settings.max_samples = static_cast<std::uint32_t>(std::max(
+        delegate.GetRenderSetting<int>(
             HdRenderSettingsTokens->convergedSamplesPerPixel,
             kDefaultConvergedSamples),
-        Exclusion(render_tags));
+        1));
+    settings.sample_index = static_cast<std::uint32_t>(
+        std::max(delegate.GetRenderSetting<int>(kSampleIndexSetting, 0), 0));
+    return settings;
   }
 
   void _MarkCollectionDirty() override {
@@ -1110,8 +1128,9 @@ HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
 HdRenderSettingDescriptorList
 HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
   return {{"Converged samples per pixel",
-      HdRenderSettingsTokens->convergedSamplesPerPixel,
-      VtValue(kDefaultConvergedSamples)}};
+               HdRenderSettingsTokens->convergedSamplesPerPixel,
+               VtValue(kDefaultConvergedSamples)},
+      {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {

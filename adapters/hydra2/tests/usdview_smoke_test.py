@@ -20,6 +20,11 @@ def _frames():
     return result
 
 
+def _image(phase):
+    with open(f"{os.environ['LOTUS_HYDRA_IMAGE']}-{phase}.png", "rb") as stream:
+        return stream.read()
+
+
 def _render(app_controller, phase):
     before = len(_frames())
     app_controller._stageView.SetForceRefresh(True)
@@ -82,3 +87,22 @@ def testUsdviewInputFunction(appController):
         assert first["blas"] == 2 and first["tlas_instances"] == 4
         assert updated["blas"] == 2 and updated["tlas_instances"] == 4
         assert updated["blas_builds"] == first["blas_builds"] + 1
+
+    # Deterministic mode: lotus:sampleIndex sets the accumulation's first
+    # sample index, a change restarts the accumulation, and returning to the
+    # default index renders the same image as before.
+    before = len(_frames())
+    appController._stageView.SetRendererSetting("lotus:sampleIndex", 4096)
+    seeded = _render(appController, "sample-index")
+    assert seeded["sample_index"] == 4096
+    assert updated["sample_index"] == 0
+    if seeded["ray_query"] == 1:
+        assert seeded["samples"] == updated["samples"]
+        assert any(frame["samples"] < seeded["samples"]
+                   for frame in _frames()[before:]), \
+            "changing lotus:sampleIndex did not restart the accumulation"
+    appController._stageView.SetRendererSetting("lotus:sampleIndex", 0)
+    restored = _render(appController, "sample-index-restored")
+    assert restored["sample_index"] == 0
+    assert _image("sample-index-restored") == _image("stable-update"), \
+        "returning to sample index 0 did not reproduce the image"
