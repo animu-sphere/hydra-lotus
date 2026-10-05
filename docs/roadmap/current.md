@@ -55,12 +55,12 @@ over the instances are implemented
 ([scene reference](../reference/SCENE.md),
 [extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md),
 [upload evidence](../reports/2026-10-05-gpu-scene-upload.md),
-[BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). No pass reads
-the GPU scene yet; the GPU still draws the fixed bootstrap triangle.
+[BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). Primary camera
+rays now traverse the GPU scene and write diagnostic barycentrics and depth,
+including through Hydra on ray-query devices
+([ray-query evidence](../reports/2026-10-05-primary-rays.md)).
 Remaining work, in order:
 
-- ⬜ **Camera ray → ray query → triangle hit.** The *first ray-traced
-  triangle* milestone.
 - ⬜ **BSDF and multi-bounce.** Lambert, a minimal GGX, emissive surfaces,
   environment lighting, Russian roulette, surface hit reconstruction.
 - ⬜ **HDR accumulation → AOV / output.** The *first physically correct
@@ -77,12 +77,9 @@ principle 8):
 - ⬜ **Hydra instancers and render-pass selection.** Expand instance data
   and respect collection/render-tag selection; current CPU meshes have one
   ordinary placement each.
-- ⬜ **Ray query capability probe.** Report `VK_KHR_ray_query` in
-  `renderer-report.json` and `SKIP` the path-tracing checks with an
-  explanation where it is missing, as `renderer.scene.acceleration` already
-  does for `VK_KHR_acceleration_structure`.
 - ⬜ **Deterministic mode**: fixed RNG seed, spp, camera and frame index.
-- ⬜ **Per-pass GPU timestamps**, reported by the headless runner
+- ⬜ **Extend per-pass GPU timestamps** beyond the primary-ray pass to
+  scene upload and BLAS/TLAS builds, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
 - ⬜ **Settle [DES-Q3](../design/DESIGN_POLICY.md#53-open-questions)**: what
   keeps `PathState` open to spectra.

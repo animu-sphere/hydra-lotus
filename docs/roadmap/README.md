@@ -39,7 +39,7 @@ a version here when its predecessor is done.
 | Phase | Status | Target |
 | --- | --- | --- |
 | Renderer Phase 0 — Foundation | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
-| Renderer Phase 1 — Reference path tracer | 🚧 CPU mesh extraction, GPU scene upload and BLAS / TLAS implemented | unscheduled |
+| Renderer Phase 1 — Reference path tracer | 🚧 primary-ray traversal and diagnostic AOV output implemented; BSDFs and accumulation remain | unscheduled |
 | Renderer Phase 1.5 — Minimal material IR | ⬜ | unscheduled |
 | Renderer Phase 2 — Wavefront path tracing | ⬜ | unscheduled |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |
@@ -60,7 +60,7 @@ A milestone is reached when its correctness evidence is a
 | Milestone | Reached in | Status |
 | --- | --- | --- |
 | Foundation | Renderer Phase 0 | 🚧 |
-| First ray-traced triangle | Renderer Phase 1 | ⬜ |
+| First ray-traced triangle | Renderer Phase 1 | ✅ [measured ray queries](../reports/2026-10-05-primary-rays.md) |
 | First physically correct image | Renderer Phase 1 | ⬜ |
 | Reference path tracer | Renderer Phase 1 | ⬜ |
 | Wavefront path tracer | Renderer Phase 2 | ⬜ |

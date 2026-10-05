@@ -44,6 +44,8 @@ inline constexpr std::array<const char*, 2> kAccelerationExtensions = {
 
 [[nodiscard]] AccelerationSupport ProbeAccelerationStructures(
     VkPhysicalDevice device);
+[[nodiscard]] BackendCapability ProbeRayQueries(VkPhysicalDevice device,
+    const AccelerationSupport& acceleration);
 
 struct DeviceBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
@@ -72,7 +74,12 @@ public:
   // are undefined.
   bool Apply(const SceneUpdate& update, std::string& detail);
   bool ReadBack(GpuSceneContents& contents, std::string& detail);
-  [[nodiscard]] const GpuSceneStats& Stats() const { return stats_; }
+  [[nodiscard]] const GpuSceneStats& Stats() const {
+    return stats_;
+  }
+  [[nodiscard]] VkAccelerationStructureKHR Tlas() const {
+    return tlas_built_ ? tlas_.handle : VK_NULL_HANDLE;
+  }
 
 private:
   struct AccelerationStructure {

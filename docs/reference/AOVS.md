@@ -1,6 +1,6 @@
 # Foundation AOVs
 
-The Renderer Phase 0 AOV set and the formats the bootstrap renderer accepts.
+The Renderer Phase 0 AOV set, also used by the primary-ray diagnostic pass.
 The [capability matrix](CAPABILITY_MATRIX.md) owns implementation status;
 [design policy section 25](../design/DESIGN_POLICY.md#25-debug-and-validation)
 owns the later debug channels. The measured run is the
@@ -10,13 +10,13 @@ owns the later debug channels. The measured run is the
 
 | Hydra name | Hydra buffer format | Backend product | Default clear | Meaning today |
 | --- | --- | --- | --- | --- |
-| `color` | `HdFormatUNorm8Vec4` | `rgba8-unorm`, linear RGBA | `(0, 0, 0, 0)` | Raster bootstrap colour; channels in [0, 1], no tone mapping or HDR accumulation |
+| `color` | `HdFormatUNorm8Vec4` | `rgba8-unorm`, linear RGBA | `(0, 0, 0, 0)` | Primary-ray triangle barycentrics on ray-query devices; bootstrap colour otherwise. Channels in [0, 1], no tone mapping or HDR accumulation |
 | `depth` | `HdFormatFloat32` | `d32-sfloat` | `1.0` | Vulkan window depth in [0, 1], near 0 and far 1; not linear distance |
 | `primId` | `HdFormatInt32` | CPU sentinel only | `-1` | No scene primitive identification yet |
 
 `instanceId` and `elementId` are accepted compatibility channels with the
 same Int32 sentinel behaviour as `primId`. They do not identify instances or
-triangles. The bootstrap triangle has no Hydra geometry identity, so none of
+triangles. The primary-ray pass does not publish geometry IDs, so none of
 the ID channels supports picking. These are CPU placeholders, not GPU ID
 attachments or additional headless render products. The required headless
 products remain `color` and `depth`.

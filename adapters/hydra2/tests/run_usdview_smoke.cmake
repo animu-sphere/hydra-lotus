@@ -45,6 +45,7 @@ execute_process(
     "PATH=${runtime_path}"
     "LOTUS_HYDRA_EVIDENCE=${evidence}"
     "LOTUS_HYDRA_IMAGE=${image_root}"
+    "LOTUS_RENDERER_REPORT=${RENDERER_BUILD_DIR}/renderer-report.json"
     "${RENDERER_PYTHON}" "${RENDERER_TESTUSDVIEW}" "${scene}"
     --renderer Lotus --camera /Camera --testScript "${RENDERER_TEST_SCRIPT}"
   RESULT_VARIABLE usdview_result

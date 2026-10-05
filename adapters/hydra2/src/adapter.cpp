@@ -104,6 +104,7 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " blas=" << scene.blas_count
          << " tlas_instances=" << scene.tlas_instance_count
          << " blas_builds=" << scene.blas_builds
+         << " ray_query=" << (frame.ray_query_used ? 1 : 0)
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 
@@ -263,7 +264,9 @@ public:
       std::string error;
       renderer_ = Lotus::CreateOffscreenRenderer(
           (shaders / "triangle.vert.spv").string(),
-          (shaders / "triangle.frag.spv").string(), status, error);
+          (shaders / "triangle.frag.spv").string(), status, error,
+          {(shaders / "primary_ray.vert.spv").string(),
+              (shaders / "primary_ray.frag.spv").string()});
       if (!renderer_) {
         TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",
             error.c_str());
@@ -282,7 +285,9 @@ public:
       renderer_.reset();
       return;
     }
-    const Lotus::GpuFrameEvidence frame = renderer_->Render(draw, target, 1);
+    const Lotus::GpuFrameEvidence frame = renderer_->RayQueryCapability().available
+                                              ? renderer_->RenderScene(draw, target, 1)
+                                              : renderer_->Render(draw, target, 1);
     if (frame.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus Hydra frame failed: %s", frame.detail.c_str());
       // A failed submission leaves the renderer unusable; the next frame
@@ -361,8 +366,8 @@ public:
       return;
     }
     const bool geometry_dirty = !initialized_ ||
-        (bits & HdChangeTracker::DirtyTopology) ||
-        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points);
+                                (bits & HdChangeTracker::DirtyTopology) ||
+                                HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points);
     if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
       topology_ = GetMeshTopology(delegate);
     }
@@ -370,7 +375,8 @@ public:
         HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points)) {
       const VtValue value = GetPoints(delegate);
       points_ = value.IsHolding<VtVec3fArray>()
-          ? value.UncheckedGet<VtVec3fArray>() : VtVec3fArray{};
+                    ? value.UncheckedGet<VtVec3fArray>()
+                    : VtVec3fArray{};
     }
     if (!initialized_ || HdChangeTracker::IsTransformDirty(bits, GetId())) {
       instance_.world_from_object = ToLotusMatrix(delegate->GetTransform(GetId()));
@@ -430,8 +436,7 @@ private:
     }
     VtVec3iArray triangles;
     VtIntArray primitive_params;
-    HdMeshUtil(&topology_, GetId()).ComputeTriangleIndices(
-        &triangles, &primitive_params);
+    HdMeshUtil(&topology_, GetId()).ComputeTriangleIndices(&triangles, &primitive_params);
     Lotus::MeshGeometry geometry;
     geometry.positions.reserve(points_.size());
     for (const GfVec3f& point : points_) {

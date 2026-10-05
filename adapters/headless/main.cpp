@@ -4,6 +4,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -268,10 +269,10 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       {{{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}},
           {{0, 1, 2}, {0, 2, 3}}, {0, 0}},
       instance);
-  world.SetMesh("/triangle", {{{0, 0, 1}, {1, 0, 1}, {0, 1, 1}}, {{0, 1, 2}},
-      {0}}, Lotus::MeshInstance{});
+  world.SetMesh("/triangle", {{{0, 0, 1}, {1, 0, 1}, {0, 1, 1}}, {{0, 1, 2}}, {0}}, Lotus::MeshInstance{});
   world.SetMesh("/empty", {{{0, 0, 0}}, {}, {}}, Lotus::MeshInstance{});
-  if (auto failure = apply("insertion"); !failure.empty()) return failure;
+  if (auto failure = apply("insertion"); !failure.empty())
+    return failure;
   if (before.resident_geometries != 2 || before.instance_count != 2 ||
       before.geometry_uploads != 2 || before.upload_submissions != 1) {
     return "insertion: unexpected resident geometry or upload counts";
@@ -309,7 +310,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   Lotus::MeshInstance hidden;
   hidden.visible = false;
   world.SetMeshInstance("/quad", hidden);
-  if (auto failure = apply("hide"); !failure.empty()) return failure;
+  if (auto failure = apply("hide"); !failure.empty())
+    return failure;
   if (before.resident_geometries != 2 || before.instance_count != 1 ||
       before.geometry_uploads != 2) {
     return "hide: geometry was released or uploaded";
@@ -320,9 +322,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
 
   const std::uint32_t triangle_slot =
       renderer.ReadBackScene().instances.at(0).geometry_slot;
-  world.SetMesh("/triangle", {{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}},
-      {0}}, Lotus::MeshInstance{});
-  if (auto failure = apply("point edit"); !failure.empty()) return failure;
+  world.SetMesh("/triangle", {{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}}, {0}}, Lotus::MeshInstance{});
+  if (auto failure = apply("point edit"); !failure.empty())
+    return failure;
   if (before.resident_geometries != 2 || before.geometry_uploads != 3 ||
       before.geometry_releases != 1 ||
       renderer.ReadBackScene().instances.at(0).geometry_slot != triangle_slot) {
@@ -335,7 +337,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   world.RemoveMesh("/quad");
   world.RemoveMesh("/triangle");
   world.RemoveMesh("/empty");
-  if (auto failure = apply("removal"); !failure.empty()) return failure;
+  if (auto failure = apply("removal"); !failure.empty())
+    return failure;
   if (before.resident_geometries != 0 || before.instance_count != 0 ||
       before.geometry_bytes != 0 || before.geometry_releases != 3 ||
       stats().upload_submissions != before.upload_submissions) {
@@ -344,6 +347,236 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   expect(before.blas_builds == 3 && before.tlas_builds == 4 &&
              before.tlas_updates == 1,
       "removal", "expected an empty TLAS rebuild");
+  return {};
+}
+
+std::array<double, 4> Transform(const Lotus::Matrix4& matrix,
+    const std::array<double, 4>& point) {
+  std::array<double, 4> result{};
+  for (int row = 0; row < 4; ++row)
+    for (int column = 0; column < 4; ++column)
+      result[row] += matrix[column * 4 + row] * point[column];
+  return result;
+}
+
+// Independent oracle: project CPU triangles, intersect in screen space,
+// perspective-correct the barycentrics and select the nearest window depth.
+// This uses neither GPU readback geometry nor the shader's ray construction.
+std::string PrimaryImageFailure(const Lotus::FrameSnapshot& snapshot,
+    const Lotus::OffscreenTarget& target, const Lotus::GpuFrameEvidence& frame) {
+  if (frame.status != Lotus::FrameStatus::Pass)
+    return frame.detail;
+  if (frame.color.payload.size() != std::size_t{target.width} * target.height * 4 ||
+      frame.depth.payload.size() != std::size_t{target.width} * target.height)
+    return "incorrect primary-ray product size";
+  const auto camera = Lotus::ExtractDrawSummary(snapshot).world_to_clip;
+  struct Triangle {
+    std::array<std::array<double, 4>, 3> clip;
+  };
+  std::vector<Triangle> triangles;
+  for (const auto& [key, mesh] : snapshot.scene->meshes) {
+    (void)key;
+    if (!mesh.instance.visible)
+      continue;
+    for (const auto& indices : mesh.geometry->triangles) {
+      Triangle triangle;
+      bool clipped = false;
+      for (int corner = 0; corner < 3; ++corner) {
+        const auto& position = mesh.geometry->positions[indices[corner]];
+        const auto world = Transform(mesh.instance.world_from_object,
+            {position[0], position[1], position[2], 1.0});
+        auto clip = Transform(camera, world);
+        // Fixtures use triangles wholly inside or outside the depth range.
+        if (clip[3] <= 0 || clip[2] < -clip[3] || clip[2] > clip[3])
+          clipped = true;
+        triangle.clip[corner] = clip;
+      }
+      if (!clipped)
+        triangles.push_back(triangle);
+    }
+  }
+  const auto& display = target.display_window;
+  const double dx = display[2] > 0 ? display[0] : 0;
+  const double dy = display[3] > 0 ? display[1] : 0;
+  const double dw = display[2] > 0 ? display[2] : target.width;
+  const double dh = display[3] > 0 ? display[3] : target.height;
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      const double px = 2 * (x + 0.5 - dx) / dw - 1;
+      const double py = 1 - 2 * (y + 0.5 - dy) / dh;
+      double depth = target.clear_depth;
+      std::array<double, 4> color{target.clear_color[0], target.clear_color[1],
+          target.clear_color[2], target.clear_color[3]};
+      bool boundary = false;
+      const auto& data = target.data_window;
+      const bool inside = (data[2] <= 0 || data[3] <= 0) ||
+                          (static_cast<std::int64_t>(x) >= data[0] && static_cast<std::int64_t>(y) >= data[1] &&
+                              static_cast<std::int64_t>(x) < std::int64_t{data[0]} + data[2] &&
+                              static_cast<std::int64_t>(y) < std::int64_t{data[1]} + data[3]);
+      if (inside)
+        for (const auto& triangle : triangles) {
+          double sx[3], sy[3];
+          for (int corner = 0; corner < 3; ++corner) {
+            sx[corner] = triangle.clip[corner][0] / triangle.clip[corner][3];
+            sy[corner] = triangle.clip[corner][1] / triangle.clip[corner][3];
+          }
+          const double det = (sy[1] - sy[2]) * (sx[0] - sx[2]) +
+                             (sx[2] - sx[1]) * (sy[0] - sy[2]);
+          if (std::abs(det) < 1e-12)
+            continue;
+          double weights[3];
+          weights[0] = ((sy[1] - sy[2]) * (px - sx[2]) +
+                           (sx[2] - sx[1]) * (py - sy[2])) /
+                       det;
+          weights[1] = ((sy[2] - sy[0]) * (px - sx[2]) +
+                           (sx[0] - sx[2]) * (py - sy[2])) /
+                       det;
+          weights[2] = 1 - weights[0] - weights[1];
+          const double minimum = *std::min_element(weights, weights + 3);
+          if (minimum > -0.015 && minimum < 0.015)
+            boundary = true;
+          if (minimum < 0)
+            continue;
+          double hit_depth = 0;
+          double sum = 0;
+          for (int corner = 0; corner < 3; ++corner) {
+            hit_depth += weights[corner] *
+                         (triangle.clip[corner][2] / triangle.clip[corner][3] + 1) * 0.5;
+            sum += weights[corner] / triangle.clip[corner][3];
+          }
+          if (hit_depth >= depth)
+            continue;
+          depth = hit_depth;
+          for (int corner = 0; corner < 3; ++corner)
+            color[corner] = weights[corner] / triangle.clip[corner][3] / sum;
+          color[3] = 1;
+        }
+      if (boundary)
+        continue; // Edge coverage precision is device-dependent.
+      const std::size_t pixel = std::size_t{y} * target.width + x;
+      for (int channel = 0; channel < 4; ++channel) {
+        const int expected = static_cast<int>(std::lround(std::clamp(color[channel], 0.0, 1.0) * 255));
+        if (std::abs(expected - int(frame.color.payload[pixel * 4 + channel])) > 2)
+          return "barycentric/miss mismatch at " + std::to_string(x) + "," + std::to_string(y);
+      }
+      if (!std::isfinite(frame.depth.payload[pixel]) ||
+          std::abs(frame.depth.payload[pixel] - depth) > 2e-5)
+        return "projected depth mismatch at " + std::to_string(x) + "," + std::to_string(y);
+    }
+  }
+  return {};
+}
+
+std::string PrimaryRayFailure(Lotus::OffscreenRenderer& renderer,
+    Lotus::GpuFrameEvidence& last, Lotus::GpuFrameEvidence& measured) {
+  Lotus::RenderWorld world;
+  world.SetCamera(BootstrapCamera());
+  Lotus::MeshGeometry geometry;
+  geometry.positions = {{{-0.65F, -0.35F, 0}}, {{0.55F, -0.45F, 0}}, {{0.15F, 0.70F, 0}}};
+  geometry.triangles = {{{0, 1, 2}}};
+  geometry.source_faces = {0};
+  Lotus::MeshInstance instance;
+  world.SetMesh("triangle", geometry, instance);
+  Lotus::SceneExtraction extraction;
+  Lotus::OffscreenTarget target;
+  target.width = 64;
+  target.height = 64;
+  target.clear_color = {0.05F, 0.1F, 0.15F, 0.0F};
+  const auto check = [&](const char* step) -> std::string {
+    const auto snapshot = world.Commit();
+    const auto upload = renderer.UpdateScene(extraction.Update(snapshot));
+    if (upload.status != Lotus::FrameStatus::Pass)
+      return std::string(step) + ": " + upload.detail;
+    last = renderer.RenderScene(Lotus::ExtractDrawSummary(snapshot), target, 1);
+    const auto failure = PrimaryImageFailure(snapshot, target, last);
+    if (!failure.empty())
+      return std::string(step) + ": " + failure;
+    if (last.validation_message_count != 0)
+      return std::string(step) + ": " + last.validation_detail;
+    return {};
+  };
+  if (auto error = check("perspective insertion"); !error.empty())
+    return error;
+  const auto first = last;
+  measured = first;
+  if (auto error = check("unchanged frame"); !error.empty())
+    return error;
+  if (first.color.payload != last.color.payload || first.depth.payload != last.depth.payload ||
+      first.target_creations != last.target_creations)
+    return "unchanged primary frame differs";
+  instance.world_from_object[0] = 0.8F;
+  instance.world_from_object[5] = 1.2F;
+  instance.world_from_object[4] = 0.2F;
+  instance.world_from_object[12] = 0.3F;
+  instance.world_from_object[13] = -0.15F;
+  world.SetMeshInstance("triangle", instance);
+  if (auto error = check("transform refit"); !error.empty())
+    return error;
+  instance.visible = false;
+  world.SetMeshInstance("triangle", instance);
+  if (auto error = check("hidden mesh"); !error.empty())
+    return error;
+  instance.visible = true;
+  geometry.positions[2][0] = -0.25F;
+  geometry.positions[2][2] = 0.3F;
+  world.SetMesh("triangle", geometry, instance);
+  if (auto error = check("point edit and show"); !error.empty())
+    return error;
+  Lotus::MeshInstance closer;
+  closer.world_from_object[14] = 0.65F;
+  world.SetMesh("occluder", geometry, closer);
+  if (auto error = check("closest of overlapping instances"); !error.empty())
+    return error;
+  closer.world_from_object[14] = 2.5F;
+  world.SetMeshInstance("occluder", closer);
+  if (auto error = check("near-plane exclusion"); !error.empty())
+    return error;
+  closer.world_from_object[14] = -8.0F;
+  world.SetMeshInstance("occluder", closer);
+  if (auto error = check("far-plane exclusion"); !error.empty())
+    return error;
+  world.RemoveMesh("occluder");
+  auto infinite = BootstrapCamera();
+  infinite.projection[10] = -1.0F;
+  infinite.projection[14] = -2.0F;
+  world.SetCamera(infinite);
+  if (auto error = check("infinite far-plane camera"); !error.empty())
+    return error;
+  // Orthographic projection with the same view and clipping range.
+  auto camera = BootstrapCamera();
+  camera.projection = Lotus::IdentityMatrix();
+  camera.projection[0] = 0.8F;
+  camera.projection[5] = 0.8F;
+  camera.projection[10] = -2.0F / 9.0F;
+  camera.projection[14] = -11.0F / 9.0F;
+  world.SetCamera(camera);
+  if (auto error = check("orthographic camera"); !error.empty())
+    return error;
+  target.display_window = {-8.0F, 5.0F, 80.0F, 50.0F};
+  target.data_window = {16, 8, 32, 40};
+  if (auto error = check("display and data windows"); !error.empty())
+    return error;
+  target.width = 96;
+  target.height = 48;
+  target.display_window = {};
+  target.data_window = {};
+  if (auto error = check("target resize"); !error.empty())
+    return error;
+  // A rejected camera must not poison the renderer.
+  auto singular = Lotus::ExtractDrawSummary(world.Commit());
+  singular.world_to_clip = {};
+  if (renderer.RenderScene(singular, target, 1).status != Lotus::FrameStatus::Fail)
+    return "singular camera was accepted";
+  world.RemoveMesh("triangle");
+  if (auto error = check("removal and empty scene"); !error.empty())
+    return error;
+  target.clear_color_enabled = false;
+  target.clear_depth_enabled = false;
+  const auto preserved = renderer.RenderScene(Lotus::ExtractDrawSummary(world.Commit()), target, 1);
+  if (preserved.status != Lotus::FrameStatus::Pass || preserved.color.payload != last.color.payload ||
+      preserved.depth.payload != last.depth.payload)
+    return "empty-scene no-clear preservation differs";
+  last = preserved;
   return {};
 }
 
@@ -405,7 +638,7 @@ int main(int argc, char** argv) {
       Lotus::CreateOffscreenRenderer(
           (shader_directory / "triangle.vert.spv").string(),
           (shader_directory / "triangle.frag.spv").string(), setup_status,
-          setup_error);
+          setup_error, {(shader_directory / "primary_ray.vert.spv").string(), (shader_directory / "primary_ray.frag.spv").string()});
   // The scene runs first, so the frames' validation count covers it too.
   std::string scene_failure;
   AccelerationVerdict acceleration;
@@ -530,6 +763,28 @@ int main(int argc, char** argv) {
   }
 
   std::vector<Check> checks;
+  if (renderer) {
+    const auto ray_query = renderer->RayQueryCapability();
+    checks.push_back({"renderer.ray_query.capability",
+        ray_query.available ? "pass" : "skip", ray_query.detail});
+    if (ray_query.available) {
+      Lotus::GpuFrameEvidence measured;
+      const auto ray_failure = PrimaryRayFailure(*renderer, last, measured);
+      checks.push_back({"renderer.ray_query.triangle", ray_failure.empty() ? "pass" : "fail", ray_failure});
+      checks.push_back({"renderer.ray_query.timestamp",
+          measured.primary_ray_timestamp_available ? "pass" : "skip",
+          measured.primary_ray_timestamp_available
+              ? "perspective insertion primary_ray_gpu_ms=" + std::to_string(measured.primary_ray_gpu_ms)
+              : "the graphics queue has no timestamp support"});
+    } else {
+      checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
+      checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
+    }
+  } else {
+    checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
+    checks.push_back({"renderer.ray_query.triangle", Status(setup_status), setup_error});
+    checks.push_back({"renderer.ray_query.timestamp", Status(setup_status), setup_error});
+  }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});
   checks.push_back({"renderer.backend.capability",

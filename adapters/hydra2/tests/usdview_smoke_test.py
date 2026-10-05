@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
+import json
 
 from pxr import Gf, Vt
 
@@ -48,6 +49,10 @@ def testUsdviewInputFunction(appController):
     appController._dataModel.viewSettings.showHUD = False
 
     first = _render(appController, "first-frame")
+    with open(os.environ["LOTUS_RENDERER_REPORT"], encoding="utf-8") as stream:
+        checks = {check["id"]: check for check in json.load(stream)["checks"]}
+    if checks["renderer.ray_query.capability"]["status"] == "pass":
+        assert first["ray_query"] == 1, "Hydra did not use the available ray-query path"
     appController._dataModel.stage.GetPrimAtPath(
         "/World/Triangle").GetAttribute("points").Set(
             Vt.Vec3fArray([
@@ -58,6 +63,7 @@ def testUsdviewInputFunction(appController):
     updated = _render(appController, "stable-update")
     assert updated["frame"] > first["frame"]
     assert updated["scene_revision"] > first["scene_revision"]
+    assert updated["ray_query"] == first["ray_query"]
     # The smoke scene's one mesh is resident and instanced once; the point
     # edit replaces its geometry buffer instead of adding one.
     assert first["gpu_geometries"] == 1 and first["gpu_instances"] == 1

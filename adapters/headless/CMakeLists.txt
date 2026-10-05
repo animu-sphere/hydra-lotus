@@ -11,6 +11,9 @@ if(LOTUS_WITH_VULKAN)
     COMMAND "${CMAKE_COMMAND}" -E make_directory
       "$<TARGET_FILE_DIR:lotus-headless>/shaders"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
+      "$<TARGET_FILE_DIR:lotus-headless>/shaders"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${LOTUS_VERTEX_SPV}"
       "$<TARGET_FILE_DIR:lotus-headless>/shaders/triangle.vert.spv"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different

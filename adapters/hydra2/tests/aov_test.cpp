@@ -31,11 +31,18 @@ bool Check(bool condition, const char* message) {
 class TriangleScene final : public HdSceneDelegate {
 public:
   explicit TriangleScene(HdRenderIndex* index)
-      : HdSceneDelegate(index, SdfPath("/scene")) {}
+      : HdSceneDelegate(index, SdfPath("/scene")) {
+  }
 
   bool visible = true;
   bool quad = false;
-  bool GetVisible(const SdfPath&) override { return visible; }
+  GfMatrix4d transform{1.0};
+  GfMatrix4d GetTransform(const SdfPath&) override {
+    return transform;
+  }
+  bool GetVisible(const SdfPath&) override {
+    return visible;
+  }
   HdMeshTopology GetMeshTopology(const SdfPath&) override {
     if (quad) {
       return HdMeshTopology(TfToken("none"), HdTokens->rightHanded,
@@ -78,6 +85,7 @@ int main(int argc, char** argv) {
     std::cerr << error << '\n';
     return status == Lotus::FrameStatus::Skip ? 77 : 1;
   }
+  const bool ray_query = probe->RayQueryCapability().available;
   probe.reset();
 
   HdLotusRenderDelegate delegate;
@@ -107,10 +115,15 @@ int main(int argc, char** argv) {
   state->SetAovBindings(bindings);
   pass->Execute(state, {});
   const auto* pixels = static_cast<const std::uint8_t*>(color.Map());
-  const bool triangle = pixels != nullptr && pixels[(8 * 16 + 8) * 4] > 150;
+  const auto center = (8 * 16 + 8) * 4;
+  const bool triangle = pixels != nullptr && pixels[center + 3] == 255 &&
+                        (!ray_query || (pixels[center] >= 39 && pixels[center] <= 41 &&
+                                           pixels[center + 1] >= 71 && pixels[center + 1] <= 73 &&
+                                           pixels[center + 2] >= 142 && pixels[center + 2] <= 144));
   color.Unmap();
   if (!Check(triangle && color.IsConverged() && depth.IsConverged() &&
-                 ids.IsConverged(), "triangle AOVs did not converge")) {
+                 ids.IsConverged(),
+          "triangle AOVs did not converge")) {
     return 1;
   }
   auto gpu = delegate.GetGpuSceneStats();
@@ -127,14 +140,30 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // A multi-triangle scene must also work with the bootstrap raster backend.
+  // A placement edit must move the actual silhouette, without a new BLAS.
+  if (ray_query) {
+    scene.transform.SetTranslate(GfVec3d(0.6, 0, 0));
+    dirty = HdChangeTracker::DirtyTransform;
+    mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
+    pass->Execute(state, {});
+    pixels = static_cast<const std::uint8_t*>(color.Map());
+    const bool moved = pixels && pixels[center + 3] == 0 &&
+                       pixels[(8 * 16 + 12) * 4 + 3] == 255;
+    color.Unmap();
+    if (!Check(moved, "Hydra transform did not move the ray-traced silhouette"))
+      return 1;
+    scene.transform.SetIdentity();
+    dirty = HdChangeTracker::DirtyTransform;
+    mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
+  }
+  // A topology edit replaces the BLAS/TLAS used by the next ray query.
   scene.quad = true;
   dirty = HdChangeTracker::DirtyTopology;
   mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
   pass->Execute(state, {});
   if (!Check(delegate.GetFrameSnapshot().triangle_count == 2 &&
-      color.IsConverged() && depth.IsConverged(),
-      "multi-triangle scene broke the bootstrap AOV path")) {
+                 color.IsConverged() && depth.IsConverged(),
+          "multi-triangle scene broke the AOV path")) {
     return 1;
   }
   gpu = delegate.GetGpuSceneStats();
@@ -164,13 +193,14 @@ int main(int argc, char** argv) {
   const auto* retained_depth = static_cast<const float*>(depth.Map());
   const auto* retained_ids = static_cast<const std::int32_t*>(ids.Map());
   const bool preserved = pixels && retained_depth && retained_ids &&
-                         pixels[(8 * 16 + 8) * 4] > 150 &&
+                         pixels[(8 * 16 + 8) * 4 + 3] == 255 &&
                          retained_depth[8 * 16 + 8] < 1.0F &&
                          retained_ids[8 * 16 + 8] == -1;
   color.Unmap();
   depth.Unmap();
   ids.Unmap();
-  if (!Check(preserved, "empty clear did not preserve preceding AOVs")) return 1;
+  if (!Check(preserved, "empty clear did not preserve preceding AOVs"))
+    return 1;
   gpu = delegate.GetGpuSceneStats();
   if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 0 &&
                  gpu.geometry_uploads == 2,
@@ -202,7 +232,8 @@ int main(int argc, char** argv) {
   depth.Unmap();
   ids.Unmap();
   if (!Check(cleared && color.IsConverged() && depth.IsConverged() &&
-                 ids.IsConverged(), "empty scene retained old AOV pixels")) {
+                 ids.IsConverged(),
+          "empty scene retained old AOV pixels")) {
     return 1;
   }
 
@@ -220,30 +251,39 @@ int main(int argc, char** argv) {
   };
   auto invalid = bindings;
   invalid[1].aovName = TfToken("normal");
-  if (!Check(rejected(invalid), "unknown AOV was accepted")) return 1;
+  if (!Check(rejected(invalid), "unknown AOV was accepted"))
+    return 1;
   invalid = bindings;
   invalid[1].renderBuffer = &ids;
-  if (!Check(rejected(invalid), "wrong AOV format was accepted")) return 1;
+  if (!Check(rejected(invalid), "wrong AOV format was accepted"))
+    return 1;
   invalid = bindings;
   invalid[1].clearValue = VtValue(1);
-  if (!Check(rejected(invalid), "wrong clear type was accepted")) return 1;
+  if (!Check(rejected(invalid), "wrong clear type was accepted"))
+    return 1;
   invalid[1].clearValue = VtValue(std::numeric_limits<float>::quiet_NaN());
-  if (!Check(rejected(invalid), "non-finite depth clear was accepted")) return 1;
+  if (!Check(rejected(invalid), "non-finite depth clear was accepted"))
+    return 1;
   invalid[1].clearValue = VtValue(1.5F);
-  if (!Check(rejected(invalid), "out-of-range depth clear was accepted")) return 1;
+  if (!Check(rejected(invalid), "out-of-range depth clear was accepted"))
+    return 1;
   invalid = bindings;
   invalid.push_back(bindings[0]);
-  if (!Check(rejected(invalid), "duplicate AOV was accepted")) return 1;
+  if (!Check(rejected(invalid), "duplicate AOV was accepted"))
+    return 1;
   depth.Allocate(GfVec3i(8, 16, 1), HdFormatFloat32, false);
-  if (!Check(rejected(bindings), "mismatched AOV extent was accepted")) return 1;
+  if (!Check(rejected(bindings), "mismatched AOV extent was accepted"))
+    return 1;
   depth.Allocate(GfVec3i(16, 16, 1), HdFormatFloat32, false);
   color.Map();
-  if (!Check(rejected(bindings), "mapped AOV was accepted")) return 1;
+  if (!Check(rejected(bindings), "mapped AOV was accepted"))
+    return 1;
   color.Unmap();
 
   // Recovery after a rejected binding, including a depth-only pass.
   state->SetAovBindings({bindings[1]});
   pass->Execute(state, {});
-  if (!Check(depth.IsConverged(), "depth-only pass did not converge")) return 1;
+  if (!Check(depth.IsConverged(), "depth-only pass did not converge"))
+    return 1;
   return 0;
 }

@@ -59,6 +59,9 @@ add_custom_command(TARGET hdLotus POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:hdLotus>/shaders"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
+    "$<TARGET_FILE_DIR:hdLotus>/shaders"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "${LOTUS_VERTEX_SPV}"
     "$<TARGET_FILE_DIR:hdLotus>/shaders/triangle.vert.spv"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -74,6 +77,7 @@ install(TARGETS hdLotus
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/resources")
 install(FILES "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
+  "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/shaders")
 install(FILES tests/usdview-smoke.usda
   DESTINATION "${CMAKE_INSTALL_DATADIR}/lotus/tests")

@@ -163,6 +163,22 @@ AccelerationSupport ProbeAccelerationStructures(VkPhysicalDevice device) {
                     std::string(properties.deviceName)};
 }
 
+BackendCapability ProbeRayQueries(VkPhysicalDevice device,
+    const AccelerationSupport& acceleration) {
+  if (!acceleration.available)
+    return {false, acceleration.detail};
+  if (!HasDeviceExtension(device, VK_KHR_RAY_QUERY_EXTENSION_NAME))
+    return {false, "the device does not expose VK_KHR_ray_query"};
+  VkPhysicalDeviceRayQueryFeaturesKHR query{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+  VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  features.pNext = &query;
+  vkGetPhysicalDeviceFeatures2(device, &features);
+  return {query.rayQuery == VK_TRUE, query.rayQuery == VK_TRUE
+                                         ? "VK_KHR_ray_query and rayQuery are supported"
+                                         : "the device does not support the rayQuery feature"};
+}
+
 bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
     VkQueue queue, std::uint32_t queue_family,
     const AccelerationSupport& acceleration, std::string& detail) {

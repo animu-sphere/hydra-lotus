@@ -62,6 +62,10 @@ struct GpuFrameEvidence {
   std::uint32_t device_id = 0;
   ColorProduct color;
   DepthProduct depth;
+  bool ray_query_used = false;
+  // GPU duration of the primary-ray pass, including clears, excluding readback.
+  bool primary_ray_timestamp_available = false;
+  double primary_ray_gpu_ms = 0.0;
 };
 
 // The image an offscreen frame renders into. Rectangles are {x, y, width,
@@ -174,7 +178,7 @@ struct GpuSceneContents {
 //
 // The renderer also owns the GPU scene: one device-local buffer and one BLAS
 // per resident geometry, an instance buffer and a TLAS, changed only by
-// UpdateScene. The bootstrap draw does not read them yet.
+// UpdateScene. RenderScene traces their triangles; Render is the bootstrap.
 class OffscreenRenderer {
 public:
   virtual ~OffscreenRenderer() = default;
@@ -183,6 +187,14 @@ public:
   // products back. After a failed submission the renderer stays failed;
   // create a new one.
   [[nodiscard]] virtual GpuFrameEvidence Render(const DrawSummary& draw,
+      const OffscreenTarget& target, std::uint32_t frame_count) = 0;
+
+  [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
+  // Trace primary rays through the uploaded scene, using draw.world_to_clip
+  // as the camera (the bootstrap counts are ignored). Hits output triangle
+  // barycentrics as linear RGB and projected depth; misses retain clears.
+  // Missing ray-query support returns Skip. A singular camera returns Fail.
+  [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
 
   // Apply one SceneExtraction plan; plans are applied in order. Returns after
@@ -197,6 +209,11 @@ public:
   [[nodiscard]] virtual GpuSceneContents ReadBackScene() = 0;
 };
 
+struct RayQueryShaders {
+  std::string vertex;
+  std::string fragment;
+};
+
 // Creates the device and pipeline, enabling Vulkan validation capture
 // whenever the loader offers it. Returns nullptr with `status`/`error`
 // describing why: the core-only configuration and missing device capability
@@ -205,7 +222,8 @@ public:
 // fallbacks.
 [[nodiscard]] std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(
     const std::string& vertex_shader, const std::string& fragment_shader,
-    FrameStatus& status, std::string& error);
+    FrameStatus& status, std::string& error,
+    const RayQueryShaders& ray_query_shaders = {});
 
 // One-shot convenience: create a renderer, render `frame_count` frames and
 // destroy it.

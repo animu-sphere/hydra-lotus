@@ -34,10 +34,11 @@ does not traverse or copy the meshes.
 
 `FrameSnapshot::triangle_count` counts visible scene triangles plus any
 explicit bootstrap triangles. Counts exceeding uint32 throw
-`std::overflow_error`. The current `DrawSummary` still describes the
+`std::overflow_error`. `DrawSummary` describes the
 bootstrap raster pass: it selects one fixed triangle when any visible
 triangle exists. It does not draw the stored scene geometry; the scene
-reaches the GPU through the update plan below.
+reaches the GPU through the update plan below. `RenderScene` uses only its
+camera matrix and traces the GPU scene instead of its bootstrap counts.
 
 ## Update plan
 
@@ -89,7 +90,9 @@ upload counts. `ReadBackScene` copies the device buffers back for
 validation. A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
-No pass reads the buffers yet; the bootstrap draw is unchanged.
+The primary-ray pass traverses the acceleration structures built from these
+buffers. It does not bind geometry or instance storage buffers yet:
+barycentrics and hit distance come from the committed intersection.
 Source-face indices stay on the CPU. Every geometry buffer, and every
 BLAS below, is its own device allocation, so an update fails with an
 explanation once a scene would exceed the device's allocation limit.
@@ -125,8 +128,42 @@ says why; `renderer.scene.acceleration` is then a SKIP.
 and lifetime BLAS builds, TLAS builds and TLAS updates. `ReadBackScene`
 also returns the TLAS build input decoded
 (`GpuSceneContents::tlas_instances`), each BLAS reference resolved to its
-geometry slot. No pass traces the structures yet, so their contents are
-checked only through the build input, the counters and Vulkan validation.
+geometry slot. Primary-ray correctness is also checked against independently
+projected CPU triangles ([ray-query report](../reports/2026-10-05-primary-rays.md)).
+
+## Primary rays
+
+`CreateOffscreenRenderer` accepts optional `RayQueryShaders` with explicit
+vertex and fragment SPIR-V paths. On devices with acceleration structures,
+`VK_KHR_ray_query` and the `rayQuery` feature, it enables ray queries;
+`RayQueryCapability` reports support and the reason when it is absent.
+Supplying both shader paths creates one persistent primary-ray pipeline and
+descriptor set alongside the bootstrap pipeline. Missing shader files on a
+supported device fail creation; omitting the paths preserves bootstrap-only
+callers and makes `RenderScene` fail with an explanation.
+
+`RenderScene` unprojects Vulkan near/far clip coordinates at pixel centres,
+using the inverse of `DrawSummary::world_to_clip` after clip-space conversion.
+It supports perspective (including an infinite far plane) and orthographic
+cameras, honours display/data windows, and traces opaque triangles without
+facing culling. Rays begin at the near plane and stop at the far plane. A
+singular or non-finite camera fails before recording GPU work.
+
+The closest triangle outputs its barycentric weights as linear RGBA8 RGB,
+alpha 1, and its projected Vulkan window depth as D32. Misses preserve the
+clear or preceding attachment values. The pass applies the existing depth
+test, clear flags, target reuse and resize rules. Its TLAS descriptor is
+updated before each synchronous frame, so scene rebuilds cannot leave a stale
+reference. Before any scene update, there is no TLAS and the pass only clears.
+
+`GpuFrameEvidence::ray_query_used` identifies this path. Where the graphics
+queue supports timestamps, a persistent query pool measures the primary-ray
+render pass, including clears and excluding readback; the last frame's
+`primary_ray_gpu_ms` and `primary_ray_timestamp_available` carry that result.
+The headless report checks `renderer.ray_query.capability`, `.triangle` and
+`.timestamp`; unavailable features give explained SKIPs. This is diagnostic
+intersection output: BSDFs, lighting, multi-bounce transport and HDR
+accumulation remain [roadmap work](../roadmap/current.md).
 
 ## Hydra extraction
 
@@ -150,6 +187,10 @@ for inspection without creating a GPU renderer.
 
 Each Hydra render pass plans and applies a scene update before its frame,
 and a newly created renderer resets the extraction.
+On ray-query devices its frame uses `RenderScene`, so point, topology,
+transform and visibility edits affect the traced image. Other devices retain
+the bootstrap path. The host evidence log identifies the choice as
+`ray_query=1` or `0`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
 
@@ -159,4 +200,6 @@ regression coverage, are recorded in the
 update plan and GPU scene tests in the
 [GPU scene upload report](../reports/2026-10-05-gpu-scene-upload.md); the
 acceleration-structure checks in the
-[BLAS and TLAS report](../reports/2026-10-05-blas-tlas.md).
+[BLAS and TLAS report](../reports/2026-10-05-blas-tlas.md); primary-ray CPU
+comparisons and Hydra silhouette checks in the
+[ray-query report](../reports/2026-10-05-primary-rays.md).
