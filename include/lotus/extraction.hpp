@@ -45,8 +45,9 @@ struct SceneUpdate {
   // Buffers that become resident, in scene key order. A hidden mesh's
   // geometry is resident too, so a visibility change uploads nothing.
   std::vector<std::shared_ptr<const MeshGeometry>> geometry_uploads;
-  // When set, `instances` replaces every instance: the visible meshes with
-  // triangles, in scene key order. Otherwise `instances` is empty.
+  // When set, `instances` replaces every instance: each placement of the
+  // visible meshes with triangles, in scene key order and then placement
+  // order. Otherwise `instances` is empty.
   bool instances_changed = false;
   std::vector<SceneInstance> instances;
   // When set, the scene's environment radiance replaces the GPU scene's. A

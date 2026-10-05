@@ -4,6 +4,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -73,6 +74,45 @@ int main() try {
       update.environment == std::array<float, 3>{1.0F, 0.5F, 0.25F} &&
       !update.Empty(),
       "an environment edit was not planned on its own");
+
+  // Each instancer placement is an instance of the same resident geometry,
+  // in placement order after the meshes before it.
+  auto prototype = instance;
+  Lotus::Matrix4 up = Lotus::IdentityMatrix();
+  up[13] = 2;
+  Lotus::Matrix4 down = Lotus::IdentityMatrix();
+  down[13] = -2;
+  prototype.instancer_transforms = std::vector<Lotus::Matrix4>{up, down, up};
+  world.SetMeshInstance("/a", prototype);
+  update = extraction.Update(world.Commit());
+  Check(update.geometry_uploads.empty() && update.geometry_releases.empty() &&
+      update.instances_changed && update.instances.size() == 4 &&
+      update.instances[0].geometry == a && update.instances[1].geometry == a &&
+      update.instances[2].geometry == a && update.instances[3].geometry == b &&
+      update.instances[0].world_from_object[12] == 5 &&
+      update.instances[0].world_from_object[13] == 2 &&
+      update.instances[1].world_from_object[13] == -2 &&
+      update.instances[2] == update.instances[0],
+      "instancer placements were not expanded in order over one geometry");
+  prototype.instancer_transforms->pop_back();
+  world.SetMeshInstance("/a", prototype);
+  update = extraction.Update(world.Commit());
+  Check(update.geometry_uploads.empty() && update.instances_changed &&
+      update.instances.size() == 3,
+      "removing an instancer placement did not remove one instance");
+  prototype.instancer_transforms->clear();
+  world.SetMeshInstance("/a", prototype);
+  update = extraction.Update(world.Commit());
+  Check(update.geometry_uploads.empty() && update.geometry_releases.empty() &&
+      update.instances_changed && update.instances.size() == 1 &&
+      update.instances[0].geometry == b,
+      "a prototype without placements released its geometry or kept an "
+      "instance");
+  world.SetMeshInstance("/a", instance);
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed && update.instances.size() == 2 &&
+      update.instances[0].geometry == a,
+      "an ordinary placement was not restored");
 
   Lotus::MeshInstance hidden;
   hidden.visible = false;

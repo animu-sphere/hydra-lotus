@@ -17,6 +17,7 @@ to measure.
 | [2026-10-05-bsdf-multibounce.md](2026-10-05-bsdf-multibounce.md) | Lambert and GGX-metal BSDFs, emission, a constant environment, multiple bounces and Russian roulette: exact single-scattering and bounce-limited radiance, GGX albedo against independent quadrature, a closed-box mean, five fault injections; core 8/8, ci-core 8/8 and Hydra 14/14. |
 | [2026-10-05-hdr-accumulation.md](2026-10-05-hdr-accumulation.md) | First physically correct image: RGBA32F accumulation, 1-pixel box filter against analytic pixel coverage, unclamped HDR, split-frame equality, restart rules and `max_samples`, float Hydra colour and progressive usdview convergence; five fault injections, core 8/8, ci-core 8/8 and Hydra 14/14. |
 | [2026-10-05-reference-images.md](2026-10-05-reference-images.md) | Reference path tracer: a Cornell box at 1–1024 spp compared with a committed 1024-spp mean and per-pixel variance (DES-Q5), seven independent sample sequences, the metric's power against a brighter wall, five fault injections; core 8/8, ci-core 8/8 and Hydra 14/14. |
+| [2026-10-05-hydra-instancers.md](2026-10-05-hydra-instancers.md) | Hydra instancer placements: point, nested and native instancing synced through UsdImaging and compared with UsdGeom's transforms, GPU instance and TLAS counts, primary rays through instanced triangles, four fault injections; core 8/8, ci-core 8/8 and Hydra 15/15. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and

@@ -116,6 +116,13 @@ if(LOTUS_BUILD_TESTS)
   target_compile_definitions(lotus-hydra2-mesh-test PRIVATE
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 
+  # Only this test reads a USD stage: it syncs one through UsdImaging.
+  add_executable(lotus-hydra2-instancer-test tests/instancer_test.cpp)
+  target_link_libraries(lotus-hydra2-instancer-test
+    PRIVATE lotus-hydra2-runtime usdImaging usdGeom usd sdf)
+  target_compile_definitions(lotus-hydra2-instancer-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+
   if(PXR_INCLUDE_DIRS)
     list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
     get_filename_component(LOTUS_PXR_ROOT
@@ -140,6 +147,8 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-render-buffer-test)
   add_test(NAME lotus-renderer-hydra-aov COMMAND lotus-hydra2-aov-test)
   add_test(NAME lotus-renderer-hydra-mesh COMMAND lotus-hydra2-mesh-test)
+  add_test(NAME lotus-renderer-hydra-instancer
+    COMMAND lotus-hydra2-instancer-test)
   set_tests_properties(lotus-renderer-hydra-aov PROPERTIES
     LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
@@ -148,6 +157,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-render-buffer
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-mesh
+    lotus-renderer-hydra-instancer
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 

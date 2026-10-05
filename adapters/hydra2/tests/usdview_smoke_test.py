@@ -69,14 +69,16 @@ def testUsdviewInputFunction(appController):
     assert updated["scene_revision"] > first["scene_revision"]
     assert updated["ray_query"] == first["ray_query"]
     assert updated["samples"] == first["samples"]
-    # The smoke scene's one mesh is resident and instanced once; the point
-    # edit replaces its geometry buffer instead of adding one.
-    assert first["gpu_geometries"] == 1 and first["gpu_instances"] == 1
-    assert updated["gpu_geometries"] == 1 and updated["gpu_instances"] == 1
+    # The triangle is placed once and the point instancer's prototype three
+    # times, each mesh's geometry resident once; the point edit replaces the
+    # triangle's geometry buffer instead of adding one.
+    assert first["gpu_geometries"] == 2 and first["gpu_instances"] == 4
+    assert updated["gpu_geometries"] == 2 and updated["gpu_instances"] == 4
     assert updated["geometry_uploads"] == first["geometry_uploads"] + 1
-    # With acceleration structures, the mesh has one BLAS and one TLAS
-    # instance, and the point edit builds exactly one more BLAS.
+    # With acceleration structures, each geometry has one BLAS and each
+    # placement one TLAS instance, and the point edit builds exactly one
+    # more BLAS.
     if first["acceleration"] == 1:
-        assert first["blas"] == 1 and first["tlas_instances"] == 1
-        assert updated["blas"] == 1 and updated["tlas_instances"] == 1
+        assert first["blas"] == 2 and first["tlas_instances"] == 4
+        assert updated["blas"] == 2 and updated["tlas_instances"] == 4
         assert updated["blas_builds"] == first["blas_builds"] + 1

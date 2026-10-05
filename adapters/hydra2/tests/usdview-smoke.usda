@@ -16,6 +16,24 @@ def Xform "World"
             interpolation = "constant"
         )
     }
+
+    def PointInstancer "Instances"
+    {
+        rel prototypes = </World/Instances/Prototypes/Small>
+        int[] protoIndices = [0, 0, 0]
+        point3f[] positions = [(-0.66, 0.45, 0), (0.66, 0.45, 0), (0.66, -0.45, 0)]
+        quath[] orientations = [(1, 0, 0, 0), (0.70710677, 0, 0, 0.70710677), (0, 0, 0, 1)]
+
+        def Scope "Prototypes"
+        {
+            def Mesh "Small"
+            {
+                int[] faceVertexCounts = [3]
+                int[] faceVertexIndices = [0, 1, 2]
+                point3f[] points = [(-0.1, -0.1, 0), (0.1, -0.1, 0), (0, 0.1, 0)]
+            }
+        }
+    }
 }
 
 def Camera "Camera"

@@ -158,7 +158,7 @@ Lotus::Camera BootstrapCamera() {
 }
 
 // Whether the GPU scene's buffers hold exactly the scene's resident geometry
-// and its visible instances, in the update plan's order.
+// and each placement of its visible meshes, in the update plan's order.
 bool SceneMatches(const Lotus::GpuSceneContents& contents,
     const Lotus::LotusScene& scene) {
   if (contents.status != Lotus::FrameStatus::Pass) {
@@ -175,20 +175,23 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
     if (!mesh.instance.visible) {
       continue;
     }
-    if (instance >= contents.instances.size()) {
-      return false;
-    }
-    const Lotus::GpuInstanceContents& gpu = contents.instances[instance++];
-    const auto geometry = std::find_if(contents.geometries.begin(),
-        contents.geometries.end(), [&](const Lotus::GpuGeometryContents& g) {
-          return g.slot == gpu.geometry_slot;
-        });
-    if (geometry == contents.geometries.end() ||
-        geometry->positions != mesh.geometry->positions ||
-        geometry->triangles != mesh.geometry->triangles ||
-        gpu.world_from_object != mesh.instance.world_from_object ||
-        gpu.material != mesh.material) {
-      return false;
+    for (const Lotus::Matrix4& placement :
+        Lotus::PlacementTransforms(mesh.instance)) {
+      if (instance >= contents.instances.size()) {
+        return false;
+      }
+      const Lotus::GpuInstanceContents& gpu = contents.instances[instance++];
+      const auto geometry = std::find_if(contents.geometries.begin(),
+          contents.geometries.end(), [&](const Lotus::GpuGeometryContents& g) {
+            return g.slot == gpu.geometry_slot;
+          });
+      if (geometry == contents.geometries.end() ||
+          geometry->positions != mesh.geometry->positions ||
+          geometry->triangles != mesh.geometry->triangles ||
+          gpu.world_from_object != placement ||
+          gpu.material != mesh.material) {
+        return false;
+      }
     }
   }
   return instance == contents.instances.size() &&
@@ -230,8 +233,8 @@ struct AccelerationVerdict {
 };
 
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
-// transform edit, a material edit, an environment edit, a hide, a point edit
-// and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
+// transform edit, a material edit, an environment edit, a hide, a point edit,
+// instancer placements and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
 // Acceleration-structure mismatches go to `acceleration` instead.
 std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     AccelerationVerdict& acceleration) {
@@ -372,6 +375,62 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
              before.tlas_updates == 1,
       "point edit", "expected one BLAS build and a TLAS rebuild");
 
+  // An instancer places one resident geometry, with one BLAS, several times.
+  Lotus::MeshInstance prototype;
+  Lotus::Matrix4 placement = Lotus::IdentityMatrix();
+  prototype.instancer_transforms.emplace();
+  for (float offset : {-0.5F, 0.0F, 0.5F}) {
+    placement[12] = offset;
+    prototype.instancer_transforms->push_back(placement);
+  }
+  world.SetMeshInstance("/triangle", prototype);
+  if (auto failure = apply("instancer expansion"); !failure.empty())
+    return failure;
+  if (before.resident_geometries != 2 || before.instance_count != 3 ||
+      before.geometry_uploads != 3) {
+    return "instancer expansion: expected three instances of resident "
+           "geometry and no upload";
+  }
+  expect(before.blas_count == 2 && before.blas_builds == 3 &&
+             before.tlas_builds == 4 && before.tlas_updates == 1,
+      "instancer expansion", "expected a TLAS rebuild and no BLAS build");
+
+  const Lotus::GpuSceneStats expanded = before;
+  (*prototype.instancer_transforms)[1][13] = 0.75F;
+  world.SetMeshInstance("/triangle", prototype);
+  if (auto failure = apply("instancer transform edit"); !failure.empty())
+    return failure;
+  if (before.geometry_uploads != 3 ||
+      before.instance_writes != expanded.instance_writes + 1) {
+    return "instancer transform edit: geometry was uploaded or the "
+           "instances were not rewritten";
+  }
+  expect(before.blas_builds == 3 && before.tlas_builds == 4 &&
+             before.tlas_updates == 2,
+      "instancer transform edit", "expected a TLAS update and no build");
+
+  prototype.instancer_transforms->clear();
+  world.SetMeshInstance("/triangle", prototype);
+  if (auto failure = apply("instancer without instances"); !failure.empty())
+    return failure;
+  if (before.resident_geometries != 2 || before.instance_count != 0 ||
+      before.geometry_releases != 1) {
+    return "instancer without instances: geometry was released or an "
+           "instance remained";
+  }
+  expect(before.blas_count == 2 && before.tlas_builds == 5,
+      "instancer without instances", "expected an empty TLAS rebuild");
+
+  world.SetMeshInstance("/triangle", Lotus::MeshInstance{});
+  if (auto failure = apply("ordinary placement"); !failure.empty())
+    return failure;
+  if (before.instance_count != 1 || before.geometry_uploads != 3) {
+    return "ordinary placement: expected one instance and no upload";
+  }
+  expect(before.blas_builds == 3 && before.tlas_builds == 6 &&
+             before.tlas_updates == 2,
+      "ordinary placement", "expected a TLAS rebuild and no BLAS build");
+
   world.RemoveMesh("/quad");
   world.RemoveMesh("/triangle");
   world.RemoveMesh("/empty");
@@ -382,8 +441,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       stats().upload_submissions != before.upload_submissions) {
     return "removal: the GPU scene kept geometry or instances";
   }
-  expect(before.blas_builds == 3 && before.tlas_builds == 4 &&
-             before.tlas_updates == 1,
+  expect(before.blas_builds == 3 && before.tlas_builds == 7 &&
+             before.tlas_updates == 2,
       "removal", "expected an empty TLAS rebuild");
   return {};
 }
@@ -426,22 +485,34 @@ std::string PrimaryImageFailure(const Lotus::FrameSnapshot& snapshot,
     (void)key;
     if (!mesh.instance.visible)
       continue;
-    for (const auto& indices : mesh.geometry->triangles) {
-      Triangle triangle;
-      bool clipped = false;
-      for (int corner = 0; corner < 3; ++corner) {
-        const auto& position = mesh.geometry->positions[indices[corner]];
-        const auto world = Transform(mesh.instance.world_from_object,
-            {position[0], position[1], position[2], 1.0});
-        auto clip = Transform(camera, world);
-        // Fixtures use triangles wholly inside or outside the depth range.
-        if (clip[3] <= 0 || clip[2] < -clip[3] || clip[2] > clip[3])
-          clipped = true;
-        triangle.clip[corner] = clip;
-      }
-      if (!clipped)
-        triangles.push_back(triangle);
+    // Instancer transforms apply after the mesh's own, in double precision
+    // rather than through the core's composed matrices.
+    std::vector<const Lotus::Matrix4*> instancer;
+    if (mesh.instance.instancer_transforms) {
+      for (const auto& transform : *mesh.instance.instancer_transforms)
+        instancer.push_back(&transform);
+    } else {
+      instancer.push_back(nullptr);
     }
+    for (const Lotus::Matrix4* placement : instancer)
+      for (const auto& indices : mesh.geometry->triangles) {
+        Triangle triangle;
+        bool clipped = false;
+        for (int corner = 0; corner < 3; ++corner) {
+          const auto& position = mesh.geometry->positions[indices[corner]];
+          auto world = Transform(mesh.instance.world_from_object,
+              {position[0], position[1], position[2], 1.0});
+          if (placement != nullptr)
+            world = Transform(*placement, world);
+          auto clip = Transform(camera, world);
+          // Fixtures use triangles wholly inside or outside the depth range.
+          if (clip[3] <= 0 || clip[2] < -clip[3] || clip[2] > clip[3])
+            clipped = true;
+          triangle.clip[corner] = clip;
+        }
+        if (!clipped)
+          triangles.push_back(triangle);
+      }
   }
   const auto& display = target.display_window;
   const double dx = display[2] > 0 ? display[0] : 0;
@@ -586,6 +657,22 @@ std::string PrimaryRayFailure(Lotus::OffscreenRenderer& renderer,
   if (auto error = check("far-plane exclusion"); !error.empty())
     return error;
   world.RemoveMesh("occluder");
+  // Instancer placements of one geometry, one of them rotated and scaled
+  // and one in front of another.
+  Lotus::MeshInstance instanced = instance;
+  Lotus::Matrix4 left = Lotus::IdentityMatrix();
+  left[12] = -0.45F;
+  left[13] = 0.3F;
+  Lotus::Matrix4 turned{0, 0.6F, 0, 0, -0.6F, 0, 0, 0, 0, 0, 0.6F, 0,
+      0.5F, -0.2F, 0, 1};
+  Lotus::Matrix4 front = Lotus::IdentityMatrix();
+  front[12] = -0.2F;
+  front[14] = 0.4F;
+  instanced.instancer_transforms = std::vector<Lotus::Matrix4>{left, turned, front};
+  world.SetMeshInstance("triangle", instanced);
+  if (auto error = check("instancer placements"); !error.empty())
+    return error;
+  world.SetMeshInstance("triangle", instance);
   auto infinite = BootstrapCamera();
   infinite.projection[10] = -1.0F;
   infinite.projection[14] = -2.0F;
