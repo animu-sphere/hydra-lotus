@@ -13,6 +13,7 @@ to measure.
 | [2026-10-05-cpu-mesh-extraction.md](2026-10-05-cpu-mesh-extraction.md) | CPU mesh snapshots and Hydra coarse-mesh extraction, dirty updates, malformed-input recovery and multi-triangle bootstrap AOV compatibility; core 7/7, Hydra 13/13 and strict evidence validation. |
 | [2026-10-05-gpu-scene-upload.md](2026-10-05-gpu-scene-upload.md) | The scene update plan and the GPU scene's geometry and instance buffers, compared with the CPU scene by readback; core 8/8, Hydra 14/14 and strict evidence validation. |
 | [2026-10-05-blas-tlas.md](2026-10-05-blas-tlas.md) | A BLAS per resident geometry and a TLAS refitted or rebuilt per instance rewrite; TLAS build input and build counts checked by readback, two fault injections; core 8/8, Hydra 14/14 and strict evidence validation. |
+| [2026-10-05-primary-rays.md](2026-10-05-primary-rays.md) | First ray-traced triangle: closest-hit barycentrics/depth compared with CPU projections across scene edits, clipping, framing and resize; primary-ray timestamps, Hydra silhouette checks, core 8/8, ci-core 8/8 and Hydra 14/14. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and

@@ -23,6 +23,26 @@ if(LOTUS_WITH_VULKAN)
   set(_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
   set(LOTUS_VERTEX_SPV "${_shader_dir}/triangle.vert.spv")
   set(LOTUS_FRAGMENT_SPV "${_shader_dir}/triangle.frag.spv")
+  set(LOTUS_RAY_VERTEX_SPV "${_shader_dir}/primary_ray.vert.spv")
+  set(LOTUS_RAY_FRAGMENT_SPV "${_shader_dir}/primary_ray.frag.spv")
+  foreach(_stage IN ITEMS vertex fragment)
+    if(_stage STREQUAL "vertex")
+      set(_ray_output "${LOTUS_RAY_VERTEX_SPV}")
+    else()
+      set(_ray_output "${LOTUS_RAY_FRAGMENT_SPV}")
+    endif()
+    add_custom_command(
+      OUTPUT "${_ray_output}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${_shader_dir}"
+      COMMAND "${LOTUS_SLANGC_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/primary_ray.slang"
+        -entry "${_stage}_main" -stage "${_stage}" -target spirv
+        -profile spirv_1_4 -capability spvRayQueryKHR
+        -matrix-layout-column-major -warnings-as-errors all
+        -o "${_ray_output}"
+      DEPENDS shaders/primary_ray.slang
+      VERBATIM)
+  endforeach()
   add_custom_command(
     OUTPUT "${LOTUS_VERTEX_SPV}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_shader_dir}"
@@ -42,7 +62,10 @@ if(LOTUS_WITH_VULKAN)
     DEPENDS shaders/triangle.slang
     VERBATIM)
   add_custom_target(lotus-renderer-shaders
-    DEPENDS "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
+    DEPENDS "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
+      "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}")
   set(LOTUS_VERTEX_SPV "${LOTUS_VERTEX_SPV}" PARENT_SCOPE)
   set(LOTUS_FRAGMENT_SPV "${LOTUS_FRAGMENT_SPV}" PARENT_SCOPE)
+  set(LOTUS_RAY_VERTEX_SPV "${LOTUS_RAY_VERTEX_SPV}" PARENT_SCOPE)
+  set(LOTUS_RAY_FRAGMENT_SPV "${LOTUS_RAY_FRAGMENT_SPV}" PARENT_SCOPE)
 endif()

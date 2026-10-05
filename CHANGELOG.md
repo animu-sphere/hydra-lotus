@@ -9,26 +9,31 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Primary camera rays through the GPU scene's TLAS using Vulkan ray queries:
+  diagnostic triangle barycentrics and projected depth, persistent pipeline
+  and descriptors, perspective/orthographic camera support and GPU timestamps.
+  Hydra uses this pass on supported devices. Headless evidence compares it
+  against independent CPU projections across scene edits, clipping, framing
+  and resize; missing ray-query capability produces explained SKIPs.
+
 - Acceleration structures in the GPU scene: a BLAS per resident geometry
   and a TLAS over the instances, refitted when a rewrite changes only
   transforms and rebuilt otherwise, built in each plan's one submission.
   They are enabled when the device has `VK_KHR_acceleration_structure`; a
   `renderer.scene.acceleration` check compares the read-back TLAS build
   input and the build counts with the scene, and SKIPs with the reason on
-  devices without them. Nothing traces them yet.
+  devices without them.
 
 - The scene update plan (`SceneExtraction`, `SceneUpdate`) and the GPU
   scene: incremental geometry uploads and releases and instance rewrites
   into device-local buffers owned by `OffscreenRenderer`, with a
   `renderer.scene.upload` check that compares read-back buffers with the
   CPU scene. The Hydra adapter uploads its extracted meshes on every pass.
-  No pass reads the buffers yet.
 
 - Host-neutral CPU mesh geometry and placement in `LotusScene`, immutable
   frame snapshots, and Hydra coarse-mesh extraction with dirty updates,
   winding/hole handling and removal. CPU and Hydra tests cover snapshot
   lifetime, malformed input and multi-triangle bootstrap AOV compatibility.
-  GPU scene upload and ray tracing remain unimplemented.
 
 - Source CI contracts for runtime-free core checks and digest-pinned Hydra
   builds, registered with OpenStrata as an external renderer workflow.

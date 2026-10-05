@@ -65,6 +65,55 @@ using vulkan_internal::VulkanWorldToClip;
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
+struct RayConstants {
+  Matrix4 world_to_clip;
+  Matrix4 clip_to_world;
+};
+static_assert(sizeof(RayConstants) == 128);
+
+bool Invert(const Matrix4& matrix, Matrix4& inverse) {
+  double rows[4][8]{};
+  for (int row = 0; row < 4; ++row) {
+    for (int column = 0; column < 4; ++column) {
+      const float value = matrix[column * 4 + row];
+      if (!std::isfinite(value))
+        return false;
+      rows[row][column] = value;
+    }
+    rows[row][row + 4] = 1.0;
+  }
+  for (int column = 0; column < 4; ++column) {
+    int pivot = column;
+    for (int row = column + 1; row < 4; ++row) {
+      if (std::abs(rows[row][column]) > std::abs(rows[pivot][column]))
+        pivot = row;
+    }
+    if (rows[pivot][column] == 0.0)
+      return false;
+    for (int index = 0; index < 8; ++index)
+      std::swap(rows[column][index], rows[pivot][index]);
+    const double scale = rows[column][column];
+    for (double& value : rows[column])
+      value /= scale;
+    for (int row = 0; row < 4; ++row) {
+      if (row == column)
+        continue;
+      const double factor = rows[row][column];
+      for (int index = 0; index < 8; ++index)
+        rows[row][index] -= factor * rows[column][index];
+    }
+  }
+  for (int row = 0; row < 4; ++row) {
+    for (int column = 0; column < 4; ++column) {
+      const float value = static_cast<float>(rows[row][column + 4]);
+      if (!std::isfinite(value))
+        return false;
+      inverse[column * 4 + row] = value;
+    }
+  }
+  return true;
+}
+
 std::optional<std::uint32_t> FindGraphicsQueue(VkPhysicalDevice device) {
   std::uint32_t count = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
@@ -237,6 +286,11 @@ public:
       vkDestroyFence(device_, fence_, nullptr);
       vkDestroyPipeline(device_, pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
+      vkDestroyPipeline(device_, ray_pipeline_, nullptr);
+      vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
+      vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
+      vkDestroyDescriptorSetLayout(device_, ray_descriptor_layout_, nullptr);
+      vkDestroyQueryPool(device_, ray_timestamps_, nullptr);
       vkDestroyRenderPass(device_, render_pass_, nullptr);
       vkDestroyCommandPool(device_, command_pool_, nullptr);
       vkDestroyDevice(device_, nullptr);
@@ -246,7 +300,7 @@ public:
 
   bool Initialize(const std::string& vertex_shader,
       const std::string& fragment_shader, FrameStatus& status,
-      std::string& detail) {
+      std::string& detail, const RayQueryShaders& ray_shaders) {
     status = FrameStatus::Fail;
     std::vector<std::uint32_t> vertex_words;
     std::vector<std::uint32_t> fragment_words;
@@ -263,8 +317,18 @@ public:
         !scene_.Initialize(physical_device_, device_, queue_, queue_family_,
             acceleration_, detail) ||
         !CreateRenderPass(detail) ||
-        !CreatePipeline(vertex_words, fragment_words, detail)) {
+        !CreatePipeline(vertex_words, fragment_words, pipeline_layout_,
+            pipeline_, false, detail)) {
       return false;
+    }
+    if (ray_query_.available && !ray_shaders.vertex.empty() &&
+        !ray_shaders.fragment.empty()) {
+      if (!CreateRayResources(detail) ||
+          !LoadSpirv(ray_shaders.vertex, vertex_words, detail) ||
+          !LoadSpirv(ray_shaders.fragment, fragment_words, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              ray_pipeline_, true, detail))
+        return false;
     }
     status = FrameStatus::Pass;
     return true;
@@ -272,12 +336,51 @@ public:
 
   GpuFrameEvidence Render(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count) override {
+    return RenderFrame(draw, target, frame_count, false);
+  }
+
+  BackendCapability RayQueryCapability() const override {
+    return ray_query_;
+  }
+
+  GpuFrameEvidence RenderScene(const DrawSummary& draw,
+      const OffscreenTarget& target, std::uint32_t frame_count) override {
+    if (!failure_.empty())
+      return Evidence(FrameStatus::Fail, "the renderer failed earlier: " + failure_);
+    if (!ray_query_.available)
+      return Evidence(FrameStatus::Skip, ray_query_.detail);
+    if (ray_pipeline_ == VK_NULL_HANDLE)
+      return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
+    ray_constants_.world_to_clip = VulkanWorldToClip(draw.world_to_clip);
+    if (!Invert(ray_constants_.world_to_clip, ray_constants_.clip_to_world))
+      return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
+    // A TLAS can be replaced by UpdateScene. Update its descriptor only after
+    // the preceding synchronous frame and scene update have finished.
+    const VkAccelerationStructureKHR tlas = scene_.Tlas();
+    if (tlas != VK_NULL_HANDLE) {
+      VkWriteDescriptorSetAccelerationStructureKHR acceleration_write{
+          VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+      acceleration_write.accelerationStructureCount = 1;
+      acceleration_write.pAccelerationStructures = &tlas;
+      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      write.pNext = &acceleration_write;
+      write.dstSet = ray_descriptor_;
+      write.dstBinding = 0;
+      write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+      vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+    return RenderFrame(draw, target, frame_count, true);
+  }
+
+  GpuFrameEvidence RenderFrame(const DrawSummary& draw,
+      const OffscreenTarget& target, std::uint32_t frame_count, bool trace) {
     if (!failure_.empty()) {
       return Evidence(FrameStatus::Fail,
           "the renderer failed earlier: " + failure_);
     }
-    if (!((draw.draw_count == 1 && draw.triangle_count == 1) ||
-          (draw.draw_count == 0 && draw.triangle_count == 0))) {
+    if (!trace && !((draw.draw_count == 1 && draw.triangle_count == 1) ||
+                      (draw.draw_count == 0 && draw.triangle_count == 0))) {
       return Evidence(FrameStatus::Fail,
           "bootstrap extraction must be empty or produce one triangle draw");
     }
@@ -306,7 +409,7 @@ public:
 
     std::string detail;
     if (!EnsureTargets(target.width, target.height, detail) ||
-        !Record(draw, target, detail)) {
+        !Record(draw, target, trace, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -339,6 +442,7 @@ public:
     const std::uint32_t height = targets_.height;
     const std::size_t pixel_count = std::size_t{width} * height;
     GpuFrameEvidence evidence = Evidence(FrameStatus::Pass, "");
+    evidence.ray_query_used = trace;
     evidence.completion = completion_;
     evidence.frames_rendered = frame_count;
     evidence.target_creations = target_creations_;
@@ -364,6 +468,21 @@ public:
     evidence.depth.payload.resize(pixel_count);
     std::memcpy(evidence.depth.payload.data(), targets_.depth_mapped,
         pixel_count * sizeof(float));
+
+    if (trace && ray_timestamps_ != VK_NULL_HANDLE) {
+      std::uint64_t ticks[2]{};
+      if (!VulkanOk(vkGetQueryPoolResults(device_, ray_timestamps_, 0, 2,
+                        sizeof(ticks), ticks, sizeof(std::uint64_t),
+                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+              "vkGetQueryPoolResults(primary ray)", detail)) {
+        failure_ = detail;
+        return Evidence(FrameStatus::Fail, detail);
+      }
+      const std::uint64_t mask = timestamp_bits_ == 64 ? ~std::uint64_t{0}
+                                                       : (std::uint64_t{1} << timestamp_bits_) - 1;
+      evidence.primary_ray_timestamp_available = true;
+      evidence.primary_ray_gpu_ms = static_cast<double>((ticks[1] - ticks[0]) & mask) * device_properties_.limits.timestampPeriod / 1'000'000.0;
+    }
 
     evidence.device_name = device_properties_.deviceName;
     evidence.vendor_id = device_properties_.vendorID;
@@ -475,6 +594,12 @@ private:
     // Acceleration structures are optional: without them the GPU scene
     // still uploads its buffers and reports why it builds no BLAS or TLAS.
     acceleration_ = ProbeAccelerationStructures(physical_device_);
+    ray_query_ = vulkan_internal::ProbeRayQueries(physical_device_, acceleration_);
+    std::uint32_t queue_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_count, nullptr);
+    std::vector<VkQueueFamilyProperties> queues(queue_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_count, queues.data());
+    timestamp_bits_ = queues[queue_family_].timestampValidBits;
     return true;
   }
 
@@ -494,14 +619,22 @@ private:
     VkPhysicalDeviceAccelerationStructureFeaturesKHR enabled_acceleration{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
     enabled_acceleration.accelerationStructure = VK_TRUE;
+    VkPhysicalDeviceRayQueryFeaturesKHR enabled_query{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    enabled_query.rayQuery = VK_TRUE;
+    std::vector<const char*> extensions;
     VkDeviceCreateInfo device_create{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     device_create.pNext = &enabled_vulkan11;
     if (acceleration_.available) {
       enabled_vulkan11.pNext = &enabled_vulkan12;
       enabled_vulkan12.pNext = &enabled_acceleration;
-      device_create.enabledExtensionCount =
-          static_cast<std::uint32_t>(kAccelerationExtensions.size());
-      device_create.ppEnabledExtensionNames = kAccelerationExtensions.data();
+      extensions.assign(kAccelerationExtensions.begin(), kAccelerationExtensions.end());
+      if (ray_query_.available) {
+        enabled_acceleration.pNext = &enabled_query;
+        extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+      }
+      device_create.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+      device_create.ppEnabledExtensionNames = extensions.data();
     }
     device_create.queueCreateInfoCount = 1;
     device_create.pQueueCreateInfos = &queue_create;
@@ -602,8 +735,49 @@ private:
         "vkCreateRenderPass", detail);
   }
 
+  bool CreateRayResources(std::string& detail) {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layout.bindingCount = 1;
+    layout.pBindings = &binding;
+    if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
+                      &ray_descriptor_layout_),
+            "vkCreateDescriptorSetLayout(ray)", detail))
+      return false;
+    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1};
+    VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.maxSets = 1;
+    pool.poolSizeCount = 1;
+    pool.pPoolSizes = &size;
+    if (!VulkanOk(vkCreateDescriptorPool(device_, &pool, nullptr,
+                      &ray_descriptor_pool_),
+            "vkCreateDescriptorPool(ray)", detail))
+      return false;
+    VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocate.descriptorPool = ray_descriptor_pool_;
+    allocate.descriptorSetCount = 1;
+    allocate.pSetLayouts = &ray_descriptor_layout_;
+    if (!VulkanOk(vkAllocateDescriptorSets(device_, &allocate, &ray_descriptor_),
+            "vkAllocateDescriptorSets(ray)", detail))
+      return false;
+    if (timestamp_bits_ != 0) {
+      VkQueryPoolCreateInfo query{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+      query.queryType = VK_QUERY_TYPE_TIMESTAMP;
+      query.queryCount = 2;
+      if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &ray_timestamps_),
+              "vkCreateQueryPool(primary ray)", detail))
+        return false;
+    }
+    return true;
+  }
+
   bool CreatePipeline(const std::vector<std::uint32_t>& vertex_words,
-      const std::vector<std::uint32_t>& fragment_words, std::string& detail) {
+      const std::vector<std::uint32_t>& fragment_words,
+      VkPipelineLayout& layout, VkPipeline& pipeline, bool trace, std::string& detail) {
     VkShaderModule vertex_module = CreateShader(device_, vertex_words, detail);
     VkShaderModule fragment_module =
         CreateShader(device_, fragment_words, detail);
@@ -659,14 +833,21 @@ private:
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     blend.attachmentCount = 1;
     blend.pAttachments = &blend_attachment;
-    const VkPushConstantRange push_range{VK_SHADER_STAGE_VERTEX_BIT, 0,
-        kFrameConstantsSize};
+    const VkPushConstantRange push_range{
+        static_cast<VkShaderStageFlags>(trace ? VK_SHADER_STAGE_FRAGMENT_BIT
+                                              : VK_SHADER_STAGE_VERTEX_BIT),
+        0,
+        trace ? static_cast<std::uint32_t>(sizeof(RayConstants)) : kFrameConstantsSize};
     VkPipelineLayoutCreateInfo layout_create{
         VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout_create.pushConstantRangeCount = 1;
     layout_create.pPushConstantRanges = &push_range;
+    if (trace) {
+      layout_create.setLayoutCount = 1;
+      layout_create.pSetLayouts = &ray_descriptor_layout_;
+    }
     if (!VulkanOk(vkCreatePipelineLayout(device_, &layout_create, nullptr,
-                      &pipeline_layout_),
+                      &layout),
             "vkCreatePipelineLayout", detail)) {
       vkDestroyShaderModule(device_, vertex_module, nullptr);
       vkDestroyShaderModule(device_, fragment_module, nullptr);
@@ -684,11 +865,11 @@ private:
     pipeline_create.pDepthStencilState = &depth_state;
     pipeline_create.pColorBlendState = &blend;
     pipeline_create.pDynamicState = &dynamic;
-    pipeline_create.layout = pipeline_layout_;
+    pipeline_create.layout = layout;
     pipeline_create.renderPass = render_pass_;
     pipeline_create.subpass = 0;
     const VkResult pipeline_result = vkCreateGraphicsPipelines(
-        device_, VK_NULL_HANDLE, 1, &pipeline_create, nullptr, &pipeline_);
+        device_, VK_NULL_HANDLE, 1, &pipeline_create, nullptr, &pipeline);
     vkDestroyShaderModule(device_, vertex_module, nullptr);
     vkDestroyShaderModule(device_, fragment_module, nullptr);
     return VulkanOk(pipeline_result, "vkCreateGraphicsPipelines", detail);
@@ -811,13 +992,15 @@ private:
   }
 
   bool Record(const DrawSummary& draw, const OffscreenTarget& target,
-      std::string& detail) {
+      bool trace, std::string& detail) {
     VkCommandBufferBeginInfo command_begin{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!VulkanOk(vkBeginCommandBuffer(command_, &command_begin),
             "vkBeginCommandBuffer", detail)) {
       return false;
     }
+    if (trace && ray_timestamps_ != VK_NULL_HANDLE)
+      vkCmdResetQueryPool(command_, ray_timestamps_, 0, 2);
     if (!targets_.initialized) {
       // LOAD preserves previous frames. Fresh images first need a defined
       // layout, then initialization inside the render pass below.
@@ -846,6 +1029,8 @@ private:
     render_begin.framebuffer = targets_.framebuffer;
     render_begin.renderArea.offset = {0, 0};
     render_begin.renderArea.extent = {targets_.width, targets_.height};
+    if (trace && ray_timestamps_ != VK_NULL_HANDLE)
+      vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ray_timestamps_, 0);
     vkCmdBeginRenderPass(command_, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     VkClearAttachment clears[2]{};
     std::uint32_t clear_count = 0;
@@ -868,18 +1053,28 @@ private:
     }
     const VkViewport viewport = DisplayViewport(target);
     const VkRect2D scissor = DataScissor(target);
-    if (draw.triangle_count != 0 && scissor.extent.width != 0 &&
+    const bool has_draw = trace ? scene_.Tlas() != VK_NULL_HANDLE : draw.triangle_count != 0;
+    if (has_draw && scissor.extent.width != 0 &&
         scissor.extent.height != 0) {
       const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
-      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+          trace ? ray_pipeline_ : pipeline_);
       vkCmdSetViewport(command_, 0, 1, &viewport);
       vkCmdSetScissor(command_, 0, 1, &scissor);
-      vkCmdPushConstants(command_, pipeline_layout_,
-          VK_SHADER_STAGE_VERTEX_BIT, 0, kFrameConstantsSize,
-          world_to_clip.data());
-      vkCmdDraw(command_, draw.triangle_count * 3U, 1, 0, 0);
+      if (trace) {
+        vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+        vkCmdPushConstants(command_, ray_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(RayConstants), &ray_constants_);
+      } else {
+        vkCmdPushConstants(command_, pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
+            0, kFrameConstantsSize, world_to_clip.data());
+      }
+      vkCmdDraw(command_, trace ? 3U : draw.triangle_count * 3U, 1, 0, 0);
     }
     vkCmdEndRenderPass(command_);
+    if (trace && ray_timestamps_ != VK_NULL_HANDLE)
+      vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ray_timestamps_, 1);
 
     VkBufferImageCopy color_copy{};
     color_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -920,6 +1115,7 @@ private:
   VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
   VkPhysicalDeviceProperties device_properties_{};
   AccelerationSupport acceleration_;
+  BackendCapability ray_query_;
   std::uint32_t queue_family_ = 0;
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;
@@ -929,6 +1125,14 @@ private:
   VkRenderPass render_pass_ = VK_NULL_HANDLE;
   VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
   VkPipeline pipeline_ = VK_NULL_HANDLE;
+  VkPipeline ray_pipeline_ = VK_NULL_HANDLE;
+  VkPipelineLayout ray_layout_ = VK_NULL_HANDLE;
+  VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;
+  VkDescriptorPool ray_descriptor_pool_ = VK_NULL_HANDLE;
+  VkDescriptorSet ray_descriptor_ = VK_NULL_HANDLE;
+  VkQueryPool ray_timestamps_ = VK_NULL_HANDLE;
+  std::uint32_t timestamp_bits_ = 0;
+  RayConstants ray_constants_{};
   Targets targets_;
   GpuScene scene_;
   std::uint32_t target_creations_ = 0;
@@ -942,16 +1146,18 @@ private:
 
 std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(
     const std::string& vertex_shader, const std::string& fragment_shader,
-    FrameStatus& status, std::string& error) {
+    FrameStatus& status, std::string& error, const RayQueryShaders& ray_query_shaders) {
 #if !defined(LOTUS_HAS_VULKAN)
   (void)vertex_shader;
   (void)fragment_shader;
+  (void)ray_query_shaders;
   status = FrameStatus::Skip;
   error = "Vulkan backend was not compiled for this configuration";
   return nullptr;
 #else
   auto renderer = std::make_unique<VulkanOffscreenRenderer>();
-  if (!renderer->Initialize(vertex_shader, fragment_shader, status, error)) {
+  if (!renderer->Initialize(vertex_shader, fragment_shader, status, error,
+          ray_query_shaders)) {
     return nullptr;
   }
   return renderer;
