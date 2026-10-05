@@ -13,10 +13,12 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <vector>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -89,7 +91,10 @@ int main(int argc, char** argv) {
   const bool ray_query = probe->RayQueryCapability().available;
   probe.reset();
 
-  HdLotusRenderDelegate delegate;
+  // One sample converges, so each pass below finishes its image.
+  HdRenderSettingsMap settings;
+  settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(1);
+  HdLotusRenderDelegate delegate(settings);
   std::unique_ptr<HdRenderIndex> index(HdRenderIndex::New(&delegate, {}));
   if (!Check(index != nullptr, "render index creation failed")) {
     return 1;
@@ -286,6 +291,52 @@ int main(int argc, char** argv) {
   state->SetAovBindings({bindings[1]});
   pass->Execute(state, {});
   if (!Check(depth.IsConverged(), "depth-only pass did not converge"))
+    return 1;
+
+  // The default Float32Vec4 colour accumulates one sample per pass until
+  // convergedSamplesPerPixel; further passes keep the converged image.
+  if (!ray_query)
+    return 0;
+  scene.visible = true;
+  dirty = HdChangeTracker::DirtyVisibility;
+  mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
+  delegate.SetRenderSetting(HdRenderSettingsTokens->convergedSamplesPerPixel, VtValue(4));
+  HdLotusRenderBuffer hdr(SdfPath("/hdr"));
+  if (!Check(hdr.Allocate(GfVec3i(16, 16, 1), HdFormatFloat32Vec4, false),
+          "float colour allocation failed"))
+    return 1;
+  bindings[0] = Bind(HdAovTokens->color, hdr, VtValue(GfVec4f(0.0F)));
+  bindings[1].clearValue = VtValue(1.0F);
+  state->SetAovBindings(bindings);
+  std::vector<float> converged;
+  for (int frame = 1; frame <= 5; ++frame) {
+    pass->Execute(state, {});
+    const bool done = frame >= 4;
+    if (!Check(pass->IsConverged() == done && hdr.IsConverged() == done &&
+                   depth.IsConverged(),
+            "progressive convergence does not follow the sample count"))
+      return 1;
+    const auto* mapped = static_cast<const float*>(hdr.Map());
+    std::vector<float> image(mapped, mapped + 16 * 16 * 4);
+    hdr.Unmap();
+    // An interior pixel's samples all hit: 0.18 albedo, white environment.
+    const float* interior = &image[(8 * 16 + 8) * 4];
+    if (!Check(std::abs(interior[0] - 0.18F) < 1e-4F && interior[3] == 1.0F,
+            "the float colour's interior is not the 0.18 radiance"))
+      return 1;
+    if (frame == 4)
+      converged = image;
+    if (frame == 5 && !Check(image == converged,
+                          "a pass after convergence changed the image"))
+      return 1;
+  }
+  // A scene edit restarts the accumulation.
+  scene.transform.SetTranslate(GfVec3d(0.05, 0, 0));
+  dirty = HdChangeTracker::DirtyTransform;
+  mesh->Sync(&scene, nullptr, &dirty, HdReprTokens->smoothHull);
+  pass->Execute(state, {});
+  if (!Check(!pass->IsConverged() && !hdr.IsConverged(),
+          "a transform edit did not restart the accumulation"))
     return 1;
   return 0;
 }

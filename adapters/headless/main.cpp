@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -385,6 +386,13 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   return {};
 }
 
+// The scene passes' RGBA32F colour product, four floats per pixel.
+std::vector<float> ColorValues(const Lotus::ColorProduct& color) {
+  std::vector<float> values(color.payload.size() / sizeof(float));
+  std::memcpy(values.data(), color.payload.data(), values.size() * sizeof(float));
+  return values;
+}
+
 std::array<double, 4> Transform(const Lotus::Matrix4& matrix,
     const std::array<double, 4>& point) {
   std::array<double, 4> result{};
@@ -401,9 +409,12 @@ std::string PrimaryImageFailure(const Lotus::FrameSnapshot& snapshot,
     const Lotus::OffscreenTarget& target, const Lotus::GpuFrameEvidence& frame) {
   if (frame.status != Lotus::FrameStatus::Pass)
     return frame.detail;
-  if (frame.color.payload.size() != std::size_t{target.width} * target.height * 4 ||
+  if (frame.color.pixel_format != "rgba32-sfloat" ||
+      frame.color.row_pitch != target.width * 16U ||
+      frame.color.payload.size() != std::size_t{target.width} * target.height * 16 ||
       frame.depth.payload.size() != std::size_t{target.width} * target.height)
-    return "incorrect primary-ray product size";
+    return "incorrect primary-ray product format or size";
+  const std::vector<float> values = ColorValues(frame.color);
   const auto camera = Lotus::ExtractDrawSummary(snapshot).world_to_clip;
   struct Triangle {
     std::array<std::array<double, 4>, 3> clip;
@@ -490,8 +501,7 @@ std::string PrimaryImageFailure(const Lotus::FrameSnapshot& snapshot,
         continue; // Edge coverage precision is device-dependent.
       const std::size_t pixel = std::size_t{y} * target.width + x;
       for (int channel = 0; channel < 4; ++channel) {
-        const int expected = static_cast<int>(std::lround(std::clamp(color[channel], 0.0, 1.0) * 255));
-        if (std::abs(expected - int(frame.color.payload[pixel * 4 + channel])) > 2)
+        if (std::abs(color[channel] - values[pixel * 4 + channel]) > 2.0 / 255.0)
           return "barycentric/miss mismatch at " + std::to_string(x) + "," + std::to_string(y);
       }
       if (!std::isfinite(frame.depth.payload[pixel]) ||
@@ -678,35 +688,45 @@ Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view) {
 // they are uploaded to.
 class PathScenes {
 public:
-  explicit PathScenes(Lotus::OffscreenRenderer& renderer) : renderer_(renderer) {
-    target_.width = 64;
-    target_.height = 64;
-    target_.clear_color = {0.05F, 0.1F, 0.15F, 0.0F};
+  explicit PathScenes(Lotus::OffscreenRenderer& renderer)
+      : renderer_(renderer), target_(DefaultTarget()) {
   }
 
   Lotus::RenderWorld& World() {
     return world_;
   }
 
-  // Applies the world's update plan and renders it.
+  Lotus::OffscreenTarget& Target() {
+    return target_;
+  }
+
+  // Applies the world's update plan and renders it, adding `frames`
+  // samples to a Radiance accumulation.
   std::string Render(const Lotus::PathTracingSettings& settings,
-      Lotus::GpuFrameEvidence& frame) {
+      Lotus::GpuFrameEvidence& frame, std::uint32_t frames = 1) {
     const auto snapshot = world_.Commit();
     const auto upload = renderer_.UpdateScene(extraction_.Update(snapshot));
     if (upload.status != Lotus::FrameStatus::Pass)
       return upload.detail;
-    frame = renderer_.RenderScene(Lotus::ExtractDrawSummary(snapshot), target_, 1,
-        settings);
+    frame = renderer_.RenderScene(Lotus::ExtractDrawSummary(snapshot), target_,
+        frames, settings);
     if (frame.status != Lotus::FrameStatus::Pass)
       return frame.detail;
     if (frame.validation_message_count != 0)
       return frame.validation_detail;
+    if (frame.color.pixel_format != "rgba32-sfloat" ||
+        frame.color.payload.size() != std::size_t{target_.width} * target_.height * 16)
+      return "the scene colour product is not RGBA32F at the target's size";
     return {};
   }
 
-  // Every pixel the camera ray hits has `expected` radiance within one byte,
-  // and every pixel keeps the barycentric pass's coverage and depth.
+  // Renders a fresh accumulation of `samples` per pixel, in which a pixel
+  // whose samples all hit has `expected` radiance. A pixel a fraction `a` of
+  // whose samples hit is a * expected + (1 - a) * clear with alpha a, and
+  // one none of whose samples hit keeps the clear colour. Depth is the
+  // barycentric pass's.
   std::string ExpectExact(std::uint32_t max_bounces, const Rgb& expected) {
+    constexpr std::uint32_t kSamples = 4;
     Lotus::PathTracingSettings settings;
     settings.output = Lotus::SceneOutput::Barycentrics;
     Lotus::GpuFrameEvidence coverage;
@@ -715,68 +735,76 @@ public:
       return failure;
     settings.output = Lotus::SceneOutput::Radiance;
     settings.max_bounces = max_bounces;
-    if (auto failure = Render(settings, radiance); !failure.empty())
+    if (auto failure = Render(settings, radiance, kSamples); !failure.empty())
       return failure;
+    if (radiance.samples_per_pixel != kSamples)
+      return "the accumulation holds " + std::to_string(radiance.samples_per_pixel) +
+             " samples instead of " + std::to_string(kSamples);
     if (radiance.depth.payload != coverage.depth.payload)
       return "radiance depth differs from the barycentric pass";
+    const std::vector<float> values = ColorValues(radiance.color);
     std::size_t hits = 0;
-    for (std::size_t pixel = 0; pixel * 4 < coverage.color.payload.size(); ++pixel) {
-      const std::uint8_t* covered = &coverage.color.payload[pixel * 4];
-      const std::uint8_t* actual = &radiance.color.payload[pixel * 4];
-      if (covered[3] != 255) {
-        if (!std::equal(covered, covered + 4, actual))
-          return "a missed pixel changed at " + std::to_string(pixel);
+    for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
+      const float* actual = &values[pixel * 4];
+      const double alpha = actual[3];
+      const double hit_samples = alpha * kSamples;
+      if (std::abs(hit_samples - std::round(hit_samples)) > 1e-4 || alpha < 0 || alpha > 1)
+        return "alpha " + std::to_string(alpha) + " is not a fraction of " +
+               std::to_string(kSamples) + " samples at pixel " + std::to_string(pixel);
+      if (alpha == 0) {
+        if (!std::equal(actual, actual + 4, target_.clear_color.begin()))
+          return "a pixel no sample hit changed at " + std::to_string(pixel);
         continue;
       }
-      ++hits;
+      hits += alpha == 1 ? 1 : 0;
       for (int c = 0; c < 3; ++c) {
-        const long want = std::lround(std::clamp(expected[c], 0.0, 1.0) * 255);
-        if (std::abs(want - long{actual[c]}) > 1)
-          return "radiance " + std::to_string(int(actual[c])) + " instead of " +
+        const double want = alpha * expected[c] + (1 - alpha) * target_.clear_color[c];
+        if (std::abs(want - actual[c]) > 1e-6 + 1e-4 * std::abs(want))
+          return "radiance " + std::to_string(actual[c]) + " instead of " +
                  std::to_string(want) + " in channel " + std::to_string(c) +
                  " at pixel " + std::to_string(pixel);
       }
-      if (actual[3] != 255)
-        return "a hit pixel's alpha is not 1";
     }
-    return hits == 0 ? "the camera rays hit nothing" : "";
+    return hits == 0 ? "no pixel's samples all hit" : "";
   }
 
-  // The mean radiance of every hit pixel over sample indices 0..count-1 is
-  // `expected` within five standard errors plus half a byte of rounding.
-  // Each comparison is added to Summary().
+  // Renders a fresh accumulation of `count` samples per pixel. The mean
+  // radiance over every pixel whose samples all hit is `expected` within
+  // five standard errors, estimated from the pixels' means. Each comparison
+  // is added to Summary().
   std::string ExpectMean(const char* name, std::uint32_t count,
       const Rgb& expected) {
     Lotus::PathTracingSettings settings;
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = Render(settings, frame, count); !failure.empty())
+      return failure;
+    if (frame.samples_per_pixel != count)
+      return "the accumulation holds " + std::to_string(frame.samples_per_pixel) +
+             " samples instead of " + std::to_string(count);
+    const std::vector<float> values = ColorValues(frame.color);
     Rgb sum{};
     Rgb squares{};
-    double samples = 0;
-    for (std::uint32_t index = 0; index < count; ++index) {
-      settings.sample_index = index;
-      Lotus::GpuFrameEvidence frame;
-      if (auto failure = Render(settings, frame); !failure.empty())
-        return failure;
-      for (std::size_t pixel = 0; pixel * 4 < frame.color.payload.size(); ++pixel) {
-        if (frame.color.payload[pixel * 4 + 3] != 255)
-          continue;
-        samples += 1;
-        for (int c = 0; c < 3; ++c) {
-          const double value = frame.color.payload[pixel * 4 + c] / 255.0;
-          sum[c] += value;
-          squares[c] += value * value;
-        }
+    double pixels = 0;
+    for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
+      if (values[pixel * 4 + 3] != 1.0F)
+        continue;
+      pixels += 1;
+      for (int c = 0; c < 3; ++c) {
+        const double value = values[pixel * 4 + c];
+        sum[c] += value;
+        squares[c] += value * value;
       }
     }
-    if (samples < 2)
-      return "the camera rays hit nothing";
+    if (pixels < 2)
+      return "no pixel's samples all hit";
     std::ostringstream line;
     line << std::fixed << std::setprecision(4) << name << ": "
-         << static_cast<long long>(samples) << " samples";
+         << static_cast<long long>(pixels) * count << " samples";
     for (int c = 0; c < 3; ++c) {
-      const double mean = sum[c] / samples;
+      const double mean = sum[c] / pixels;
       const double variance =
-          std::max(0.0, (squares[c] - samples * mean * mean) / (samples - 1));
-      const double tolerance = 5.0 * std::sqrt(variance / samples) + 0.5 / 255.0;
+          std::max(0.0, (squares[c] - pixels * mean * mean) / (pixels - 1));
+      const double tolerance = 5.0 * std::sqrt(variance / pixels) + 1e-6;
       line << (c == 0 ? ", mean " : " ") << mean << '/' << expected[c] << "+-"
            << tolerance;
       if (std::abs(mean - expected[c]) > tolerance)
@@ -784,8 +812,12 @@ public:
                std::to_string(expected[c]) + " +- " + std::to_string(tolerance) +
                " in channel " + std::to_string(c);
     }
-    summary_ += (summary_.empty() ? "" : "; ") + line.str();
+    Summarize(line.str());
     return {};
+  }
+
+  void Summarize(const std::string& line) {
+    summary_ += (summary_.empty() ? "" : "; ") + line;
   }
 
   // The mean comparisons since the last call: measured/expected+-tolerance.
@@ -793,7 +825,8 @@ public:
     return std::exchange(summary_, {});
   }
 
-  // Removes every mesh and the environment from the world and the GPU scene.
+  // Removes every mesh and the environment from the world and the GPU scene,
+  // and restores the target.
   std::string Clear() {
     std::vector<std::string> keys;
     const auto snapshot = world_.Commit();
@@ -804,11 +837,20 @@ public:
     for (const std::string& key : keys)
       world_.RemoveMesh(key);
     world_.SetEnvironment({});
+    target_ = DefaultTarget();
     const auto upload = renderer_.UpdateScene(extraction_.Update(world_.Commit()));
     return upload.status == Lotus::FrameStatus::Pass ? "" : upload.detail;
   }
 
 private:
+  static Lotus::OffscreenTarget DefaultTarget() {
+    Lotus::OffscreenTarget target;
+    target.width = 64;
+    target.height = 64;
+    target.clear_color = {0.05F, 0.1F, 0.15F, 0.0F};
+    return target;
+  }
+
   Lotus::OffscreenRenderer& renderer_;
   Lotus::RenderWorld world_;
   Lotus::SceneExtraction extraction_;
@@ -933,23 +975,237 @@ std::string MultibounceFailure(PathScenes& scenes) {
       !failure.empty())
     return "Russian roulette mean: " + failure;
 
-  // The same sample index repeats its image; another one does not.
+  // A restarted accumulation with the same first sample index repeats its
+  // image; another index does not. Changing the index restarts it.
   Lotus::PathTracingSettings settings;
+  settings.sample_index = 1;
   Lotus::GpuFrameEvidence first;
   Lotus::GpuFrameEvidence again;
   Lotus::GpuFrameEvidence other;
   if (auto failure = scenes.Render(settings, first); !failure.empty())
     return failure;
-  if (auto failure = scenes.Render(settings, again); !failure.empty())
-    return failure;
-  settings.sample_index = 1;
+  settings.sample_index = 2;
   if (auto failure = scenes.Render(settings, other); !failure.empty())
     return failure;
+  settings.sample_index = 1;
+  if (auto failure = scenes.Render(settings, again); !failure.empty())
+    return failure;
+  if (first.samples_per_pixel != 1 || other.samples_per_pixel != 1 ||
+      again.samples_per_pixel != 1)
+    return "a sample index change did not restart the accumulation";
   if (first.color.payload != again.color.payload)
     return "a repeated sample index changed the image";
   if (first.color.payload == other.color.payload)
     return "another sample index repeated the image";
   return {};
+}
+
+// The area of the part of a screen-space polygon inside the pixel square
+// [x, x + 1] x [y, y + 1]: Sutherland-Hodgman clipping, then the shoelace
+// formula.
+double PixelCoverage(std::vector<std::array<double, 2>> polygon, double x,
+    double y) {
+  const auto clip = [&](int axis, double bound, bool below) {
+    std::vector<std::array<double, 2>> kept;
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+      const auto& a = polygon[i];
+      const auto& b = polygon[(i + 1) % polygon.size()];
+      const bool a_in = below ? a[axis] <= bound : a[axis] >= bound;
+      const bool b_in = below ? b[axis] <= bound : b[axis] >= bound;
+      if (a_in)
+        kept.push_back(a);
+      if (a_in != b_in) {
+        const double t = (bound - a[axis]) / (b[axis] - a[axis]);
+        kept.push_back({a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])});
+      }
+    }
+    polygon = std::move(kept);
+  };
+  clip(0, x, false);
+  clip(0, x + 1, true);
+  clip(1, y, false);
+  clip(1, y + 1, true);
+  double area = 0;
+  for (std::size_t i = 0; i < polygon.size(); ++i) {
+    const auto& a = polygon[i];
+    const auto& b = polygon[(i + 1) % polygon.size()];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  return std::abs(area) / 2;
+}
+
+// The accumulation as an estimator, then as state. A Lambert triangle under
+// a constant environment has one HDR radiance at every hit, so with the
+// 1-pixel box filter each pixel's alpha estimates the triangle's area
+// fraction of the pixel, computed here by clipping the projected triangle,
+// and its colour is the coverage-weighted mix of that radiance and the
+// clear colour. Then: split frames continue one accumulation, and what
+// restarts it.
+std::string AccumulationFailure(PathScenes& scenes) {
+  Lotus::RenderWorld& world = scenes.World();
+  Lotus::OffscreenTarget& target = scenes.Target();
+  world.SetCamera(BootstrapCamera());
+  Lotus::MeshGeometry triangle;
+  triangle.positions = {{{-0.65F, -0.35F, 0}}, {{0.55F, -0.45F, 0}}, {{0.15F, 0.70F, 0}}};
+  triangle.triangles = {{{0, 1, 2}}};
+  triangle.source_faces = {0};
+  world.SetMesh("/panel", triangle, Lotus::MeshInstance{});
+  Lotus::SurfaceMaterial material;
+  material.base_color = {0.5F, 0.25F, 0.75F};
+  material.emission = {2.5F, 1.25F, 0.5F};
+  world.SetMeshMaterial("/panel", material);
+  world.SetEnvironment({2.0F, 1.0F, 0.5F});
+  const Rgb radiance{0.5 * 2.0 + 2.5, 0.25 * 1.0 + 1.25, 0.75 * 0.5 + 0.5};
+
+  constexpr std::uint32_t kSamples = 256;
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame, kSamples); !failure.empty())
+    return failure;
+  if (frame.samples_per_pixel != kSamples || frame.frames_rendered != kSamples)
+    return "the accumulation holds " + std::to_string(frame.samples_per_pixel) +
+           " samples instead of " + std::to_string(kSamples);
+  const auto camera = Lotus::ExtractDrawSummary(world.Commit()).world_to_clip;
+  std::vector<std::array<double, 2>> projected;
+  for (const auto& position : triangle.positions) {
+    const auto clip = Transform(camera, {position[0], position[1], position[2], 1.0});
+    projected.push_back({(clip[0] / clip[3] + 1) / 2 * target.width,
+        (1 - clip[1] / clip[3]) / 2 * target.height});
+  }
+  const std::vector<float> values = ColorValues(frame.color);
+  double measured_total = 0;
+  double expected_total = 0;
+  double variance_total = 0;
+  double brightest = 0;
+  std::size_t partial = 0;
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      const std::string at = " at " + std::to_string(x) + "," + std::to_string(y);
+      const float* actual = &values[(std::size_t{y} * target.width + x) * 4];
+      const double area = PixelCoverage(projected, x, y);
+      const double alpha = actual[3];
+      // Binomial: five standard deviations, plus one sample for edges that
+      // graze a pixel's border.
+      const double tolerance =
+          5 * std::sqrt(area * (1 - area) / kSamples) + 1.0 / kSamples;
+      if (std::abs(alpha - area) > tolerance)
+        return "coverage " + std::to_string(alpha) + " instead of " +
+               std::to_string(area) + " +- " + std::to_string(tolerance) + at;
+      measured_total += alpha;
+      expected_total += area;
+      variance_total += area * (1 - area) / kSamples;
+      partial += alpha > 0 && alpha < 1 ? 1 : 0;
+      if (alpha == 0) {
+        if (!std::equal(actual, actual + 4, target.clear_color.begin()))
+          return "a pixel no sample hit changed" + at;
+        continue;
+      }
+      for (int c = 0; c < 3; ++c) {
+        const double want = alpha * radiance[c] + (1 - alpha) * target.clear_color[c];
+        if (std::abs(want - actual[c]) > 1e-6 + 1e-4 * std::abs(want))
+          return "radiance " + std::to_string(actual[c]) + " instead of " +
+                 std::to_string(want) + " in channel " + std::to_string(c) + at;
+        brightest = std::max(brightest, double{actual[c]});
+      }
+    }
+  }
+  if (brightest <= 1)
+    return "no radiance above 1: the colour product is clamped";
+  if (partial == 0)
+    return "no pixel is partly covered";
+  const double total_tolerance = 5 * std::sqrt(variance_total) + 1e-3;
+  if (std::abs(measured_total - expected_total) > total_tolerance)
+    return "total coverage " + std::to_string(measured_total) + " instead of " +
+           std::to_string(expected_total) + " +- " + std::to_string(total_tolerance);
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(3) << "box filter: " << partial
+       << " partly covered pixels, total coverage " << measured_total << '/'
+       << expected_total << "+-" << total_tolerance << " px at " << kSamples
+       << " spp, peak radiance " << brightest;
+  scenes.Summarize(line.str());
+
+  // A GGX-Lambert mixture makes every sample's radiance random. A material
+  // change restarts the accumulation; 1 + 3 + 12 samples in three frames
+  // are the same image as 16 in one.
+  material.metallic = 0.5F;
+  material.roughness = 0.4F;
+  world.SetMeshMaterial("/panel", material);
+  Lotus::GpuFrameEvidence whole;
+  settings.sample_index = 1000;
+  if (auto failure = scenes.Render(settings, whole, 16); !failure.empty())
+    return failure;
+  settings.sample_index = 2000;
+  if (auto failure = scenes.Render(settings, frame, 1); !failure.empty())
+    return failure;
+  settings.sample_index = 1000;
+  for (const std::uint32_t frames : {1U, 3U, 12U}) {
+    if (auto failure = scenes.Render(settings, frame, frames); !failure.empty())
+      return failure;
+  }
+  if (whole.samples_per_pixel != 16 || frame.samples_per_pixel != 16 ||
+      frame.color.payload != whole.color.payload)
+    return "1 + 3 + 12 samples differ from 16 samples in one frame";
+
+  // How frames continue or restart the accumulation.
+  const auto expect = [&](const char* step, std::uint32_t frames,
+                          std::uint32_t samples) -> std::string {
+    if (auto failure = scenes.Render(settings, frame, frames); !failure.empty())
+      return std::string(step) + ": " + failure;
+    if (frame.samples_per_pixel != samples)
+      return std::string(step) + ": " + std::to_string(frame.samples_per_pixel) +
+             " samples instead of " + std::to_string(samples);
+    return {};
+  };
+  if (auto failure = expect("an unchanged frame", 1, 17); !failure.empty())
+    return failure;
+  settings.output = Lotus::SceneOutput::Barycentrics;
+  if (auto failure = expect("a barycentric frame", 1, 0); !failure.empty())
+    return failure;
+  settings.output = Lotus::SceneOutput::Radiance;
+  if (auto failure = expect("after a barycentric frame", 1, 18); !failure.empty())
+    return failure;
+  target.clear_color = {0.2F, 0.3F, 0.4F, 1.0F};
+  if (auto failure = expect("a clear colour change", 1, 19); !failure.empty())
+    return failure;
+  Lotus::Camera moved = BootstrapCamera();
+  moved.view[12] = 0.1F;
+  world.SetCamera(moved);
+  if (auto failure = expect("a camera change", 1, 1); !failure.empty())
+    return failure;
+  world.SetCamera(BootstrapCamera());
+  if (auto failure = expect("the camera restored", 2, 2); !failure.empty())
+    return failure;
+  target.data_window = {8, 8, 48, 48};
+  if (auto failure = expect("a data window change", 1, 1); !failure.empty())
+    return failure;
+  target.display_window = {-8.0F, 5.0F, 80.0F, 50.0F};
+  if (auto failure = expect("a display window change", 1, 1); !failure.empty())
+    return failure;
+  settings.max_bounces = 8;
+  if (auto failure = expect("a bounce limit change", 1, 1); !failure.empty())
+    return failure;
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  if (auto failure = expect("an environment change", 1, 1); !failure.empty())
+    return failure;
+  target.width = 48;
+  if (auto failure = expect("a target resize", 1, 1); !failure.empty())
+    return failure;
+
+  // max_samples stops the accumulation; later frames write the same image
+  // with one submission. Raising it continues.
+  settings.max_samples = 4;
+  if (auto failure = expect("a limit", 10, 4); !failure.empty())
+    return failure;
+  if (frame.frames_rendered != 3)
+    return "a limit submitted " + std::to_string(frame.frames_rendered) +
+           " frames instead of 3";
+  const std::vector<std::uint8_t> limited = frame.color.payload;
+  if (auto failure = expect("at the limit", 3, 4); !failure.empty())
+    return failure;
+  if (frame.frames_rendered != 1 || frame.color.payload != limited)
+    return "a frame at the limit did not write the same image once";
+  settings.max_samples = 6;
+  return expect("a raised limit", 5, 6);
 }
 
 std::string Status(Lotus::FrameStatus status) {
@@ -1160,11 +1416,13 @@ int main(int argc, char** argv) {
       };
       run("renderer.path.bsdf", BsdfFailure);
       run("renderer.path.multibounce", MultibounceFailure);
+      run("renderer.path.accumulation", AccumulationFailure);
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
       checks.push_back({"renderer.path.bsdf", "skip", ray_query.detail});
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -1172,6 +1430,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.ray_query.timestamp", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.bsdf", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

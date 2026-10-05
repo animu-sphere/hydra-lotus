@@ -10,7 +10,7 @@ owns the later debug channels. The measured run is the
 
 | Hydra name | Hydra buffer format | Backend product | Default clear | Meaning today |
 | --- | --- | --- | --- | --- |
-| `color` | `HdFormatUNorm8Vec4` | `rgba8-unorm`, linear RGBA | `(0, 0, 0, 0)` | One path-traced radiance sample per pixel on ray-query devices ([scene reference](SCENE.md#path-tracing)); bootstrap colour otherwise. Linear radiance clamped to [0, 1], alpha 1 where the camera ray hits; no tone mapping or HDR accumulation |
+| `color` | `HdFormatFloat32Vec4`; `HdFormatUNorm8Vec4` also accepted | `rgba32-sfloat` from the scene passes, `rgba8-unorm` from the bootstrap; linear RGBA | `(0, 0, 0, 0)` | On ray-query devices, the mean of the accumulated path-traced radiance samples, box-filtered, unclamped and not tone mapped; a missed sample counts as the clear colour, so with a transparent clear alpha is coverage ([scene reference](SCENE.md#accumulation-and-the-pixel-filter)). Bootstrap colour otherwise. An 8-bit buffer receives the value clamped to [0, 1] |
 | `depth` | `HdFormatFloat32` | `d32-sfloat` | `1.0` | Vulkan window depth in [0, 1], near 0 and far 1; not linear distance |
 | `primId` | `HdFormatInt32` | CPU sentinel only | `-1` | No scene primitive identification yet |
 
@@ -23,14 +23,16 @@ products remain `color` and `depth`.
 
 All other names have an invalid default descriptor. Normal, albedo,
 roughness, path depth, throughput and the other debug channels are introduced
-with the renderer passes that produce them. The RGBA8 colour carries one
-clamped sample per frame; floating-point radiance and HDR accumulation are
-the next Renderer Phase 1 step.
+with the renderer passes that produce them. Each Hydra pass adds one
+radiance sample; colour converges when the accumulation reaches the
+`convergedSamplesPerPixel` render setting (64 by default), depth and IDs
+after one pass. The render pass's `IsConverged` follows the colour, so a host
+that waits for convergence redraws until then.
 
 ## Storage and binding
 
 Buffers are single-sample, two-dimensional (`dimensions.z == 1`). Allocation
-accepts only the three formats above. Zero width or height can be allocated,
+accepts only the four formats above. Zero width or height can be allocated,
 but an empty buffer cannot be bound for rendering. Negative dimensions,
 volume buffers, other formats and multisampling are rejected.
 
@@ -43,9 +45,11 @@ buffer. `Map` gives CPU storage; writes and reallocation are rejected while
 it is mapped.
 
 Backend colour and depth products have tightly packed rows and a top-left
-origin. Row pitch is in bytes: `width * 4` for both current products. The
-adapter flips the rows when writing Hydra's bottom-up buffers. It does not
-scale one product to a differently sized AOV.
+origin. Row pitch is in bytes: `width * 16` for RGBA32F colour, `width * 4`
+for RGBA8 colour and for depth. The adapter flips the rows when writing
+Hydra's bottom-up buffers and converts colour between the product's and the
+buffer's format, clamping and rounding into 8 bits. It does not scale one
+product to a differently sized AOV.
 
 ## Clears and successive frames
 
@@ -60,8 +64,9 @@ buffer, including triangle pixels.
 
 An empty clear value preserves preceding attachment contents across frames
 at the same target size. The offscreen renderer retains one colour/depth
-attachment pair; this foundation path assumes successive passes reuse their
-bound buffers. It does not restore arbitrary buffer contents after switching
+attachment pair for the bootstrap and one for the scene passes; this
+foundation path assumes successive passes reuse their bound buffers. A
+radiance frame rewrites every pixel any of its samples hit. It does not restore arbitrary buffer contents after switching
 between different AOV buffer sets. Newly created or resized targets initialize
 colour to transparent black and depth to 1 when no clear is supplied; old
 pixels are not carried across a resize. ID buffers remain untouched when no

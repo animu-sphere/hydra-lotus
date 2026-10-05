@@ -22,6 +22,7 @@ enum class FrameStatus {
   Skip,
 };
 
+// "rgba8-unorm" from the bootstrap draw; "rgba32-sfloat" from RenderScene.
 struct ColorProduct {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -46,11 +47,15 @@ struct GpuFrameEvidence {
   std::string detail;
   // Frames completed since the renderer was created, this call's included.
   std::uint64_t completion = 0;
-  // Frames this call rendered.
+  // Frames this call submitted.
   std::uint32_t frames_rendered = 0;
-  // How many times the renderer has created its targets: once, plus once per
-  // change of target size.
+  // How many times the renderer has created its targets: once for the
+  // bootstrap draw and once for the scene passes, plus once per change of
+  // either's size.
   std::uint32_t target_creations = 0;
+  // The Radiance output's samples per pixel in the colour product; 0 for
+  // the other outputs.
+  std::uint32_t samples_per_pixel = 0;
   bool validation_available = false;
   // Messages since the renderer was created.
   std::uint32_t validation_message_count = 0;
@@ -171,21 +176,28 @@ struct GpuSceneContents {
 
 // What RenderScene writes into the colour product.
 enum class SceneOutput {
-  // One path-traced sample of radiance per pixel, clamped to [0, 1].
+  // The mean of the accumulated path-traced radiance samples, unclamped.
   Radiance,
-  // The closest triangle's barycentric weights: the intersection diagnostic.
+  // The pixel centre's closest triangle's barycentric weights: the
+  // intersection diagnostic. Not accumulated.
   Barycentrics,
 };
 
-// The reference path tracer's per-frame settings.
+// The reference path tracer's settings.
 struct PathTracingSettings {
   SceneOutput output = SceneOutput::Radiance;
-  // Selects each pixel's random sequence together with the pixel's
-  // coordinates: the same index, scene and camera give the same image.
+  // The random sequence of an accumulation's first sample; its k-th sample
+  // uses sample_index + k. With the pixel's coordinates it selects each
+  // sample's random numbers: the same index, scene, camera and target give
+  // the same image.
   std::uint32_t sample_index = 0;
   // Scattering events after the camera ray's hit; 0 keeps only the emission
   // the camera sees directly.
   std::uint32_t max_bounces = 64;
+  // Radiance stops adding samples once each pixel holds this many; later
+  // frames write the same image. 0 means no limit. Changing it does not
+  // restart the accumulation.
+  std::uint32_t max_samples = 0;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
@@ -211,12 +223,25 @@ public:
   [[nodiscard]] virtual GpuFrameEvidence Render(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
 
+  // Ray queries, plus what the scene passes need besides: fragment-stage
+  // storage writes and RGBA32F colour attachments.
   [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
-  // Trace one camera path per pixel centre through the uploaded scene, using
-  // draw.world_to_clip as the camera (the bootstrap counts are ignored).
-  // Pixels whose camera ray hits output `settings.output` as linear RGB with
-  // alpha 1, and the hit's projected depth; misses retain clears. Missing
-  // ray-query support returns Skip. A singular camera returns Fail.
+  // Trace the uploaded scene through draw.world_to_clip as the camera (the
+  // bootstrap counts are ignored), into RGBA32F colour and D32 depth.
+  // Depth is the pixel centre's closest hit; misses retain clears.
+  //
+  // Radiance adds `frame_count` path-traced samples per pixel, at most up
+  // to `settings.max_samples`, to a floating-point accumulation and writes
+  // its mean: each sample's camera ray goes through a uniformly distributed
+  // point of the pixel (a 1-pixel box filter), a hit adds its radiance with
+  // alpha 1, and a miss adds the target's clear colour. Pixels no sample
+  // has hit retain the colour attachment. The accumulation restarts when
+  // the camera, the target's size or windows, `sample_index`,
+  // `max_bounces` or the scene (any nonempty UpdateScene) changes.
+  // Barycentrics writes the pixel centre's hit with alpha 1 and leaves the
+  // accumulation as it is.
+  //
+  // Missing ray-query support returns Skip. A singular camera returns Fail.
   [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count,
       const PathTracingSettings& settings = {}) = 0;

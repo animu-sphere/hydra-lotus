@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// The reference path tracer (design policy section 9) as one fullscreen
-// fragment pass: one camera path per pixel centre, brute-force BSDF
-// sampling, emissive surfaces, a constant environment and Russian roulette.
-// It also writes the barycentric intersection diagnostic. No accumulation.
+// The reference path tracer (design policy section 9) as fullscreen fragment
+// passes. The camera pass traces each pixel centre for depth and the
+// barycentric intersection diagnostic. The radiance pass adds one camera
+// path per pixel, through a box-filtered point of the pixel, to a
+// floating-point accumulation image and writes the accumulated mean: brute-
+// force BSDF sampling, emissive surfaces, a constant environment and Russian
+// roulette.
 import bsdf.bsdf;
 import sampling.sampling;
 import common.spectrum;
@@ -27,16 +30,34 @@ struct InstanceRecord {
 // Mirrors PathConstants in vulkan_backend.cpp.
 struct PathConstants {
   float4 environment;
+  // What a camera sample that misses the scene contributes to its pixel:
+  // the target's clear colour.
+  float4 background;
+  // Framebuffer pixel coordinates to normalized device coordinates:
+  // ndc = pixel * xy + zw, from the display window.
+  float4 ndc_from_pixel;
   InstanceRecord* instances;
+  // The random sequence of the sample this frame adds.
   uint sample_index;
+  // Samples already in the accumulation image; 0 restarts it.
+  uint accumulated;
+  // 0 writes the accumulated mean again without adding a sample.
+  uint add_sample;
   uint max_bounces;
-  uint output;
   uint width;
+  uint reserved;
 };
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] ConstantBuffer<PathConstants> path_constants;
+// Per pixel: the sum of the radiance of the samples that hit the scene, and
+// how many did.
+[[vk::binding(2, 0)]] [[vk::image_format("rgba32f")]]
+RWTexture2D<float4> accumulation;
 
-static const uint kOutputBarycentrics = 1;
+// Which pass a pipeline runs: kCameraPass or kRadiancePass.
+[vk::constant_id(0)] const uint kPass = 0;
+static const uint kCameraPass = 0;
+static const uint kRadiancePass = 1;
 // Bounces before Russian roulette may end a path.
 static const uint kRouletteBounces = 3;
 static const float kMaxSurvival = 0.95;
@@ -73,6 +94,21 @@ bool Trace(RayDesc ray, out Hit hit) {
   hit.barycentrics = query.CommittedTriangleBarycentrics();
   hit.t = query.CommittedRayT();
   return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// The camera ray through a point in normalized device coordinates. Starting
+// at the unprojected Vulkan z=0 handles perspective and orthographic
+// cameras, and clips geometry behind the near plane; z=1 bounds it.
+RayDesc CameraRay(float2 ndc) {
+  float4 near_h = mul(frame.clip_to_world, float4(ndc, 0.0, 1.0));
+  float4 far_h = mul(frame.clip_to_world, float4(ndc, 1.0, 1.0));
+  RayDesc ray;
+  ray.Origin = near_h.xyz / near_h.w;
+  ray.Direction = normalize(far_h.xyz * near_h.w - near_h.xyz * far_h.w);
+  ray.TMin = 0.0;
+  ray.TMax = far_h.w == 0.0 ? kFloatMax :
+      length(far_h.xyz / far_h.w - ray.Origin);
+  return ray;
 }
 
 struct SurfaceHit {
@@ -127,62 +163,8 @@ float3 OffsetRayOrigin(float3 position, float3 normal) {
   return result;
 }
 
-struct VertexOutput {
-  float4 position : SV_Position;
-  float2 ndc : TEXCOORD0;
-};
-
-[shader("vertex")]
-VertexOutput vertex_main(uint index : SV_VertexID) {
-  VertexOutput output;
-  float2 ndc = float2(index == 1 ? 3.0 : -1.0,
-                     index == 2 ? 3.0 : -1.0);
-  output.position = float4(ndc, 0.0, 1.0);
-  output.ndc = ndc;
-  return output;
-}
-
-struct FragmentOutput {
-  float4 color : SV_Target;
-  float depth : SV_Depth;
-};
-
-[shader("fragment")]
-FragmentOutput fragment_main(VertexOutput input) {
-  // Unproject Vulkan z=0 and z=1. Starting at the near plane handles
-  // perspective and orthographic cameras, and clips geometry behind it.
-  float4 near_h = mul(frame.clip_to_world, float4(input.ndc, 0.0, 1.0));
-  float4 far_h = mul(frame.clip_to_world, float4(input.ndc, 1.0, 1.0));
-  RayDesc ray;
-  ray.Origin = near_h.xyz / near_h.w;
-  ray.Direction = normalize(far_h.xyz * near_h.w - near_h.xyz * far_h.w);
-  ray.TMin = 0.0;
-  ray.TMax = far_h.w == 0.0 ? kFloatMax :
-      length(far_h.xyz / far_h.w - ray.Origin);
-  Hit hit;
-  if (!Trace(ray, hit)) {
-    discard;
-  }
-  float3 position = ray.Origin + ray.Direction * hit.t;
-  float4 clip = mul(frame.world_to_clip, float4(position, 1.0));
-  FragmentOutput output;
-  output.depth = clip.z / clip.w;
-  if (path_constants.output == kOutputBarycentrics) {
-    output.color = float4(1.0 - hit.barycentrics.x - hit.barycentrics.y,
-        hit.barycentrics.x, hit.barycentrics.y, 1.0);
-    return output;
-  }
-
-  const uint2 pixel = uint2(input.position.xy);
-  PathState path;
-  path.ray = ray;
-  path.throughput = SpectrumConstant(1.0);
-  path.radiance = SpectrumConstant(0.0);
-  path.pixelIndex = pixel.y * path_constants.width + pixel.x;
-  path.depth = 0;
-  path.rngState = SeedRandom(path.pixelIndex, path_constants.sample_index);
-  path.lastPdf = 0.0;
-  path.flags = 0;
+// The radiance a camera path carries back, given its first hit.
+Spectrum TracePath(inout PathState path, Hit hit) {
   const Spectrum environment =
       SpectrumFromRgb(path_constants.environment.xyz);
   while ((path.flags & kPathDone) == 0) {
@@ -221,6 +203,93 @@ FragmentOutput fragment_main(VertexOutput input) {
       path.flags |= kPathDone;
     }
   }
-  output.color = float4(saturate(SpectrumToRgb(path.radiance)), 1.0);
+  return path.radiance;
+}
+
+struct VertexOutput {
+  float4 position : SV_Position;
+  float2 ndc : TEXCOORD0;
+};
+
+[shader("vertex")]
+VertexOutput vertex_main(uint index : SV_VertexID) {
+  VertexOutput output;
+  float2 ndc = float2(index == 1 ? 3.0 : -1.0,
+                     index == 2 ? 3.0 : -1.0);
+  output.position = float4(ndc, 0.0, 1.0);
+  output.ndc = ndc;
   return output;
+}
+
+struct FragmentOutput {
+  float4 color : SV_Target;
+  float depth : SV_Depth;
+};
+
+// The camera pass: the pixel centre's closest hit, as its projected depth
+// and barycentric weights. Misses keep the attachments.
+FragmentOutput CameraPass(VertexOutput input) {
+  const RayDesc ray = CameraRay(input.ndc);
+  Hit hit;
+  if (!Trace(ray, hit)) {
+    discard;
+  }
+  float3 position = ray.Origin + ray.Direction * hit.t;
+  float4 clip = mul(frame.world_to_clip, float4(position, 1.0));
+  FragmentOutput output;
+  output.depth = clip.z / clip.w;
+  output.color = float4(1.0 - hit.barycentrics.x - hit.barycentrics.y,
+      hit.barycentrics.x, hit.barycentrics.y, 1.0);
+  return output;
+}
+
+// The radiance pass: adds one sample to the pixel's accumulation and writes
+// the mean of its samples, a missed sample counting as the background. A
+// pixel no sample has hit keeps the colour attachment. Depth is the camera
+// pass's; this pipeline neither tests nor writes it.
+FragmentOutput RadiancePass(VertexOutput input) {
+  const uint2 pixel = uint2(input.position.xy);
+  float4 sum = path_constants.accumulated == 0 ? float4(0.0)
+                                               : accumulation[pixel];
+  if (path_constants.add_sample != 0) {
+    PathState path;
+    path.throughput = SpectrumConstant(1.0);
+    path.radiance = SpectrumConstant(0.0);
+    path.pixelIndex = pixel.y * path_constants.width + pixel.x;
+    path.depth = 0;
+    path.rngState =
+        SeedRandom(path.pixelIndex, path_constants.sample_index);
+    path.lastPdf = 0.0;
+    path.flags = 0;
+    float2 u;
+    u.x = NextRandom(path.rngState);
+    u.y = NextRandom(path.rngState);
+    const float2 film = float2(pixel) + 0.5 + SampleBoxFilter(u);
+    path.ray = CameraRay(film * path_constants.ndc_from_pixel.xy +
+                         path_constants.ndc_from_pixel.zw);
+    Hit hit;
+    if (Trace(path.ray, hit)) {
+      sum += float4(SpectrumToRgb(TracePath(path, hit)), 1.0);
+    }
+    accumulation[pixel] = sum;
+  }
+  if (sum.w == 0.0) {
+    discard;
+  }
+  const float count =
+      float(path_constants.accumulated + path_constants.add_sample);
+  const float4 background = path_constants.background;
+  FragmentOutput output;
+  output.color = float4(sum.xyz + (count - sum.w) * background.xyz,
+                     sum.w + (count - sum.w) * background.w) / count;
+  output.depth = 1.0;
+  return output;
+}
+
+[shader("fragment")]
+FragmentOutput fragment_main(VertexOutput input) {
+  if (kPass == kRadiancePass) {
+    return RadiancePass(input);
+  }
+  return CameraPass(input);
 }

@@ -54,6 +54,12 @@ public ShadingFrame MakeShadingFrame(float3 normal) {
   return frame;
 }
 
+// A film sample's offset from its pixel centre, in pixels, for the 1-pixel
+// box filter: uniform over the pixel's square. Every sample has weight 1.
+public float2 SampleBoxFilter(float2 u) {
+  return u - 0.5;
+}
+
 // A direction about +z with density cos(theta) / pi.
 public float3 SampleCosineHemisphere(float2 u) {
   const float radius = sqrt(u.x);

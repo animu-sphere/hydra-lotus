@@ -165,9 +165,12 @@ projected CPU triangles ([ray-query report](../reports/2026-10-05-primary-rays.m
 vertex and fragment SPIR-V paths (`path_trace.vert.spv`,
 `path_trace.frag.spv`). On devices with acceleration structures,
 `VK_KHR_ray_query` and the `rayQuery` feature, it enables ray queries;
-`RayQueryCapability` reports support and the reason when it is absent.
-Supplying both shader paths creates one persistent scene-pass pipeline,
-descriptor set and uniform block alongside the bootstrap pipeline. Missing
+The scene passes also need `fragmentStoresAndAtomics` and RGBA32F colour
+attachments with storage and readback; `RayQueryCapability` reports support
+and the reason when any of these is absent. Supplying both shader paths
+creates the scene render pass, three persistent pipelines specialized from
+the one fragment module (below), a descriptor set and a uniform block
+alongside the bootstrap pipeline. Missing
 shader files on a supported device fail creation; omitting the paths
 preserves bootstrap-only callers and makes `RenderScene` fail with an
 explanation.
@@ -179,21 +182,25 @@ cameras, honours display/data windows, and traces opaque triangles without
 facing culling. Rays begin at the near plane and stop at the far plane. A
 singular or non-finite camera fails before recording GPU work.
 
-What a hit pixel's colour holds is `PathTracingSettings::output`:
-`Radiance`, the default, is one path-traced sample (below);
-`Barycentrics` is the closest triangle's barycentric weights, the
-intersection diagnostic. Either is linear RGBA8 RGB with alpha 1, and the
-camera ray's closest hit writes its projected Vulkan window depth as D32.
-Misses preserve the clear or preceding attachment values. The pass applies
-the existing depth test, clear flags, target reuse and resize rules. Its
-TLAS descriptor and its uniform block (the environment, the instance
+The scene passes render into their own RGBA32F colour and D32 depth
+targets, separate from the bootstrap's RGBA8 ones; each set follows the
+clear flags, target reuse and resize rules. The *camera pass* traces each
+pixel centre: its closest hit writes its projected Vulkan window depth
+through the existing depth test, and misses preserve the clear or
+preceding attachment values. What the colour holds is
+`PathTracingSettings::output`: `Barycentrics` is the camera pass's closest
+triangle's barycentric weights with alpha 1, the intersection diagnostic;
+`Radiance`, the default, is the accumulated path-traced radiance of the
+*radiance pass* (below), drawn after the camera pass has written depth.
+The TLAS and accumulation-image descriptors and the uniform block (the
+environment, the background, the display-window mapping, the instance
 records' address and the settings) are updated before each synchronous
-frame, so scene rebuilds cannot leave a stale reference. Before any scene
-update, there is no TLAS and the pass only clears.
+submission, so scene rebuilds cannot leave a stale reference. Before any
+scene update, there is no TLAS and the passes only clear.
 
 `GpuFrameEvidence::ray_query_used` identifies this path. Where the graphics
 queue supports timestamps, a persistent query pool measures the scene
-render pass, including clears and excluding readback; the last frame's
+render pass, including clears and excluding readback; the last submission's
 `primary_ray_gpu_ms` and `primary_ray_timestamp_available` carry that result.
 The headless report checks `renderer.ray_query.capability`, `.triangle` and
 `.timestamp` with the barycentric output; unavailable features give
@@ -203,8 +210,8 @@ explained SKIPs.
 
 The `Radiance` output is the reference path tracer of
 [design policy section 9](../design/DESIGN_POLICY.md#9-baseline-path-tracer)
-in one fullscreen fragment pass (`backend/vulkan/shaders/path_trace.slang`):
-one brute-force path per pixel centre, with no light sampling.
+in a fullscreen fragment pass (`backend/vulkan/shaders/path_trace.slang`):
+one brute-force camera path per pixel per sample, with no light sampling.
 
 - **Hit reconstruction.** The instance record's transform places the hit
   triangle's corners in world space; the position is interpolated from the
@@ -230,20 +237,51 @@ one brute-force path per pixel centre, with no light sampling.
   throughput is divided by that probability.
 - **Ray origins** are offset along the normal (Wächter and Binder, *Ray
   Tracing Gems* chapter 6), and secondary rays are unbounded.
-- **Randomness.** Each pixel's PCG sequence is seeded from its index in the
-  target and `PathTracingSettings::sample_index`, so the same scene, camera,
-  target and settings render the same bytes.
+- **Randomness.** A sample's PCG sequence is seeded from the pixel's index
+  in the target and its sample index: an accumulation's k-th sample uses
+  `PathTracingSettings::sample_index + k`. The same scene, camera, target
+  and settings render the same bytes.
 
-The radiance is clamped to [0, 1] when written; there is no accumulation,
-tone mapping or pixel filter, so one frame is one sample. Light-carrying
-values in the shaders are `Spectrum` (`shaders/common/spectrum.slang`),
-which holds RGB today
+Light-carrying values in the shaders are `Spectrum`
+(`shaders/common/spectrum.slang`), which holds RGB today
 ([DES-Q3](../design/DESIGN_POLICY.md#53-open-questions)).
+
+### Accumulation and the pixel filter
+
+Each submission of a `Radiance` frame adds one sample per pixel to an
+RGBA32F accumulation image: the sum of the radiance of the samples that hit
+the scene, and their count.
+
+- **Pixel filter.** A 1-pixel box: a sample's camera ray goes through a
+  uniformly distributed point of the pixel's square, through the display
+  window's mapping, and every sample has weight 1. Pixels are estimated
+  independently.
+- **Output.** The colour is the mean of the pixel's `n` samples, a missed
+  sample counting as the target's clear colour: hit radiance with alpha 1,
+  so with a transparent clear, alpha is the pixel's coverage. It is not
+  clamped or tone mapped. A pixel none of whose samples hit keeps the colour
+  attachment, cleared or preserved.
+- **Continuing and restarting.** A frame continues the accumulation when its
+  camera, target size, display and data windows, `sample_index` and
+  `max_bounces` match the previous `Radiance` frame's and no nonempty
+  `UpdateScene` came between; otherwise it restarts it. Recreating the
+  targets restarts it too. The clear colour and `max_samples` do not, and a
+  `Barycentrics` frame leaves it as it is. `frame_count` samples split over
+  several calls give the same bytes as one call.
+- **Limit.** `PathTracingSettings::max_samples`, when nonzero, caps the
+  samples per pixel; a frame with nothing left to add makes one submission
+  that writes the same mean again.
+  `GpuFrameEvidence::samples_per_pixel` reports the count, and
+  `frames_rendered` the submissions.
 
 `renderer.path.bsdf` and `renderer.path.multibounce` check the transport
 against radiance known in closed form or by independent quadrature
-([report](../reports/2026-10-05-bsdf-multibounce.md)). HDR accumulation is
-[roadmap work](../roadmap/current.md).
+([report](../reports/2026-10-05-bsdf-multibounce.md));
+`renderer.path.accumulation` checks the box filter's coverage against the
+projected triangle's area in each pixel, unclamped HDR output, split frames
+and the restart rules
+([report](../reports/2026-10-05-hdr-accumulation.md)). Reference images
+are [roadmap work](../roadmap/current.md).
 
 ## Hydra extraction
 
@@ -267,13 +305,16 @@ for inspection without creating a GPU renderer.
 
 Each Hydra render pass plans and applies a scene update before its frame,
 and a newly created renderer resets the extraction.
-On ray-query devices its frame uses `RenderScene` with the default
-settings, so point, topology, transform and visibility edits affect the
-path-traced image. Other devices retain the bootstrap path. Materials and
+On ray-query devices each pass adds one sample with `RenderScene`, with
+`max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
+default); the render pass and the colour buffer report convergence when the
+accumulation reaches it. Point, topology, transform and visibility edits,
+like camera and framing changes, restart the accumulation. Other devices
+retain the bootstrap path and converge after one pass. Materials and
 lights are not read yet: every mesh has the default `SurfaceMaterial`, and
 the adapter sets a constant white environment, so a surface no other
 surface occludes shows its 0.18 albedo. The host evidence log identifies the choice as
-`ray_query=1` or `0`.
+`ray_query=1` or `0`, with each pass's `samples` and `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
 
@@ -287,4 +328,6 @@ acceleration-structure checks in the
 comparisons and Hydra silhouette checks in the
 [ray-query report](../reports/2026-10-05-primary-rays.md); materials, the
 environment and the path tracer in the
-[BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md).
+[BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md); accumulation and
+progressive Hydra convergence in the
+[HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md).

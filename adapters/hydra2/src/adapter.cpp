@@ -80,7 +80,7 @@ void AppendHostEvidence(std::uint64_t frame_index,
     std::size_t buffers_written,
     std::uint64_t scene_revision,
     std::uint64_t renderer_creations,
-    const Lotus::GpuSceneStats& scene) {
+    const Lotus::GpuSceneStats& scene, bool converged) {
   const char* path = std::getenv("LOTUS_HYDRA_EVIDENCE");
   if (path == nullptr || *path == '\0') {
     return;
@@ -106,6 +106,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " tlas_instances=" << scene.tlas_instance_count
          << " blas_builds=" << scene.blas_builds
          << " ray_query=" << (frame.ray_query_used ? 1 : 0)
+         << " samples=" << frame.samples_per_pixel
+         << " converged=" << (converged ? 1 : 0)
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 
@@ -127,9 +129,13 @@ Lotus::Camera ToLotusCamera(const HdRenderPassState& state) {
       ToLotusMatrix(state.GetProjectionMatrix())};
 }
 
+// Until render settings say otherwise, a path-traced frame converges at
+// this many samples per pixel.
+constexpr int kDefaultConvergedSamples = 64;
+
 HdAovDescriptor AovDescriptor(const TfToken& name) {
   if (name == HdAovTokens->color) {
-    return {HdFormatUNorm8Vec4, false, VtValue(GfVec4f(0.0F))};
+    return {HdFormatFloat32Vec4, false, VtValue(GfVec4f(0.0F))};
   }
   if (name == HdAovTokens->depth) {
     return {HdFormatFloat32, false, VtValue(1.0F)};
@@ -149,8 +155,14 @@ bool ConfigureTarget(const HdRenderPassAovBindingVector& bindings,
     const auto* buffer =
         dynamic_cast<const HdLotusRenderBuffer*>(binding.renderBuffer);
     const HdAovDescriptor descriptor = AovDescriptor(binding.aovName);
+    // Colour may also be 8-bit, as before HDR output.
+    const bool format_ok =
+        buffer != nullptr &&
+        (buffer->GetFormat() == descriptor.format ||
+            (binding.aovName == HdAovTokens->color &&
+                buffer->GetFormat() == HdFormatUNorm8Vec4));
     if (buffer == nullptr || descriptor.format == HdFormatInvalid ||
-        buffer->GetFormat() != descriptor.format || buffer->GetDepth() != 1 ||
+        !format_ok || buffer->GetDepth() != 1 ||
         buffer->IsMultiSampled() || buffer->IsMapped() ||
         buffer->GetWidth() == 0 || buffer->GetHeight() == 0 ||
         std::find(names.begin(), names.end(), binding.aovName) != names.end()) {
@@ -250,9 +262,20 @@ public:
     return scene_stats_;
   }
 
-  void Render(const HdRenderPassState& state) {
+  // Whether the latest pass finished its image. A failed pass counts as
+  // finished, so a host waiting for convergence does not wait forever.
+  bool IsConverged() {
+    std::scoped_lock lock(mutex_);
+    return converged_;
+  }
+
+  // Each pass adds one radiance sample per pixel until the accumulation
+  // holds `converged_samples`; the backend restarts it when the scene,
+  // camera or framing changes.
+  void Render(const HdRenderPassState& state, int converged_samples) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
+    converged_ = true;
     for (const HdRenderPassAovBinding& binding : bindings) {
       if (auto* buffer = dynamic_cast<HdLotusRenderBuffer*>(binding.renderBuffer)) {
         buffer->SetConverged(false);
@@ -294,9 +317,12 @@ public:
       renderer_.reset();
       return;
     }
-    const Lotus::GpuFrameEvidence frame = renderer_->RayQueryCapability().available
-                                              ? renderer_->RenderScene(draw, target, 1)
-                                              : renderer_->Render(draw, target, 1);
+    Lotus::PathTracingSettings settings;
+    settings.max_samples = static_cast<std::uint32_t>(std::max(converged_samples, 1));
+    const bool trace = renderer_->RayQueryCapability().available;
+    const Lotus::GpuFrameEvidence frame =
+        trace ? renderer_->RenderScene(draw, target, 1, settings)
+              : renderer_->Render(draw, target, 1);
     if (frame.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus Hydra frame failed: %s", frame.detail.c_str());
       // A failed submission leaves the renderer unusable; the next frame
@@ -305,6 +331,7 @@ public:
       return;
     }
 
+    converged_ = !trace || frame.samples_per_pixel >= settings.max_samples;
     std::size_t buffers_written{};
     for (const HdRenderPassAovBinding& binding : bindings) {
       auto* buffer =
@@ -313,9 +340,12 @@ public:
         continue;
       }
       bool wrote = false;
+      // Depth and IDs are final after one pass; colour when its
+      // accumulation is.
+      bool complete = true;
       if (binding.aovName == HdAovTokens->color) {
-        wrote = buffer->WriteColor(frame.color.payload, frame.color.width,
-            frame.color.height);
+        wrote = buffer->WriteColor(frame.color);
+        complete = converged_;
       } else if (binding.aovName == HdAovTokens->depth) {
         wrote = buffer->WriteDepth(frame.depth.payload, frame.depth.width,
             frame.depth.height);
@@ -327,14 +357,15 @@ public:
         wrote = binding.clearValue.IsEmpty() ||
                 buffer->WriteIds(binding.clearValue.UncheckedGet<int>());
       }
-      buffer->SetConverged(wrote);
+      buffer->SetConverged(wrote && complete);
       if (wrote) {
         ++buffers_written;
       }
     }
     ++frame_index_;
     AppendHostEvidence(frame_index_, frame, target.width, target.height,
-        buffers_written, snapshot.revision, renderer_creations_, scene_stats_);
+        buffers_written, snapshot.revision, renderer_creations_, scene_stats_,
+        converged_);
   }
 
 private:
@@ -348,6 +379,7 @@ private:
   Lotus::GpuSceneStats scene_stats_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
+  bool converged_ = true;
 };
 
 class HdLotusMesh final : public HdMesh {
@@ -486,11 +518,19 @@ public:
       : HdRenderPass(index, collection), state_(std::move(state)) {
   }
 
+public:
+  bool IsConverged() const override {
+    return state_->IsConverged();
+  }
+
 private:
   void _Execute(const HdRenderPassStateSharedPtr& render_pass_state,
       const TfTokenVector& render_tags) override {
     (void)render_tags;
-    state_->Render(*render_pass_state);
+    state_->Render(*render_pass_state,
+        GetRenderIndex()->GetRenderDelegate()->GetRenderSetting<int>(
+            HdRenderSettingsTokens->convergedSamplesPerPixel,
+            kDefaultConvergedSamples));
   }
 
   std::shared_ptr<AdapterState> state_;
@@ -508,8 +548,8 @@ bool HdLotusRenderBuffer::Allocate(const GfVec3i& dimensions,
   std::scoped_lock lock(mutex_);
   if (map_count_ != 0 || dimensions[0] < 0 || dimensions[1] < 0 ||
       dimensions[2] != 1 || multi_sampled ||
-      (format != HdFormatUNorm8Vec4 && format != HdFormatFloat32 &&
-          format != HdFormatInt32)) {
+      (format != HdFormatUNorm8Vec4 && format != HdFormatFloat32Vec4 &&
+          format != HdFormatFloat32 && format != HdFormatInt32)) {
     return false;
   }
   const std::size_t pixel_size = HdDataSizeOfFormat(format);
@@ -587,12 +627,48 @@ bool HdLotusRenderBuffer::IsConverged() const {
   return converged_;
 }
 
-bool HdLotusRenderBuffer::WriteColor(
-    const std::vector<std::uint8_t>& rgba8, std::uint32_t source_width,
-    std::uint32_t source_height) {
+bool HdLotusRenderBuffer::WriteColor(const Lotus::ColorProduct& color) {
   std::scoped_lock lock(mutex_);
-  return WriteRowsFlippedLocked(rgba8.data(), rgba8.size(), source_width,
-      source_height, HdFormatUNorm8Vec4);
+  HdFormat source_format = HdFormatInvalid;
+  if (color.pixel_format == "rgba8-unorm") {
+    source_format = HdFormatUNorm8Vec4;
+  } else if (color.pixel_format == "rgba32-sfloat") {
+    source_format = HdFormatFloat32Vec4;
+  }
+  const std::size_t pixel_count = std::size_t{color.width} * color.height;
+  if (source_format == HdFormatInvalid ||
+      color.row_pitch != color.width * HdDataSizeOfFormat(source_format) ||
+      color.payload.size() != pixel_count * HdDataSizeOfFormat(source_format)) {
+    return false;
+  }
+  if (source_format == format_) {
+    return WriteRowsFlippedLocked(color.payload.data(), color.payload.size(),
+        color.width, color.height, source_format);
+  }
+  // Convert one format to the other, then flip as usual.
+  std::vector<std::uint8_t> converted;
+  if (format_ == HdFormatUNorm8Vec4 && source_format == HdFormatFloat32Vec4) {
+    converted.resize(pixel_count * 4);
+    for (std::size_t index = 0; index < converted.size(); ++index) {
+      float value = 0.0F;
+      std::memcpy(&value, color.payload.data() + index * sizeof(float),
+          sizeof(float));
+      converted[index] = static_cast<std::uint8_t>(
+          std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+    }
+  } else if (format_ == HdFormatFloat32Vec4 &&
+             source_format == HdFormatUNorm8Vec4) {
+    converted.resize(pixel_count * 4 * sizeof(float));
+    for (std::size_t index = 0; index < pixel_count * 4; ++index) {
+      const float value = color.payload[index] / 255.0F;
+      std::memcpy(converted.data() + index * sizeof(float), &value,
+          sizeof(float));
+    }
+  } else {
+    return false;
+  }
+  return WriteRowsFlippedLocked(converted.data(), converted.size(),
+      color.width, color.height, format_);
 }
 
 bool HdLotusRenderBuffer::WriteDepth(const std::vector<float>& depth,
@@ -664,6 +740,7 @@ HdLotusRenderDelegate::HdLotusRenderDelegate(
     : HdRenderDelegate(settings),
       impl_(std::make_unique<Impl>()),
       resources_(std::make_shared<HdResourceRegistry>()) {
+  _PopulateDefaultSettings(GetRenderSettingDescriptors());
 }
 
 HdLotusRenderDelegate::~HdLotusRenderDelegate() = default;
@@ -764,6 +841,13 @@ void HdLotusRenderDelegate::CommitResources(HdChangeTracker* tracker) {
 HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
     const TfToken& name) const {
   return AovDescriptor(name);
+}
+
+HdRenderSettingDescriptorList
+HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
+  return {{"Converged samples per pixel",
+      HdRenderSettingsTokens->convergedSamplesPerPixel,
+      VtValue(kDefaultConvergedSamples)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
