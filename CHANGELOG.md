@@ -9,6 +9,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- The reference path tracer's transport: surface hit reconstruction from
+  the instance records and geometry device addresses, a Lambert and
+  GGX-metal BSDF, two-sided emission, a constant environment, multiple
+  bounces with Russian roulette, and PCG sampling seeded by pixel and
+  `PathTracingSettings::sample_index`. `RenderScene` writes one clamped
+  sample per pixel by default and keeps the barycentric diagnostic as an
+  output. `LotusScene` gains a per-mesh `SurfaceMaterial` and an environment
+  radiance, carried by the update plan; the Hydra adapter uses the default
+  material under a white fallback environment. Light-carrying shader values
+  are a `Spectrum` type that holds RGB (DES-Q3). `renderer.path.bsdf` and
+  `renderer.path.multibounce` check the transport against closed-form
+  radiance and independent quadrature.
+
 - Primary camera rays through the GPU scene's TLAS using Vulkan ray queries:
   diagnostic triangle barycentrics and projected depth, persistent pipeline
   and descriptors, perspective/orthographic camera support and GPU timestamps.
@@ -99,3 +112,6 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   MSVC print that file's `/showIncludes` notes in a form Ninja did not
   recognize on a Japanese host, so the headless runner recorded no header
   dependencies and a header edit did not rebuild it.
+- Adapters relink when their SPIR-V changes, so their shader copies and the
+  headless report no longer survive a shader-only edit. A material-only
+  instance rewrite no longer refits the TLAS.

@@ -30,6 +30,8 @@ validation:
     - renderer.ray_query.capability
     - renderer.ray_query.triangle
     - renderer.ray_query.timestamp
+    - renderer.path.bsdf
+    - renderer.path.multibounce
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

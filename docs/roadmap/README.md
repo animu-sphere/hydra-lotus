@@ -39,7 +39,7 @@ a version here when its predecessor is done.
 | Phase | Status | Target |
 | --- | --- | --- |
 | Renderer Phase 0 — Foundation | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
-| Renderer Phase 1 — Reference path tracer | 🚧 primary-ray traversal and diagnostic AOV output implemented; BSDFs and accumulation remain | unscheduled |
+| Renderer Phase 1 — Reference path tracer | 🚧 primary rays, BSDFs and multi-bounce transport implemented; HDR accumulation and reference images remain | unscheduled |
 | Renderer Phase 1.5 — Minimal material IR | ⬜ | unscheduled |
 | Renderer Phase 2 — Wavefront path tracing | ⬜ | unscheduled |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |

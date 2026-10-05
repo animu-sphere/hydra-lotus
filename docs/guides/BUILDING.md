@@ -24,8 +24,9 @@ ost validate
 ```
 
 `ost build` runs `lotus-headless`, which renders the bootstrap frame 1,000
-times, checks primary-ray barycentrics and depth against CPU projections when
-ray queries are available, and writes `build/<target>/renderer-report.json`. `ost validate` reads
+times, checks primary-ray barycentrics and depth against CPU projections and
+path-traced radiance against known values when ray queries are available,
+and writes `build/<target>/renderer-report.json`. `ost validate` reads
 it; the Hydra assertions are `SKIP` in this build by design.
 
 ## The Hydra adapter

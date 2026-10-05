@@ -23,8 +23,15 @@ if(LOTUS_WITH_VULKAN)
   set(_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
   set(LOTUS_VERTEX_SPV "${_shader_dir}/triangle.vert.spv")
   set(LOTUS_FRAGMENT_SPV "${_shader_dir}/triangle.frag.spv")
-  set(LOTUS_RAY_VERTEX_SPV "${_shader_dir}/primary_ray.vert.spv")
-  set(LOTUS_RAY_FRAGMENT_SPV "${_shader_dir}/primary_ray.frag.spv")
+  set(LOTUS_RAY_VERTEX_SPV "${_shader_dir}/path_trace.vert.spv")
+  set(LOTUS_RAY_FRAGMENT_SPV "${_shader_dir}/path_trace.frag.spv")
+  # The path tracer's entry points import these modules, by their path
+  # below shaders/.
+  set(_path_trace_sources
+    shaders/path_trace.slang
+    shaders/bsdf/bsdf.slang
+    shaders/common/spectrum.slang
+    shaders/sampling/sampling.slang)
   foreach(_stage IN ITEMS vertex fragment)
     if(_stage STREQUAL "vertex")
       set(_ray_output "${LOTUS_RAY_VERTEX_SPV}")
@@ -35,12 +42,13 @@ if(LOTUS_WITH_VULKAN)
       OUTPUT "${_ray_output}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${_shader_dir}"
       COMMAND "${LOTUS_SLANGC_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/primary_ray.slang"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/path_trace.slang"
+        -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
         -entry "${_stage}_main" -stage "${_stage}" -target spirv
         -profile spirv_1_4 -capability spvRayQueryKHR
         -matrix-layout-column-major -warnings-as-errors all
         -o "${_ray_output}"
-      DEPENDS shaders/primary_ray.slang
+      DEPENDS ${_path_trace_sources}
       VERBATIM)
   endforeach()
   add_custom_command(

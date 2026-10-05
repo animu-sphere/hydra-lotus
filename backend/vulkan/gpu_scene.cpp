@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -119,6 +120,19 @@ bool HasDeviceExtension(VkPhysicalDevice device, std::string_view name) {
 
 // The column-major 4x4 transform's first three rows, row-major, which is
 // how VkTransformMatrixKHR stores it.
+bool ValidRadiance(const std::array<float, 3>& values) {
+  return std::all_of(values.begin(), values.end(),
+      [](float value) { return std::isfinite(value) && value >= 0.0F; });
+}
+
+bool ValidMaterial(const SurfaceMaterial& material) {
+  const auto unit = [](float value) { return value >= 0.0F && value <= 1.0F; };
+  return std::all_of(material.base_color.begin(), material.base_color.end(),
+             unit) &&
+         unit(material.roughness) && unit(material.metallic) &&
+         ValidRadiance(material.emission);
+}
+
 VkTransformMatrixKHR TlasTransform(const Matrix4& world_from_object) {
   VkTransformMatrixKHR transform{};
   for (int row = 0; row < 3; ++row) {
@@ -270,6 +284,7 @@ void GpuScene::Destroy() {
   free_slots_.clear();
   slot_of_.clear();
   tlas_blas_ids_.clear();
+  tlas_transforms_.clear();
   tlas_built_ = false;
   DestroyBuffer(device_, instances_);
   DestroyBuffer(device_, tlas_instances_);
@@ -340,6 +355,15 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
       detail = "a scene instance references geometry that is not resident";
       return false;
     }
+    if (!ValidMaterial(instance.material)) {
+      detail = "a scene instance has a material value out of range";
+      return false;
+    }
+  }
+  if (update.environment_changed && !ValidRadiance(update.environment)) {
+    detail = "the scene update's environment radiance is negative or not "
+             "finite";
+    return false;
   }
   if (acceleration_ && update.instances.size() > max_instances_) {
     std::ostringstream message;
@@ -496,7 +520,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     return false;
   }
   stats_.source_revision = update.source_revision;
-  if (update.Empty()) {
+  if (update.environment_changed) {
+    // Host state: the scene pass reads it with each frame's constants.
+    environment_ = update.environment;
+  }
+  if (update.geometry_releases.empty() && update.geometry_uploads.empty() &&
+      !update.instances_changed) {
     return true;
   }
   for (const MeshGeometry* geometry : update.geometry_releases) {
@@ -513,7 +542,20 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   }
   const VkDeviceSize instance_bytes =
       update.instances.size() * kInstanceBytes;
-  const bool build_tlas = acceleration_ && update.instances_changed;
+  // A rewrite that keeps every instance's BLAS and transform, such as a
+  // material edit, leaves the TLAS as it is.
+  bool tlas_current =
+      tlas_built_ && update.instances.size() == tlas_blas_ids_.size();
+  for (std::size_t index = 0; tlas_current && index < update.instances.size();
+      ++index) {
+    const SceneInstance& instance = update.instances[index];
+    const auto found = slot_of_.find(instance.geometry);
+    tlas_current = found != slot_of_.end() &&
+                   slots_[found->second].blas_id == tlas_blas_ids_[index] &&
+                   instance.world_from_object == tlas_transforms_[index];
+  }
+  const bool build_tlas =
+      acceleration_ && update.instances_changed && !tlas_current;
   const VkDeviceSize tlas_input_bytes =
       build_tlas ? update.instances.size() * kTlasInstanceBytes : 0;
   staging_bytes += instance_bytes + tlas_input_bytes;
@@ -635,11 +677,14 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       const VkDeviceSize capacity =
           std::max(instance_bytes, instances_.size * 2);
       DestroyBuffer(device_, instances_);
-      if (!CreateDeviceBuffer(capacity,
-              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-              instances_, detail)) {
+      // The scene pass reads the records through their device address.
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      if (acceleration_) {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      }
+      if (!CreateDeviceBuffer(capacity, usage, instances_, detail)) {
         return false;
       }
     }
@@ -649,6 +694,18 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       std::copy(instance.world_from_object.begin(),
           instance.world_from_object.end(), record.world_from_object);
       record.geometry_slot = slot_of_.at(instance.geometry);
+      const Geometry& geometry = slots_[record.geometry_slot];
+      if (geometry.buffer.address != 0) {
+        record.positions = geometry.buffer.address;
+        record.triangles = geometry.buffer.address + geometry.index_offset;
+      }
+      const SurfaceMaterial& material = instance.material;
+      std::copy(material.base_color.begin(), material.base_color.end(),
+          record.base_color_roughness);
+      record.base_color_roughness[3] = material.roughness;
+      std::copy(material.emission.begin(), material.emission.end(),
+          record.emission_metallic);
+      record.emission_metallic[3] = material.metallic;
       std::memcpy(staging + offset + index * kInstanceBytes, &record,
           kInstanceBytes);
     }
@@ -747,6 +804,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     tlas_info.dstAccelerationStructure = tlas_.handle;
     tlas_range.primitiveCount = count;
     tlas_blas_ids_ = std::move(blas_ids);
+    tlas_transforms_.clear();
+    for (const SceneInstance& instance : update.instances) {
+      tlas_transforms_.push_back(instance.world_from_object);
+    }
     tlas_built_ = true;
   }
 
@@ -834,6 +895,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
 
 bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
   contents = GpuSceneContents{};
+  contents.environment = environment_;
   const VkDeviceSize instance_bytes = instance_count_ * kInstanceBytes;
   const VkDeviceSize tlas_input_bytes =
       tlas_built_ ? tlas_blas_ids_.size() * kTlasInstanceBytes : 0;
@@ -912,6 +974,13 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     std::copy(std::begin(record.world_from_object),
         std::end(record.world_from_object), instance.world_from_object.begin());
     instance.geometry_slot = record.geometry_slot;
+    SurfaceMaterial& material = instance.material;
+    std::copy(record.base_color_roughness, record.base_color_roughness + 3,
+        material.base_color.begin());
+    material.roughness = record.base_color_roughness[3];
+    std::copy(record.emission_metallic, record.emission_metallic + 3,
+        material.emission.begin());
+    material.metallic = record.emission_metallic[3];
     contents.instances.push_back(instance);
   }
   offset += instance_bytes;

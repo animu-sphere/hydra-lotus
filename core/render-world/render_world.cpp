@@ -19,6 +19,31 @@ void ValidateInstance(const MeshInstance& instance) {
   }
 }
 
+bool Finite(const std::array<float, 3>& values) {
+  return std::all_of(values.begin(), values.end(),
+      [](float value) { return std::isfinite(value); });
+}
+
+bool UnitInterval(float value) {
+  return value >= 0.0F && value <= 1.0F;
+}
+
+void ValidateMaterial(const SurfaceMaterial& material) {
+  if (!Finite(material.base_color) ||
+      !std::all_of(material.base_color.begin(), material.base_color.end(),
+          UnitInterval)) {
+    throw std::invalid_argument("base colour components must be in [0, 1]");
+  }
+  if (!UnitInterval(material.roughness) || !UnitInterval(material.metallic)) {
+    throw std::invalid_argument("roughness and metallic must be in [0, 1]");
+  }
+  if (!Finite(material.emission) ||
+      !std::all_of(material.emission.begin(), material.emission.end(),
+          [](float value) { return value >= 0.0F; })) {
+    throw std::invalid_argument("emission must be finite and non-negative");
+  }
+}
+
 void ValidateGeometry(const MeshGeometry& geometry) {
   if (geometry.triangles.size() != geometry.source_faces.size()) {
     throw std::invalid_argument("each triangle needs a source face");
@@ -64,7 +89,9 @@ void RenderWorld::SetMesh(const std::string& id, MeshGeometry geometry,
   }
   auto owned = std::make_shared<const MeshGeometry>(std::move(geometry));
   MakeSceneWritable();
-  scene_->meshes[id] = SceneMesh{std::move(owned), instance};
+  SceneMesh& mesh = scene_->meshes[id];
+  mesh.geometry = std::move(owned);
+  mesh.instance = instance;
 }
 
 void RenderWorld::SetMeshInstance(const std::string& id,
@@ -77,6 +104,32 @@ void RenderWorld::SetMeshInstance(const std::string& id,
   if (found->second.instance != instance) {
     MakeSceneWritable();
     scene_->meshes.at(id).instance = instance;
+  }
+}
+
+void RenderWorld::SetMeshMaterial(const std::string& id,
+    const SurfaceMaterial& material) {
+  ValidateMaterial(material);
+  const auto found = scene_->meshes.find(id);
+  if (found == scene_->meshes.end()) {
+    throw std::invalid_argument("mesh material needs existing geometry");
+  }
+  if (found->second.material != material) {
+    MakeSceneWritable();
+    scene_->meshes.at(id).material = material;
+  }
+}
+
+void RenderWorld::SetEnvironment(const std::array<float, 3>& radiance) {
+  if (!Finite(radiance) ||
+      !std::all_of(radiance.begin(), radiance.end(),
+          [](float value) { return value >= 0.0F; })) {
+    throw std::invalid_argument(
+        "environment radiance must be finite and non-negative");
+  }
+  if (scene_->environment != radiance) {
+    MakeSceneWritable();
+    scene_->environment = radiance;
   }
 }
 

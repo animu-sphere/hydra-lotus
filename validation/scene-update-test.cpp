@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/extraction.hpp>
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 
@@ -54,6 +55,25 @@ int main() try {
       update.instances[1].world_from_object[12] == 0,
       "a transform edit uploaded geometry or lost the new transform");
 
+  Lotus::SurfaceMaterial material;
+  material.metallic = 1.0F;
+  world.SetMeshMaterial("/b", material);
+  update = extraction.Update(world.Commit());
+  Check(update.geometry_uploads.empty() && update.geometry_releases.empty() &&
+      !update.environment_changed && update.instances_changed &&
+      update.instances.size() == 2 &&
+      update.instances[0].material == Lotus::SurfaceMaterial{} &&
+      update.instances[1].material == material,
+      "a material edit uploaded geometry or lost the new material");
+
+  world.SetEnvironment({1.0F, 0.5F, 0.25F});
+  update = extraction.Update(world.Commit());
+  Check(update.geometry_uploads.empty() && update.geometry_releases.empty() &&
+      !update.instances_changed && update.environment_changed &&
+      update.environment == std::array<float, 3>{1.0F, 0.5F, 0.25F} &&
+      !update.Empty(),
+      "an environment edit was not planned on its own");
+
   Lotus::MeshInstance hidden;
   hidden.visible = false;
   world.SetMeshInstance("/b", hidden);
@@ -86,7 +106,9 @@ int main() try {
   // A lost GPU scene gets everything again, without releases.
   extraction.Reset();
   update = extraction.Update(world.Commit());
-  Check(update.geometry_releases.empty() &&
+  Check(update.environment_changed &&
+      update.environment == std::array<float, 3>{1.0F, 0.5F, 0.25F} &&
+      update.geometry_releases.empty() &&
       update.geometry_uploads.size() == 1 &&
       update.geometry_uploads[0].get() == edited_a &&
       update.instances_changed && update.instances.size() == 1,
@@ -94,11 +116,13 @@ int main() try {
 
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
+  world.SetEnvironment({});
   update = extraction.Update(world.Commit());
   Check(update.geometry_releases.size() == 1 &&
       update.geometry_releases[0] == edited_a &&
-      update.instances_changed && update.instances.empty(),
-      "removing the last mesh left resident geometry or instances");
+      update.instances_changed && update.instances.empty() &&
+      update.environment_changed && update.environment == std::array<float, 3>{},
+      "removing the last mesh left resident geometry, instances or light");
   Check(extraction.Update(Lotus::FrameSnapshot{}).Empty(),
       "a snapshot without a scene was not treated as empty");
   return 0;

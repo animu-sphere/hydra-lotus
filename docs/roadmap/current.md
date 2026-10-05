@@ -58,13 +58,16 @@ over the instances are implemented
 [BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). Primary camera
 rays now traverse the GPU scene and write diagnostic barycentrics and depth,
 including through Hydra on ray-query devices
-([ray-query evidence](../reports/2026-10-05-primary-rays.md)).
+([ray-query evidence](../reports/2026-10-05-primary-rays.md)). Each pixel
+then follows one brute-force path with Lambert and GGX metal surfaces,
+emission, a constant environment and Russian roulette, written as a clamped
+single sample
+([BSDF and multi-bounce evidence](../reports/2026-10-05-bsdf-multibounce.md)).
 Remaining work, in order:
 
-- ⬜ **BSDF and multi-bounce.** Lambert, a minimal GGX, emissive surfaces,
-  environment lighting, Russian roulette, surface hit reconstruction.
-- ⬜ **HDR accumulation → AOV / output.** The *first physically correct
-  image* milestone.
+- ⬜ **HDR accumulation → AOV / output.** Floating-point radiance
+  accumulated across sample indices, a pixel filter, and a float colour
+  AOV. The *first physically correct image* milestone.
 - ⬜ **Reference images.** A fixed deterministic test scene rendered by the
   headless runner at 1, 16, 64, 256 and 1024 spp, compared in `validation/`
   ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
@@ -78,11 +81,11 @@ principle 8):
   and respect collection/render-tag selection; current CPU meshes have one
   ordinary placement each.
 - ⬜ **Deterministic mode**: fixed RNG seed, spp, camera and frame index.
-- ⬜ **Extend per-pass GPU timestamps** beyond the primary-ray pass to
+  A frame's randomness is already a function of the pixel and
+  `PathTracingSettings::sample_index` alone.
+- ⬜ **Extend per-pass GPU timestamps** beyond the scene pass to
   scene upload and BLAS/TLAS builds, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
-- ⬜ **Settle [DES-Q3](../design/DESIGN_POLICY.md#53-open-questions)**: what
-  keeps `PathState` open to spectra.
 - ⬜ **Settle [DES-Q5](../design/DESIGN_POLICY.md#53-open-questions)**: how
   "statistically matches the reference" is measured, before Renderer Phase 2
   compares against it.
@@ -100,6 +103,12 @@ principle 8):
 
 ## Adapter follow-up
 
+- ⬜ **Hydra lights and materials.** The adapter reads no light or
+  material: every mesh has the default `SurfaceMaterial` under a constant
+  white fallback environment
+  ([scene reference](../reference/SCENE.md#hydra-extraction)). A dome
+  light's colour and intensity can feed the constant environment;
+  `UsdPreviewSurface` translation is Renderer Phase 1.5.
 - ⬜ **No-clear restoration when switching AOV buffer sets.** The foundation
   renderer retains one colour/depth attachment pair at a time; preservation
   currently assumes successive passes reuse their bound buffers

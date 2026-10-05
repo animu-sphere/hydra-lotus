@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -70,6 +71,20 @@ struct RayConstants {
   Matrix4 clip_to_world;
 };
 static_assert(sizeof(RayConstants) == 128);
+
+// The scene pass's uniform block, std140; mirrored in path_trace.slang.
+struct PathConstants {
+  float environment[4];
+  std::uint64_t instances;
+  std::uint32_t sample_index;
+  std::uint32_t max_bounces;
+  std::uint32_t output;
+  std::uint32_t width;
+  std::uint32_t reserved[2];
+};
+static_assert(sizeof(PathConstants) == 48 &&
+              offsetof(PathConstants, instances) == 16 &&
+              offsetof(PathConstants, width) == 36);
 
 bool Invert(const Matrix4& matrix, Matrix4& inverse) {
   double rows[4][8]{};
@@ -173,16 +188,17 @@ bool CreateImage(VkPhysicalDevice physical_device,
   return true;
 }
 
-bool CreateReadbackBuffer(VkPhysicalDevice physical_device,
+bool CreateHostBuffer(VkPhysicalDevice physical_device,
     VkDevice device,
     VkDeviceSize size,
+    VkBufferUsageFlags usage,
     VkBuffer& buffer,
     VkDeviceMemory& memory,
     bool& coherent,
     std::string& detail) {
   VkBufferCreateInfo create{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   create.size = size;
-  create.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  create.usage = usage;
   create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   if (!VulkanOk(vkCreateBuffer(device, &create, nullptr, &buffer),
           "vkCreateBuffer", detail)) {
@@ -195,14 +211,14 @@ bool CreateReadbackBuffer(VkPhysicalDevice physical_device,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
       &coherent);
   if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
-    detail = "no host-visible readback memory type is available";
+    detail = "no host-visible buffer memory type is available";
     return false;
   }
   VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   allocate.allocationSize = requirements.size;
   allocate.memoryTypeIndex = memory_type;
   if (!VulkanOk(vkAllocateMemory(device, &allocate, nullptr, &memory),
-          "vkAllocateMemory(readback)", detail) ||
+          "vkAllocateMemory(host buffer)", detail) ||
       !VulkanOk(vkBindBufferMemory(device, buffer, memory, 0),
           "vkBindBufferMemory", detail)) {
     return false;
@@ -290,6 +306,10 @@ public:
       vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
       vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
       vkDestroyDescriptorSetLayout(device_, ray_descriptor_layout_, nullptr);
+      if (path_constants_mapped_ != nullptr)
+        vkUnmapMemory(device_, path_constants_memory_);
+      vkDestroyBuffer(device_, path_constants_, nullptr);
+      vkFreeMemory(device_, path_constants_memory_, nullptr);
       vkDestroyQueryPool(device_, ray_timestamps_, nullptr);
       vkDestroyRenderPass(device_, render_pass_, nullptr);
       vkDestroyCommandPool(device_, command_pool_, nullptr);
@@ -344,16 +364,39 @@ public:
   }
 
   GpuFrameEvidence RenderScene(const DrawSummary& draw,
-      const OffscreenTarget& target, std::uint32_t frame_count) override {
+      const OffscreenTarget& target, std::uint32_t frame_count,
+      const PathTracingSettings& settings) override {
     if (!failure_.empty())
       return Evidence(FrameStatus::Fail, "the renderer failed earlier: " + failure_);
     if (!ray_query_.available)
       return Evidence(FrameStatus::Skip, ray_query_.detail);
     if (ray_pipeline_ == VK_NULL_HANDLE)
       return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
+    if (settings.output != SceneOutput::Radiance &&
+        settings.output != SceneOutput::Barycentrics)
+      return Evidence(FrameStatus::Fail, "unknown scene output");
     ray_constants_.world_to_clip = VulkanWorldToClip(draw.world_to_clip);
     if (!Invert(ray_constants_.world_to_clip, ray_constants_.clip_to_world))
       return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
+    // The previous frame has finished, so its constants can be overwritten.
+    PathConstants constants{};
+    const std::array<float, 3>& environment = scene_.Environment();
+    std::copy(environment.begin(), environment.end(), constants.environment);
+    constants.instances = scene_.InstanceAddress();
+    constants.sample_index = settings.sample_index;
+    constants.max_bounces = settings.max_bounces;
+    constants.output = settings.output == SceneOutput::Barycentrics ? 1U : 0U;
+    constants.width = target.width;
+    std::memcpy(path_constants_mapped_, &constants, sizeof(constants));
+    if (!path_constants_coherent_) {
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = path_constants_memory_;
+      range.size = VK_WHOLE_SIZE;
+      if (std::string detail; !VulkanOk(
+              vkFlushMappedMemoryRanges(device_, 1, &range),
+              "vkFlushMappedMemoryRanges(path constants)", detail))
+        return Evidence(FrameStatus::Fail, detail);
+    }
     // A TLAS can be replaced by UpdateScene. Update its descriptor only after
     // the preceding synchronous frame and scene update have finished.
     const VkAccelerationStructureKHR tlas = scene_.Tlas();
@@ -736,23 +779,29 @@ private:
   }
 
   bool CreateRayResources(std::string& detail) {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout.bindingCount = 1;
-    layout.pBindings = &binding;
+    layout.bindingCount = 2;
+    layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
             "vkCreateDescriptorSetLayout(ray)", detail))
       return false;
-    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1};
+    const VkDescriptorPoolSize sizes[] = {
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
-    pool.poolSizeCount = 1;
-    pool.pPoolSizes = &size;
+    pool.poolSizeCount = 2;
+    pool.pPoolSizes = sizes;
     if (!VulkanOk(vkCreateDescriptorPool(device_, &pool, nullptr,
                       &ray_descriptor_pool_),
             "vkCreateDescriptorPool(ray)", detail))
@@ -764,6 +813,23 @@ private:
     if (!VulkanOk(vkAllocateDescriptorSets(device_, &allocate, &ray_descriptor_),
             "vkAllocateDescriptorSets(ray)", detail))
       return false;
+    // One frame is in flight, so one persistently mapped block serves them
+    // all. RenderScene writes it before recording.
+    if (!CreateHostBuffer(physical_device_, device_, sizeof(PathConstants),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, path_constants_,
+            path_constants_memory_, path_constants_coherent_, detail) ||
+        !VulkanOk(vkMapMemory(device_, path_constants_memory_, 0,
+                      sizeof(PathConstants), 0, &path_constants_mapped_),
+            "vkMapMemory(path constants)", detail))
+      return false;
+    const VkDescriptorBufferInfo constants{path_constants_, 0, sizeof(PathConstants)};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = ray_descriptor_;
+    write.dstBinding = 1;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    write.pBufferInfo = &constants;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     if (timestamp_bits_ != 0) {
       VkQueryPoolCreateInfo query{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
       query.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -951,12 +1017,12 @@ private:
     const VkDeviceSize pixel_count = VkDeviceSize{t.width} * t.height;
     const VkDeviceSize color_bytes = pixel_count * 4U;
     const VkDeviceSize depth_bytes = pixel_count * sizeof(float);
-    if (!CreateReadbackBuffer(physical_device_, device_, color_bytes,
-            t.color_readback, t.color_readback_memory,
-            t.color_readback_coherent, detail) ||
-        !CreateReadbackBuffer(physical_device_, device_, depth_bytes,
-            t.depth_readback, t.depth_readback_memory,
-            t.depth_readback_coherent, detail)) {
+    if (!CreateHostBuffer(physical_device_, device_, color_bytes,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, t.color_readback,
+            t.color_readback_memory, t.color_readback_coherent, detail) ||
+        !CreateHostBuffer(physical_device_, device_, depth_bytes,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, t.depth_readback,
+            t.depth_readback_memory, t.depth_readback_coherent, detail)) {
       return false;
     }
     return VulkanOk(vkMapMemory(device_, t.color_readback_memory, 0,
@@ -1130,6 +1196,10 @@ private:
   VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;
   VkDescriptorPool ray_descriptor_pool_ = VK_NULL_HANDLE;
   VkDescriptorSet ray_descriptor_ = VK_NULL_HANDLE;
+  VkBuffer path_constants_ = VK_NULL_HANDLE;
+  VkDeviceMemory path_constants_memory_ = VK_NULL_HANDLE;
+  bool path_constants_coherent_ = false;
+  void* path_constants_mapped_ = nullptr;
   VkQueryPool ray_timestamps_ = VK_NULL_HANDLE;
   std::uint32_t timestamp_bits_ = 0;
   RayConstants ray_constants_{};

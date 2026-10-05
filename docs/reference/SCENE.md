@@ -1,9 +1,9 @@
 # Scene snapshots and the GPU scene
 
 `include/lotus/render_world.hpp` owns the host-neutral CPU scene interface.
-`RenderWorld` remains the mutable entry point; `LotusScene` is its mesh state,
-published through `FrameSnapshot::scene`. Only standard C++ types cross this
-boundary. Camera conventions are in the header and the
+`RenderWorld` remains the mutable entry point; `LotusScene` is its mesh and
+lighting state, published through `FrameSnapshot::scene`. Only standard C++
+types cross this boundary. Camera conventions are in the header and the
 [camera evidence](../reports/2026-10-04-foundation-camera-boundary.md).
 
 ## Geometry and placement
@@ -40,6 +40,25 @@ triangle exists. It does not draw the stored scene geometry; the scene
 reaches the GPU through the update plan below. `RenderScene` uses only its
 camera matrix and traces the GPU scene instead of its bootstrap counts.
 
+## Materials and environment
+
+Until the material IR of Renderer Phase 1.5, a mesh's appearance is a
+`SurfaceMaterial` on its `SceneMesh`, in linear RGB. Its defaults are
+`UsdPreviewSurface`'s:
+
+| Field | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `base_color` | `(0.18, 0.18, 0.18)` | each in [0, 1] | Lambert albedo, and the metal's reflectance at normal incidence |
+| `roughness` | `0.5` | [0, 1] | GGX roughness; alpha is its square |
+| `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
+| `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
+
+`SetMeshMaterial` changes an existing mesh's material; `SetMesh` keeps it
+when it replaces the geometry or the instance. `LotusScene::environment` is
+a constant environment radiance, finite and non-negative, black by default,
+changed with `SetEnvironment`. Out-of-range values and a material for a
+missing mesh throw `std::invalid_argument` without changing the world.
+
 ## Update plan
 
 `include/lotus/extraction.hpp` owns the host-neutral update plan.
@@ -50,12 +69,15 @@ planned and returns a `SceneUpdate`:
   the previous scene's key order;
 - `geometry_uploads`: geometry buffers that become resident, in key order;
 - `instances`: when `instances_changed`, the complete replacement list,
-  one `SceneInstance` (geometry and `world_from_object`) per visible mesh
-  with triangles, in key order.
+  one `SceneInstance` (geometry, `world_from_object` and material) per
+  visible mesh with triangles, in key order;
+- `environment`: when `environment_changed`, the scene's environment
+  radiance. A GPU scene, and the extraction after `Reset`, start from
+  black, so only a different environment is planned.
 
 A geometry buffer is identified by its address. Every mesh with triangles
-keeps its geometry resident, hidden or not, so visibility and transform
-changes rewrite only the instances. Geometry without triangles is never
+keeps its geometry resident, hidden or not, so visibility, transform and
+material changes rewrite only the instances. Geometry without triangles is never
 resident or instanced. The extraction holds a reference to every resident
 buffer, so an address is not reused before its release.
 
@@ -78,9 +100,14 @@ empty plan records no GPU work.
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
   deterministic sequence of plans.
-- One device-local instance buffer holds an 80-byte std430 record per
-  instance: the column-major `world_from_object` and the geometry slot.
-  It grows when needed and is rewritten only when the instances change.
+- One device-local instance buffer holds a 128-byte record per instance:
+  the column-major `world_from_object`, the device addresses of its
+  geometry's positions and triangles (zero without acceleration
+  structures), the geometry slot, and the material as base colour and
+  roughness, then emission and metallic. It grows when needed and is
+  rewritten only when the instances change.
+- The environment is host state: a plan that changes only the environment
+  records no GPU work, and the scene pass reads it with each frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
   in one submission per plan, followed by a barrier that makes them
   visible to later shader reads and transfers.
@@ -90,10 +117,9 @@ upload counts. `ReadBackScene` copies the device buffers back for
 validation. A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
-The primary-ray pass traverses the acceleration structures built from these
-buffers. It does not bind geometry or instance storage buffers yet:
-barycentrics and hit distance come from the committed intersection.
-Source-face indices stay on the CPU. Every geometry buffer, and every
+The scene pass traverses the acceleration structures built from these
+buffers and reads a hit's instance record and, through its addresses, the
+hit triangle. Source-face indices stay on the CPU. Every geometry buffer, and every
 BLAS below, is its own device allocation, so an update fails with an
 explanation once a scene would exceed the device's allocation limit.
 
@@ -116,10 +142,12 @@ says why; `renderer.scene.acceleration` is then a SKIP.
   ray query's instance index is the instance record's index. Each instance
   references its geometry's BLAS with the record's transform, mask `0xFF`
   and facing culling disabled; the custom index is unused.
-- An instance rewrite in which every instance keeps its BLAS, which is a
-  transform-only change, updates (refits) the TLAS in place. Any other
-  rewrite, including one that changes the instance count, rebuilds it. The
-  TLAS storage grows when a build needs more and is otherwise reused.
+- An instance rewrite in which every instance keeps its BLAS and its
+  transform, such as a material edit, leaves the TLAS as it is. One in
+  which every instance keeps its BLAS but a transform changes updates
+  (refits) the TLAS in place. Any other rewrite, including one that
+  changes the instance count, rebuilds it. The TLAS storage grows when a
+  build needs more and is otherwise reused.
 - The builds are recorded in the plan's one submission after its copies,
   BLASes first, using a grow-only scratch buffer, and `UpdateScene`
   returns after they complete.
@@ -134,13 +162,15 @@ projected CPU triangles ([ray-query report](../reports/2026-10-05-primary-rays.m
 ## Primary rays
 
 `CreateOffscreenRenderer` accepts optional `RayQueryShaders` with explicit
-vertex and fragment SPIR-V paths. On devices with acceleration structures,
+vertex and fragment SPIR-V paths (`path_trace.vert.spv`,
+`path_trace.frag.spv`). On devices with acceleration structures,
 `VK_KHR_ray_query` and the `rayQuery` feature, it enables ray queries;
 `RayQueryCapability` reports support and the reason when it is absent.
-Supplying both shader paths creates one persistent primary-ray pipeline and
-descriptor set alongside the bootstrap pipeline. Missing shader files on a
-supported device fail creation; omitting the paths preserves bootstrap-only
-callers and makes `RenderScene` fail with an explanation.
+Supplying both shader paths creates one persistent scene-pass pipeline,
+descriptor set and uniform block alongside the bootstrap pipeline. Missing
+shader files on a supported device fail creation; omitting the paths
+preserves bootstrap-only callers and makes `RenderScene` fail with an
+explanation.
 
 `RenderScene` unprojects Vulkan near/far clip coordinates at pixel centres,
 using the inverse of `DrawSummary::world_to_clip` after clip-space conversion.
@@ -149,21 +179,71 @@ cameras, honours display/data windows, and traces opaque triangles without
 facing culling. Rays begin at the near plane and stop at the far plane. A
 singular or non-finite camera fails before recording GPU work.
 
-The closest triangle outputs its barycentric weights as linear RGBA8 RGB,
-alpha 1, and its projected Vulkan window depth as D32. Misses preserve the
-clear or preceding attachment values. The pass applies the existing depth
-test, clear flags, target reuse and resize rules. Its TLAS descriptor is
-updated before each synchronous frame, so scene rebuilds cannot leave a stale
-reference. Before any scene update, there is no TLAS and the pass only clears.
+What a hit pixel's colour holds is `PathTracingSettings::output`:
+`Radiance`, the default, is one path-traced sample (below);
+`Barycentrics` is the closest triangle's barycentric weights, the
+intersection diagnostic. Either is linear RGBA8 RGB with alpha 1, and the
+camera ray's closest hit writes its projected Vulkan window depth as D32.
+Misses preserve the clear or preceding attachment values. The pass applies
+the existing depth test, clear flags, target reuse and resize rules. Its
+TLAS descriptor and its uniform block (the environment, the instance
+records' address and the settings) are updated before each synchronous
+frame, so scene rebuilds cannot leave a stale reference. Before any scene
+update, there is no TLAS and the pass only clears.
 
 `GpuFrameEvidence::ray_query_used` identifies this path. Where the graphics
-queue supports timestamps, a persistent query pool measures the primary-ray
+queue supports timestamps, a persistent query pool measures the scene
 render pass, including clears and excluding readback; the last frame's
 `primary_ray_gpu_ms` and `primary_ray_timestamp_available` carry that result.
 The headless report checks `renderer.ray_query.capability`, `.triangle` and
-`.timestamp`; unavailable features give explained SKIPs. This is diagnostic
-intersection output: BSDFs, lighting, multi-bounce transport and HDR
-accumulation remain [roadmap work](../roadmap/current.md).
+`.timestamp` with the barycentric output; unavailable features give
+explained SKIPs.
+
+## Path tracing
+
+The `Radiance` output is the reference path tracer of
+[design policy section 9](../design/DESIGN_POLICY.md#9-baseline-path-tracer)
+in one fullscreen fragment pass (`backend/vulkan/shaders/path_trace.slang`):
+one brute-force path per pixel centre, with no light sampling.
+
+- **Hit reconstruction.** The instance record's transform places the hit
+  triangle's corners in world space; the position is interpolated from the
+  barycentrics, and the geometric normal is turned to face the incoming
+  ray. Surfaces are two-sided and have no shading normals, since normals
+  are not extracted yet.
+- **Emission** is added at every hit, the camera's included.
+- **BSDF.** A Lambert lobe with albedo `base_color` and a GGX metal lobe,
+  mixed by `metallic`. The metal has Schlick's Fresnel from `base_color`,
+  the height-correlated Smith masking-shadowing term and alpha
+  `max(roughness², 0.001)`. A direction is sampled by choosing the metal
+  with probability `metallic`, then from the cosine-weighted hemisphere or
+  from GGX visible normals by spherical caps; its weight is the mixture's
+  f·cos divided by the mixture's density. A surface with `metallic` 0 is
+  Lambert only; the dielectric specular layer arrives with the material IR.
+- **Environment.** A scattered ray that escapes adds the throughput times
+  the environment radiance. Camera rays that miss do not see it.
+- **Termination.** A path ends after `PathTracingSettings::max_bounces`
+  scattering events (64 by default; 0 keeps only the emission the camera
+  sees), when a sampled direction is not above the surface, or by Russian
+  roulette: before the fourth and every later scattering event, it
+  continues with probability `min(max throughput component, 0.95)` and its
+  throughput is divided by that probability.
+- **Ray origins** are offset along the normal (Wächter and Binder, *Ray
+  Tracing Gems* chapter 6), and secondary rays are unbounded.
+- **Randomness.** Each pixel's PCG sequence is seeded from its index in the
+  target and `PathTracingSettings::sample_index`, so the same scene, camera,
+  target and settings render the same bytes.
+
+The radiance is clamped to [0, 1] when written; there is no accumulation,
+tone mapping or pixel filter, so one frame is one sample. Light-carrying
+values in the shaders are `Spectrum` (`shaders/common/spectrum.slang`),
+which holds RGB today
+([DES-Q3](../design/DESIGN_POLICY.md#53-open-questions)).
+
+`renderer.path.bsdf` and `renderer.path.multibounce` check the transport
+against radiance known in closed form or by independent quadrature
+([report](../reports/2026-10-05-bsdf-multibounce.md)). HDR accumulation is
+[roadmap work](../roadmap/current.md).
 
 ## Hydra extraction
 
@@ -187,9 +267,12 @@ for inspection without creating a GPU renderer.
 
 Each Hydra render pass plans and applies a scene update before its frame,
 and a newly created renderer resets the extraction.
-On ray-query devices its frame uses `RenderScene`, so point, topology,
-transform and visibility edits affect the traced image. Other devices retain
-the bootstrap path. The host evidence log identifies the choice as
+On ray-query devices its frame uses `RenderScene` with the default
+settings, so point, topology, transform and visibility edits affect the
+path-traced image. Other devices retain the bootstrap path. Materials and
+lights are not read yet: every mesh has the default `SurfaceMaterial`, and
+the adapter sets a constant white environment, so a surface no other
+surface occludes shows its 0.18 albedo. The host evidence log identifies the choice as
 `ray_query=1` or `0`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
@@ -202,4 +285,6 @@ update plan and GPU scene tests in the
 acceleration-structure checks in the
 [BLAS and TLAS report](../reports/2026-10-05-blas-tlas.md); primary-ray CPU
 comparisons and Hydra silhouette checks in the
-[ray-query report](../reports/2026-10-05-primary-rays.md).
+[ray-query report](../reports/2026-10-05-primary-rays.md); materials, the
+environment and the path tracer in the
+[BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md).

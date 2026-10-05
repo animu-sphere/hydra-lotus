@@ -12,6 +12,7 @@
 
 #include <lotus/vulkan_backend.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -116,10 +117,11 @@ int main(int argc, char** argv) {
   pass->Execute(state, {});
   const auto* pixels = static_cast<const std::uint8_t*>(color.Map());
   const auto center = (8 * 16 + 8) * 4;
+  // Path-traced, the default UsdPreviewSurface grey under the adapter's
+  // white fallback environment reflects 0.18 (46 of 255).
   const bool triangle = pixels != nullptr && pixels[center + 3] == 255 &&
-                        (!ray_query || (pixels[center] >= 39 && pixels[center] <= 41 &&
-                                           pixels[center + 1] >= 71 && pixels[center + 1] <= 73 &&
-                                           pixels[center + 2] >= 142 && pixels[center + 2] <= 144));
+                        (!ray_query || std::all_of(pixels + center, pixels + center + 3,
+                                           [](std::uint8_t value) { return value >= 45 && value <= 47; }));
   color.Unmap();
   if (!Check(triangle && color.IsConverged() && depth.IsConverged() &&
                  ids.IsConverged(),

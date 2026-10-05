@@ -50,6 +50,10 @@ configure_file(resources/plugInfo.json.in
   "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json" @ONLY)
 
 add_dependencies(hdLotus lotus-renderer-shaders)
+# A shader change relinks, so the copies below follow it.
+set_property(TARGET hdLotus APPEND PROPERTY LINK_DEPENDS
+  "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
+  "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
 add_custom_command(TARGET hdLotus POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:hdLotus>/resources"
