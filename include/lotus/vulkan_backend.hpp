@@ -127,12 +127,33 @@ struct GpuSceneStats {
   std::uint64_t blas_builds = 0;
   std::uint64_t tlas_builds = 0;
   std::uint64_t tlas_updates = 0;
+
+  // Whether the queue writes timestamps, so that UpdateScene measures each
+  // submission (GpuSceneEvidence::timings).
+  bool timestamps_available = false;
+};
+
+// GPU durations of one UpdateScene submission, from timestamps between its
+// phases. Each phase starts after the previous one has finished.
+struct GpuSceneTimings {
+  // False when the call submitted no GPU work or the queue has no timestamp
+  // support; the durations are then 0.
+  bool available = false;
+  // Copying the staged geometry, instance records and TLAS build input; 0
+  // when there was nothing to copy.
+  double upload_gpu_ms = 0.0;
+  // Building the uploaded geometries' BLASes; 0 when there were none.
+  double blas_build_gpu_ms = 0.0;
+  // Building or refitting the TLAS; 0 when it was left as it was.
+  double tlas_build_gpu_ms = 0.0;
 };
 
 struct GpuSceneEvidence {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
   GpuSceneStats stats;
+  // This call's submission.
+  GpuSceneTimings timings;
   // Messages since the renderer was created, as in GpuFrameEvidence.
   std::uint32_t validation_message_count = 0;
 };

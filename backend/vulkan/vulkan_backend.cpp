@@ -706,6 +706,7 @@ public:
       evidence.detail = detail;
     } else {
       evidence.status = FrameStatus::Pass;
+      evidence.timings = scene_.Timings();
     }
     evidence.stats = scene_.Stats();
     evidence.validation_message_count = validation_.message_count;

@@ -61,8 +61,21 @@ on the installed smoke scene for a few seconds and keeps
 `usdview-first-frame.png` and `usdview-stable-update.png` under
 `build/<target>--hydra/adapters/hydra2/usdview-install/`.
 
-`ost renderer view` opens `usdview` interactively on the same install. It has
-not been run in this repository yet.
+To look at the renderer interactively, open `usdview` with Lotus selected:
+
+```sh
+ost renderer view --profile lookdev --intent hydra
+```
+
+It builds and installs its own Hydra tree
+(`build/<target>--hydra--renderer-hydra2`, installed under
+`.strata/renderer-view/`) and opens the installed smoke scene through its
+`/Camera`; pass a USD file to open another scene. The command returns when
+the window is closed.
+
+`ost plugin view <bundle> <fixture>` is the equivalent for OpenUSD plugin
+bundles. It needs an `openstrata.plugin.yaml`, which this renderer project
+does not have, so here it stops with "no openstrata.plugin.yaml".
 
 ## The standalone viewport
 

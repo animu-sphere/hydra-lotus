@@ -31,6 +31,9 @@ constexpr std::uint32_t kReservedAllocations = 16;
 
 constexpr std::uint32_t kNoSlot = std::numeric_limits<std::uint32_t>::max();
 
+// One timestamp before Apply's copies and one after each of its phases.
+constexpr std::uint32_t kTimestampCount = 4;
+
 VkDeviceSize AlignUp(VkDeviceSize value, VkDeviceSize alignment) {
   return (value + alignment - 1) / alignment * alignment;
 }
@@ -213,6 +216,14 @@ bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
   index_alignment_ = std::max<VkDeviceSize>(4,
       properties.limits.minStorageBufferOffsetAlignment);
   max_allocations_ = properties.limits.maxMemoryAllocationCount;
+  timestamp_period_ = properties.limits.timestampPeriod;
+  std::uint32_t queue_count = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_count,
+      nullptr);
+  std::vector<VkQueueFamilyProperties> queues(queue_count);
+  vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_count,
+      queues.data());
+  timestamp_bits_ = queues.at(queue_family).timestampValidBits;
 
   acceleration_ = acceleration.available;
   stats_.acceleration_available = acceleration.available;
@@ -266,6 +277,16 @@ bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
           "vkAllocateCommandBuffers(scene)", detail)) {
     return false;
   }
+  if (timestamp_bits_ != 0) {
+    VkQueryPoolCreateInfo query{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    query.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    query.queryCount = kTimestampCount;
+    if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &timestamps_),
+            "vkCreateQueryPool(scene)", detail)) {
+      return false;
+    }
+  }
+  stats_.timestamps_available = timestamps_ != VK_NULL_HANDLE;
   VkFenceCreateInfo fence_create{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   return VulkanOk(vkCreateFence(device_, &fence_create, nullptr, &fence_),
       "vkCreateFence(scene)", detail);
@@ -290,8 +311,10 @@ void GpuScene::Destroy() {
   DestroyBuffer(device_, tlas_instances_);
   DestroyBuffer(device_, scratch_);
   DestroyBuffer(device_, staging_);
+  vkDestroyQueryPool(device_, timestamps_, nullptr);
   vkDestroyFence(device_, fence_, nullptr);
   vkDestroyCommandPool(device_, command_pool_, nullptr);
+  timestamps_ = VK_NULL_HANDLE;
   fence_ = VK_NULL_HANDLE;
   command_pool_ = VK_NULL_HANDLE;
   command_ = VK_NULL_HANDLE;
@@ -516,6 +539,7 @@ bool GpuScene::SubmitAndWait(std::string& detail) {
 }
 
 bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
+  timings_ = GpuSceneTimings{};
   if (!Validate(update, detail)) {
     return false;
   }
@@ -828,6 +852,18 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     if (!Flush(staging_, detail) || !BeginCommands(detail)) {
       return false;
     }
+    // Each phase's closing timestamp waits for the phase's commands; the
+    // barriers between phases keep the next phase from starting earlier.
+    const bool timed = timestamps_ != VK_NULL_HANDLE;
+    const auto stamp = [&](VkPipelineStageFlagBits stage, std::uint32_t query) {
+      if (timed) {
+        vkCmdWriteTimestamp(command_, stage, timestamps_, query);
+      }
+    };
+    if (timed) {
+      vkCmdResetQueryPool(command_, timestamps_, 0, kTimestampCount);
+    }
+    stamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0);
     for (const auto& [buffer, region] : copies) {
       vkCmdCopyBuffer(command_, staging_.buffer, buffer, 1, &region);
     }
@@ -841,6 +877,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0,
         nullptr);
+    stamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 1);
     if (!blas_builds.empty()) {
       std::vector<VkAccelerationStructureBuildGeometryInfoKHR> infos;
       std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> ranges;
@@ -860,10 +897,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
           VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &built,
           0, nullptr, 0, nullptr);
     }
+    stamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 2);
     if (build_tlas) {
       const VkAccelerationStructureBuildRangeInfoKHR* range = &tlas_range;
       build_acceleration_(command_, 1, &tlas_info, &range);
     }
+    stamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 3);
     if (builds) {
       // Later submissions trace the structures, update the TLAS and reuse
       // the scratch buffer.
@@ -881,6 +920,29 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     }
     ++stats_.upload_submissions;
     stats_.uploaded_bytes += offset;
+    if (timed) {
+      std::array<std::uint64_t, kTimestampCount> ticks{};
+      if (!VulkanOk(vkGetQueryPoolResults(device_, timestamps_, 0,
+                        kTimestampCount, sizeof(ticks), ticks.data(),
+                        sizeof(std::uint64_t),
+                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+              "vkGetQueryPoolResults(scene)", detail)) {
+        return false;
+      }
+      const std::uint64_t mask = timestamp_bits_ == 64
+                                     ? ~std::uint64_t{0}
+                                     : (std::uint64_t{1} << timestamp_bits_) - 1;
+      const auto milliseconds = [&](std::size_t first) {
+        return static_cast<double>((ticks[first + 1] - ticks[first]) & mask) *
+               timestamp_period_ / 1'000'000.0;
+      };
+      timings_.available = true;
+      // A phase with no commands measures only the gap between two
+      // timestamps, so it reports 0.
+      timings_.upload_gpu_ms = copies.empty() ? 0.0 : milliseconds(0);
+      timings_.blas_build_gpu_ms = blas_builds.empty() ? 0.0 : milliseconds(1);
+      timings_.tlas_build_gpu_ms = build_tlas ? milliseconds(2) : 0.0;
+    }
   }
   stats_.resident_geometries = static_cast<std::uint32_t>(slot_of_.size());
   stats_.instance_count = instance_count_;
