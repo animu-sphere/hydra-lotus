@@ -24,6 +24,10 @@ add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
 target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-renderer-scene-mesh COMMAND lotus-render-world-mesh-test)
 
+add_executable(lotus-scene-update-test scene-update-test.cpp)
+target_link_libraries(lotus-scene-update-test PRIVATE Lotus::RenderExtraction)
+add_test(NAME lotus-renderer-scene-update COMMAND lotus-scene-update-test)
+
 add_test(NAME lotus-renderer-host-capability-gate
   COMMAND "${CMAKE_COMMAND}"
     "-DGATE=${CMAKE_SOURCE_DIR}/adapters/hydra2/tests/check_gpu_evidence.cmake"

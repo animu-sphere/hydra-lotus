@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -148,6 +149,134 @@ Lotus::Camera BootstrapCamera() {
   return camera;
 }
 
+// Whether the GPU scene's buffers hold exactly the scene's resident geometry
+// and its visible instances, in the update plan's order.
+bool SceneMatches(const Lotus::GpuSceneContents& contents,
+    const Lotus::LotusScene& scene) {
+  if (contents.status != Lotus::FrameStatus::Pass) {
+    return false;
+  }
+  std::set<const Lotus::MeshGeometry*> resident;
+  std::size_t instance = 0;
+  for (const auto& [id, mesh] : scene.meshes) {
+    (void)id;
+    if (mesh.geometry->triangles.empty()) {
+      continue;
+    }
+    resident.insert(mesh.geometry.get());
+    if (!mesh.instance.visible) {
+      continue;
+    }
+    if (instance >= contents.instances.size()) {
+      return false;
+    }
+    const Lotus::GpuInstanceContents& gpu = contents.instances[instance++];
+    const auto geometry = std::find_if(contents.geometries.begin(),
+        contents.geometries.end(), [&](const Lotus::GpuGeometryContents& g) {
+          return g.slot == gpu.geometry_slot;
+        });
+    if (geometry == contents.geometries.end() ||
+        geometry->positions != mesh.geometry->positions ||
+        geometry->triangles != mesh.geometry->triangles ||
+        gpu.world_from_object != mesh.instance.world_from_object) {
+      return false;
+    }
+  }
+  return instance == contents.instances.size() &&
+         resident.size() == contents.geometries.size();
+}
+
+// Drives the renderer's GPU scene through insertion, an unchanged commit, a
+// transform edit, a hide, a point edit and removal, comparing the device
+// buffers with the CPU scene after each. Returns an empty string on success.
+std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
+  Lotus::RenderWorld world;
+  Lotus::SceneExtraction extraction;
+  Lotus::GpuSceneStats before;
+  const auto apply = [&](const char* step) -> std::string {
+    const Lotus::FrameSnapshot snapshot = world.Commit();
+    const Lotus::GpuSceneEvidence evidence =
+        renderer.UpdateScene(extraction.Update(snapshot));
+    if (evidence.status != Lotus::FrameStatus::Pass) {
+      return std::string(step) + ": " + evidence.detail;
+    }
+    if (evidence.validation_message_count != 0) {
+      return std::string(step) + ": Vulkan validation reported messages";
+    }
+    if (!SceneMatches(renderer.ReadBackScene(), *snapshot.scene)) {
+      return std::string(step) + ": device buffers differ from the scene";
+    }
+    before = evidence.stats;
+    return {};
+  };
+  const auto stats = [&] { return renderer.UpdateScene({}).stats; };
+
+  Lotus::MeshInstance instance;
+  instance.world_from_object[12] = 0.25F;
+  world.SetMesh("/quad",
+      {{{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}},
+          {{0, 1, 2}, {0, 2, 3}}, {0, 0}},
+      instance);
+  world.SetMesh("/triangle", {{{0, 0, 1}, {1, 0, 1}, {0, 1, 1}}, {{0, 1, 2}},
+      {0}}, Lotus::MeshInstance{});
+  world.SetMesh("/empty", {{{0, 0, 0}}, {}, {}}, Lotus::MeshInstance{});
+  if (auto failure = apply("insertion"); !failure.empty()) return failure;
+  if (before.resident_geometries != 2 || before.instance_count != 2 ||
+      before.geometry_uploads != 2 || before.upload_submissions != 1) {
+    return "insertion: unexpected resident geometry or upload counts";
+  }
+
+  const Lotus::GpuSceneStats inserted = before;
+  if (auto failure = apply("unchanged commit"); !failure.empty()) {
+    return failure;
+  }
+  if (before.upload_submissions != inserted.upload_submissions ||
+      before.instance_writes != inserted.instance_writes) {
+    return "unchanged commit: the GPU scene recorded work";
+  }
+
+  instance.world_from_object[13] = -0.5F;
+  world.SetMeshInstance("/quad", instance);
+  if (auto failure = apply("transform edit"); !failure.empty()) {
+    return failure;
+  }
+  if (before.geometry_uploads != 2 ||
+      before.instance_writes != inserted.instance_writes + 1) {
+    return "transform edit: geometry was uploaded again";
+  }
+
+  Lotus::MeshInstance hidden;
+  hidden.visible = false;
+  world.SetMeshInstance("/quad", hidden);
+  if (auto failure = apply("hide"); !failure.empty()) return failure;
+  if (before.resident_geometries != 2 || before.instance_count != 1 ||
+      before.geometry_uploads != 2) {
+    return "hide: geometry was released or uploaded";
+  }
+
+  const std::uint32_t triangle_slot =
+      renderer.ReadBackScene().instances.at(0).geometry_slot;
+  world.SetMesh("/triangle", {{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}},
+      {0}}, Lotus::MeshInstance{});
+  if (auto failure = apply("point edit"); !failure.empty()) return failure;
+  if (before.resident_geometries != 2 || before.geometry_uploads != 3 ||
+      before.geometry_releases != 1 ||
+      renderer.ReadBackScene().instances.at(0).geometry_slot != triangle_slot) {
+    return "point edit: the geometry was not replaced in its slot";
+  }
+
+  world.RemoveMesh("/quad");
+  world.RemoveMesh("/triangle");
+  world.RemoveMesh("/empty");
+  if (auto failure = apply("removal"); !failure.empty()) return failure;
+  if (before.resident_geometries != 0 || before.instance_count != 0 ||
+      before.geometry_bytes != 0 || before.geometry_releases != 3 ||
+      stats().upload_submissions != before.upload_submissions) {
+    return "removal: the GPU scene kept geometry or instances";
+  }
+  return {};
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -207,6 +336,11 @@ int main(int argc, char** argv) {
           (shader_directory / "triangle.vert.spv").string(),
           (shader_directory / "triangle.frag.spv").string(), setup_status,
           setup_error);
+  // The scene runs first, so the frames' validation count covers it too.
+  std::string scene_failure;
+  if (renderer) {
+    scene_failure = SceneUploadFailure(*renderer);
+  }
   Lotus::GpuFrameEvidence frame;
   if (renderer) {
     frame = renderer->Render(draw, target, 1000);
@@ -330,6 +464,13 @@ int main(int argc, char** argv) {
   checks.push_back({"renderer.backend.capability",
       capability.available ? "pass" : "skip", capability.detail});
   checks.push_back({"renderer.gpu.frame", Status(frame.status), frame.detail});
+  if (renderer) {
+    checks.push_back({"renderer.scene.upload",
+        scene_failure.empty() ? "pass" : "fail", scene_failure});
+  } else {
+    checks.push_back({"renderer.scene.upload", Status(setup_status),
+        setup_error});
+  }
   if (last.validation_available) {
     checks.push_back({"renderer.validation.messages",
         last.validation_message_count == 0 ? "pass" : "fail",

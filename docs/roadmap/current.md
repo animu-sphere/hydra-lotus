@@ -49,15 +49,16 @@ The near-term priority is one complete vertical path
 ([roadmap policy §9](../design/ROADMAP_POLICY.md#9-near-term-priority)); the
 phase's full scope and exit criteria are
 [§4](../design/ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer).
-CPU coarse-mesh extraction and ordinary mesh placement are implemented
+CPU coarse-mesh extraction, ordinary mesh placement and the incremental
+upload of geometry and instance buffers are implemented
 ([scene reference](../reference/SCENE.md),
-[evidence](../reports/2026-10-05-cpu-mesh-extraction.md)). The GPU still draws
-the fixed bootstrap triangle. Remaining work, in order:
+[extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md),
+[upload evidence](../reports/2026-10-05-gpu-scene-upload.md)). No pass reads
+the GPU scene yet; the GPU still draws the fixed bootstrap triangle.
+Remaining work, in order:
 
-- ⬜ **`LotusScene` → `GpuScene`.** The update plan in
-  `core/render-extraction/`; vertex, index and instance buffers uploaded in
-  the backend.
-- ⬜ **BLAS and TLAS.**
+- ⬜ **BLAS and TLAS.** The geometry buffers gain device addresses and
+  acceleration-structure build input usage.
 - ⬜ **Camera ray → ray query → triangle hit.** The *first ray-traced
   triangle* milestone.
 - ⬜ **BSDF and multi-bounce.** Lambert, a minimal GGX, emissive surfaces,
@@ -87,6 +88,12 @@ principle 8):
 - ⬜ **Settle [DES-Q5](../design/DESIGN_POLICY.md#53-open-questions)**: how
   "statistically matches the reference" is measured, before Renderer Phase 2
   compares against it.
+
+## Backend follow-up
+
+- ⬜ **GPU memory suballocation.** Each geometry buffer is its own device
+  allocation, so scenes are limited by the device's allocation count
+  ([scene reference](../reference/SCENE.md#gpu-scene)).
 
 ## Adapter follow-up
 

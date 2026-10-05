@@ -113,6 +113,12 @@ int main(int argc, char** argv) {
                  ids.IsConverged(), "triangle AOVs did not converge")) {
     return 1;
   }
+  auto gpu = delegate.GetGpuSceneStats();
+  if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 1 &&
+                 gpu.geometry_uploads == 1,
+          "the extracted triangle did not reach the GPU scene")) {
+    return 1;
+  }
 
   // A multi-triangle scene must also work with the bootstrap raster backend.
   scene.quad = true;
@@ -122,6 +128,12 @@ int main(int argc, char** argv) {
   if (!Check(delegate.GetFrameSnapshot().triangle_count == 2 &&
       color.IsConverged() && depth.IsConverged(),
       "multi-triangle scene broke the bootstrap AOV path")) {
+    return 1;
+  }
+  gpu = delegate.GetGpuSceneStats();
+  if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 1 &&
+                 gpu.geometry_uploads == 2 && gpu.geometry_releases == 1,
+          "a topology edit did not replace the GPU geometry")) {
     return 1;
   }
 
@@ -146,6 +158,12 @@ int main(int argc, char** argv) {
   depth.Unmap();
   ids.Unmap();
   if (!Check(preserved, "empty clear did not preserve preceding AOVs")) return 1;
+  gpu = delegate.GetGpuSceneStats();
+  if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 0 &&
+                 gpu.geometry_uploads == 2,
+          "hiding the mesh released or re-uploaded its GPU geometry")) {
+    return 1;
+  }
   bindings[0].clearValue = VtValue(GfVec4f(0.25F, 0.5F, 0.75F, 1.0F));
   bindings[1].clearValue = VtValue(0.375F);
   bindings[2].clearValue = VtValue(-7);
