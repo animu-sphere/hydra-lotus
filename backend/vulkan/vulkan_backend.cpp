@@ -46,14 +46,17 @@ GpuFrameEvidence Evidence(FrameStatus status, std::string detail) {
 
 #if defined(LOTUS_HAS_VULKAN)
 
+using vulkan_internal::AccelerationSupport;
 using vulkan_internal::CreateInstanceWithValidation;
 using vulkan_internal::CreateShader;
 using vulkan_internal::DestroyInstance;
 using vulkan_internal::FindMemoryType;
 using vulkan_internal::GpuScene;
 using vulkan_internal::InstanceState;
+using vulkan_internal::kAccelerationExtensions;
 using vulkan_internal::kFrameConstantsSize;
 using vulkan_internal::LoadSpirv;
+using vulkan_internal::ProbeAccelerationStructures;
 using vulkan_internal::SupportsShaderDrawParameters;
 using vulkan_internal::ValidationState;
 using vulkan_internal::VulkanOk;
@@ -258,7 +261,7 @@ public:
     }
     if (!SelectDevice(status, detail) || !CreateDevice(detail) ||
         !scene_.Initialize(physical_device_, device_, queue_, queue_family_,
-            detail) ||
+            acceleration_, detail) ||
         !CreateRenderPass(detail) ||
         !CreatePipeline(vertex_words, fragment_words, detail)) {
       return false;
@@ -469,6 +472,9 @@ private:
       return false;
     }
     vkGetPhysicalDeviceProperties(physical_device_, &device_properties_);
+    // Acceleration structures are optional: without them the GPU scene
+    // still uploads its buffers and reports why it builds no BLAS or TLAS.
+    acceleration_ = ProbeAccelerationStructures(physical_device_);
     return true;
   }
 
@@ -482,8 +488,21 @@ private:
     VkPhysicalDeviceVulkan11Features enabled_vulkan11{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     enabled_vulkan11.shaderDrawParameters = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features enabled_vulkan12{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    enabled_vulkan12.bufferDeviceAddress = VK_TRUE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR enabled_acceleration{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+    enabled_acceleration.accelerationStructure = VK_TRUE;
     VkDeviceCreateInfo device_create{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     device_create.pNext = &enabled_vulkan11;
+    if (acceleration_.available) {
+      enabled_vulkan11.pNext = &enabled_vulkan12;
+      enabled_vulkan12.pNext = &enabled_acceleration;
+      device_create.enabledExtensionCount =
+          static_cast<std::uint32_t>(kAccelerationExtensions.size());
+      device_create.ppEnabledExtensionNames = kAccelerationExtensions.data();
+    }
     device_create.queueCreateInfoCount = 1;
     device_create.pQueueCreateInfos = &queue_create;
     if (!VulkanOk(vkCreateDevice(physical_device_, &device_create, nullptr,
@@ -900,6 +919,7 @@ private:
   ValidationState validation_;
   VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
   VkPhysicalDeviceProperties device_properties_{};
+  AccelerationSupport acceleration_;
   std::uint32_t queue_family_ = 0;
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;

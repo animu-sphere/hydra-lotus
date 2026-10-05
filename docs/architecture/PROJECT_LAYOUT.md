@@ -33,7 +33,7 @@ that moment every file is project-owned; the template is not re-applied.
 | --- | --- | --- | --- |
 | `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU mesh scene; immutable snapshots and shared geometry ([scene reference](../reference/SCENE.md)) |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
-| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, the GPU scene's geometry and instance buffers, swapchain presentation, Slang shaders |
+| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, the GPU scene's geometry and instance buffers, BLASes and TLAS, swapchain presentation, Slang shaders |
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json` |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter, coarse mesh extraction into the core scene, and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |

@@ -100,6 +100,10 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " gpu_geometries=" << scene.resident_geometries
          << " gpu_instances=" << scene.instance_count
          << " geometry_uploads=" << scene.geometry_uploads
+         << " acceleration=" << (scene.acceleration_available ? 1 : 0)
+         << " blas=" << scene.blas_count
+         << " tlas_instances=" << scene.tlas_instance_count
+         << " blas_builds=" << scene.blas_builds
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 

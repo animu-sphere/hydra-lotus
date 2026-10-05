@@ -102,6 +102,22 @@ struct GpuSceneStats {
   std::uint64_t instance_writes = 0;
   std::uint64_t upload_submissions = 0;
   std::uint64_t uploaded_bytes = 0;
+
+  // Whether the device builds acceleration structures. Without them the
+  // buffers are still uploaded but no BLAS or TLAS exists, and
+  // `acceleration_detail` says why.
+  bool acceleration_available = false;
+  std::string acceleration_detail;
+  // One BLAS per resident geometry; the TLAS holds one instance per
+  // instance record. Bytes are the BLAS and TLAS storage.
+  std::uint32_t blas_count = 0;
+  std::uint32_t tlas_instance_count = 0;
+  std::uint64_t acceleration_bytes = 0;
+  // Lifetime: BLAS builds, full TLAS builds, and TLAS updates (refits) for
+  // instance rewrites that change only transforms.
+  std::uint64_t blas_builds = 0;
+  std::uint64_t tlas_builds = 0;
+  std::uint64_t tlas_updates = 0;
 };
 
 struct GpuSceneEvidence {
@@ -125,12 +141,25 @@ struct GpuInstanceContents {
   std::uint32_t geometry_slot = 0;
 };
 
+// One TLAS build input, decoded. `object_to_world` holds the first three
+// rows of the transform, row-major, as Vulkan takes it. `geometry_slot` is
+// the slot whose BLAS the instance references, or UINT32_MAX when it
+// references no resident BLAS.
+struct GpuTlasInstanceContents {
+  std::array<float, 12> object_to_world{};
+  std::uint32_t geometry_slot = 0;
+  std::uint32_t mask = 0;
+};
+
 struct GpuSceneContents {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
   // Resident geometry in slot order, and the instances in update order.
   std::vector<GpuGeometryContents> geometries;
   std::vector<GpuInstanceContents> instances;
+  // The TLAS build input in instance order; empty without acceleration
+  // structures.
+  std::vector<GpuTlasInstanceContents> tlas_instances;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
@@ -143,9 +172,9 @@ struct GpuSceneContents {
 // flight: Render returns after the GPU has finished and the products are read
 // back.
 //
-// The renderer also owns the GPU scene: one device-local buffer per resident
-// geometry and one instance buffer, changed only by UpdateScene. The
-// bootstrap draw does not read them yet.
+// The renderer also owns the GPU scene: one device-local buffer and one BLAS
+// per resident geometry, an instance buffer and a TLAS, changed only by
+// UpdateScene. The bootstrap draw does not read them yet.
 class OffscreenRenderer {
 public:
   virtual ~OffscreenRenderer() = default;

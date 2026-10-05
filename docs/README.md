@@ -32,7 +32,7 @@ and the document is a bug. When a summary disagrees with
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/) |
 | Foundation AOV set, formats, storage and clear behaviour | [reference/AOVS.md](reference/AOVS.md) |
-| CPU mesh geometry, placement, snapshots, Hydra extraction, the scene update plan and the GPU scene | [reference/SCENE.md](reference/SCENE.md) |
+| CPU mesh geometry, placement, snapshots, Hydra extraction, the scene update plan, the GPU scene and its acceleration structures | [reference/SCENE.md](reference/SCENE.md) |
 | Incomplete work, and which release carries it | [roadmap/](roadmap/) |
 | Released history | [releases/](releases/) and the [CHANGELOG](../CHANGELOG.md) |
 | How documents here are maintained, and how they cite other repositories | [contributing/documentation.md](contributing/documentation.md) |
