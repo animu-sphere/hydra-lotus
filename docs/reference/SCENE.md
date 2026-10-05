@@ -89,11 +89,44 @@ upload counts. `ReadBackScene` copies the device buffers back for
 validation. A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
-No pass reads the buffers yet, and they carry neither device addresses
-nor acceleration-structure build usage; the bootstrap draw is unchanged.
-Source-face indices stay on the CPU. Every geometry buffer is its own
-device allocation, so an update fails with an explanation once a scene
-would exceed the device's allocation limit.
+No pass reads the buffers yet; the bootstrap draw is unchanged.
+Source-face indices stay on the CPU. Every geometry buffer, and every
+BLAS below, is its own device allocation, so an update fails with an
+explanation once a scene would exceed the device's allocation limit.
+
+## Acceleration structures
+
+When the device exposes `VK_KHR_acceleration_structure` with the
+`accelerationStructure` and `bufferDeviceAddress` features, the renderer
+enables them and the GPU scene keeps one BLAS per resident geometry and one
+TLAS over the instances. Without them the buffers are still uploaded, no
+acceleration structure exists, and `GpuSceneStats::acceleration_detail`
+says why; `renderer.scene.acceleration` is then a SKIP.
+
+- Geometry buffers also carry device addresses and acceleration-structure
+  build-input usage. A BLAS is built from the geometry buffer when it is
+  uploaded: one opaque triangle geometry, built for fast trace. It lives
+  and dies with the buffer, so a point or topology edit builds a new BLAS,
+  and hidden geometry keeps its BLAS. BLASes are neither refitted nor
+  compacted.
+- The TLAS has one instance per instance record, in the same order, so a
+  ray query's instance index is the instance record's index. Each instance
+  references its geometry's BLAS with the record's transform, mask `0xFF`
+  and facing culling disabled; the custom index is unused.
+- An instance rewrite in which every instance keeps its BLAS, which is a
+  transform-only change, updates (refits) the TLAS in place. Any other
+  rewrite, including one that changes the instance count, rebuilds it. The
+  TLAS storage grows when a build needs more and is otherwise reused.
+- The builds are recorded in the plan's one submission after its copies,
+  BLASes first, using a grow-only scratch buffer, and `UpdateScene`
+  returns after they complete.
+
+`GpuSceneStats` counts the BLASes, the TLAS instances, their storage bytes,
+and lifetime BLAS builds, TLAS builds and TLAS updates. `ReadBackScene`
+also returns the TLAS build input decoded
+(`GpuSceneContents::tlas_instances`), each BLAS reference resolved to its
+geometry slot. No pass traces the structures yet, so their contents are
+checked only through the build input, the counters and Vulkan validation.
 
 ## Hydra extraction
 
@@ -124,4 +157,6 @@ The CPU scene and Hydra extraction tests, plus multi-triangle bootstrap AOV
 regression coverage, are recorded in the
 [mesh extraction report](../reports/2026-10-05-cpu-mesh-extraction.md); the
 update plan and GPU scene tests in the
-[GPU scene upload report](../reports/2026-10-05-gpu-scene-upload.md).
+[GPU scene upload report](../reports/2026-10-05-gpu-scene-upload.md); the
+acceleration-structure checks in the
+[BLAS and TLAS report](../reports/2026-10-05-blas-tlas.md).

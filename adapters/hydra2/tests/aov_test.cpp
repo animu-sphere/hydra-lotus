@@ -119,6 +119,13 @@ int main(int argc, char** argv) {
           "the extracted triangle did not reach the GPU scene")) {
     return 1;
   }
+  // Acceleration structures follow the buffers when the device has them.
+  if (!Check(!gpu.acceleration_available ||
+                 (gpu.blas_count == 1 && gpu.tlas_instance_count == 1 &&
+                     gpu.blas_builds == 1 && gpu.tlas_builds == 1),
+          "the triangle did not get a BLAS and a TLAS instance")) {
+    return 1;
+  }
 
   // A multi-triangle scene must also work with the bootstrap raster backend.
   scene.quad = true;
@@ -134,6 +141,12 @@ int main(int argc, char** argv) {
   if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 1 &&
                  gpu.geometry_uploads == 2 && gpu.geometry_releases == 1,
           "a topology edit did not replace the GPU geometry")) {
+    return 1;
+  }
+  if (!Check(!gpu.acceleration_available ||
+                 (gpu.blas_count == 1 && gpu.tlas_instance_count == 1 &&
+                     gpu.blas_builds == 2 && gpu.tlas_builds == 2),
+          "a topology edit did not rebuild the BLAS and the TLAS")) {
     return 1;
   }
 
@@ -162,6 +175,12 @@ int main(int argc, char** argv) {
   if (!Check(gpu.resident_geometries == 1 && gpu.instance_count == 0 &&
                  gpu.geometry_uploads == 2,
           "hiding the mesh released or re-uploaded its GPU geometry")) {
+    return 1;
+  }
+  if (!Check(!gpu.acceleration_available ||
+                 (gpu.blas_count == 1 && gpu.tlas_instance_count == 0 &&
+                     gpu.blas_builds == 2),
+          "hiding the mesh rebuilt its BLAS or kept its TLAS instance")) {
     return 1;
   }
   bindings[0].clearValue = VtValue(GfVec4f(0.25F, 0.5F, 0.75F, 1.0F));

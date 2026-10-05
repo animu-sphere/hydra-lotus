@@ -26,6 +26,7 @@ validation:
     - renderer.backend.capability
     - renderer.gpu.frame
     - renderer.scene.upload
+    - renderer.scene.acceleration
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

@@ -186,13 +186,56 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
          resident.size() == contents.geometries.size();
 }
 
+// Whether the TLAS build input holds one instance per instance record, in
+// the same order, referencing the record's geometry's BLAS with the same
+// transform.
+bool TlasMatches(const Lotus::GpuSceneContents& contents) {
+  if (contents.tlas_instances.size() != contents.instances.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < contents.instances.size(); ++index) {
+    const Lotus::GpuInstanceContents& instance = contents.instances[index];
+    const Lotus::GpuTlasInstanceContents& tlas = contents.tlas_instances[index];
+    if (tlas.geometry_slot != instance.geometry_slot || tlas.mask != 0xFFU) {
+      return false;
+    }
+    for (int row = 0; row < 3; ++row) {
+      for (int column = 0; column < 4; ++column) {
+        if (tlas.object_to_world[row * 4 + column] !=
+            instance.world_from_object[column * 4 + row]) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+// The BLAS and TLAS verdict of the scene walk below. Without acceleration
+// structures on the device it is a SKIP that says why.
+struct AccelerationVerdict {
+  bool available = false;
+  std::string detail;
+  std::string failure;
+};
+
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
 // transform edit, a hide, a point edit and removal, comparing the device
 // buffers with the CPU scene after each. Returns an empty string on success.
-std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
+// Acceleration-structure mismatches go to `acceleration` instead.
+std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
+    AccelerationVerdict& acceleration) {
   Lotus::RenderWorld world;
   Lotus::SceneExtraction extraction;
   Lotus::GpuSceneStats before;
+  // Records the first acceleration-structure mismatch; the walk goes on so
+  // the buffer checks still run.
+  const auto expect = [&](bool ok, const char* step, const char* what) {
+    if (before.acceleration_available && !ok &&
+        acceleration.failure.empty()) {
+      acceleration.failure = std::string(step) + ": " + what;
+    }
+  };
   const auto apply = [&](const char* step) -> std::string {
     const Lotus::FrameSnapshot snapshot = world.Commit();
     const Lotus::GpuSceneEvidence evidence =
@@ -203,10 +246,18 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
     if (evidence.validation_message_count != 0) {
       return std::string(step) + ": Vulkan validation reported messages";
     }
-    if (!SceneMatches(renderer.ReadBackScene(), *snapshot.scene)) {
+    const Lotus::GpuSceneContents contents = renderer.ReadBackScene();
+    if (!SceneMatches(contents, *snapshot.scene)) {
       return std::string(step) + ": device buffers differ from the scene";
     }
     before = evidence.stats;
+    acceleration.available = before.acceleration_available;
+    acceleration.detail = before.acceleration_detail;
+    expect(TlasMatches(contents), step,
+        "the TLAS build input differs from the instances");
+    expect(before.blas_count == before.resident_geometries &&
+               before.tlas_instance_count == before.instance_count,
+        step, "BLAS or TLAS instance count differs from the scene");
     return {};
   };
   const auto stats = [&] { return renderer.UpdateScene({}).stats; };
@@ -225,6 +276,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       before.geometry_uploads != 2 || before.upload_submissions != 1) {
     return "insertion: unexpected resident geometry or upload counts";
   }
+  expect(before.blas_builds == 2 && before.tlas_builds == 1 &&
+             before.tlas_updates == 0 && before.acceleration_bytes != 0,
+      "insertion", "expected two BLAS builds and one TLAS build");
 
   const Lotus::GpuSceneStats inserted = before;
   if (auto failure = apply("unchanged commit"); !failure.empty()) {
@@ -234,6 +288,10 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       before.instance_writes != inserted.instance_writes) {
     return "unchanged commit: the GPU scene recorded work";
   }
+  expect(before.blas_builds == inserted.blas_builds &&
+             before.tlas_builds == inserted.tlas_builds &&
+             before.tlas_updates == inserted.tlas_updates,
+      "unchanged commit", "acceleration structures were built");
 
   instance.world_from_object[13] = -0.5F;
   world.SetMeshInstance("/quad", instance);
@@ -244,6 +302,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       before.instance_writes != inserted.instance_writes + 1) {
     return "transform edit: geometry was uploaded again";
   }
+  expect(before.blas_builds == 2 && before.tlas_builds == 1 &&
+             before.tlas_updates == 1,
+      "transform edit", "expected a TLAS update and no build");
 
   Lotus::MeshInstance hidden;
   hidden.visible = false;
@@ -253,6 +314,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       before.geometry_uploads != 2) {
     return "hide: geometry was released or uploaded";
   }
+  expect(before.blas_builds == 2 && before.tlas_builds == 2 &&
+             before.tlas_updates == 1,
+      "hide", "expected a TLAS rebuild and no BLAS build");
 
   const std::uint32_t triangle_slot =
       renderer.ReadBackScene().instances.at(0).geometry_slot;
@@ -264,6 +328,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       renderer.ReadBackScene().instances.at(0).geometry_slot != triangle_slot) {
     return "point edit: the geometry was not replaced in its slot";
   }
+  expect(before.blas_builds == 3 && before.tlas_builds == 3 &&
+             before.tlas_updates == 1,
+      "point edit", "expected one BLAS build and a TLAS rebuild");
 
   world.RemoveMesh("/quad");
   world.RemoveMesh("/triangle");
@@ -274,6 +341,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer) {
       stats().upload_submissions != before.upload_submissions) {
     return "removal: the GPU scene kept geometry or instances";
   }
+  expect(before.blas_builds == 3 && before.tlas_builds == 4 &&
+             before.tlas_updates == 1,
+      "removal", "expected an empty TLAS rebuild");
   return {};
 }
 
@@ -338,8 +408,9 @@ int main(int argc, char** argv) {
           setup_error);
   // The scene runs first, so the frames' validation count covers it too.
   std::string scene_failure;
+  AccelerationVerdict acceleration;
   if (renderer) {
-    scene_failure = SceneUploadFailure(*renderer);
+    scene_failure = SceneUploadFailure(*renderer, acceleration);
   }
   Lotus::GpuFrameEvidence frame;
   if (renderer) {
@@ -467,8 +538,21 @@ int main(int argc, char** argv) {
   if (renderer) {
     checks.push_back({"renderer.scene.upload",
         scene_failure.empty() ? "pass" : "fail", scene_failure});
+    if (!scene_failure.empty()) {
+      checks.push_back({"renderer.scene.acceleration", "skip",
+          "renderer.scene.upload did not pass: " + scene_failure});
+    } else if (!acceleration.available) {
+      checks.push_back({"renderer.scene.acceleration", "skip",
+          acceleration.detail});
+    } else {
+      checks.push_back({"renderer.scene.acceleration",
+          acceleration.failure.empty() ? "pass" : "fail",
+          acceleration.failure});
+    }
   } else {
     checks.push_back({"renderer.scene.upload", Status(setup_status),
+        setup_error});
+    checks.push_back({"renderer.scene.acceleration", Status(setup_status),
         setup_error});
   }
   if (last.validation_available) {

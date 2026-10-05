@@ -9,6 +9,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Acceleration structures in the GPU scene: a BLAS per resident geometry
+  and a TLAS over the instances, refitted when a rewrite changes only
+  transforms and rebuilt otherwise, built in each plan's one submission.
+  They are enabled when the device has `VK_KHR_acceleration_structure`; a
+  `renderer.scene.acceleration` check compares the read-back TLAS build
+  input and the build counts with the scene, and SKIPs with the reason on
+  devices without them. Nothing traces them yet.
+
 - The scene update plan (`SceneExtraction`, `SceneUpdate`) and the GPU
   scene: incremental geometry uploads and releases and instance rewrites
   into device-local buffers owned by `OffscreenRenderer`, with a

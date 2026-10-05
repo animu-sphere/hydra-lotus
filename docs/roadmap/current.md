@@ -49,16 +49,16 @@ The near-term priority is one complete vertical path
 ([roadmap policy §9](../design/ROADMAP_POLICY.md#9-near-term-priority)); the
 phase's full scope and exit criteria are
 [§4](../design/ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer).
-CPU coarse-mesh extraction, ordinary mesh placement and the incremental
-upload of geometry and instance buffers are implemented
+CPU coarse-mesh extraction, ordinary mesh placement, the incremental
+upload of geometry and instance buffers, and a BLAS per geometry with a TLAS
+over the instances are implemented
 ([scene reference](../reference/SCENE.md),
 [extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md),
-[upload evidence](../reports/2026-10-05-gpu-scene-upload.md)). No pass reads
+[upload evidence](../reports/2026-10-05-gpu-scene-upload.md),
+[BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). No pass reads
 the GPU scene yet; the GPU still draws the fixed bootstrap triangle.
 Remaining work, in order:
 
-- ⬜ **BLAS and TLAS.** The geometry buffers gain device addresses and
-  acceleration-structure build input usage.
 - ⬜ **Camera ray → ray query → triangle hit.** The *first ray-traced
   triangle* milestone.
 - ⬜ **BSDF and multi-bounce.** Lambert, a minimal GGX, emissive surfaces,
@@ -77,9 +77,10 @@ principle 8):
 - ⬜ **Hydra instancers and render-pass selection.** Expand instance data
   and respect collection/render-tag selection; current CPU meshes have one
   ordinary placement each.
-- ⬜ **Ray query capability probe.** Report `VK_KHR_acceleration_structure`
-  and `VK_KHR_ray_query` in `renderer-report.json` and `SKIP` the
-  path-tracing checks with an explanation where they are missing.
+- ⬜ **Ray query capability probe.** Report `VK_KHR_ray_query` in
+  `renderer-report.json` and `SKIP` the path-tracing checks with an
+  explanation where it is missing, as `renderer.scene.acceleration` already
+  does for `VK_KHR_acceleration_structure`.
 - ⬜ **Deterministic mode**: fixed RNG seed, spp, camera and frame index.
 - ⬜ **Per-pass GPU timestamps**, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).
@@ -91,9 +92,14 @@ principle 8):
 
 ## Backend follow-up
 
-- ⬜ **GPU memory suballocation.** Each geometry buffer is its own device
-  allocation, so scenes are limited by the device's allocation count
-  ([scene reference](../reference/SCENE.md#gpu-scene)).
+- ⬜ **GPU memory suballocation.** Each geometry buffer and each BLAS is
+  its own device allocation, so scenes are limited by the device's
+  allocation count ([scene reference](../reference/SCENE.md#gpu-scene)).
+- ⬜ **BLAS refit and compaction.** A point edit that keeps the topology
+  uploads a new buffer and builds a new BLAS instead of refitting the old
+  one, and BLASes are not compacted
+  ([design policy §20](../design/DESIGN_POLICY.md#20-acceleration-structure),
+  [scene reference](../reference/SCENE.md#acceleration-structures)).
 
 ## Adapter follow-up
 

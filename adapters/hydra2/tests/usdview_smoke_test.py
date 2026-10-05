@@ -63,3 +63,9 @@ def testUsdviewInputFunction(appController):
     assert first["gpu_geometries"] == 1 and first["gpu_instances"] == 1
     assert updated["gpu_geometries"] == 1 and updated["gpu_instances"] == 1
     assert updated["geometry_uploads"] == first["geometry_uploads"] + 1
+    # With acceleration structures, the mesh has one BLAS and one TLAS
+    # instance, and the point edit builds exactly one more BLAS.
+    if first["acceleration"] == 1:
+        assert first["blas"] == 1 and first["tlas_instances"] == 1
+        assert updated["blas"] == 1 and updated["tlas_instances"] == 1
+        assert updated["blas_builds"] == first["blas_builds"] + 1
