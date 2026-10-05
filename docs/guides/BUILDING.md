@@ -29,6 +29,18 @@ path-traced radiance against known values when ray queries are available,
 and writes `build/<target>/renderer-report.json`. `ost validate` reads
 it; the Hydra assertions are `SKIP` in this build by design.
 
+The same run renders the reference scene at 1, 16, 64, 256 and 1024 spp
+into `build/<target>/reference-images/` and compares each image with the
+committed reference in `validation/reference/`
+([scene reference](../reference/SCENE.md#reference-images)). PFM files open
+in most HDR image viewers. When a change is meant to alter the reference
+image, regenerate the reference with deterministic mode and commit both
+files:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-reference validation/reference
+```
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

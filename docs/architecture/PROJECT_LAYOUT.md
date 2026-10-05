@@ -34,10 +34,10 @@ that moment every file is project-owned; the template is not re-applied.
 | `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU mesh scene with surface materials and a constant environment; immutable snapshots and shared geometry ([scene reference](../reference/SCENE.md)) |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
 | `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, GPU scene buffers and BLAS/TLAS, the reference path-tracing pass and GPU timestamps, swapchain presentation, Slang shaders |
-| `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json` |
+| `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference ([scene reference](../reference/SCENE.md#reference-images)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter, coarse mesh extraction into the core scene, and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |
-| `validation/` | CTest only | — | core boundary, evidence and install-tree checks |
+| `validation/` | CTest only | — | core boundary, evidence and install-tree checks; `validation/reference/` holds the committed reference images |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
 is a classic `HdRenderDelegate` ([DESIGN_POLICY.md](../design/DESIGN_POLICY.md)
@@ -118,7 +118,7 @@ OpenStrata's plugin workspace generator is not used for this renderer
 
 ```text
 <prefix>/
-├── bin/lotus-headless, bin/shaders/*.spv
+├── bin/lotus-headless, bin/shaders/*.spv, bin/reference/*.pfm
 ├── include/lotus/
 ├── lib/lotus-render-*.lib|.a
 ├── lib/cmake/Lotus/           LotusConfig.cmake, LotusTargets.cmake
