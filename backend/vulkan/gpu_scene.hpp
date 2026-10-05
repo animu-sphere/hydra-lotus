@@ -29,11 +29,19 @@ struct GpuInstanceRecord {
   std::uint64_t positions;
   std::uint64_t triangles;
   std::uint32_t geometry_slot;
-  std::uint32_t reserved[3];
+  // The instance's entry in the material table.
+  std::uint32_t material_slot;
+  std::uint32_t reserved[2];
+};
+static_assert(sizeof(GpuInstanceRecord) == 96);
+
+// One material table element: the material IR as the scene pass evaluates
+// it. Its mirror is `MaterialRecord` in shaders/path_trace.slang.
+struct GpuMaterialRecord {
   float base_color_roughness[4];
   float emission_metallic[4];
 };
-static_assert(sizeof(GpuInstanceRecord) == 128);
+static_assert(sizeof(GpuMaterialRecord) == 32);
 
 // Whether a physical device can build acceleration structures, decided
 // before the device is created. When `available`, the device must be
@@ -95,6 +103,10 @@ public:
   [[nodiscard]] VkDeviceAddress InstanceAddress() const {
     return instances_.address;
   }
+  // The material table's device address, under the same conditions.
+  [[nodiscard]] VkDeviceAddress MaterialAddress() const {
+    return materials_.address;
+  }
   [[nodiscard]] const std::array<float, 3>& Environment() const {
     return environment_;
   }
@@ -151,6 +163,15 @@ private:
   std::unordered_map<const MeshGeometry*, std::uint32_t> slot_of_;
   DeviceBuffer instances_;
   std::uint32_t instance_count_ = 0;
+  // The plans' material table. It reaches the device with the first
+  // instances and with each change after that; until then the device holds
+  // no entries.
+  std::vector<Material> material_table_{Material{}};
+  bool materials_current_ = false;
+  DeviceBuffer materials_;
+  std::uint32_t material_count_ = 0;
+  // One more than the highest material slot an instance uses.
+  std::uint32_t materials_used_ = 0;
   std::array<float, 3> environment_{};
   DeviceBuffer staging_;
 

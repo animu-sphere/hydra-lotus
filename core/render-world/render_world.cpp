@@ -37,7 +37,7 @@ bool UnitInterval(float value) {
   return value >= 0.0F && value <= 1.0F;
 }
 
-void ValidateMaterial(const SurfaceMaterial& material) {
+void ValidateMaterial(const Material& material) {
   if (!Finite(material.base_color) ||
       !std::all_of(material.base_color.begin(), material.base_color.end(),
           UnitInterval)) {
@@ -142,16 +142,35 @@ void RenderWorld::SetMeshInstance(const std::string& id,
   }
 }
 
-void RenderWorld::SetMeshMaterial(const std::string& id,
-    const SurfaceMaterial& material) {
-  ValidateMaterial(material);
-  const auto found = scene_->meshes.find(id);
+void RenderWorld::BindMaterial(const std::string& mesh_id,
+    const std::string& material_id) {
+  const auto found = scene_->meshes.find(mesh_id);
   if (found == scene_->meshes.end()) {
-    throw std::invalid_argument("mesh material needs existing geometry");
+    throw std::invalid_argument("material binding needs existing geometry");
   }
-  if (found->second.material != material) {
+  if (found->second.material != material_id) {
     MakeSceneWritable();
-    scene_->meshes.at(id).material = material;
+    scene_->meshes.at(mesh_id).material = material_id;
+  }
+}
+
+void RenderWorld::SetMaterial(const std::string& id,
+    const Material& material) {
+  if (id.empty()) {
+    throw std::invalid_argument("material identifier must not be empty");
+  }
+  ValidateMaterial(material);
+  const auto found = scene_->materials.find(id);
+  if (found == scene_->materials.end() || found->second != material) {
+    MakeSceneWritable();
+    scene_->materials[id] = material;
+  }
+}
+
+void RenderWorld::RemoveMaterial(const std::string& id) {
+  if (scene_->materials.contains(id)) {
+    MakeSceneWritable();
+    scene_->materials.erase(id);
   }
 }
 

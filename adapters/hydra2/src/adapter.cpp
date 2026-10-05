@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "adapter.hpp"
+#include "material_translator.hpp"
 
 #include <pxr/pxr.h>
 
@@ -20,6 +21,7 @@
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/changeTracker.h>
 #include <pxr/imaging/hd/instancer.h>
+#include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/mesh.h>
 #include <pxr/imaging/hd/meshUtil.h>
 #include <pxr/imaging/hd/renderIndex.h>
@@ -247,7 +249,7 @@ void ApplyFraming(const HdRenderPassState& state,
 }
 
 // Until dome lights are read, every surface is lit by a constant white
-// environment, so the default UsdPreviewSurface grey shows its albedo.
+// environment, so an unlit surface shows its albedo.
 constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 
 // The scene keys of the meshes a render pass does not trace.
@@ -259,15 +261,29 @@ public:
     world_.SetEnvironment(kFallbackEnvironment);
   }
 
+  // A mesh's material binding is the bound material's SdfPath string.
   void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
-      const Lotus::MeshInstance& instance) {
+      const Lotus::MeshInstance& instance, const SdfPath& material) {
     std::scoped_lock lock(mutex_);
     world_.SetMesh(id.GetString(), std::move(geometry), instance);
+    world_.BindMaterial(id.GetString(), material.GetString());
   }
 
-  void SyncInstance(const SdfPath& id, const Lotus::MeshInstance& instance) {
+  void SyncInstance(const SdfPath& id, const Lotus::MeshInstance& instance,
+      const SdfPath& material) {
     std::scoped_lock lock(mutex_);
     world_.SetMeshInstance(id.GetString(), instance);
+    world_.BindMaterial(id.GetString(), material.GetString());
+  }
+
+  void SyncMaterial(const SdfPath& id, const Lotus::Material& material) {
+    std::scoped_lock lock(mutex_);
+    world_.SetMaterial(id.GetString(), material);
+  }
+
+  void RemoveMaterial(const SdfPath& id) {
+    std::scoped_lock lock(mutex_);
+    world_.RemoveMaterial(id.GetString());
   }
 
   void RemoveMesh(const SdfPath& id) {
@@ -576,6 +592,47 @@ private:
   Primvars primvars_;
 };
 
+// Translates its Hydra material network into the material IR, keyed by its
+// path, whenever the network changes. Meshes bound to the path follow it.
+class HdLotusMaterial final : public HdMaterial {
+public:
+  // A fallback material has no state and never syncs.
+  HdLotusMaterial(const SdfPath& id, std::shared_ptr<AdapterState> state)
+      : HdMaterial(id), state_(std::move(state)) {
+  }
+
+  ~HdLotusMaterial() override {
+    if (state_) {
+      state_->RemoveMaterial(GetId());
+    }
+  }
+
+  HdDirtyBits GetInitialDirtyBitsMask() const override {
+    return HdMaterial::AllDirty;
+  }
+
+  void Sync(HdSceneDelegate* delegate, HdRenderParam* render_param,
+      HdDirtyBits* dirty_bits) override {
+    (void)render_param;
+    if (state_ && (*dirty_bits & (DirtyParams | DirtyResource))) {
+      const VtValue resource = delegate->GetMaterialResource(GetId());
+      const HdLotusMaterialTranslation translation = HdLotusTranslateMaterial(
+          resource.IsHolding<HdMaterialNetworkMap>()
+              ? resource.UncheckedGet<HdMaterialNetworkMap>()
+              : HdMaterialNetworkMap{});
+      if (!translation.unsupported.empty()) {
+        TF_WARN("Lotus uses the default material for %s: %s",
+            GetId().GetText(), translation.unsupported.c_str());
+      }
+      state_->SyncMaterial(GetId(), translation.material);
+    }
+    *dirty_bits = Clean;
+  }
+
+private:
+  std::shared_ptr<AdapterState> state_;
+};
+
 class HdLotusMesh final : public HdMesh {
 public:
   HdLotusMesh(const SdfPath& id, std::shared_ptr<AdapterState> state)
@@ -590,7 +647,8 @@ public:
     return HdChangeTracker::DirtyPoints | HdChangeTracker::DirtyTopology |
            HdChangeTracker::DirtyTransform | HdChangeTracker::DirtyVisibility |
            HdChangeTracker::DirtyRenderTag | HdChangeTracker::DirtyInstancer |
-           HdChangeTracker::DirtyInstanceIndex;
+           HdChangeTracker::DirtyInstanceIndex |
+           HdChangeTracker::DirtyMaterialId;
   }
 
   void Sync(HdSceneDelegate* delegate, HdRenderParam* render_param,
@@ -624,11 +682,14 @@ public:
         HdChangeTracker::IsInstanceIndexDirty(bits, GetId())) {
       instance_.instancer_transforms = InstancerTransforms(delegate, bits);
     }
+    if (!initialized_ || (bits & HdChangeTracker::DirtyMaterialId)) {
+      SetMaterialId(delegate->GetMaterialId(GetId()));
+    }
     try {
       if (geometry_dirty) {
-        state_->SyncMesh(GetId(), ExtractGeometry(), instance_);
+        state_->SyncMesh(GetId(), ExtractGeometry(), instance_, GetMaterialId());
       } else {
-        state_->SyncInstance(GetId(), instance_);
+        state_->SyncInstance(GetId(), instance_, GetMaterialId());
       }
       initialized_ = true;
     } catch (const std::invalid_argument& error) {
@@ -1035,7 +1096,8 @@ const TfTokenVector& HdLotusRenderDelegate::GetSupportedRprimTypes() const {
 }
 
 const TfTokenVector& HdLotusRenderDelegate::GetSupportedSprimTypes() const {
-  static const TfTokenVector types{HdPrimTypeTokens->camera};
+  static const TfTokenVector types{
+      HdPrimTypeTokens->camera, HdPrimTypeTokens->material};
   return types;
 }
 
@@ -1080,6 +1142,9 @@ HdSprim* HdLotusRenderDelegate::CreateSprim(const TfToken& type_id,
   if (type_id == HdPrimTypeTokens->camera) {
     return new HdLotusCamera(sprim_id);
   }
+  if (type_id == HdPrimTypeTokens->material) {
+    return new HdLotusMaterial(sprim_id, impl_->state);
+  }
   return nullptr;
 }
 
@@ -1087,6 +1152,9 @@ HdSprim* HdLotusRenderDelegate::CreateFallbackSprim(
     const TfToken& type_id) {
   if (type_id == HdPrimTypeTokens->camera) {
     return new HdLotusCamera(SdfPath("/__lotusFallbackCamera"));
+  }
+  if (type_id == HdPrimTypeTokens->material) {
+    return new HdLotusMaterial(SdfPath("/__lotusFallbackMaterial"), nullptr);
   }
   return nullptr;
 }

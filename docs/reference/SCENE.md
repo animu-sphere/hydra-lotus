@@ -48,9 +48,11 @@ camera matrix and traces the GPU scene instead of its bootstrap counts.
 
 ## Materials and environment
 
-Until the material IR of Renderer Phase 1.5, a mesh's appearance is a
-`SurfaceMaterial` on its `SceneMesh`, in linear RGB. Its defaults are
-`UsdPreviewSurface`'s:
+`include/lotus/material.hpp` owns the Lotus material IR of Renderer Phase
+1.5 ([design policy §18](../design/DESIGN_POLICY.md#18-material-ir)): a
+`Material` that host translators produce and the GPU material table
+evaluates, independent of any authoring schema. It holds constant values in
+linear RGB, and its defaults are `UsdPreviewSurface`'s:
 
 | Field | Default | Range | Meaning |
 | --- | --- | --- | --- |
@@ -59,11 +61,17 @@ Until the material IR of Renderer Phase 1.5, a mesh's appearance is a
 | `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
 | `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
 
-`SetMeshMaterial` changes an existing mesh's material; `SetMesh` keeps it
+`LotusScene::materials` maps stable host-supplied keys to materials, in
+deterministic order; `SetMaterial` inserts or replaces one and
+`RemoveMaterial` removes one. A mesh binds to a key with `BindMaterial`, and
+`SceneMesh::material` holds the key. An empty key, or one with no material,
+means the default `Material`, so a binding may name a material before it
+exists and outlives the material's removal. `SetMesh` keeps a mesh's binding
 when it replaces the geometry or the instance. `LotusScene::environment` is
 a constant environment radiance, finite and non-negative, black by default,
-changed with `SetEnvironment`. Out-of-range values and a material for a
-missing mesh throw `std::invalid_argument` without changing the world.
+changed with `SetEnvironment`. Out-of-range values, an empty material key
+and a binding for a missing mesh throw `std::invalid_argument` without
+changing the world.
 
 ## Update plan
 
@@ -75,17 +83,24 @@ planned and returns a `SceneUpdate`:
   the previous scene's key order;
 - `geometry_uploads`: geometry buffers that become resident, in key order;
 - `instances`: when `instances_changed`, the complete replacement list,
-  one `SceneInstance` (geometry, composed `world_from_object` and material)
-  per placement of each visible mesh with triangles, in key order and then
-  placement order;
+  one `SceneInstance` (geometry, composed `world_from_object` and material
+  slot) per placement of each visible mesh with triangles, in key order and
+  then placement order;
+- `materials`: when `materials_changed`, the complete material table: the
+  default `Material` at slot 0, then the scene's materials in key order. A
+  mesh whose binding names no material gets slot 0. A GPU scene, and the
+  extraction after `Reset`, start with the default alone, so a scene
+  without materials plans no table;
 - `environment`: when `environment_changed`, the scene's environment
   radiance. A GPU scene, and the extraction after `Reset`, start from
   black, so only a different environment is planned.
 
 A geometry buffer is identified by its address. Every mesh with triangles
 keeps its geometry resident, even hidden or placed nowhere, so visibility,
-transform, placement and material changes rewrite only the instances. Geometry without triangles is never
-resident or instanced. The extraction holds a reference to every resident
+transform, placement and binding changes rewrite only the instances, and a
+material's value edit rewrites only the material table. Adding or removing
+a material moves the later slots, so it rewrites both. Geometry without
+triangles is never resident or instanced. The extraction holds a reference to every resident
 buffer, so an address is not reused before its release.
 
 An unchanged scene pointer, including a camera-only commit, returns an
@@ -107,21 +122,26 @@ empty plan records no GPU work.
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
   deterministic sequence of plans.
-- One device-local instance buffer holds a 128-byte record per instance:
+- One device-local instance buffer holds a 96-byte record per instance:
   the column-major `world_from_object`, the device addresses of its
   geometry's positions and triangles (zero without acceleration
-  structures), the geometry slot, and the material as base colour and
-  roughness, then emission and metallic. It grows when needed and is
-  rewritten only when the instances change.
+  structures), the geometry slot and the material slot. It grows when
+  needed and is rewritten only when the instances change.
+- One device-local material table holds a 32-byte record per material:
+  base colour and roughness, then emission and metallic. It reaches the
+  device with the first instances and is rewritten whole whenever the plan
+  changes it. A plan is rejected when an instance's slot lies outside the
+  table, including a table that shrinks below the slots of instances it
+  leaves unchanged.
 - The environment is host state: a plan that changes only the environment
   records no GPU work, and the scene pass reads it with each frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
   in one submission per plan, followed by a barrier that makes them
   visible to later shader reads and transfers.
 
-`GpuSceneStats` reports resident geometry, instances, bytes and lifetime
-upload counts. `ReadBackScene` copies the device buffers back for
-validation. A failed update or readback leaves the renderer failed, as a
+`GpuSceneStats` reports resident geometry, instances, material table
+entries, their bytes and lifetime upload counts. `ReadBackScene` copies the
+device buffers back for validation, the material table included. A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
 The scene pass traverses the acceleration structures built from these
@@ -150,7 +170,7 @@ says why; `renderer.scene.acceleration` is then a SKIP.
   references its geometry's BLAS with the record's transform, mask `0xFF`
   and facing culling disabled; the custom index is unused.
 - An instance rewrite in which every instance keeps its BLAS and its
-  transform, such as a material edit, leaves the TLAS as it is. One in
+  transform, such as a material binding change, leaves the TLAS as it is. One in
   which every instance keeps its BLAS but a transform changes updates
   (refits) the TLAS in place. Any other rewrite, including one that
   changes the instance count, rebuilds it. The TLAS storage grows when a
@@ -178,7 +198,8 @@ GPU duration as `upload_gpu_ms`, `blas_build_gpu_ms` and
 that submits nothing, such as an empty or environment-only plan, reports
 `timings.available` false. `renderer.scene.timestamp` times a 131,072-triangle
 grid with 1,024 instancer placements through insertion, a transform edit
-(a TLAS refit), a material edit, an unchanged commit and removal: every
+(a TLAS refit), a material binding, a material edit, an unchanged commit
+and removal: every
 phase a step runs must measure a positive duration, except the removal's
 empty TLAS build, and every other phase must report 0. Its detail lists the
 durations; it is a SKIP without timestamp support
@@ -242,7 +263,8 @@ one brute-force camera path per pixel per sample, with no light sampling.
   triangle's corners in world space; the position is interpolated from the
   barycentrics, and the geometric normal is turned to face the incoming
   ray. Surfaces are two-sided and have no shading normals, since normals
-  are not extracted yet.
+  are not extracted yet. The hit's material is the material table's entry
+  at the instance record's material slot.
 - **Emission** is added at every hit, the camera's included.
 - **BSDF.** A Lambert lobe with albedo `base_color` and a GGX metal lobe,
   mixed by `metallic`. The metal has Schlick's Fresnel from `base_color`,
@@ -251,7 +273,8 @@ one brute-force camera path per pixel per sample, with no light sampling.
   with probability `metallic`, then from the cosine-weighted hemisphere or
   from GGX visible normals by spherical caps; its weight is the mixture's
   f·cos divided by the mixture's density. A surface with `metallic` 0 is
-  Lambert only; the dielectric specular layer arrives with the material IR.
+  Lambert only; a dielectric specular layer is later Renderer Phase 1.5
+  work.
 - **Environment.** A scattered ray that escapes adds the throughput times
   the environment radiance. Camera rays that miss do not see it.
 - **Termination.** A path ends after `PathTracingSettings::max_bounces`
@@ -369,7 +392,8 @@ Coarse polygons use OpenUSD's
 [`HdMeshUtil` triangulation](https://openusd.org/dev/api/class_hd_mesh_util.html):
 fan triangles, winding normalization, hole-face exclusion and coarse-face
 mapping. Subdivision refinement, general concave-polygon tessellation,
-normals, face-varying primvars and materials are not implemented.
+normals and face-varying primvars are not implemented. Materials are
+[below](#materials).
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -385,10 +409,9 @@ default); the render pass and the colour buffer report convergence when the
 accumulation reaches its sample count. Point, topology, transform,
 visibility and instancer edits, like camera, framing and
 `lotus:sampleIndex` changes, restart the accumulation. Other devices
-retain the bootstrap path and converge after one pass. Materials and
-lights are not read yet: every mesh has the default `SurfaceMaterial`, and
-the adapter sets a constant white environment, so a surface no other
-surface occludes shows its 0.18 albedo. The host evidence log identifies the choice as
+retain the bootstrap path and converge after one pass. Lights are not read
+yet: the adapter sets a constant white environment, so a Lambert surface no
+other surface occludes shows its albedo plus its emission. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `sample_index`, `samples` and
 `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
@@ -463,7 +486,9 @@ instancer placements against UsdGeom, and their GPU instances, in the
 collection and render-tag selection in the
 [render-pass selection report](../reports/2026-10-05-render-pass-selection.md);
 deterministic Hydra renders against the backend's in the
-[Hydra deterministic mode report](../reports/2026-10-05-hydra-deterministic-mode.md).
+[Hydra deterministic mode report](../reports/2026-10-05-hydra-deterministic-mode.md);
+the material IR, the material table and the `UsdPreviewSurface`
+translation in the [material IR report](../reports/2026-10-05-material-ir.md).
 
 ### Instancers
 
@@ -482,3 +507,32 @@ instancers, nested point instancers and native instancing reach the adapter
 this way through UsdImaging. Per-instance primvars other than these, such
 as a per-instance colour, are not read. A mesh without an instancer keeps
 its one ordinary placement.
+
+### Materials
+
+The delegate supports the `material` sprim. A material translates its Hydra
+material network (`GetMaterialResource`) into the material IR whenever its
+parameters or resource are dirty and stores the result under its `SdfPath`
+string; destroying the sprim removes it. A mesh binds to its
+`GetMaterialId` path, read when its material id is dirty, so a material's
+value edit rewrites only the material table and a binding change only the
+instances. The fallback material sprim is never stored.
+
+The material translator (`adapters/hydra2/src/material_translator.*`) reads
+the network's surface terminal when it is a `UsdPreviewSurface`:
+
+| IR field | Input | Rule |
+| --- | --- | --- |
+| `base_color` | `diffuseColor` | each component clamped to [0, 1] |
+| `roughness` | `roughness` | clamped to [0, 1] |
+| `metallic` | `metallic` | clamped to [0, 1]; 0 under `useSpecularWorkflow` |
+| `emission` | `emissiveColor` | each component clamped to be non-negative |
+
+An unauthored input, a non-finite value and a value of another type take
+the input's default. So does an input a shader graph drives, such as a
+texture: graphs are not evaluated yet. Any other surface shader, or a
+network without a surface, warns and leaves the default material.
+`opacity`, `opacityThreshold`, `normal`, `ior`, `specularColor`,
+`clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
+read, and a mesh without a binding does not fall back to its
+`displayColor`.

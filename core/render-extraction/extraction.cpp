@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/extraction.hpp>
 
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace Lotus {
@@ -16,7 +18,7 @@ DrawSummary ExtractDrawSummary(const FrameSnapshot& snapshot) {
 
 bool SceneUpdate::Empty() const {
   return geometry_releases.empty() && geometry_uploads.empty() &&
-         !instances_changed && !environment_changed;
+         !instances_changed && !materials_changed && !environment_changed;
 }
 
 SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
@@ -29,7 +31,15 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
   std::unordered_map<const MeshGeometry*, std::shared_ptr<const MeshGeometry>>
       resident;
   std::vector<SceneInstance> instances;
+  std::vector<Material> materials{Material{}};
   if (snapshot.scene) {
+    // Slot 0 is the default material, for unbound meshes and bindings to a
+    // key without a material.
+    std::unordered_map<std::string_view, std::uint32_t> slots;
+    for (const auto& [id, material] : snapshot.scene->materials) {
+      slots.emplace(id, static_cast<std::uint32_t>(materials.size()));
+      materials.push_back(material);
+    }
     for (const auto& [id, mesh] : snapshot.scene->meshes) {
       (void)id;
       const MeshGeometry* geometry = mesh.geometry.get();
@@ -41,8 +51,10 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
         update.geometry_uploads.push_back(mesh.geometry);
       }
       if (mesh.instance.visible) {
+        const auto slot = slots.find(mesh.material);
+        const std::uint32_t material = slot == slots.end() ? 0 : slot->second;
         for (const Matrix4& placement : PlacementTransforms(mesh.instance)) {
-          instances.push_back({geometry, placement, mesh.material});
+          instances.push_back({geometry, placement, material});
         }
       }
     }
@@ -63,6 +75,11 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
     update.instances = instances;
     instances_ = std::move(instances);
   }
+  if (materials != materials_) {
+    update.materials_changed = true;
+    update.materials = materials;
+    materials_ = std::move(materials);
+  }
   const std::array<float, 3> environment =
       snapshot.scene ? snapshot.scene->environment : std::array<float, 3>{};
   if (environment != environment_) {
@@ -80,6 +97,7 @@ void SceneExtraction::Reset() {
   scene_.reset();
   resident_.clear();
   instances_.clear();
+  materials_ = {Material{}};
   environment_ = {};
   reset_ = true;
 }

@@ -60,8 +60,8 @@ Lotus::MeshInstance Block(const std::array<float, 3>& size, float degrees,
   return instance;
 }
 
-Lotus::SurfaceMaterial Lambert(const std::array<float, 3>& albedo) {
-  Lotus::SurfaceMaterial material;
+Lotus::Material Lambert(const std::array<float, 3>& albedo) {
+  Lotus::Material material;
   material.base_color = albedo;
   return material;
 }
@@ -155,35 +155,40 @@ void SetCornellBox(Lotus::RenderWorld& world) {
       Quad({{{-1, -1, 1}}, {{-1, -1, -1}}, {{-1, 1, -1}}, {{-1, 1, 1}}}), placed);
   world.SetMesh("/cornell/right",
       Quad({{{1, -1, -1}}, {{1, -1, 1}}, {{1, 1, 1}}, {{1, 1, -1}}}), placed);
+  world.SetMaterial("/materials/white", Lambert(kWhite));
+  world.SetMaterial("/materials/red", Lambert(kRed));
+  world.SetMaterial("/materials/green", Lambert(kGreen));
   for (const char* wall : {"/cornell/floor", "/cornell/ceiling", "/cornell/back"})
-    world.SetMeshMaterial(wall, Lambert(kWhite));
-  world.SetMeshMaterial("/cornell/left", Lambert(kRed));
-  world.SetMeshMaterial("/cornell/right", Lambert(kGreen));
+    world.BindMaterial(wall, "/materials/white");
+  world.BindMaterial("/cornell/left", "/materials/red");
+  world.BindMaterial("/cornell/right", "/materials/green");
 
   // A black emitter just under the ceiling, a quarter of its width.
   world.SetMesh("/cornell/light",
       Quad({{{-0.35F, 0.98F, 0.35F}}, {{-0.35F, 0.98F, -0.35F}},
           {{0.35F, 0.98F, -0.35F}}, {{0.35F, 0.98F, 0.35F}}}),
       placed);
-  Lotus::SurfaceMaterial light = Lambert({0.0F, 0.0F, 0.0F});
+  Lotus::Material light = Lambert({0.0F, 0.0F, 0.0F});
   light.emission = {15.0F, 13.0F, 10.0F};
-  world.SetMeshMaterial("/cornell/light", light);
+  world.SetMaterial("/materials/light", light);
+  world.BindMaterial("/cornell/light", "/materials/light");
 
   // The blocks stand a hair above the floor, so no face is coplanar with it.
   world.SetMesh("/cornell/tall", UnitCube(),
       Block({0.6F, 1.2F, 0.6F}, 17.0F, {-0.35F, -0.399F, -0.3F}));
-  Lotus::SurfaceMaterial metal;
+  Lotus::Material metal;
   metal.base_color = {0.95F, 0.85F, 0.6F};
   metal.roughness = 0.35F;
   metal.metallic = 1.0F;
-  world.SetMeshMaterial("/cornell/tall", metal);
+  world.SetMaterial("/materials/metal", metal);
+  world.BindMaterial("/cornell/tall", "/materials/metal");
   world.SetMesh("/cornell/short", UnitCube(),
       Block({0.6F, 0.6F, 0.6F}, -18.0F, {0.38F, -0.699F, 0.3F}));
-  world.SetMeshMaterial("/cornell/short", Lambert(kWhite));
+  world.BindMaterial("/cornell/short", "/materials/white");
 }
 
 void SetCornellRedWall(Lotus::RenderWorld& world, float scale) {
-  world.SetMeshMaterial("/cornell/left",
+  world.SetMaterial("/materials/red",
       Lambert({kRed[0] * scale, kRed[1] * scale, kRed[2] * scale}));
 }
 

@@ -31,8 +31,8 @@ that moment every file is project-owned; the template is not re-applied.
 
 | Directory | Target | Alias | Role |
 | --- | --- | --- | --- |
-| `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU mesh scene with surface materials and a constant environment; immutable snapshots and shared geometry ([scene reference](../reference/SCENE.md)) |
-| `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
+| `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU mesh scene with keyed materials (the material IR in `include/lotus/material.hpp`), mesh material bindings and a constant environment; immutable snapshots and shared geometry ([scene reference](../reference/SCENE.md)) |
+| `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance and material table rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
 | `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, GPU scene buffers and BLAS/TLAS, the reference path-tracing pass and GPU timestamps, swapchain presentation, Slang shaders |
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference ([scene reference](../reference/SCENE.md#reference-images)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
@@ -54,7 +54,7 @@ names the directory of the implementation direction's sketch
 | --- | --- | --- | --- |
 | `LotusScene`: geometry, instances, materials, textures, lights, cameras, render settings (§4.1) — the scaffold's `RenderWorld` is its seed | `core/render-world/` | `lotus-render-world` | `src/lotus/scene/` |
 | The update plan: which `LotusScene` changes become which GPU uploads, BLAS refits or rebuilds (§4.2, §20) | `core/render-extraction/` | `lotus-render-extraction` | — |
-| Lotus material IR (§18) | `core/material/` when it exists | new core target | `src/lotus/material/` |
+| Lotus material IR (§18) | `include/lotus/material.hpp`, header-only; `core/material/` once it needs code | `lotus-render-world`; a new core target then | `src/lotus/material/` |
 | Integrator selection, interactive / progressive mode, deterministic-mode settings (§21, §26, §34) | `core/integrator/` when it exists | new core target | `src/lotus/integrator/` |
 | Render graph (§35) | `core/render-graph/` when it exists | new core target | — |
 | Vulkan device, memory, descriptors, pipelines, GPU timers | `backend/vulkan/` | `lotus-render-vulkan` | `src/vulkan/{device,memory,descriptor,pipeline}/` |

@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <lotus/material.hpp>
+
 namespace Lotus {
 
 // A 4x4 matrix in column-major order that multiplies column vectors: element
@@ -59,32 +61,20 @@ struct MeshInstance {
 [[nodiscard]] std::vector<Matrix4> PlacementTransforms(
     const MeshInstance& instance);
 
-// How a mesh's surface scatters and emits light: the reference path tracer's
-// parameters until the material IR (Renderer Phase 1.5) replaces them. Colours
-// are linear RGB. The defaults are UsdPreviewSurface's.
-struct SurfaceMaterial {
-  // Lambert albedo, and the GGX reflectance at normal incidence (F0) where
-  // the surface is metallic. Each component in [0, 1].
-  std::array<float, 3> base_color{0.18F, 0.18F, 0.18F};
-  // GGX roughness in [0, 1]; the microfacet alpha is its square.
-  float roughness = 0.5F;
-  // The GGX metal's share of the reflectance in [0, 1]; the rest is Lambert.
-  float metallic = 0.0F;
-  // Emitted radiance, non-negative, from both sides of the surface.
-  std::array<float, 3> emission{0.0F, 0.0F, 0.0F};
-
-  bool operator==(const SurfaceMaterial&) const = default;
-};
-
 struct SceneMesh {
   std::shared_ptr<const MeshGeometry> geometry;
   MeshInstance instance;
-  SurfaceMaterial material;
+  // The key of the material in LotusScene::materials that the mesh is bound
+  // to. Empty, or a key with no material, means the default Material.
+  std::string material;
 };
 
 struct LotusScene {
   // Stable host-supplied identifiers, in deterministic order.
   std::map<std::string, SceneMesh> meshes;
+  // The material IR, keyed by stable host-supplied identifiers that meshes
+  // bind to, in deterministic order.
+  std::map<std::string, Material> materials;
   // Constant environment radiance, linear RGB, arriving from every direction
   // a path escapes in. Camera rays that miss do not see it.
   std::array<float, 3> environment{0.0F, 0.0F, 0.0F};
@@ -108,9 +98,15 @@ public:
   void SetMesh(const std::string& id, MeshGeometry geometry,
       const MeshInstance& instance);
   void SetMeshInstance(const std::string& id, const MeshInstance& instance);
-  // A mesh keeps its material when its geometry or instance is replaced.
-  void SetMeshMaterial(const std::string& id, const SurfaceMaterial& material);
+  // A mesh keeps its material binding when its geometry or instance is
+  // replaced. Any key may be bound, including one without a material yet.
+  void BindMaterial(const std::string& mesh_id, const std::string& material_id);
   void RemoveMesh(const std::string& id);
+  // Inserts or replaces a material; the meshes bound to its key follow it.
+  void SetMaterial(const std::string& id, const Material& material);
+  // The meshes bound to a removed material keep their binding and use the
+  // default Material until it returns.
+  void RemoveMaterial(const std::string& id);
   void SetEnvironment(const std::array<float, 3>& radiance);
   [[nodiscard]] FrameSnapshot Commit();
 

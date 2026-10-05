@@ -80,16 +80,18 @@ struct PathConstants {
   float background[4];
   float ndc_from_pixel[4];
   std::uint64_t instances;
+  std::uint64_t materials;
   std::uint32_t sample_index;
   std::uint32_t accumulated;
   std::uint32_t add_sample;
   std::uint32_t max_bounces;
   std::uint32_t width;
-  std::uint32_t reserved;
+  std::uint32_t reserved[3];
 };
-static_assert(sizeof(PathConstants) == 80 &&
+static_assert(sizeof(PathConstants) == 96 &&
               offsetof(PathConstants, instances) == 48 &&
-              offsetof(PathConstants, width) == 72);
+              offsetof(PathConstants, materials) == 56 &&
+              offsetof(PathConstants, width) == 80);
 
 // The path tracer's kPass specialization constant.
 constexpr std::uint32_t kCameraPass = 0;
@@ -642,6 +644,7 @@ public:
     constants.ndc_from_pixel[2] = -2.0F * viewport.x / viewport.width - 1.0F;
     constants.ndc_from_pixel[3] = -2.0F * viewport.y / viewport.height - 1.0F;
     constants.instances = scene_.InstanceAddress();
+    constants.materials = scene_.MaterialAddress();
     constants.sample_index = settings.sample_index + accumulated_samples_;
     constants.accumulated = accumulated_samples_;
     constants.add_sample = add_sample ? 1U : 0U;
