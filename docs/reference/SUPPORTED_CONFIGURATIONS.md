@@ -19,6 +19,9 @@ local run, and the report named in the row holds its detail.
 | Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` | NVIDIA RTX A5000 | Path-tracing checks, 8/8 tests and strict evidence validation passed | [BSDF and multi-bounce](../reports/2026-10-05-bsdf-multibounce.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Path-traced AOVs, usdview, 14/14 tests and strict evidence validation passed | [BSDF and multi-bounce](../reports/2026-10-05-bsdf-multibounce.md) |
 | Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained ray-query and path-tracing SKIPs | [BSDF and multi-bounce](../reports/2026-10-05-bsdf-multibounce.md) |
+| Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` | NVIDIA RTX A5000 | Accumulation and path-tracing checks, 8/8 tests and strict evidence validation passed | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
+| Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Float colour AOVs, progressive usdview convergence, 14/14 tests and strict evidence validation passed | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
+| Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained ray-query and path-tracing SKIPs | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
 
 ## Requirements
 
@@ -33,10 +36,12 @@ local run, and the report named in the row holds its detail.
 | GLFW | 3.4 | standalone viewport only; `find_package`, else a pinned FetchContent |
 
 Ray-traced scene rendering requires `VK_KHR_ray_query`, `rayQuery`,
-acceleration structures and buffer device addresses. The bootstrap remains
+acceleration structures, buffer device addresses, `fragmentStoresAndAtomics`
+and RGBA32F colour attachments with storage. The bootstrap remains
 available without them, and headless ray-query and path-tracing checks
 report an explained SKIP. The measured runs are in the
 [ray-query report](../reports/2026-10-05-primary-rays.md) and the
-[BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md).
+[BSDF and multi-bounce report](../reports/2026-10-05-bsdf-multibounce.md) and the
+[HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md).
 
 Linux, macOS, AMD and Intel GPUs are not measured.

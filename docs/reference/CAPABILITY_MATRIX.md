@@ -17,7 +17,7 @@ Configurations each row was measured on are
 | Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` recursively discovers all public headers, including backend headers. `lotus-renderer-core-boundary-discovery` checks newly added nested headers against foreign dependencies |
 | Core and Hydra source CI definition | 🧪 | Registered external workflow and `openstrata.ci.yaml`; matrix and pinned artifact verified locally, core 6/6 and Hydra 11/11 tests pass. GitHub-hosted execution is not measured ([CI report](../reports/2026-10-04-foundation-ci.md)) |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
-| Offscreen colour (RGBA8) and depth (D32) render products, read back | ✅ | bootstrap, path-traced and barycentric diagnostic output at the requested size, with display/data windows; `renderer.render_product.color`, `.depth`, `renderer.ray_query.triangle`, `renderer.path.bsdf` |
+| Offscreen colour and depth (D32) render products, read back | ✅ | RGBA8 bootstrap and RGBA32F path-traced and barycentric diagnostic output at the requested size, with display/data windows; `renderer.render_product.color`, `.depth`, `renderer.ray_query.triangle`, `renderer.path.bsdf`, `.accumulation` |
 | Foundation AOV formats and clears | ✅ | [AOV reference](AOVS.md); transparent-black colour, window depth 1, CPU ID sentinels. `renderer.aov.clears` checks full-target clears, empty scenes and preservation across frames; [measured run](../reports/2026-10-04-foundation-aovs.md) |
 | Repeated frames on persistent resources | 🧪 | `Lotus::OffscreenRenderer`: the instance, device and pipeline outlive frames, and the targets are recreated only when their size changes; one frame in flight, read back each frame. 1,000 deterministic frames, another at the same size and a resize; `renderer.gpu.frame`, `renderer.frame.persistence`. The Hydra adapter keeps one renderer across frames (usdview smoke test) |
 | Swapchain presentation, one frame in flight | 🧪 | `lotus-viewport`; the bootstrap triangle through the core camera, with its perspective aspect updated from the framebuffer extent |
@@ -40,7 +40,8 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | Surface hit reconstruction, multiple bounces and Russian roulette | ✅ | [Scene reference](SCENE.md#path-tracing): one brute-force path per pixel centre in a fragment pass, `PathTracingSettings::max_bounces` and `sample_index`. `renderer.path.multibounce`: exact bounce-limited radiance and the converged mean in a closed emissive box; [measured run](../reports/2026-10-05-bsdf-multibounce.md) |
 | Lambert, minimal GGX, emissive surfaces | ✅ | Per-mesh `SurfaceMaterial` (Lambert and a GGX metal mixed by `metallic`, two-sided emission) until the material IR; `renderer.path.bsdf` compares exact Lambert radiance and GGX directional albedo from independent quadrature. No dielectric specular layer |
 | Environment light | ✅ | A constant environment radiance on `LotusScene`, uniform, not seen by camera rays; Hydra sets a white fallback. Dome lights and environment maps are not read |
-| HDR accumulation; deterministic reference images — the reference path tracer | ⬜ | Renderer Phase 1 |
+| HDR accumulation, 1-pixel box filter, float colour output | ✅ | [Scene reference](SCENE.md#accumulation-and-the-pixel-filter): an RGBA32F accumulation restarted by scene, camera, framing and settings changes, capped by `max_samples`; Hydra converges progressively at `convergedSamplesPerPixel`. `renderer.path.accumulation`: box coverage against each pixel's projected-triangle area, unclamped HDR radiance, split frames and restart rules; [measured run](../reports/2026-10-05-hdr-accumulation.md) |
+| Deterministic reference images — the reference path tracer | ⬜ | Renderer Phase 1 |
 | Minimal material IR; basic `UsdPreviewSurface` translation | ⬜ | Renderer Phase 1.5 |
 | Wavefront queues, compaction, indirect dispatch | ⬜ | Renderer Phase 2 |
 | NEE, MIS, environment importance sampling | ⬜ | Renderer Phase 3 |
@@ -60,12 +61,13 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | --- | --- | --- |
 | Plugin discovery through `plugInfo.json` | ✅ | `renderer.plugin.discovery` |
 | Render delegate creation | ✅ | `renderer.delegate.creation`; measured against OpenUSD 26.08 (`HD_API_VERSION` 98) |
-| CPU colour / depth / primId `HdRenderBuffer`s | ✅ | `renderer.render_buffer.cpu`; `lotus-renderer-hydra-render-buffer` checks descriptors, formats, map guards and row order. IDs are clear sentinels only ([AOV reference](AOVS.md)) |
+| CPU colour / depth / primId `HdRenderBuffer`s | ✅ | `renderer.render_buffer.cpu`; `lotus-renderer-hydra-render-buffer` checks descriptors, formats, colour conversion, map guards and row order. Float32 colour by default, 8-bit accepted. IDs are clear sentinels only ([AOV reference](AOVS.md)) |
 | AOV binding validation and empty-scene output | ✅ | `lotus-renderer-hydra-aov`: all bindings checked before rendering, host clear values, no-clear preservation at the same size, disappearance of the last mesh and depth-only recovery. GPU capability-gated CTest; [measured run](../reports/2026-10-04-foundation-aovs.md) |
-| First frame and a stable update in `testusdview` | ✅ | `renderer.host.first_frame`, `.host.stable_update`; path tracing through the Hydra camera/framing on ray-query devices, bootstrap otherwise, with no Vulkan validation message; [measured run](../reports/2026-10-05-bsdf-multibounce.md) |
+| First frame and a stable update in `testusdview` | ✅ | `renderer.host.first_frame`, `.host.stable_update`; progressive path tracing through the Hydra camera/framing to 64 spp on ray-query devices, bootstrap otherwise, with no Vulkan validation message; [measured run](../reports/2026-10-05-hdr-accumulation.md) |
 | GPU capability gate for `testusdview` | ✅ | Explicit `renderer.gpu.frame` SKIP returns before launching the viewer; CTest reports the host test as skipped. Failed, missing, malformed or unexplained evidence fails. `lotus-renderer-host-capability-gate` and [CI report](../reports/2026-10-04-foundation-ci.md) |
 | Supported prim types | ✅ | `mesh` (coarse geometry and ordinary placement extracted, uploaded and traced on ray-query devices), `camera` (through render pass state), `renderBuffer`; collection/render-tag filtering and instancers remain incomplete |
-| Instancers, materials, lights, render settings | ⬜ | every mesh has the default `SurfaceMaterial` under a white fallback environment |
+| Render settings | 🧪 | `convergedSamplesPerPixel` only |
+| Instancers, materials, lights | ⬜ | every mesh has the default `SurfaceMaterial` under a white fallback environment |
 
 ## Hosts
 

@@ -15,6 +15,7 @@ to measure.
 | [2026-10-05-blas-tlas.md](2026-10-05-blas-tlas.md) | A BLAS per resident geometry and a TLAS refitted or rebuilt per instance rewrite; TLAS build input and build counts checked by readback, two fault injections; core 8/8, Hydra 14/14 and strict evidence validation. |
 | [2026-10-05-primary-rays.md](2026-10-05-primary-rays.md) | First ray-traced triangle: closest-hit barycentrics/depth compared with CPU projections across scene edits, clipping, framing and resize; primary-ray timestamps, Hydra silhouette checks, core 8/8, ci-core 8/8 and Hydra 14/14. |
 | [2026-10-05-bsdf-multibounce.md](2026-10-05-bsdf-multibounce.md) | Lambert and GGX-metal BSDFs, emission, a constant environment, multiple bounces and Russian roulette: exact single-scattering and bounce-limited radiance, GGX albedo against independent quadrature, a closed-box mean, five fault injections; core 8/8, ci-core 8/8 and Hydra 14/14. |
+| [2026-10-05-hdr-accumulation.md](2026-10-05-hdr-accumulation.md) | First physically correct image: RGBA32F accumulation, 1-pixel box filter against analytic pixel coverage, unclamped HDR, split-frame equality, restart rules and `max_samples`, float Hydra colour and progressive usdview convergence; five fault injections, core 8/8, ci-core 8/8 and Hydra 14/14. |
 
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and

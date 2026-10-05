@@ -39,8 +39,9 @@ public:
 
   // The source is a backend product: the buffer's size, rows top-down. Hydra
   // render buffers store rows bottom-up, so the rows are flipped on the way in.
-  bool WriteColor(const std::vector<std::uint8_t>& rgba8,
-      std::uint32_t source_width, std::uint32_t source_height);
+  // An rgba8-unorm or rgba32-sfloat colour product converts to the buffer's
+  // UNorm8Vec4 or Float32Vec4; conversion to UNorm8 clamps to [0, 1].
+  bool WriteColor(const Lotus::ColorProduct& color);
   bool WriteDepth(const std::vector<float>& depth,
       std::uint32_t source_width, std::uint32_t source_height);
   bool WriteIds(std::int32_t value);
@@ -90,6 +91,9 @@ public:
   void DestroyBprim(HdBprim* bprim) override;
   void CommitResources(HdChangeTracker* tracker) override;
   HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
+  // convergedSamplesPerPixel: the radiance samples per pixel at which a
+  // path-traced frame converges.
+  HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();
   // The GPU scene after the latest render pass; empty before the first.

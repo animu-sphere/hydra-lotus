@@ -64,6 +64,8 @@ using vulkan_internal::VulkanOk;
 using vulkan_internal::VulkanWorldToClip;
 
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+// The scene pass's colour target and its radiance accumulation image.
+constexpr VkFormat kSceneColorFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
 struct RayConstants {
@@ -72,19 +74,59 @@ struct RayConstants {
 };
 static_assert(sizeof(RayConstants) == 128);
 
-// The scene pass's uniform block, std140; mirrored in path_trace.slang.
+// The scene passes' uniform block, std140; mirrored in path_trace.slang.
 struct PathConstants {
   float environment[4];
+  float background[4];
+  float ndc_from_pixel[4];
   std::uint64_t instances;
   std::uint32_t sample_index;
+  std::uint32_t accumulated;
+  std::uint32_t add_sample;
   std::uint32_t max_bounces;
-  std::uint32_t output;
   std::uint32_t width;
-  std::uint32_t reserved[2];
+  std::uint32_t reserved;
 };
-static_assert(sizeof(PathConstants) == 48 &&
-              offsetof(PathConstants, instances) == 16 &&
-              offsetof(PathConstants, width) == 36);
+static_assert(sizeof(PathConstants) == 80 &&
+              offsetof(PathConstants, instances) == 48 &&
+              offsetof(PathConstants, width) == 72);
+
+// The path tracer's kPass specialization constant.
+constexpr std::uint32_t kCameraPass = 0;
+constexpr std::uint32_t kRadiancePass = 1;
+
+// What one frame draws: the bootstrap triangle into the RGBA8 targets, or
+// the scene into the RGBA32F targets, either the camera pass alone
+// (barycentrics) or the camera pass's depth and then the radiance pass.
+enum class FramePass {
+  Bootstrap,
+  Barycentrics,
+  Radiance,
+};
+
+// How a pipeline differs from the others. A scene pipeline specializes the
+// path tracer's kPass; the radiance pass leaves depth to the camera pass.
+struct PipelineOptions {
+  VkRenderPass render_pass = VK_NULL_HANDLE;
+  std::optional<std::uint32_t> pass;
+  bool color_write = true;
+  bool depth = true;
+};
+
+// What a Radiance accumulation depends on. A frame with another key, or
+// after the scene targets were recreated, restarts it.
+struct AccumulationKey {
+  Matrix4 world_to_clip{};
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::array<float, 4> display_window{};
+  std::array<std::int32_t, 4> data_window{};
+  std::uint32_t sample_index = 0;
+  std::uint32_t max_bounces = 0;
+  std::uint64_t scene_generation = 0;
+
+  bool operator==(const AccumulationKey&) const = default;
+};
 
 bool Invert(const Matrix4& matrix, Matrix4& inverse) {
   double rows[4][8]{};
@@ -270,10 +312,16 @@ VkRect2D DataScissor(const OffscreenTarget& target) {
 }
 
 // The images, framebuffer and persistently mapped readback buffers of one
-// target size.
+// target size, for one colour format. The scene targets also hold the
+// radiance accumulation image.
 struct Targets {
+  VkFormat color_format = VK_FORMAT_UNDEFINED;
+  std::uint32_t color_pixel_bytes = 0;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
+  VkImage accumulation_image = VK_NULL_HANDLE;
+  VkDeviceMemory accumulation_memory = VK_NULL_HANDLE;
+  VkImageView accumulation_view = VK_NULL_HANDLE;
   VkImage color_image = VK_NULL_HANDLE;
   VkDeviceMemory color_memory = VK_NULL_HANDLE;
   VkImageView color_view = VK_NULL_HANDLE;
@@ -297,12 +345,15 @@ public:
   ~VulkanOffscreenRenderer() override {
     if (device_ != VK_NULL_HANDLE) {
       vkDeviceWaitIdle(device_);
-      DestroyTargets();
+      DestroyTargets(targets_);
+      DestroyTargets(scene_targets_);
       scene_.Destroy();
       vkDestroyFence(device_, fence_, nullptr);
       vkDestroyPipeline(device_, pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
-      vkDestroyPipeline(device_, ray_pipeline_, nullptr);
+      vkDestroyPipeline(device_, camera_pipeline_, nullptr);
+      vkDestroyPipeline(device_, depth_pipeline_, nullptr);
+      vkDestroyPipeline(device_, radiance_pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
       vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
       vkDestroyDescriptorSetLayout(device_, ray_descriptor_layout_, nullptr);
@@ -312,6 +363,7 @@ public:
       vkFreeMemory(device_, path_constants_memory_, nullptr);
       vkDestroyQueryPool(device_, ray_timestamps_, nullptr);
       vkDestroyRenderPass(device_, render_pass_, nullptr);
+      vkDestroyRenderPass(device_, scene_render_pass_, nullptr);
       vkDestroyCommandPool(device_, command_pool_, nullptr);
       vkDestroyDevice(device_, nullptr);
     }
@@ -336,18 +388,34 @@ public:
     if (!SelectDevice(status, detail) || !CreateDevice(detail) ||
         !scene_.Initialize(physical_device_, device_, queue_, queue_family_,
             acceleration_, detail) ||
-        !CreateRenderPass(detail) ||
+        !CreateRenderPass(kColorFormat, render_pass_, detail) ||
+        !CreatePipelineLayout(false, pipeline_layout_, detail) ||
         !CreatePipeline(vertex_words, fragment_words, pipeline_layout_,
-            pipeline_, false, detail)) {
+            {render_pass_}, pipeline_, detail)) {
       return false;
     }
+    targets_.color_format = kColorFormat;
+    targets_.color_pixel_bytes = 4;
+    scene_targets_.color_format = kSceneColorFormat;
+    scene_targets_.color_pixel_bytes = 16;
     if (ray_query_.available && !ray_shaders.vertex.empty() &&
         !ray_shaders.fragment.empty()) {
+      // One shader module serves three pipelines: the camera pass with
+      // and without colour writes, and the radiance pass, which leaves
+      // depth to the camera pass.
       if (!CreateRayResources(detail) ||
+          !CreateRenderPass(kSceneColorFormat, scene_render_pass_, detail) ||
+          !CreatePipelineLayout(true, ray_layout_, detail) ||
           !LoadSpirv(ray_shaders.vertex, vertex_words, detail) ||
           !LoadSpirv(ray_shaders.fragment, fragment_words, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
-              ray_pipeline_, true, detail))
+              {scene_render_pass_, kCameraPass}, camera_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kCameraPass, false}, depth_pipeline_,
+              detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kRadiancePass, true, false},
+              radiance_pipeline_, detail))
         return false;
     }
     status = FrameStatus::Pass;
@@ -356,7 +424,7 @@ public:
 
   GpuFrameEvidence Render(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count) override {
-    return RenderFrame(draw, target, frame_count, false);
+    return RenderFrame(draw, target, frame_count, FramePass::Bootstrap, {});
   }
 
   BackendCapability RayQueryCapability() const override {
@@ -370,7 +438,7 @@ public:
       return Evidence(FrameStatus::Fail, "the renderer failed earlier: " + failure_);
     if (!ray_query_.available)
       return Evidence(FrameStatus::Skip, ray_query_.detail);
-    if (ray_pipeline_ == VK_NULL_HANDLE)
+    if (camera_pipeline_ == VK_NULL_HANDLE)
       return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
     if (settings.output != SceneOutput::Radiance &&
         settings.output != SceneOutput::Barycentrics)
@@ -378,50 +446,20 @@ public:
     ray_constants_.world_to_clip = VulkanWorldToClip(draw.world_to_clip);
     if (!Invert(ray_constants_.world_to_clip, ray_constants_.clip_to_world))
       return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
-    // The previous frame has finished, so its constants can be overwritten.
-    PathConstants constants{};
-    const std::array<float, 3>& environment = scene_.Environment();
-    std::copy(environment.begin(), environment.end(), constants.environment);
-    constants.instances = scene_.InstanceAddress();
-    constants.sample_index = settings.sample_index;
-    constants.max_bounces = settings.max_bounces;
-    constants.output = settings.output == SceneOutput::Barycentrics ? 1U : 0U;
-    constants.width = target.width;
-    std::memcpy(path_constants_mapped_, &constants, sizeof(constants));
-    if (!path_constants_coherent_) {
-      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-      range.memory = path_constants_memory_;
-      range.size = VK_WHOLE_SIZE;
-      if (std::string detail; !VulkanOk(
-              vkFlushMappedMemoryRanges(device_, 1, &range),
-              "vkFlushMappedMemoryRanges(path constants)", detail))
-        return Evidence(FrameStatus::Fail, detail);
-    }
-    // A TLAS can be replaced by UpdateScene. Update its descriptor only after
-    // the preceding synchronous frame and scene update have finished.
-    const VkAccelerationStructureKHR tlas = scene_.Tlas();
-    if (tlas != VK_NULL_HANDLE) {
-      VkWriteDescriptorSetAccelerationStructureKHR acceleration_write{
-          VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-      acceleration_write.accelerationStructureCount = 1;
-      acceleration_write.pAccelerationStructures = &tlas;
-      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-      write.pNext = &acceleration_write;
-      write.dstSet = ray_descriptor_;
-      write.dstBinding = 0;
-      write.descriptorCount = 1;
-      write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-      vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-    }
-    return RenderFrame(draw, target, frame_count, true);
+    return RenderFrame(draw, target, frame_count,
+        settings.output == SceneOutput::Barycentrics ? FramePass::Barycentrics
+                                                     : FramePass::Radiance,
+        settings);
   }
 
   GpuFrameEvidence RenderFrame(const DrawSummary& draw,
-      const OffscreenTarget& target, std::uint32_t frame_count, bool trace) {
+      const OffscreenTarget& target, std::uint32_t frame_count,
+      FramePass pass, const PathTracingSettings& settings) {
     if (!failure_.empty()) {
       return Evidence(FrameStatus::Fail,
           "the renderer failed earlier: " + failure_);
     }
+    const bool trace = pass != FramePass::Bootstrap;
     if (!trace && !((draw.draw_count == 1 && draw.triangle_count == 1) ||
                       (draw.draw_count == 0 && draw.triangle_count == 0))) {
       return Evidence(FrameStatus::Fail,
@@ -450,15 +488,47 @@ public:
       return Evidence(FrameStatus::Fail, message.str());
     }
 
+    Targets& targets = trace ? scene_targets_ : targets_;
     std::string detail;
-    if (!EnsureTargets(target.width, target.height, detail) ||
-        !Record(draw, target, trace, detail)) {
+    if (!EnsureTargets(targets, target.width, target.height, detail)) {
+      return Evidence(FrameStatus::Fail, detail);
+    }
+    // A Radiance frame continues the accumulation when nothing it depends
+    // on has changed, and adds at most `max_samples` in all. Once there is
+    // nothing to add, one submission writes the accumulated mean again.
+    std::uint32_t submissions = frame_count;
+    std::uint32_t samples_to_add = 0;
+    if (pass == FramePass::Radiance) {
+      const AccumulationKey key{ray_constants_.world_to_clip, target.width,
+          target.height, target.display_window, target.data_window,
+          settings.sample_index, settings.max_bounces, scene_generation_};
+      if (accumulation_key_ != key) {
+        accumulation_key_ = key;
+        accumulated_samples_ = 0;
+      }
+      const std::uint32_t room =
+          settings.max_samples == 0
+              ? frame_count
+              : settings.max_samples -
+                    std::min(settings.max_samples, accumulated_samples_);
+      samples_to_add = std::min(frame_count, room);
+      submissions = std::max(samples_to_add, 1U);
+    }
+    if (trace) {
+      UpdateSceneDescriptors(targets);
+    }
+    bool initializing = !targets.initialized;
+    if (!Record(draw, target, targets, pass, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &command_;
-    for (std::uint32_t frame = 0; frame < frame_count; ++frame) {
+    for (std::uint32_t frame = 0; frame < submissions; ++frame) {
+      const bool add_sample = frame < samples_to_add;
+      if (trace && !WritePathConstants(target, settings, add_sample, detail)) {
+        return Evidence(FrameStatus::Fail, detail);
+      }
       // A failure here may leave the command buffer pending, so it can never
       // be recorded again.
       if (!VulkanOk(vkResetFences(device_, 1, &fence_), "vkResetFences",
@@ -472,23 +542,36 @@ public:
         return Evidence(FrameStatus::Fail, detail);
       }
       ++completion_;
-      targets_.initialized = true;
+      if (add_sample) {
+        ++accumulated_samples_;
+      }
+      targets.initialized = true;
+      // The first recording gives fresh images their layouts, which would
+      // discard the accumulation if it were submitted again.
+      if (initializing && frame + 1 < submissions) {
+        initializing = false;
+        if (!Record(draw, target, targets, pass, detail)) {
+          return Evidence(FrameStatus::Fail, detail);
+        }
+      }
     }
-    if (!InvalidateIfNeeded(device_, targets_.color_readback_memory,
-            targets_.color_readback_coherent, detail) ||
-        !InvalidateIfNeeded(device_, targets_.depth_readback_memory,
-            targets_.depth_readback_coherent, detail)) {
+    if (!InvalidateIfNeeded(device_, targets.color_readback_memory,
+            targets.color_readback_coherent, detail) ||
+        !InvalidateIfNeeded(device_, targets.depth_readback_memory,
+            targets.depth_readback_coherent, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
 
-    const std::uint32_t width = targets_.width;
-    const std::uint32_t height = targets_.height;
+    const std::uint32_t width = targets.width;
+    const std::uint32_t height = targets.height;
     const std::size_t pixel_count = std::size_t{width} * height;
     GpuFrameEvidence evidence = Evidence(FrameStatus::Pass, "");
     evidence.ray_query_used = trace;
     evidence.completion = completion_;
-    evidence.frames_rendered = frame_count;
+    evidence.frames_rendered = submissions;
     evidence.target_creations = target_creations_;
+    evidence.samples_per_pixel =
+        pass == FramePass::Radiance ? accumulated_samples_ : 0;
     evidence.validation_available = instance_state_.validation_available;
     evidence.validation_message_count = validation_.message_count;
     evidence.validation_detail = validation_.first_message.empty()
@@ -496,12 +579,12 @@ public:
                                      : validation_.first_message;
     evidence.color.width = width;
     evidence.color.height = height;
-    evidence.color.row_pitch = width * 4U;
-    evidence.color.pixel_format = "rgba8-unorm";
+    evidence.color.row_pitch = width * targets.color_pixel_bytes;
+    evidence.color.pixel_format = trace ? "rgba32-sfloat" : "rgba8-unorm";
     evidence.color.origin = "top-left";
     evidence.color.color_space = "linear";
-    evidence.color.payload.resize(pixel_count * 4U);
-    std::memcpy(evidence.color.payload.data(), targets_.color_mapped,
+    evidence.color.payload.resize(pixel_count * targets.color_pixel_bytes);
+    std::memcpy(evidence.color.payload.data(), targets.color_mapped,
         evidence.color.payload.size());
     evidence.depth.width = width;
     evidence.depth.height = height;
@@ -509,7 +592,7 @@ public:
     evidence.depth.pixel_format = "d32-sfloat";
     evidence.depth.origin = "top-left";
     evidence.depth.payload.resize(pixel_count);
-    std::memcpy(evidence.depth.payload.data(), targets_.depth_mapped,
+    std::memcpy(evidence.depth.payload.data(), targets.depth_mapped,
         pixel_count * sizeof(float));
 
     if (trace && ray_timestamps_ != VK_NULL_HANDLE) {
@@ -537,14 +620,82 @@ public:
                 << VK_API_VERSION_PATCH(device_properties_.apiVersion);
     evidence.api_version = api_version.str();
     std::ostringstream success;
-    success << "rendered " << frame_count << " deterministic frames on "
+    success << "rendered " << submissions << " deterministic frames on "
             << device_properties_.deviceName;
     evidence.detail = success.str();
     return evidence;
   }
 
+  // Called after the preceding synchronous frame or submission has
+  // finished, so the block can be overwritten.
+  bool WritePathConstants(const OffscreenTarget& target,
+      const PathTracingSettings& settings, bool add_sample,
+      std::string& detail) {
+    PathConstants constants{};
+    const std::array<float, 3>& environment = scene_.Environment();
+    std::copy(environment.begin(), environment.end(), constants.environment);
+    std::copy(target.clear_color.begin(), target.clear_color.end(),
+        constants.background);
+    const VkViewport viewport = DisplayViewport(target);
+    constants.ndc_from_pixel[0] = 2.0F / viewport.width;
+    constants.ndc_from_pixel[1] = 2.0F / viewport.height;
+    constants.ndc_from_pixel[2] = -2.0F * viewport.x / viewport.width - 1.0F;
+    constants.ndc_from_pixel[3] = -2.0F * viewport.y / viewport.height - 1.0F;
+    constants.instances = scene_.InstanceAddress();
+    constants.sample_index = settings.sample_index + accumulated_samples_;
+    constants.accumulated = accumulated_samples_;
+    constants.add_sample = add_sample ? 1U : 0U;
+    constants.max_bounces = settings.max_bounces;
+    constants.width = target.width;
+    std::memcpy(path_constants_mapped_, &constants, sizeof(constants));
+    if (path_constants_coherent_) {
+      return true;
+    }
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+    range.memory = path_constants_memory_;
+    range.size = VK_WHOLE_SIZE;
+    return VulkanOk(vkFlushMappedMemoryRanges(device_, 1, &range),
+        "vkFlushMappedMemoryRanges(path constants)", detail);
+  }
+
+  // UpdateScene can replace the TLAS and EnsureTargets the accumulation
+  // image. Both are written after the preceding synchronous frame and scene
+  // update have finished.
+  void UpdateSceneDescriptors(const Targets& targets) {
+    VkWriteDescriptorSet writes[2]{};
+    std::uint32_t count = 0;
+    const VkAccelerationStructureKHR tlas = scene_.Tlas();
+    VkWriteDescriptorSetAccelerationStructureKHR acceleration_write{
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    acceleration_write.accelerationStructureCount = 1;
+    acceleration_write.pAccelerationStructures = &tlas;
+    if (tlas != VK_NULL_HANDLE) {
+      VkWriteDescriptorSet& write = writes[count++];
+      write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      write.pNext = &acceleration_write;
+      write.dstSet = ray_descriptor_;
+      write.dstBinding = 0;
+      write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    }
+    const VkDescriptorImageInfo accumulation{VK_NULL_HANDLE,
+        targets.accumulation_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet& write = writes[count++];
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = ray_descriptor_;
+    write.dstBinding = 2;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.pImageInfo = &accumulation;
+    vkUpdateDescriptorSets(device_, count, writes, 0, nullptr);
+  }
+
   GpuSceneEvidence UpdateScene(const SceneUpdate& update) override {
     GpuSceneEvidence evidence;
+    // Any change to the scene restarts the radiance accumulation.
+    if (!update.Empty()) {
+      ++scene_generation_;
+    }
     if (!failure_.empty()) {
       evidence.status = FrameStatus::Fail;
       evidence.detail = "the renderer failed earlier: " + failure_;
@@ -638,6 +789,28 @@ private:
     // still uploads its buffers and reports why it builds no BLAS or TLAS.
     acceleration_ = ProbeAccelerationStructures(physical_device_);
     ray_query_ = vulkan_internal::ProbeRayQueries(physical_device_, acceleration_);
+    // The scene passes write RGBA32F, and the radiance pass accumulates
+    // into a storage image from the fragment stage.
+    if (ray_query_.available) {
+      VkPhysicalDeviceFeatures features{};
+      vkGetPhysicalDeviceFeatures(physical_device_, &features);
+      VkFormatProperties scene_color{};
+      vkGetPhysicalDeviceFormatProperties(physical_device_, kSceneColorFormat,
+          &scene_color);
+      const VkFormatFeatureFlags scene_required =
+          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+          VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+      if (features.fragmentStoresAndAtomics != VK_TRUE) {
+        ray_query_ = {false, "the device does not support "
+                             "fragmentStoresAndAtomics, which radiance "
+                             "accumulation requires"};
+      } else if ((scene_color.optimalTilingFeatures & scene_required) !=
+                 scene_required) {
+        ray_query_ = {false, "RGBA32F colour attachments with storage and "
+                             "readback are unavailable"};
+      }
+    }
     std::uint32_t queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_count, nullptr);
     std::vector<VkQueueFamilyProperties> queues(queue_count);
@@ -665,9 +838,13 @@ private:
     VkPhysicalDeviceRayQueryFeaturesKHR enabled_query{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
     enabled_query.rayQuery = VK_TRUE;
+    VkPhysicalDeviceFeatures enabled_features{};
+    enabled_features.fragmentStoresAndAtomics =
+        ray_query_.available ? VK_TRUE : VK_FALSE;
     std::vector<const char*> extensions;
     VkDeviceCreateInfo device_create{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     device_create.pNext = &enabled_vulkan11;
+    device_create.pEnabledFeatures = &enabled_features;
     if (acceleration_.available) {
       enabled_vulkan11.pNext = &enabled_vulkan12;
       enabled_vulkan12.pNext = &enabled_acceleration;
@@ -714,9 +891,10 @@ private:
         "vkCreateFence", detail);
   }
 
-  bool CreateRenderPass(std::string& detail) {
+  bool CreateRenderPass(VkFormat color_format, VkRenderPass& render_pass,
+      std::string& detail) {
     VkAttachmentDescription attachments[2]{};
-    attachments[0].format = kColorFormat;
+    attachments[0].format = color_format;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -774,12 +952,12 @@ private:
     render_pass_create.dependencyCount = 2;
     render_pass_create.pDependencies = dependencies;
     return VulkanOk(vkCreateRenderPass(device_, &render_pass_create, nullptr,
-                        &render_pass_),
+                        &render_pass),
         "vkCreateRenderPass", detail);
   }
 
   bool CreateRayResources(std::string& detail) {
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    VkDescriptorSetLayoutBinding bindings[3]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -788,8 +966,12 @@ private:
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout.bindingCount = 2;
+    layout.bindingCount = 3;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -797,10 +979,11 @@ private:
       return false;
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
-    pool.poolSizeCount = 2;
+    pool.poolSizeCount = 3;
     pool.pPoolSizes = sizes;
     if (!VulkanOk(vkCreateDescriptorPool(device_, &pool, nullptr,
                       &ray_descriptor_pool_),
@@ -841,9 +1024,33 @@ private:
     return true;
   }
 
+  // The bootstrap layout takes world-to-clip in the vertex stage; the scene
+  // layout takes RayConstants and the scene descriptor set in the fragment
+  // stage.
+  bool CreatePipelineLayout(bool trace, VkPipelineLayout& layout,
+      std::string& detail) {
+    const VkPushConstantRange push_range{
+        static_cast<VkShaderStageFlags>(trace ? VK_SHADER_STAGE_FRAGMENT_BIT
+                                              : VK_SHADER_STAGE_VERTEX_BIT),
+        0,
+        trace ? static_cast<std::uint32_t>(sizeof(RayConstants)) : kFrameConstantsSize};
+    VkPipelineLayoutCreateInfo layout_create{
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layout_create.pushConstantRangeCount = 1;
+    layout_create.pPushConstantRanges = &push_range;
+    if (trace) {
+      layout_create.setLayoutCount = 1;
+      layout_create.pSetLayouts = &ray_descriptor_layout_;
+    }
+    return VulkanOk(vkCreatePipelineLayout(device_, &layout_create, nullptr,
+                        &layout),
+        "vkCreatePipelineLayout", detail);
+  }
+
   bool CreatePipeline(const std::vector<std::uint32_t>& vertex_words,
       const std::vector<std::uint32_t>& fragment_words,
-      VkPipelineLayout& layout, VkPipeline& pipeline, bool trace, std::string& detail) {
+      VkPipelineLayout layout, const PipelineOptions& options,
+      VkPipeline& pipeline, std::string& detail) {
     VkShaderModule vertex_module = CreateShader(device_, vertex_words, detail);
     VkShaderModule fragment_module =
         CreateShader(device_, fragment_words, detail);
@@ -852,6 +1059,13 @@ private:
       vkDestroyShaderModule(device_, fragment_module, nullptr);
       return false;
     }
+    const VkSpecializationMapEntry pass_entry{0, 0, sizeof(std::uint32_t)};
+    const std::uint32_t pass = options.pass.value_or(0);
+    VkSpecializationInfo specialization{};
+    specialization.mapEntryCount = 1;
+    specialization.pMapEntries = &pass_entry;
+    specialization.dataSize = sizeof(pass);
+    specialization.pData = &pass;
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -861,6 +1075,9 @@ private:
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragment_module;
     stages[1].pName = "main";
+    if (options.pass) {
+      stages[1].pSpecializationInfo = &specialization;
+    }
     VkPipelineVertexInputStateCreateInfo vertex_input{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     VkPipelineInputAssemblyStateCreateInfo input_assembly{
@@ -887,38 +1104,20 @@ private:
     multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineDepthStencilStateCreateInfo depth_state{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depth_state.depthTestEnable = VK_TRUE;
-    depth_state.depthWriteEnable = VK_TRUE;
+    depth_state.depthTestEnable = options.depth ? VK_TRUE : VK_FALSE;
+    depth_state.depthWriteEnable = options.depth ? VK_TRUE : VK_FALSE;
     depth_state.depthCompareOp = VK_COMPARE_OP_LESS;
     VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                      VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT |
-                                      VK_COLOR_COMPONENT_A_BIT;
+    if (options.color_write) {
+      blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                        VK_COLOR_COMPONENT_G_BIT |
+                                        VK_COLOR_COMPONENT_B_BIT |
+                                        VK_COLOR_COMPONENT_A_BIT;
+    }
     VkPipelineColorBlendStateCreateInfo blend{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     blend.attachmentCount = 1;
     blend.pAttachments = &blend_attachment;
-    const VkPushConstantRange push_range{
-        static_cast<VkShaderStageFlags>(trace ? VK_SHADER_STAGE_FRAGMENT_BIT
-                                              : VK_SHADER_STAGE_VERTEX_BIT),
-        0,
-        trace ? static_cast<std::uint32_t>(sizeof(RayConstants)) : kFrameConstantsSize};
-    VkPipelineLayoutCreateInfo layout_create{
-        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout_create.pushConstantRangeCount = 1;
-    layout_create.pPushConstantRanges = &push_range;
-    if (trace) {
-      layout_create.setLayoutCount = 1;
-      layout_create.pSetLayouts = &ray_descriptor_layout_;
-    }
-    if (!VulkanOk(vkCreatePipelineLayout(device_, &layout_create, nullptr,
-                      &layout),
-            "vkCreatePipelineLayout", detail)) {
-      vkDestroyShaderModule(device_, vertex_module, nullptr);
-      vkDestroyShaderModule(device_, fragment_module, nullptr);
-      return false;
-    }
     VkGraphicsPipelineCreateInfo pipeline_create{
         VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipeline_create.stageCount = 2;
@@ -932,7 +1131,7 @@ private:
     pipeline_create.pColorBlendState = &blend;
     pipeline_create.pDynamicState = &dynamic;
     pipeline_create.layout = layout;
-    pipeline_create.renderPass = render_pass_;
+    pipeline_create.renderPass = options.render_pass;
     pipeline_create.subpass = 0;
     const VkResult pipeline_result = vkCreateGraphicsPipelines(
         device_, VK_NULL_HANDLE, 1, &pipeline_create, nullptr, &pipeline);
@@ -943,27 +1142,34 @@ private:
 
   // Keep the targets when the size is unchanged; otherwise replace them. A
   // failed creation leaves no targets, so the next frame tries again.
-  bool EnsureTargets(std::uint32_t width, std::uint32_t height,
-      std::string& detail) {
-    if (targets_.framebuffer != VK_NULL_HANDLE && targets_.width == width &&
-        targets_.height == height) {
+  // Replacing the scene targets discards the radiance accumulation.
+  bool EnsureTargets(Targets& targets, std::uint32_t width,
+      std::uint32_t height, std::string& detail) {
+    if (targets.framebuffer != VK_NULL_HANDLE && targets.width == width &&
+        targets.height == height) {
       return true;
     }
-    DestroyTargets();
-    targets_.width = width;
-    targets_.height = height;
-    if (!CreateTargets(detail)) {
-      DestroyTargets();
+    DestroyTargets(targets);
+    if (&targets == &scene_targets_) {
+      accumulation_key_.reset();
+    }
+    targets.width = width;
+    targets.height = height;
+    if (!CreateTargets(targets, &targets == &scene_targets_ ? scene_render_pass_
+                                                            : render_pass_,
+            detail)) {
+      DestroyTargets(targets);
       return false;
     }
     ++target_creations_;
     return true;
   }
 
-  bool CreateTargets(std::string& detail) {
-    Targets& t = targets_;
+  bool CreateTargets(Targets& t, VkRenderPass render_pass,
+      std::string& detail) {
+    const bool accumulates = &t == &scene_targets_;
     if (!CreateImage(physical_device_, device_, t.width, t.height,
-            kColorFormat,
+            t.color_format,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
             t.color_image, t.color_memory, detail) ||
@@ -971,7 +1177,11 @@ private:
             kDepthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-            t.depth_image, t.depth_memory, detail)) {
+            t.depth_image, t.depth_memory, detail) ||
+        (accumulates &&
+            !CreateImage(physical_device_, device_, t.width, t.height,
+                kSceneColorFormat, VK_IMAGE_USAGE_STORAGE_BIT,
+                t.accumulation_image, t.accumulation_memory, detail))) {
       return false;
     }
 
@@ -982,12 +1192,21 @@ private:
     view_create.subresourceRange.baseArrayLayer = 0;
     view_create.subresourceRange.layerCount = 1;
     view_create.image = t.color_image;
-    view_create.format = kColorFormat;
+    view_create.format = t.color_format;
     view_create.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     if (!VulkanOk(vkCreateImageView(device_, &view_create, nullptr,
                       &t.color_view),
             "vkCreateImageView(color)", detail)) {
       return false;
+    }
+    if (accumulates) {
+      view_create.image = t.accumulation_image;
+      view_create.format = kSceneColorFormat;
+      if (!VulkanOk(vkCreateImageView(device_, &view_create, nullptr,
+                        &t.accumulation_view),
+              "vkCreateImageView(accumulation)", detail)) {
+        return false;
+      }
     }
     view_create.image = t.depth_image;
     view_create.format = kDepthFormat;
@@ -1002,7 +1221,7 @@ private:
         t.depth_view};
     VkFramebufferCreateInfo framebuffer_create{
         VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-    framebuffer_create.renderPass = render_pass_;
+    framebuffer_create.renderPass = render_pass;
     framebuffer_create.attachmentCount = 2;
     framebuffer_create.pAttachments = framebuffer_attachments;
     framebuffer_create.width = t.width;
@@ -1015,7 +1234,7 @@ private:
     }
 
     const VkDeviceSize pixel_count = VkDeviceSize{t.width} * t.height;
-    const VkDeviceSize color_bytes = pixel_count * 4U;
+    const VkDeviceSize color_bytes = pixel_count * t.color_pixel_bytes;
     const VkDeviceSize depth_bytes = pixel_count * sizeof(float);
     if (!CreateHostBuffer(physical_device_, device_, color_bytes,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, t.color_readback,
@@ -1034,9 +1253,8 @@ private:
   }
 
   // Only called while no frame is in flight: Render waits for every
-  // submission before it returns.
-  void DestroyTargets() {
-    Targets& t = targets_;
+  // submission before it returns. Keeps the colour format.
+  void DestroyTargets(Targets& t) {
     if (t.color_mapped != nullptr) {
       vkUnmapMemory(device_, t.color_readback_memory);
     }
@@ -1054,11 +1272,18 @@ private:
     vkDestroyImageView(device_, t.color_view, nullptr);
     vkDestroyImage(device_, t.color_image, nullptr);
     vkFreeMemory(device_, t.color_memory, nullptr);
-    t = Targets{};
+    vkDestroyImageView(device_, t.accumulation_view, nullptr);
+    vkDestroyImage(device_, t.accumulation_image, nullptr);
+    vkFreeMemory(device_, t.accumulation_memory, nullptr);
+    Targets empty;
+    empty.color_format = t.color_format;
+    empty.color_pixel_bytes = t.color_pixel_bytes;
+    t = empty;
   }
 
   bool Record(const DrawSummary& draw, const OffscreenTarget& target,
-      bool trace, std::string& detail) {
+      Targets& targets, FramePass pass, std::string& detail) {
+    const bool trace = pass != FramePass::Bootstrap;
     VkCommandBufferBeginInfo command_begin{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!VulkanOk(vkBeginCommandBuffer(command_, &command_begin),
@@ -1067,7 +1292,7 @@ private:
     }
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
       vkCmdResetQueryPool(command_, ray_timestamps_, 0, 2);
-    if (!targets_.initialized) {
+    if (!targets.initialized) {
       // LOAD preserves previous frames. Fresh images first need a defined
       // layout, then initialization inside the render pass below.
       VkImageMemoryBarrier barriers[2]{};
@@ -1081,39 +1306,60 @@ private:
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.layerCount = 1;
       }
-      barriers[0].image = targets_.color_image;
+      barriers[0].image = targets.color_image;
       barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      barriers[1].image = targets_.depth_image;
+      barriers[1].image = targets.depth_image;
       barriers[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
       vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
           2, barriers);
     }
+    if (trace) {
+      // The radiance pass reads and writes the accumulation image; order
+      // that against the preceding submission's writes. Its contents are
+      // undefined until the first sample of an accumulation writes them.
+      VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      barrier.oldLayout = targets.initialized ? VK_IMAGE_LAYOUT_GENERAL
+                                              : VK_IMAGE_LAYOUT_UNDEFINED;
+      barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier.dstAccessMask =
+          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.image = targets.accumulation_image;
+      barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      barrier.subresourceRange.levelCount = 1;
+      barrier.subresourceRange.layerCount = 1;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+          1, &barrier);
+    }
     VkRenderPassBeginInfo render_begin{
         VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    render_begin.renderPass = render_pass_;
-    render_begin.framebuffer = targets_.framebuffer;
+    render_begin.renderPass = trace ? scene_render_pass_ : render_pass_;
+    render_begin.framebuffer = targets.framebuffer;
     render_begin.renderArea.offset = {0, 0};
-    render_begin.renderArea.extent = {targets_.width, targets_.height};
+    render_begin.renderArea.extent = {targets.width, targets.height};
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ray_timestamps_, 0);
     vkCmdBeginRenderPass(command_, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     VkClearAttachment clears[2]{};
     std::uint32_t clear_count = 0;
-    if (target.clear_color_enabled || !targets_.initialized) {
+    if (target.clear_color_enabled || !targets.initialized) {
       auto& clear = clears[clear_count++];
       clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
       std::copy(target.clear_color.begin(), target.clear_color.end(),
           clear.clearValue.color.float32);
     }
-    if (target.clear_depth_enabled || !targets_.initialized) {
+    if (target.clear_depth_enabled || !targets.initialized) {
       auto& clear = clears[clear_count++];
       clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
       clear.clearValue.depthStencil = {target.clear_depth, 0};
     }
     if (clear_count != 0) {
       VkClearRect rect{};
-      rect.rect.extent = {targets_.width, targets_.height};
+      rect.rect.extent = {targets.width, targets.height};
       rect.layerCount = 1;
       vkCmdClearAttachments(command_, clear_count, clears, 1, &rect);
     }
@@ -1123,20 +1369,32 @@ private:
     if (has_draw && scissor.extent.width != 0 &&
         scissor.extent.height != 0) {
       const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
-      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-          trace ? ray_pipeline_ : pipeline_);
-      vkCmdSetViewport(command_, 0, 1, &viewport);
-      vkCmdSetScissor(command_, 0, 1, &scissor);
       if (trace) {
+        // The camera pass first: in Radiance output, for depth alone.
+        vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pass == FramePass::Barycentrics ? camera_pipeline_
+                                            : depth_pipeline_);
+        vkCmdSetViewport(command_, 0, 1, &viewport);
+        vkCmdSetScissor(command_, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
         vkCmdPushConstants(command_, ray_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(RayConstants), &ray_constants_);
+        vkCmdDraw(command_, 3U, 1, 0, 0);
+        if (pass == FramePass::Radiance) {
+          vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+              radiance_pipeline_);
+          vkCmdDraw(command_, 3U, 1, 0, 0);
+        }
       } else {
+        vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline_);
+        vkCmdSetViewport(command_, 0, 1, &viewport);
+        vkCmdSetScissor(command_, 0, 1, &scissor);
         vkCmdPushConstants(command_, pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT,
             0, kFrameConstantsSize, world_to_clip.data());
+        vkCmdDraw(command_, draw.triangle_count * 3U, 1, 0, 0);
       }
-      vkCmdDraw(command_, trace ? 3U : draw.triangle_count * 3U, 1, 0, 0);
     }
     vkCmdEndRenderPass(command_);
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
@@ -1145,16 +1403,16 @@ private:
     VkBufferImageCopy color_copy{};
     color_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     color_copy.imageSubresource.layerCount = 1;
-    color_copy.imageExtent = {targets_.width, targets_.height, 1};
-    vkCmdCopyImageToBuffer(command_, targets_.color_image,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, targets_.color_readback, 1,
+    color_copy.imageExtent = {targets.width, targets.height, 1};
+    vkCmdCopyImageToBuffer(command_, targets.color_image,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, targets.color_readback, 1,
         &color_copy);
     VkBufferImageCopy depth_copy{};
     depth_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     depth_copy.imageSubresource.layerCount = 1;
-    depth_copy.imageExtent = {targets_.width, targets_.height, 1};
-    vkCmdCopyImageToBuffer(command_, targets_.depth_image,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, targets_.depth_readback, 1,
+    depth_copy.imageExtent = {targets.width, targets.height, 1};
+    vkCmdCopyImageToBuffer(command_, targets.depth_image,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, targets.depth_readback, 1,
         &depth_copy);
     VkBufferMemoryBarrier host_barriers[2]{};
     for (VkBufferMemoryBarrier& barrier : host_barriers) {
@@ -1166,8 +1424,8 @@ private:
       barrier.offset = 0;
       barrier.size = VK_WHOLE_SIZE;
     }
-    host_barriers[0].buffer = targets_.color_readback;
-    host_barriers[1].buffer = targets_.depth_readback;
+    host_barriers[0].buffer = targets.color_readback;
+    host_barriers[1].buffer = targets.depth_readback;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 2, host_barriers, 0,
         nullptr);
@@ -1191,7 +1449,10 @@ private:
   VkRenderPass render_pass_ = VK_NULL_HANDLE;
   VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
   VkPipeline pipeline_ = VK_NULL_HANDLE;
-  VkPipeline ray_pipeline_ = VK_NULL_HANDLE;
+  VkRenderPass scene_render_pass_ = VK_NULL_HANDLE;
+  VkPipeline camera_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline radiance_pipeline_ = VK_NULL_HANDLE;
   VkPipelineLayout ray_layout_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;
   VkDescriptorPool ray_descriptor_pool_ = VK_NULL_HANDLE;
@@ -1204,7 +1465,14 @@ private:
   std::uint32_t timestamp_bits_ = 0;
   RayConstants ray_constants_{};
   Targets targets_;
+  Targets scene_targets_;
   GpuScene scene_;
+  // Incremented by every UpdateScene with a nonempty plan.
+  std::uint64_t scene_generation_ = 0;
+  // The Radiance accumulation in scene_targets_: what it was rendered with,
+  // and how many samples each pixel holds.
+  std::optional<AccumulationKey> accumulation_key_;
+  std::uint32_t accumulated_samples_ = 0;
   std::uint32_t target_creations_ = 0;
   std::uint64_t completion_ = 0;
   std::string failure_;

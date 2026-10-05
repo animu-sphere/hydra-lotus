@@ -58,16 +58,16 @@ over the instances are implemented
 [BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). Primary camera
 rays now traverse the GPU scene and write diagnostic barycentrics and depth,
 including through Hydra on ray-query devices
-([ray-query evidence](../reports/2026-10-05-primary-rays.md)). Each pixel
+([ray-query evidence](../reports/2026-10-05-primary-rays.md)). Each sample
 then follows one brute-force path with Lambert and GGX metal surfaces,
-emission, a constant environment and Russian roulette, written as a clamped
-single sample
-([BSDF and multi-bounce evidence](../reports/2026-10-05-bsdf-multibounce.md)).
-Remaining work, in order:
+emission, a constant environment and Russian roulette
+([BSDF and multi-bounce evidence](../reports/2026-10-05-bsdf-multibounce.md)),
+through a box-filtered point of its pixel, into an unclamped RGBA32F
+accumulation that Hydra receives as a float colour AOV and converges
+progressively
+([HDR accumulation evidence](../reports/2026-10-05-hdr-accumulation.md)) —
+the *first physically correct image*. Remaining work:
 
-- ⬜ **HDR accumulation → AOV / output.** Floating-point radiance
-  accumulated across sample indices, a pixel filter, and a float colour
-  AOV. The *first physically correct image* milestone.
 - ⬜ **Reference images.** A fixed deterministic test scene rendered by the
   headless runner at 1, 16, 64, 256 and 1024 spp, compared in `validation/`
   ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
@@ -81,8 +81,9 @@ principle 8):
   and respect collection/render-tag selection; current CPU meshes have one
   ordinary placement each.
 - ⬜ **Deterministic mode**: fixed RNG seed, spp, camera and frame index.
-  A frame's randomness is already a function of the pixel and
-  `PathTracingSettings::sample_index` alone.
+  A sample's randomness is already a function of the pixel and its sample
+  index alone, and an accumulation of a given spp is the same bytes however
+  its frames are split.
 - ⬜ **Extend per-pass GPU timestamps** beyond the scene pass to
   scene upload and BLAS/TLAS builds, reported by the headless runner
   ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)).

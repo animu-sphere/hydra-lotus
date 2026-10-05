@@ -5,6 +5,7 @@
 #include <pxr/imaging/hd/tokens.h>
 
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -19,6 +20,23 @@ bool Check(bool condition, const char* message) {
   return condition;
 }
 
+Lotus::ColorProduct Product(std::uint32_t width, std::uint32_t height,
+    const char* format, std::vector<std::uint8_t> payload) {
+  Lotus::ColorProduct product;
+  product.width = width;
+  product.height = height;
+  product.pixel_format = format;
+  product.row_pitch = width * (product.pixel_format == "rgba8-unorm" ? 4U : 16U);
+  product.payload = std::move(payload);
+  return product;
+}
+
+std::vector<std::uint8_t> FloatBytes(const std::vector<float>& values) {
+  std::vector<std::uint8_t> bytes(values.size() * sizeof(float));
+  std::memcpy(bytes.data(), values.data(), bytes.size());
+  return bytes;
+}
+
 } // namespace
 
 int main() {
@@ -26,7 +44,7 @@ int main() {
   const auto color_descriptor = delegate.GetDefaultAovDescriptor(HdAovTokens->color);
   const auto depth_descriptor = delegate.GetDefaultAovDescriptor(HdAovTokens->depth);
   const auto id_descriptor = delegate.GetDefaultAovDescriptor(HdAovTokens->primId);
-  if (!Check(color_descriptor.format == HdFormatUNorm8Vec4 &&
+  if (!Check(color_descriptor.format == HdFormatFloat32Vec4 &&
                  !color_descriptor.multiSampled &&
                  color_descriptor.clearValue == VtValue(GfVec4f(0.0F)),
           "color descriptor mismatch") ||
@@ -44,7 +62,7 @@ int main() {
     return 1;
   }
   HdLotusRenderBuffer color(SdfPath("/color"));
-  if (!Check(!color.Allocate(GfVec3i(2, 2, 1), HdFormatFloat32Vec4, false),
+  if (!Check(!color.Allocate(GfVec3i(2, 2, 1), HdFormatFloat16Vec4, false),
           "unsupported color format was accepted") ||
       !Check(!color.Allocate(GfVec3i(2, 2, 2), HdFormatUNorm8Vec4, false),
           "volume AOV was accepted") ||
@@ -57,17 +75,19 @@ int main() {
     return 1;
   }
   // Top-down source rows: red, green over blue, white.
-  const std::vector<std::uint8_t> source{
-      255, 0, 0, 255, 0, 255, 0, 255,
-      0, 0, 255, 255, 255, 255, 255, 255};
-  if (!Check(!color.WriteColor(source, 1, 4),
+  const auto source = Product(2, 2, "rgba8-unorm",
+      {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255});
+  auto unknown = source;
+  unknown.pixel_format = "rgba16-sfloat";
+  if (!Check(!color.WriteColor(Product(1, 4, "rgba8-unorm", source.payload)),
           "a color source of another size was accepted") ||
-      !Check(color.WriteColor(source, 2, 2), "color write failed")) {
+      !Check(!color.WriteColor(unknown), "an unknown color format was accepted") ||
+      !Check(color.WriteColor(source), "color write failed")) {
     return 1;
   }
   color.SetConverged(true);
   const auto* pixels = static_cast<const std::uint8_t*>(color.Map());
-  if (!Check(!color.WriteColor(source, 2, 2), "mapped color was overwritten") ||
+  if (!Check(!color.WriteColor(source), "mapped color was overwritten") ||
       !Check(!color.Allocate(GfVec3i(1, 1, 1), HdFormatUNorm8Vec4, false),
           "mapped color was reallocated")) {
     return 1;
@@ -82,6 +102,45 @@ int main() {
     return 1;
   }
   color.Unmap();
+
+  // HDR radiance keeps its values in a Float32Vec4 buffer and is clamped
+  // and rounded into a UNorm8Vec4 one; 8-bit colour widens to floats.
+  const auto radiance = Product(1, 2, "rgba32-sfloat",
+      FloatBytes({2.5F, 0.5F, -1.0F, 1.0F, 0.25F, 0.0F, 1.0F, 0.0F}));
+  HdLotusRenderBuffer hdr(SdfPath("/hdr"));
+  if (!Check(hdr.Allocate(GfVec3i(1, 2, 1), HdFormatFloat32Vec4, false) &&
+                 hdr.WriteColor(radiance),
+          "float color write failed")) {
+    return 1;
+  }
+  const auto* floats = static_cast<const float*>(hdr.Map());
+  const bool kept = floats != nullptr && floats[0] == 0.25F && floats[3] == 0.0F &&
+                    floats[4] == 2.5F && floats[6] == -1.0F && floats[7] == 1.0F;
+  hdr.Unmap();
+  if (!Check(kept, "float color was not kept and flipped") ||
+      !Check(hdr.WriteColor(Product(1, 2, "rgba8-unorm",
+                 {255, 51, 0, 255, 0, 0, 0, 0})),
+          "8-bit color did not widen")) {
+    return 1;
+  }
+  floats = static_cast<const float*>(hdr.Map());
+  const bool widened = floats != nullptr && floats[4] == 1.0F && floats[5] == 0.2F &&
+                       floats[7] == 1.0F && floats[0] == 0.0F;
+  hdr.Unmap();
+  if (!Check(widened, "8-bit color widened incorrectly") ||
+      !Check(color.Allocate(GfVec3i(1, 2, 1), HdFormatUNorm8Vec4, false) &&
+                 color.WriteColor(radiance),
+          "float color did not narrow")) {
+    return 1;
+  }
+  pixels = static_cast<const std::uint8_t*>(color.Map());
+  const bool narrowed = pixels != nullptr && pixels[0] == 64 && pixels[2] == 255 &&
+                        pixels[3] == 0 && pixels[4] == 255 && pixels[5] == 128 &&
+                        pixels[6] == 0 && pixels[7] == 255;
+  color.Unmap();
+  if (!Check(narrowed, "float color was not clamped into 8 bits")) {
+    return 1;
+  }
 
   HdLotusRenderBuffer depth(SdfPath("/depth"));
   if (!Check(depth.Allocate(GfVec3i(1, 2, 1), HdFormatFloat32, false),

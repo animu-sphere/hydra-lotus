@@ -31,6 +31,9 @@ def _render(app_controller, phase):
     assert len(frames) > before, f"no Hydra frame completed for {phase}"
     assert frames[-1]["buffers_written"] >= 2
     assert frames[-1]["width"] > 0 and frames[-1]["height"] > 0
+    # Waiting for convergence leaves a finished image: the bootstrap's
+    # one frame, or every path-traced sample the render settings ask for.
+    assert frames[-1]["converged"] == 1, f"{phase} did not converge"
     assert all(frame["validation_messages"] == 0 for frame in frames), \
         "Vulkan validation reported messages during a Hydra frame"
     # One device and pipeline serve every frame, and the targets are
@@ -53,6 +56,7 @@ def testUsdviewInputFunction(appController):
         checks = {check["id"]: check for check in json.load(stream)["checks"]}
     if checks["renderer.ray_query.capability"]["status"] == "pass":
         assert first["ray_query"] == 1, "Hydra did not use the available ray-query path"
+        assert first["samples"] == 64, "the first frame did not accumulate 64 samples"
     appController._dataModel.stage.GetPrimAtPath(
         "/World/Triangle").GetAttribute("points").Set(
             Vt.Vec3fArray([
@@ -64,6 +68,7 @@ def testUsdviewInputFunction(appController):
     assert updated["frame"] > first["frame"]
     assert updated["scene_revision"] > first["scene_revision"]
     assert updated["ray_query"] == first["ray_query"]
+    assert updated["samples"] == first["samples"]
     # The smoke scene's one mesh is resident and instanced once; the point
     # edit replaces its geometry buffer instead of adding one.
     assert first["gpu_geometries"] == 1 and first["gpu_instances"] == 1

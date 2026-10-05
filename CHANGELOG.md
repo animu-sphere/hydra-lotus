@@ -9,6 +9,22 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- HDR accumulation, the first physically correct image. `RenderScene`'s
+  `Radiance` output adds `frame_count` samples per pixel to a persistent
+  RGBA32F accumulation through a 1-pixel box filter and writes the
+  unclamped mean as an `rgba32-sfloat` colour product; a missed sample counts
+  as the clear colour. The accumulation restarts when the scene, camera,
+  target framing, `sample_index` or `max_bounces` changes, and
+  `PathTracingSettings::max_samples` caps it;
+  `GpuFrameEvidence::samples_per_pixel` reports it. The scene pass is a
+  camera pass for depth and barycentrics and a radiance pass, specialized
+  from one shader module. The Hydra colour AOV defaults to
+  `HdFormatFloat32Vec4` (8-bit buffers are still accepted) and converges
+  progressively at the `convergedSamplesPerPixel` render setting, 64 by
+  default. `renderer.path.accumulation` checks the filter's coverage against
+  the projected area in each pixel, HDR output, split frames and the
+  restart rules.
+
 - The reference path tracer's transport: surface hit reconstruction from
   the instance records and geometry device addresses, a Lambert and
   GGX-metal BSDF, two-sided emission, a constant environment, multiple
