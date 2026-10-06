@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // The reference path tracer (design policy section 9) as fullscreen fragment
 // passes. The camera pass traces each pixel centre for depth and the
-// barycentric intersection diagnostic, or the shading normal diagnostic in
-// the normal pass. The radiance pass adds one camera
+// barycentric intersection diagnostic, or in the surface pass a diagnostic
+// of the hit's surface: its shading normal, albedo, or roughness and
+// metallic. The radiance pass adds one camera
 // path per pixel, through a box-filtered point of the pixel, to a
 // floating-point accumulation image and writes the accumulated mean: brute-
 // force BSDF sampling, emissive surfaces, a constant environment and Russian
@@ -29,13 +30,39 @@ struct InstanceRecord {
   // slangc emit a pointer variable that the SPIR-V validator of Vulkan SDK
   // 1.3.290 rejects (no AliasedPointer decoration).
   uint64_t normals;
+  // The address of the three float2 texture coordinates per triangle that
+  // the material's lookups read, or 0 without them.
+  uint64_t texcoords;
+  uint texcoord_set;
+  uint reserved;
 };
+
+// Mirrors GpuTextureInputRecord in gpu_scene.hpp: one material input's
+// texture lookup.
+struct TextureInputRecord {
+  uint texture;
+  uint sampler_index;
+  uint channel;
+  uint mode;
+  float4 scale;
+  float4 bias;
+  float4 fallback;
+};
+static const uint kConstantInput = 0;
+static const uint kTextureLookup = 1;
+static const uint kFallbackLookup = 2;
+static const uint kBaseColorInput = 0;
+static const uint kRoughnessInput = 1;
+static const uint kMetallicInput = 2;
+static const uint kEmissionInput = 3;
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
 // table, the Lotus material IR.
 struct MaterialRecord {
   float4 base_color_roughness;
   float4 emission_metallic;
+  float4 texcoord_fallback;
+  TextureInputRecord inputs[4];
 };
 
 // Mirrors PathConstants in vulkan_backend.cpp.
@@ -57,9 +84,11 @@ struct PathConstants {
   uint add_sample;
   uint max_bounces;
   uint width;
+  // What the surface pass writes: kShadingNormalOutput, kAlbedoOutput or
+  // kRoughnessMetallicOutput.
+  uint surface_output;
   uint reserved0;
   uint reserved1;
-  uint reserved2;
 };
 [[vk::binding(0, 0)]] RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] ConstantBuffer<PathConstants> path_constants;
@@ -67,12 +96,19 @@ struct PathConstants {
 // how many did.
 [[vk::binding(2, 0)]] [[vk::image_format("rgba32f")]]
 RWTexture2D<float4> accumulation;
+// The GPU scene's texture table (kMaxTextures in gpu_scene.hpp), written
+// only where textures are resident, and one sampler per pair of wrap modes.
+[[vk::binding(3, 0)]] Texture2D<float4> textures[1024];
+[[vk::binding(4, 0)]] SamplerState samplers[16];
 
-// Which pass a pipeline runs: kCameraPass, kRadiancePass or kNormalPass.
+// Which pass a pipeline runs: kCameraPass, kRadiancePass or kSurfacePass.
 [vk::constant_id(0)] const uint kPass = 0;
 static const uint kCameraPass = 0;
 static const uint kRadiancePass = 1;
-static const uint kNormalPass = 2;
+static const uint kSurfacePass = 2;
+static const uint kShadingNormalOutput = 0;
+static const uint kAlbedoOutput = 1;
+static const uint kRoughnessMetallicOutput = 2;
 // Bounces before Russian roulette may end a path.
 static const uint kRouletteBounces = 3;
 static const float kMaxSurvival = 0.95;
@@ -133,9 +169,41 @@ struct SurfaceHit {
   // The normal the BSDF is evaluated around: on the geometric normal's side
   // and facing the incoming ray.
   float3 shading_normal;
+  // The material's inputs at the hit, after texture lookups.
+  float3 base_color;
+  float roughness;
+  float metallic;
   SurfaceBsdf bsdf;
   Spectrum emission;
 };
+
+// A texture lookup as UsdUVTexture makes it: the bilinear texel at (s, t),
+// whose rows run from the image's top, times scale plus bias; or the
+// unscaled fallback when the input's texture is missing.
+float4 Lookup(TextureInputRecord input, float2 st) {
+  if (input.mode == kFallbackLookup) {
+    return input.fallback;
+  }
+  const float4 texel =
+      textures[NonUniformResourceIndex(input.texture)].SampleLevel(
+          samplers[NonUniformResourceIndex(input.sampler_index)],
+          float2(st.x, 1.0 - st.y), 0.0);
+  return texel * input.scale + input.bias;
+}
+
+// The texture coordinates at a hit: the instance's set interpolated with the
+// barycentrics, or the material's fallback.
+float2 HitTexcoords(InstanceRecord instance, MaterialRecord material,
+    Hit hit) {
+  if (instance.texcoords == 0) {
+    return material.texcoord_fallback.xy;
+  }
+  const uint corner = hit.primitive * 3;
+  const float2 t0 = ((float2*)instance.texcoords)[corner];
+  const float2 t1 = ((float2*)instance.texcoords)[corner + 1];
+  const float2 t2 = ((float2*)instance.texcoords)[corner + 2];
+  return t0 + hit.barycentrics.x * (t1 - t0) + hit.barycentrics.y * (t2 - t0);
+}
 
 // A hit's object-space corner normals `n` (one per row) interpolated at the
 // hit, in world space and turned to the geometric normal's side. The
@@ -193,10 +261,37 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   }
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
-  surface.bsdf = MakeSurfaceBsdf(
-      SpectrumFromRgb(material.base_color_roughness.xyz),
-      material.base_color_roughness.w, material.emission_metallic.w);
-  surface.emission = SpectrumFromRgb(material.emission_metallic.xyz);
+  surface.base_color = material.base_color_roughness.xyz;
+  surface.roughness = material.base_color_roughness.w;
+  surface.metallic = material.emission_metallic.w;
+  float3 emission = material.emission_metallic.xyz;
+  // A texture lookup replaces its input's constant, clamped into the
+  // input's range.
+  if (material.inputs[kBaseColorInput].mode != kConstantInput ||
+      material.inputs[kRoughnessInput].mode != kConstantInput ||
+      material.inputs[kMetallicInput].mode != kConstantInput ||
+      material.inputs[kEmissionInput].mode != kConstantInput) {
+    const float2 st = HitTexcoords(instance, material, hit);
+    TextureInputRecord input = material.inputs[kBaseColorInput];
+    if (input.mode != kConstantInput) {
+      surface.base_color = saturate(Lookup(input, st).xyz);
+    }
+    input = material.inputs[kRoughnessInput];
+    if (input.mode != kConstantInput) {
+      surface.roughness = saturate(Lookup(input, st)[input.channel]);
+    }
+    input = material.inputs[kMetallicInput];
+    if (input.mode != kConstantInput) {
+      surface.metallic = saturate(Lookup(input, st)[input.channel]);
+    }
+    input = material.inputs[kEmissionInput];
+    if (input.mode != kConstantInput) {
+      emission = max(Lookup(input, st).xyz, 0.0);
+    }
+  }
+  surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
+      surface.roughness, surface.metallic);
+  surface.emission = SpectrumFromRgb(emission);
   return surface;
 }
 
@@ -290,8 +385,8 @@ struct FragmentOutput {
 };
 
 // The camera pass: the pixel centre's closest hit, as its projected depth
-// and barycentric weights, or in the normal pass its world-space shading
-// normal. Misses keep the attachments.
+// and barycentric weights, or in the surface pass a diagnostic of its
+// surface. Misses keep the attachments.
 FragmentOutput CameraPass(VertexOutput input) {
   const RayDesc ray = CameraRay(input.ndc);
   Hit hit;
@@ -302,9 +397,15 @@ FragmentOutput CameraPass(VertexOutput input) {
   float4 clip = mul(frame.world_to_clip, float4(position, 1.0));
   FragmentOutput output;
   output.depth = clip.z / clip.w;
-  if (kPass == kNormalPass) {
-    output.color =
-        float4(ReconstructHit(hit, ray.Direction).shading_normal, 1.0);
+  if (kPass == kSurfacePass) {
+    const SurfaceHit surface = ReconstructHit(hit, ray.Direction);
+    if (path_constants.surface_output == kAlbedoOutput) {
+      output.color = float4(surface.base_color, 1.0);
+    } else if (path_constants.surface_output == kRoughnessMetallicOutput) {
+      output.color = float4(surface.roughness, surface.metallic, 0.0, 1.0);
+    } else {
+      output.color = float4(surface.shading_normal, 1.0);
+    }
   } else {
     output.color = float4(1.0 - hit.barycentrics.x - hit.barycentrics.y,
         hit.barycentrics.x, hit.barycentrics.y, 1.0);

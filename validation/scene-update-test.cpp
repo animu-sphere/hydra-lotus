@@ -72,8 +72,8 @@ int main() try {
       !update.environment_changed && update.instances_changed &&
       update.instances.size() == 2 && update.instances[0].material == 0 &&
       update.instances[1].material == 2 && update.materials_changed &&
-      update.materials ==
-          std::vector<Lotus::Material>{Lotus::Material{}, glow, metal},
+      update.materials == std::vector<Lotus::SceneMaterial>{
+                              {Lotus::Material{}}, {glow}, {metal}},
       "a material binding uploaded geometry or planned the wrong table");
 
   // A value edit rewrites the table and leaves the instances.
@@ -81,7 +81,8 @@ int main() try {
   world.SetMaterial("/m/metal", metal);
   update = extraction.Update(world.Commit());
   Check(!update.instances_changed && update.materials_changed &&
-      update.materials.size() == 3 && update.materials[2] == metal,
+      update.materials.size() == 3 &&
+      update.materials[2] == Lotus::SceneMaterial{metal},
       "a material edit rewrote the instances or lost the new value");
   world.BindMaterial("/a", "/m/glow");
   update = extraction.Update(world.Commit());
@@ -94,8 +95,8 @@ int main() try {
   world.RemoveMaterial("/m/glow");
   update = extraction.Update(world.Commit());
   Check(update.instances_changed && update.materials_changed &&
-      update.materials ==
-          std::vector<Lotus::Material>{Lotus::Material{}, metal} &&
+      update.materials == std::vector<Lotus::SceneMaterial>{
+                              {Lotus::Material{}}, {metal}} &&
       update.instances[0].material == 0 && update.instances[1].material == 1,
       "a material removal did not fall back to the default material");
   world.SetMaterial("/m/glow", glow);
@@ -198,18 +199,96 @@ int main() try {
       update.materials_changed && update.materials.size() == 2,
       "reset did not re-upload the resident scene");
 
+  // Every texture in the scene is resident. A material's lookups resolve
+  // their keys to textures, and its instances read the texture-coordinate
+  // set it names, by the set's position in key order.
+  Lotus::Texture checker;
+  checker.width = 2;
+  checker.height = 1;
+  checker.format = Lotus::TextureFormat::Rgba8Srgb;
+  checker.texels = {255, 0, 0, 255, 0, 0, 255, 255};
+  world.SetTexture("/t/checker", checker);
+  auto mapped = edited;
+  mapped.texcoords["map1"] = {{{0, 0}}, {{1, 0}}, {{0, 1}}};
+  mapped.texcoords["st"] = {{{0, 0}}, {{2, 0}}, {{0, 2}}};
+  world.SetMesh("/a", mapped, instance);
+  Lotus::Material painted;
+  painted.base_color_texture = Lotus::TextureInput{"/t/checker"};
+  Lotus::TextureInput missing;
+  missing.texture = "/t/missing";
+  missing.channel = 1;
+  painted.roughness_texture = missing;
+  painted.texcoords = "st";
+  world.SetMaterial("/m/painted", painted);
+  world.BindMaterial("/a", "/m/painted");
+  const auto textured = world.Commit();
+  const auto* checker_texture = textured.scene->textures.at("/t/checker").get();
+  const auto* mapped_a = textured.scene->meshes.at("/a").geometry.get();
+  update = extraction.Update(textured);
+  Check(update.texture_releases.empty() && update.texture_uploads.size() == 1 &&
+      update.texture_uploads[0].get() == checker_texture &&
+      update.materials_changed && update.materials.size() == 3 &&
+      update.materials[2].material == painted &&
+      update.materials[2].textures ==
+          std::array<const Lotus::Texture*, 4>{checker_texture} &&
+      update.instances_changed && update.instances.size() == 1 &&
+      update.instances[0].geometry == mapped_a &&
+      update.instances[0].material == 2 && update.instances[0].texcoords == 1,
+      "a textured material did not upload its texture, resolve its keys or "
+      "select its texture-coordinate set");
+
+  // Replacing a texture's texels replaces the texture, and the table that
+  // samples it, but no instance.
+  checker.texels[0] = 128;
+  world.SetTexture("/t/checker", checker);
+  const auto retextured = world.Commit();
+  const auto* replaced = retextured.scene->textures.at("/t/checker").get();
+  update = extraction.Update(retextured);
+  Check(update.texture_releases == std::vector<const Lotus::Texture*>{
+                                       checker_texture} &&
+      update.texture_uploads.size() == 1 &&
+      update.texture_uploads[0].get() == replaced &&
+      update.materials_changed && update.materials[2].textures[0] == replaced &&
+      !update.instances_changed && update.geometry_uploads.empty(),
+      "a texture edit did not replace exactly the texture and the table");
+
+  // A set the mesh lacks reads none; a removed texture leaves its lookup to
+  // the fallback.
+  painted.texcoords = "uv";
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.instances_changed &&
+      update.instances[0].texcoords == Lotus::kNoTexcoords,
+      "a missing texture-coordinate set was selected");
+  world.RemoveTexture("/t/checker");
+  update = extraction.Update(world.Commit());
+  Check(update.texture_releases == std::vector<const Lotus::Texture*>{
+                                       replaced} &&
+      update.texture_uploads.empty() && update.materials_changed &&
+      update.materials[2].textures == std::array<const Lotus::Texture*, 4>{} &&
+      !update.instances_changed,
+      "a texture removal did not release it and leave its lookup without one");
+  world.SetTexture("/t/unused", checker);
+  update = extraction.Update(world.Commit());
+  Check(update.texture_uploads.size() == 1 && !update.materials_changed &&
+      !update.instances_changed,
+      "a texture no material names was not resident on its own");
+
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
   world.RemoveMaterial("/m/metal");
+  world.RemoveMaterial("/m/painted");
+  world.RemoveTexture("/t/unused");
   world.SetEnvironment({});
   update = extraction.Update(world.Commit());
   Check(update.geometry_releases.size() == 1 &&
-      update.geometry_releases[0] == edited_a &&
+      update.geometry_releases[0] == mapped_a &&
+      update.texture_releases.size() == 1 &&
       update.instances_changed && update.instances.empty() &&
       update.materials_changed && update.materials.size() == 1 &&
       update.environment_changed && update.environment == std::array<float, 3>{},
-      "removing the last mesh left resident geometry, instances, materials "
-      "or light");
+      "removing the last mesh left resident geometry, textures, instances, "
+      "materials or light");
   Check(extraction.Update(Lotus::FrameSnapshot{}).Empty(),
       "a snapshot without a scene was not treated as empty");
   return 0;

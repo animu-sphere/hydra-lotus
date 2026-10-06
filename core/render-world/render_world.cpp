@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -37,6 +38,38 @@ bool UnitInterval(float value) {
   return value >= 0.0F && value <= 1.0F;
 }
 
+bool Finite(const std::array<float, 4>& values) {
+  return std::all_of(values.begin(), values.end(),
+      [](float value) { return std::isfinite(value); });
+}
+
+void ValidateTextureInput(const std::optional<TextureInput>& input,
+    bool colour) {
+  if (!input) {
+    return;
+  }
+  if (input->texture.empty()) {
+    throw std::invalid_argument("a texture input needs a texture key");
+  }
+  if (input->channel > (colour ? 0U : 3U)) {
+    throw std::invalid_argument(colour
+                                    ? "a colour texture input reads channel 0"
+                                    : "a texture input channel must be 0 to 3");
+  }
+  const auto wrap = [](TextureWrap value) {
+    return value == TextureWrap::Black || value == TextureWrap::Clamp ||
+           value == TextureWrap::Repeat || value == TextureWrap::Mirror;
+  };
+  if (!wrap(input->wrap_s) || !wrap(input->wrap_t)) {
+    throw std::invalid_argument("a texture input has an unknown wrap mode");
+  }
+  if (!Finite(input->scale) || !Finite(input->bias) ||
+      !Finite(input->fallback)) {
+    throw std::invalid_argument(
+        "texture input scale, bias and fallback must be finite");
+  }
+}
+
 void ValidateMaterial(const Material& material) {
   if (!Finite(material.base_color) ||
       !std::all_of(material.base_color.begin(), material.base_color.end(),
@@ -50,6 +83,42 @@ void ValidateMaterial(const Material& material) {
       !std::all_of(material.emission.begin(), material.emission.end(),
           [](float value) { return value >= 0.0F; })) {
     throw std::invalid_argument("emission must be finite and non-negative");
+  }
+  ValidateTextureInput(material.base_color_texture, true);
+  ValidateTextureInput(material.roughness_texture, false);
+  ValidateTextureInput(material.metallic_texture, false);
+  ValidateTextureInput(material.emission_texture, true);
+  if (!std::isfinite(material.texcoord_fallback[0]) ||
+      !std::isfinite(material.texcoord_fallback[1])) {
+    throw std::invalid_argument("texture coordinate fallback must be finite");
+  }
+}
+
+void ValidateTexture(const Texture& texture) {
+  if (texture.width == 0 || texture.height == 0) {
+    throw std::invalid_argument("a texture needs at least one texel");
+  }
+  if (texture.format != TextureFormat::Rgba8Unorm &&
+      texture.format != TextureFormat::Rgba8Srgb &&
+      texture.format != TextureFormat::Rgba32Float) {
+    throw std::invalid_argument("a texture has an unknown format");
+  }
+  const std::uint64_t texels = std::uint64_t{texture.width} * texture.height;
+  if (texels > std::numeric_limits<std::size_t>::max() /
+                   TexelBytes(texture.format) ||
+      texture.texels.size() != texels * TexelBytes(texture.format)) {
+    throw std::invalid_argument(
+        "texture texels must be width * height texels of its format");
+  }
+  if (texture.format == TextureFormat::Rgba32Float) {
+    for (std::size_t offset = 0; offset < texture.texels.size();
+        offset += sizeof(float)) {
+      float value = 0.0F;
+      std::memcpy(&value, texture.texels.data() + offset, sizeof(float));
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument("float texels must be finite");
+      }
+    }
   }
 }
 
@@ -78,6 +147,22 @@ void ValidateGeometry(const MeshGeometry& geometry) {
   if (!std::all_of(geometry.normals.begin(), geometry.normals.end(),
           [](const std::array<float, 3>& normal) { return Finite(normal); })) {
     throw std::invalid_argument("mesh normals must be finite");
+  }
+  for (const auto& [name, texcoords] : geometry.texcoords) {
+    if (name.empty()) {
+      throw std::invalid_argument(
+          "mesh texture coordinates need a non-empty name");
+    }
+    if (texcoords.size() != 3 * geometry.triangles.size()) {
+      throw std::invalid_argument(
+          "mesh texture coordinates need one per triangle corner");
+    }
+    if (!std::all_of(texcoords.begin(), texcoords.end(),
+            [](const std::array<float, 2>& st) {
+              return std::isfinite(st[0]) && std::isfinite(st[1]);
+            })) {
+      throw std::invalid_argument("mesh texture coordinates must be finite");
+    }
   }
 }
 
@@ -179,6 +264,27 @@ void RenderWorld::RemoveMaterial(const std::string& id) {
   if (scene_->materials.contains(id)) {
     MakeSceneWritable();
     scene_->materials.erase(id);
+  }
+}
+
+void RenderWorld::SetTexture(const std::string& id, Texture texture) {
+  if (id.empty()) {
+    throw std::invalid_argument("texture identifier must not be empty");
+  }
+  ValidateTexture(texture);
+  const auto found = scene_->textures.find(id);
+  if (found != scene_->textures.end() && *found->second == texture) {
+    return;
+  }
+  auto owned = std::make_shared<const Texture>(std::move(texture));
+  MakeSceneWritable();
+  scene_->textures[id] = std::move(owned);
+}
+
+void RenderWorld::RemoveTexture(const std::string& id) {
+  if (scene_->textures.contains(id)) {
+    MakeSceneWritable();
+    scene_->textures.erase(id);
   }
 }
 

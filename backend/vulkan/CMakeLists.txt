@@ -32,6 +32,10 @@ if(LOTUS_WITH_VULKAN)
     shaders/bsdf/bsdf.slang
     shaders/common/spectrum.slang
     shaders/sampling/sampling.slang)
+  # Texture sampling needs Slang's sm_5_0 capability set and the texture
+  # table's non-uniform indexing spvShaderNonUniformEXT; declaring them keeps
+  # slangc from upgrading the profile implicitly, which it warns about. The
+  # SPIR-V still declares only the capabilities the shader uses.
   foreach(_stage IN ITEMS vertex fragment)
     if(_stage STREQUAL "vertex")
       set(_ray_output "${LOTUS_RAY_VERTEX_SPV}")
@@ -46,6 +50,7 @@ if(LOTUS_WITH_VULKAN)
         -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
         -entry "${_stage}_main" -stage "${_stage}" -target spirv
         -profile spirv_1_4 -capability spvRayQueryKHR
+        -capability spvShaderNonUniformEXT -capability sm_5_0
         -matrix-layout-column-major -warnings-as-errors all
         -o "${_ray_output}"
       DEPENDS ${_path_trace_sources}

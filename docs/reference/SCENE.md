@@ -17,6 +17,9 @@ a `SceneMesh` record. Keys iterate in deterministic order.
   per triangle corner (corner `k` of triangle `t` at `3t + k`), so every
   interpolation a host has reaches the core the same way. They need not be
   unit length; empty means the surface shades with its geometric normal.
+  Its `texcoords` are named texture-coordinate sets, each one (s, t) per
+  triangle corner in the same layout; a material's texture inputs read the
+  set it names.
 - `MeshInstance` contains visibility and `world_from_object`, using the
   core's column-major matrix convention for column vectors.
 - Without `MeshInstance::instancer_transforms` a mesh has one ordinary
@@ -30,8 +33,9 @@ a `SceneMesh` record. Keys iterate in deterministic order.
 `SetMesh` validates and owns the geometry, inserting or replacing the keyed
 record. Instancer transforms are copied with the record. `SetMeshInstance` updates an existing placement without copying its
 geometry. `RemoveMesh` removes the keyed record. Invalid indices, mismatched
-face mappings, normals that are not one per triangle corner or not
-finite, non-finite positions or transforms (instancer transforms included), empty insertion keys and
+face mappings, normals or texture-coordinate sets that are not one per
+triangle corner or not finite, an unnamed texture-coordinate set,
+non-finite positions or transforms (instancer transforms included), empty insertion keys and
 instance updates without geometry throw `std::invalid_argument` without
 changing the world.
 
@@ -66,6 +70,37 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
 | `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
 
+Each input is a constant or, when its `TextureInput` is set
+(`base_color_texture`, `roughness_texture`, `metallic_texture`,
+`emission_texture`), a texture lookup that replaces the constant, as
+`UsdUVTexture` does:
+
+- The lookup names a texture by its key in `LotusScene::textures`. A key
+  with no texture makes it return its `fallback` (default (0, 0, 0, 1)),
+  unscaled.
+- Otherwise the texture is filtered bilinearly, at level 0 and without
+  mipmaps, at the material's texture coordinates; outside [0, 1] each
+  coordinate follows its `wrap_s` or `wrap_t`: `Black` (transparent black,
+  the default), `Clamp`, `Repeat` or `Mirror`. The result is
+  `texel * scale + bias` (defaults 1 and 0).
+- A colour input takes the result's red, green and blue (`channel` 0); a
+  scalar input takes its `channel`, 0 to 3. The value is clamped into the
+  input's range: [0, 1] for base colour, roughness and metallic, and
+  non-negative for emission.
+- The texture coordinates are the mesh's set named `Material::texcoords`,
+  interpolated at the hit. A mesh without that set, or an empty name, uses
+  `texcoord_fallback` (default (0, 0)). A material has one
+  texture-coordinate source for all its lookups.
+
+A `Texture` holds decoded texels, four channels each, rows from the top of
+the image, so (s, t) = (0, 0) is its bottom-left corner as in USD:
+`Rgba8Unorm`, `Rgba8Srgb` (sRGB-encoded colour, linear alpha; lookups
+decode it before filtering) or `Rgba32Float`. `LotusScene::textures` keys
+them by stable host-supplied identifiers and shares their texels with
+retained snapshots; `SetTexture` inserts or replaces one and
+`RemoveTexture` removes one. A texture input may name a key before its
+texture exists.
+
 `LotusScene::materials` maps stable host-supplied keys to materials, in
 deterministic order; `SetMaterial` inserts or replaces one and
 `RemoveMaterial` removes one. A mesh binds to a key with `BindMaterial`, and
@@ -74,9 +109,11 @@ means the default `Material`, so a binding may name a material before it
 exists and outlives the material's removal. `SetMesh` keeps a mesh's binding
 when it replaces the geometry or the instance. `LotusScene::environment` is
 a constant environment radiance, finite and non-negative, black by default,
-changed with `SetEnvironment`. Out-of-range values, an empty material key
-and a binding for a missing mesh throw `std::invalid_argument` without
-changing the world.
+changed with `SetEnvironment`. Out-of-range values, an empty material or
+texture key, a texture input without a key, with a channel out of range or
+with a non-finite scale, bias or fallback, a texture whose texels do not
+match its size and format or are not finite, and a binding for a missing
+mesh throw `std::invalid_argument` without changing the world.
 
 ## Update plan
 
@@ -87,24 +124,33 @@ planned and returns a `SceneUpdate`:
 - `geometry_releases`: geometry buffers the scene no longer references, in
   the previous scene's key order;
 - `geometry_uploads`: geometry buffers that become resident, in key order;
+- `texture_releases` and `texture_uploads`: the same for textures. Every
+  texture in the scene is resident, whether a material names it or not;
 - `instances`: when `instances_changed`, the complete replacement list,
-  one `SceneInstance` (geometry, composed `world_from_object` and material
-  slot) per placement of each visible mesh with triangles, in key order and
-  then placement order;
+  one `SceneInstance` (geometry, composed `world_from_object`, material
+  slot and texture-coordinate set) per placement of each visible mesh with
+  triangles, in key order and then placement order. The set is the index,
+  in key order, of the geometry's set that the material's lookups read, or
+  `kNoTexcoords` when the material has no texture input or the geometry no
+  such set;
 - `materials`: when `materials_changed`, the complete material table: the
-  default `Material` at slot 0, then the scene's materials in key order. A
-  mesh whose binding names no material gets slot 0. A GPU scene, and the
-  extraction after `Reset`, start with the default alone, so a scene
-  without materials plans no table;
+  default `Material` at slot 0, then the scene's materials in key order,
+  each a `SceneMaterial` with the resident texture each texture input's key
+  names (null without one). A mesh whose binding names no material gets
+  slot 0. A GPU scene, and the extraction after `Reset`, start with the
+  default alone, so a scene without materials plans no table;
 - `environment`: when `environment_changed`, the scene's environment
   radiance. A GPU scene, and the extraction after `Reset`, start from
   black, so only a different environment is planned.
 
-A geometry buffer is identified by its address. Every mesh with triangles
+A geometry buffer or a texture is identified by its address. Every mesh with triangles
 keeps its geometry resident, even hidden or placed nowhere, so visibility,
 transform, placement and binding changes rewrite only the instances, and a
 material's value edit rewrites only the material table. Adding or removing
-a material moves the later slots, so it rewrites both. Geometry without
+a material moves the later slots, so it rewrites both. A texture edit
+replaces the texture (a release and an upload) and the table that samples
+it; a material edit that changes its texture-coordinate set rewrites the
+instances too. Geometry without
 triangles is never resident or instanced. The extraction holds a reference to every resident
 buffer, so an address is not reused before its release.
 
@@ -125,39 +171,59 @@ empty plan records no GPU work.
   tightly packed float triples, then, at an offset aligned to the device's
   storage-buffer offset alignment, the triangles as uint32 triples and,
   when the geometry has normals, at the next aligned offset, the corner
-  normals as float triples. Normals are geometry: changing them uploads a
-  new buffer and builds a new BLAS, as a point edit does.
+  normals as float triples, then each texture-coordinate set, in key
+  order, as float pairs at the next aligned offset. Normals and texture
+  coordinates are geometry: changing them uploads a new buffer and builds a
+  new BLAS, as a point edit does.
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
   deterministic sequence of plans.
-- One device-local instance buffer holds a 96-byte record per instance:
+- Each resident texture is a device-local, sampled 2D image of one level,
+  `R8G8B8A8_UNORM`, `R8G8B8A8_SRGB` or `R32G32B32A32_SFLOAT`, in the
+  shader-read layout, with a slot in the GPU scene's texture table. Slots
+  are reused lowest first, as geometry slots are. The table holds at most
+  1,024 textures, the size of the scene passes' sampled-image array.
+- One device-local instance buffer holds a 112-byte record per instance:
   the column-major `world_from_object`, the device addresses of its
   geometry's positions and triangles (zero without acceleration
-  structures), the geometry slot, the material slot and the address of
-  its corner normals (zero without normals). It grows when
+  structures), the geometry slot, the material slot, the address of
+  its corner normals (zero without normals), and the address and index of
+  the texture-coordinate set its material reads (zero and `kNoTexcoords`
+  without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 32-byte record per material:
-  base colour and roughness, then emission and metallic. It reaches the
+- One device-local material table holds a 304-byte record per material:
+  base colour and roughness, emission and metallic, the texture-coordinate
+  fallback, then one 64-byte lookup per texture input, in the order base
+  colour, roughness, metallic, emission: its texture slot, its sampler
+  (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
+  a lookup whose key names no texture, which returns the fallback), scale,
+  bias and fallback. It reaches the
   device with the first instances and is rewritten whole whenever the plan
   changes it. A plan is rejected when an instance's slot lies outside the
   table, including a table that shrinks below the slots of instances it
-  leaves unchanged.
+  leaves unchanged, when an instance reads a texture-coordinate set its
+  geometry lacks, and when the table after the plan samples a texture that
+  is not resident.
 - The environment is host state: a plan that changes only the environment
   records no GPU work, and the scene pass reads it with each frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
   in one submission per plan, followed by a barrier that makes them
-  visible to later shader reads and transfers.
+  visible to later shader reads and transfers. Texture copies go to the
+  new images in the transfer layout, which then move to the shader-read
+  layout.
 
-`GpuSceneStats` reports resident geometry, instances, material table
-entries, their bytes and lifetime upload counts. `ReadBackScene` copies the
-device buffers back for validation, the corner normals
-(`GpuGeometryContents::normals`) and the material table included. A failed update or readback leaves the renderer failed, as a
+`GpuSceneStats` reports resident geometry and textures, instances, material
+table entries, their bytes and lifetime upload counts. `ReadBackScene`
+copies the device buffers and images back for validation: the corner
+normals and texture-coordinate sets (`GpuGeometryContents`), each
+instance's set, the material table with each lookup's texture slot
+(`GpuMaterialContents`) and the textures' texels (`GpuTextureContents`). A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
 The scene pass traverses the acceleration structures built from these
 buffers and reads a hit's instance record and, through its addresses, the
-hit triangle. Source-face indices stay on the CPU. Every geometry buffer, and every
-BLAS below, is its own device allocation, so an update fails with an
+hit triangle. Source-face indices stay on the CPU. Every geometry buffer,
+every texture, and every BLAS below, is its own device allocation, so an update fails with an
 explanation once a scene would exceed the device's allocation limit.
 
 ## Acceleration structures
@@ -222,12 +288,21 @@ vertex and fragment SPIR-V paths (`path_trace.vert.spv`,
 `path_trace.frag.spv`). On devices with acceleration structures,
 `VK_KHR_ray_query` and the `rayQuery` feature, it enables ray queries;
 The scene passes also need `fragmentStoresAndAtomics`, `shaderInt64` (the
-instance records' normal addresses) and RGBA32F colour attachments with
-storage and readback; `RayQueryCapability` reports support
+instance records' addresses), RGBA32F colour attachments with
+storage and readback, and the texture table: `descriptorBindingPartiallyBound`
+and `shaderSampledImageArrayNonUniformIndexing`, descriptor limits that
+allow 1,024 sampled images and 16 samplers in the fragment stage, and
+linearly filtered RGBA8 and RGBA32F images with transfers.
+`RayQueryCapability` reports support
 and the reason when any of these is absent. Supplying both shader paths
 creates the scene render pass, four persistent pipelines specialized from
 the one fragment module (below), a descriptor set and a uniform block
-alongside the bootstrap pipeline. Missing
+alongside the bootstrap pipeline. The descriptor set's partially bound
+array of 1,024 sampled images holds a descriptor for each resident
+texture's slot, written before a frame when the textures changed; a
+released slot's stale descriptor is never read. Sixteen immutable bilinear
+samplers without mipmaps, one per pair of wrap modes, go with it; black is
+the transparent black border. Missing
 shader files on a supported device fail creation; omitting the paths
 preserves bootstrap-only callers and makes `RenderScene` fail with an
 explanation.
@@ -247,9 +322,13 @@ through the existing depth test, and misses preserve the clear or
 preceding attachment values. What the colour holds is
 `PathTracingSettings::output`: `Barycentrics` is the camera pass's closest
 triangle's barycentric weights with alpha 1, the intersection diagnostic;
-`ShadingNormal` is the world-space shading normal (below) the path tracer
-would evaluate the hit's BSDF around, with alpha 1, the normal diagnostic
-of [design policy section 25](../design/DESIGN_POLICY.md#25-debug-and-validation);
+the *surface pass* writes a diagnostic of the pixel centre's closest hit,
+with alpha 1: `ShadingNormal` is the world-space shading normal (below)
+the path tracer
+would evaluate the hit's BSDF around, the normal diagnostic
+of [design policy section 25](../design/DESIGN_POLICY.md#25-debug-and-validation),
+`Albedo` the base colour and `RoughnessMetallic` (roughness, metallic, 0),
+both after texture lookups;
 `Radiance`, the default, is the accumulated path-traced radiance of the
 *radiance pass* (below), drawn after the camera pass has written depth.
 The TLAS and accumulation-image descriptors and the uniform block (the
@@ -278,6 +357,13 @@ one brute-force camera path per pixel per sample, with no light sampling.
   barycentrics, and the geometric normal is turned to face the incoming
   ray. Surfaces are two-sided. The hit's material is the material table's
   entry at the instance record's material slot.
+- **Texture lookups.** When any of the material's inputs is a lookup, the
+  instance's texture-coordinate set is interpolated with the barycentrics
+  (or the material's fallback is used), and each lookup samples its
+  texture as [above](#materials-and-environment), with the sampler of its
+  wrap modes, at (s, 1 - t), since texture rows run from the top. The
+  results replace the constants before the BSDF is built. A material
+  without lookups reads no texture coordinates.
 - **Shading normal.** With authored normals, the hit triangle's corner
   normals are interpolated with the barycentrics, transformed by the
   cofactor matrix of the transform's linear part (the inverse transpose up
@@ -353,6 +439,10 @@ against radiance known in closed form or by independent quadrature
 independent double-precision oracle, and Lambert and mirror radiance that
 authored normals decide
 ([report](../reports/2026-10-06-authored-normals.md));
+`renderer.path.textures` checks the `Albedo` and `RoughnessMetallic`
+outputs against an independent oracle of Vulkan's bilinear filter and
+address modes, and the exact radiance of textured Lambert and emissive
+surfaces ([report](../reports/2026-10-06-textures.md));
 `renderer.path.accumulation` checks the box filter's coverage against the
 projected triangle's area in each pixel, unclamped HDR output, split frames
 and the restart rules
@@ -419,8 +509,8 @@ visibility or instancer update does not fetch or re-triangulate geometry.
 Coarse polygons use OpenUSD's
 [`HdMeshUtil` triangulation](https://openusd.org/dev/api/class_hd_mesh_util.html):
 fan triangles, winding normalization, hole-face exclusion and coarse-face
-mapping. Subdivision refinement, general concave-polygon tessellation and
-face-varying primvars other than normals are not implemented. Materials
+mapping. Subdivision refinement and general concave-polygon tessellation
+are not implemented. Materials
 are [below](#materials).
 
 The `normals` primvar, which UsdImaging takes from `primvars:normals` over
@@ -435,6 +525,13 @@ and the mesh renders with geometric normals. A mesh without authored
 normals is not given computed ones, whatever its subdivision scheme, so a
 coarse mesh shades faceted. Normals are read when the normals or the
 primvars are dirty.
+
+Every other primvar whose values are float pairs (`float2`, `double2` or
+`half2`, such as `texCoord2f[] primvars:st`) becomes a texture-coordinate
+set of its name, expanded to corners in the same way, indexed ones
+flattened; one that cannot be used warns and is left out. `points`,
+`displayColor`, `displayOpacity` and `widths` are not read. They are read
+with the normals.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -529,7 +626,9 @@ collection and render-tag selection in the
 deterministic Hydra renders against the backend's in the
 [Hydra deterministic mode report](../reports/2026-10-05-hydra-deterministic-mode.md);
 the material IR, the material table and the `UsdPreviewSurface`
-translation in the [material IR report](../reports/2026-10-05-material-ir.md).
+translation in the [material IR report](../reports/2026-10-05-material-ir.md);
+textures, texture coordinates and texture lookups in the
+[textures report](../reports/2026-10-06-textures.md).
 
 ### Instancers
 
@@ -564,16 +663,48 @@ the network's surface terminal when it is a `UsdPreviewSurface`:
 
 | IR field | Input | Rule |
 | --- | --- | --- |
-| `base_color` | `diffuseColor` | each component clamped to [0, 1] |
-| `roughness` | `roughness` | clamped to [0, 1] |
-| `metallic` | `metallic` | clamped to [0, 1]; 0 under `useSpecularWorkflow` |
-| `emission` | `emissiveColor` | each component clamped to be non-negative |
+| `base_color`, `base_color_texture` | `diffuseColor` | each component clamped to [0, 1] |
+| `roughness`, `roughness_texture` | `roughness` | clamped to [0, 1] |
+| `metallic`, `metallic_texture` | `metallic` | clamped to [0, 1]; 0 under `useSpecularWorkflow` |
+| `emission`, `emission_texture` | `emissiveColor` | each component clamped to be non-negative |
 
 An unauthored input, a non-finite value and a value of another type take
-the input's default. So does an input a shader graph drives, such as a
-texture: graphs are not evaluated yet. Any other surface shader, or a
-network without a surface, warns and leaves the default material.
+the input's default. An input a `UsdUVTexture` drives becomes a texture
+lookup:
+
+| `TextureInput` | `UsdUVTexture` | Rule |
+| --- | --- | --- |
+| `channel` | the connected output | `rgb` for a colour input; `r`, `g`, `b` or `a` for a scalar |
+| `texture` | `file`, `sourceColorSpace` | the key `<resolved path>|<colour space>`; the authored path when it does not resolve |
+| `wrap_s`, `wrap_t` | `wrapS`, `wrapT` | `black`, `clamp`, `repeat`, `mirror`; `useMetadata`, the default, is black |
+| `scale`, `bias`, `fallback` | the same inputs | float4, defaults (1, 1, 1, 1), (0, 0, 0, 0) and (0, 0, 0, 1) |
+| `Material::texcoords`, `texcoord_fallback` | `st` | a `UsdPrimvarReader_float2`'s `varname` and `fallback`, or, unconnected, no set and `st`'s value |
+
+The colour space is `sourceColorSpace`, or the `colorSpace:file` input
+colour space UsdImaging hands it over as: `raw` and linear or data colour
+spaces are raw, `sRGB` and `srgb_*` spaces sRGB, and anything else `auto`.
+A material has one texture-coordinate source, its first lookup's. An input
+driven by anything else (another node type, a colour output on a scalar,
+a `UsdTransform2d` between the reader and the texture, or a second
+texture-coordinate source) takes its default and is reported as connected.
+A `UsdUVTexture` without a file is a lookup whose key names no image, which
+returns its fallback. Any other surface shader, or a network without a
+surface, warns and leaves the default material.
 `opacity`, `opacityThreshold`, `normal`, `ior`, `specularColor`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read, and a mesh without a binding does not fall back to its
 `displayColor`.
+
+The adapter decodes each image a material names with Hio
+(`HioImage::OpenForReading` under the source colour space) when the first
+material names its key, and removes the texture when the last one stops.
+One channel becomes (r, r, r, 1), two (r, r, r, g) and three (r, g, b, 1),
+as Storm samples them. 8-bit images stay 8-bit, `Rgba8Srgb` when Hio
+reports them sRGB (under `auto`, 8-bit three- and four-channel images
+without colour metadata) and `Rgba8Unorm` otherwise; 16-bit, half and float
+images become `Rgba32Float`, decoded from sRGB on the CPU when Hio reports
+them sRGB. An image that cannot be read, of an unsupported pixel format, or
+with a non-finite value warns, and its lookups return their fallbacks. An
+image is not read again until no material names it, so editing a file on
+disk is not seen while it is in use. UDIM tiles, wrap metadata and premultiplied
+alpha are not supported.

@@ -56,6 +56,8 @@ using vulkan_internal::GpuScene;
 using vulkan_internal::InstanceState;
 using vulkan_internal::kAccelerationExtensions;
 using vulkan_internal::kFrameConstantsSize;
+using vulkan_internal::kMaxTextures;
+using vulkan_internal::kTextureSamplers;
 using vulkan_internal::LoadSpirv;
 using vulkan_internal::ProbeAccelerationStructures;
 using vulkan_internal::SupportsShaderDrawParameters;
@@ -86,7 +88,9 @@ struct PathConstants {
   std::uint32_t add_sample;
   std::uint32_t max_bounces;
   std::uint32_t width;
-  std::uint32_t reserved[3];
+  // What the surface pass writes: a SurfaceOutput.
+  std::uint32_t surface_output;
+  std::uint32_t reserved[2];
 };
 static_assert(sizeof(PathConstants) == 96 &&
               offsetof(PathConstants, instances) == 48 &&
@@ -96,16 +100,21 @@ static_assert(sizeof(PathConstants) == 96 &&
 // The path tracer's kPass specialization constant.
 constexpr std::uint32_t kCameraPass = 0;
 constexpr std::uint32_t kRadiancePass = 1;
-constexpr std::uint32_t kNormalPass = 2;
+constexpr std::uint32_t kSurfacePass = 2;
+
+// PathConstants::surface_output: the surface pass's diagnostics.
+constexpr std::uint32_t kShadingNormalOutput = 0;
+constexpr std::uint32_t kAlbedoOutput = 1;
+constexpr std::uint32_t kRoughnessMetallicOutput = 2;
 
 // What one frame draws: the bootstrap triangle into the RGBA8 targets, or
 // the scene into the RGBA32F targets, either the camera pass alone
-// (barycentrics or shading normals) or the camera pass's depth and then the
-// radiance pass.
+// (barycentrics), the surface pass alone (a diagnostic of the hit's
+// surface) or the camera pass's depth and then the radiance pass.
 enum class FramePass {
   Bootstrap,
   Barycentrics,
-  ShadingNormal,
+  Surface,
   Radiance,
 };
 
@@ -358,11 +367,14 @@ public:
       vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
       vkDestroyPipeline(device_, camera_pipeline_, nullptr);
       vkDestroyPipeline(device_, depth_pipeline_, nullptr);
-      vkDestroyPipeline(device_, normal_pipeline_, nullptr);
+      vkDestroyPipeline(device_, surface_pipeline_, nullptr);
       vkDestroyPipeline(device_, radiance_pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
       vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
       vkDestroyDescriptorSetLayout(device_, ray_descriptor_layout_, nullptr);
+      // The layout's immutable samplers outlive it.
+      for (VkSampler sampler : samplers_)
+        vkDestroySampler(device_, sampler, nullptr);
       if (path_constants_mapped_ != nullptr)
         vkUnmapMemory(device_, path_constants_memory_);
       vkDestroyBuffer(device_, path_constants_, nullptr);
@@ -407,7 +419,7 @@ public:
     if (ray_query_.available && !ray_shaders.vertex.empty() &&
         !ray_shaders.fragment.empty()) {
       // One shader module serves four pipelines: the camera pass with
-      // and without colour writes, the normal pass, and the radiance pass,
+      // and without colour writes, the surface pass, and the radiance pass,
       // which leaves depth to the camera pass.
       if (!CreateRayResources(detail) ||
           !CreateRenderPass(kSceneColorFormat, scene_render_pass_, detail) ||
@@ -420,7 +432,7 @@ public:
               {scene_render_pass_, kCameraPass, false}, depth_pipeline_,
               detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
-              {scene_render_pass_, kNormalPass}, normal_pipeline_, detail) ||
+              {scene_render_pass_, kSurfacePass}, surface_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRadiancePass, true, false},
               radiance_pipeline_, detail))
@@ -456,7 +468,9 @@ public:
       pass = FramePass::Barycentrics;
       break;
     case SceneOutput::ShadingNormal:
-      pass = FramePass::ShadingNormal;
+    case SceneOutput::Albedo:
+    case SceneOutput::RoughnessMetallic:
+      pass = FramePass::Surface;
       break;
     default:
       return Evidence(FrameStatus::Fail, "unknown scene output");
@@ -663,6 +677,11 @@ public:
     constants.add_sample = add_sample ? 1U : 0U;
     constants.max_bounces = settings.max_bounces;
     constants.width = target.width;
+    constants.surface_output =
+        settings.output == SceneOutput::Albedo ? kAlbedoOutput
+        : settings.output == SceneOutput::RoughnessMetallic
+            ? kRoughnessMetallicOutput
+            : kShadingNormalOutput;
     std::memcpy(path_constants_mapped_, &constants, sizeof(constants));
     if (path_constants_coherent_) {
       return true;
@@ -674,10 +693,36 @@ public:
         "vkFlushMappedMemoryRanges(path constants)", detail);
   }
 
-  // UpdateScene can replace the TLAS and EnsureTargets the accumulation
-  // image. Both are written after the preceding synchronous frame and scene
-  // update have finished.
+  // UpdateScene can replace the TLAS and the textures, and EnsureTargets the
+  // accumulation image. They are written after the preceding synchronous
+  // frame and scene update have finished. A released texture's descriptor
+  // stays as it was: the binding is partially bound, and no material
+  // samples it.
   void UpdateSceneDescriptors(const Targets& targets) {
+    if (scene_.TextureGeneration() != texture_generation_) {
+      const std::vector<VkImageView> views = scene_.TextureViews();
+      std::vector<VkDescriptorImageInfo> images;
+      std::vector<VkWriteDescriptorSet> texture_writes;
+      images.reserve(views.size());
+      for (std::size_t slot = 0; slot < views.size(); ++slot) {
+        if (views[slot] == VK_NULL_HANDLE)
+          continue;
+        images.push_back({VK_NULL_HANDLE, views[slot],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+        VkWriteDescriptorSet& write = texture_writes.emplace_back();
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = ray_descriptor_;
+        write.dstBinding = 3;
+        write.dstArrayElement = static_cast<std::uint32_t>(slot);
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &images.back();
+      }
+      vkUpdateDescriptorSets(device_,
+          static_cast<std::uint32_t>(texture_writes.size()),
+          texture_writes.data(), 0, nullptr);
+      texture_generation_ = scene_.TextureGeneration();
+    }
     VkWriteDescriptorSet writes[2]{};
     std::uint32_t count = 0;
     const VkAccelerationStructureKHR tlas = scene_.Tlas();
@@ -831,6 +876,8 @@ private:
                  scene_required) {
         ray_query_ = {false, "RGBA32F colour attachments with storage and "
                              "readback are unavailable"};
+      } else if (std::string reason; !SupportsTextures(reason)) {
+        ray_query_ = {false, reason};
       }
     }
     std::uint32_t queue_count = 0;
@@ -838,6 +885,53 @@ private:
     std::vector<VkQueueFamilyProperties> queues(queue_count);
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_count, queues.data());
     timestamp_bits_ = queues[queue_family_].timestampValidBits;
+    return true;
+  }
+
+  // The scene passes sample the GPU scene's texture table: a partially bound
+  // array of kMaxTextures sampled images and kTextureSamplers samplers,
+  // indexed per hit, with bilinear filtering of every texture format.
+  bool SupportsTextures(std::string& reason) const {
+    VkPhysicalDeviceVulkan12Features vulkan12{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 features{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.pNext = &vulkan12;
+    vkGetPhysicalDeviceFeatures2(physical_device_, &features);
+    if (vulkan12.descriptorBindingPartiallyBound != VK_TRUE ||
+        vulkan12.shaderSampledImageArrayNonUniformIndexing != VK_TRUE) {
+      reason = "the device does not support descriptorBindingPartiallyBound "
+               "and shaderSampledImageArrayNonUniformIndexing, which the "
+               "texture table requires";
+      return false;
+    }
+    const VkPhysicalDeviceLimits& limits = device_properties_.limits;
+    if (limits.maxPerStageDescriptorSampledImages < kMaxTextures ||
+        limits.maxDescriptorSetSampledImages < kMaxTextures ||
+        limits.maxPerStageDescriptorSamplers < kTextureSamplers ||
+        limits.maxDescriptorSetSamplers < kTextureSamplers ||
+        limits.maxPerStageResources < kMaxTextures + kTextureSamplers + 3) {
+      std::ostringstream message;
+      message << "the device's descriptor limits do not allow a table of "
+              << kMaxTextures << " sampled textures";
+      reason = message.str();
+      return false;
+    }
+    const VkFormatFeatureFlags sampled =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    for (const VkFormat format : {VK_FORMAT_R8G8B8A8_UNORM,
+             VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R32G32B32A32_SFLOAT}) {
+      VkFormatProperties properties{};
+      vkGetPhysicalDeviceFormatProperties(physical_device_, format,
+          &properties);
+      if ((properties.optimalTilingFeatures & sampled) != sampled) {
+        reason = "linearly filtered RGBA8 and RGBA32F textures with uploads "
+                 "and readback are unavailable";
+        return false;
+      }
+    }
     return true;
   }
 
@@ -854,6 +948,11 @@ private:
     VkPhysicalDeviceVulkan12Features enabled_vulkan12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     enabled_vulkan12.bufferDeviceAddress = VK_TRUE;
+    // The texture table; SupportsTextures checked both.
+    enabled_vulkan12.descriptorBindingPartiallyBound =
+        ray_query_.available ? VK_TRUE : VK_FALSE;
+    enabled_vulkan12.shaderSampledImageArrayNonUniformIndexing =
+        ray_query_.available ? VK_TRUE : VK_FALSE;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR enabled_acceleration{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
     enabled_acceleration.accelerationStructure = VK_TRUE;
@@ -980,7 +1079,28 @@ private:
   }
 
   bool CreateRayResources(std::string& detail) {
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    // Bilinear, without mipmaps. TextureWrap order: black, clamp, repeat,
+    // mirror; black is the transparent black border.
+    constexpr VkSamplerAddressMode kAddress[] = {
+        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT};
+    for (std::uint32_t index = 0; index < kTextureSamplers; ++index) {
+      VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+      sampler.magFilter = VK_FILTER_LINEAR;
+      sampler.minFilter = VK_FILTER_LINEAR;
+      sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+      sampler.addressModeU = kAddress[index / 4];
+      sampler.addressModeV = kAddress[index % 4];
+      sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      sampler.maxLod = 0.0F;
+      sampler.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+      if (!VulkanOk(vkCreateSampler(device_, &sampler, nullptr,
+                        &samplers_[index]),
+              "vkCreateSampler", detail))
+        return false;
+    }
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -993,8 +1113,26 @@ private:
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // The texture table, written as textures become resident, and its
+    // samplers.
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    bindings[3].descriptorCount = kMaxTextures;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    bindings[4].descriptorCount = kTextureSamplers;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].pImmutableSamplers = samplers_.data();
+    const VkDescriptorBindingFlags binding_flags[5] = {0, 0, 0,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0};
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    flags.bindingCount = 5;
+    flags.pBindingFlags = binding_flags;
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout.bindingCount = 3;
+    layout.pNext = &flags;
+    layout.bindingCount = 5;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -1003,10 +1141,12 @@ private:
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
-    pool.poolSizeCount = 3;
+    pool.poolSizeCount = 5;
     pool.pPoolSizes = sizes;
     if (!VulkanOk(vkCreateDescriptorPool(device_, &pool, nullptr,
                       &ray_descriptor_pool_),
@@ -1395,9 +1535,9 @@ private:
       if (trace) {
         // The camera pass first: in Radiance output, for depth alone.
         vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pass == FramePass::Barycentrics    ? camera_pipeline_
-            : pass == FramePass::ShadingNormal ? normal_pipeline_
-                                               : depth_pipeline_);
+            pass == FramePass::Barycentrics ? camera_pipeline_
+            : pass == FramePass::Surface    ? surface_pipeline_
+                                            : depth_pipeline_);
         vkCmdSetViewport(command_, 0, 1, &viewport);
         vkCmdSetScissor(command_, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1476,7 +1616,11 @@ private:
   VkRenderPass scene_render_pass_ = VK_NULL_HANDLE;
   VkPipeline camera_pipeline_ = VK_NULL_HANDLE;
   VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
-  VkPipeline normal_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline surface_pipeline_ = VK_NULL_HANDLE;
+  // Immutable samplers, one per pair of TextureWrap modes (s * 4 + t).
+  std::array<VkSampler, kTextureSamplers> samplers_{};
+  // The GpuScene texture generation the descriptor set holds.
+  std::uint64_t texture_generation_ = 0;
   VkPipeline radiance_pipeline_ = VK_NULL_HANDLE;
   VkPipelineLayout ray_layout_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;

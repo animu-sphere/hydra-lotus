@@ -9,7 +9,11 @@
 #include <pxr/base/gf/quatd.h>
 #include <pxr/base/gf/quatf.h>
 #include <pxr/base/gf/quath.h>
+#include <pxr/base/gf/half.h>
 #include <pxr/base/gf/rotation.h>
+#include <pxr/base/gf/vec2d.h>
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec2h.h>
 #include <pxr/base/gf/vec3d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec3h.h>
@@ -30,6 +34,8 @@
 #include <pxr/imaging/hd/resourceRegistry.h>
 #include <pxr/imaging/hd/rprimCollection.h>
 #include <pxr/imaging/hd/tokens.h>
+#include <pxr/imaging/hio/image.h>
+#include <pxr/imaging/hio/types.h>
 
 #include <lotus/extraction.hpp>
 #include <lotus/render_world.hpp>
@@ -49,11 +55,14 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -255,6 +264,143 @@ constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 // The scene keys of the meshes a render pass does not trace.
 using MeshExclusion = std::unordered_set<std::string>;
 
+// Decodes an image with Hio into four channels, as Storm samples them: one
+// channel becomes (r, r, r, 1), two (r, r, r, g) and three (r, g, b, 1).
+// 8-bit images keep 8 bits, sRGB-encoded when Hio decides from the source
+// colour space that they are; others become 32-bit floats, decoded from sRGB
+// first when Hio says they are encoded. Nothing, and `error`, when the image
+// cannot be read or holds a non-finite value.
+std::optional<Lotus::Texture> LoadTexture(const HdLotusTextureRequest& request,
+    std::string& error) {
+  HioImage::SourceColorSpace color_space = HioImage::Auto;
+  if (request.source_color_space == "raw") {
+    color_space = HioImage::Raw;
+  } else if (request.source_color_space == "sRGB") {
+    color_space = HioImage::SRGB;
+  }
+  const HioImageSharedPtr image =
+      HioImage::OpenForReading(request.file, 0, 0, color_space, true);
+  if (!image) {
+    error = "it cannot be opened as an image";
+    return std::nullopt;
+  }
+  const HioFormat format = image->GetFormat();
+  const int channels = HioGetComponentCount(format);
+  const HioType type = HioGetHioType(format);
+  const int width = image->GetWidth();
+  const int height = image->GetHeight();
+  if (HioIsCompressed(format) || channels < 1 || channels > 4 || width <= 0 ||
+      height <= 0) {
+    error = "its pixel format is not supported";
+    return std::nullopt;
+  }
+  const std::size_t component_bytes = HioGetDataSizeOfType(type);
+  const std::size_t texels = std::size_t(width) * std::size_t(height);
+  std::vector<std::uint8_t> data(texels * channels * component_bytes);
+  HioImage::StorageSpec storage;
+  storage.width = width;
+  storage.height = height;
+  storage.depth = 1;
+  storage.format = format;
+  storage.flipped = false;
+  storage.data = data.data();
+  if (!image->Read(storage)) {
+    error = "its pixels cannot be read";
+    return std::nullopt;
+  }
+  const bool srgb = type == HioTypeUnsignedByteSRGB || image->IsColorSpaceSRGB();
+  const bool bytes = type == HioTypeUnsignedByte || type == HioTypeUnsignedByteSRGB;
+  // Component `c` of texel `index`, normalized for integer types.
+  const auto component = [&](std::size_t index, int c) -> double {
+    const std::uint8_t* at =
+        data.data() + (index * channels + c) * component_bytes;
+    switch (type) {
+    case HioTypeUnsignedByte:
+    case HioTypeUnsignedByteSRGB:
+      return *at / 255.0;
+    case HioTypeUnsignedShort: {
+      std::uint16_t value = 0;
+      std::memcpy(&value, at, sizeof(value));
+      return value / 65535.0;
+    }
+    case HioTypeHalfFloat: {
+      GfHalf value;
+      std::memcpy(&value, at, sizeof(value));
+      return static_cast<float>(value);
+    }
+    case HioTypeFloat: {
+      float value = 0.0F;
+      std::memcpy(&value, at, sizeof(value));
+      return value;
+    }
+    case HioTypeDouble: {
+      double value = 0.0;
+      std::memcpy(&value, at, sizeof(value));
+      return value;
+    }
+    default:
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  };
+  // The texel's red, green, blue and alpha components.
+  const auto rgba = [&](std::size_t index) {
+    const double first = component(index, 0);
+    switch (channels) {
+    case 1:
+      return std::array<double, 4>{first, first, first, 1.0};
+    case 2:
+      return std::array<double, 4>{first, first, first, component(index, 1)};
+    case 3:
+      return std::array<double, 4>{
+          first, component(index, 1), component(index, 2), 1.0};
+    default:
+      return std::array<double, 4>{first, component(index, 1),
+          component(index, 2), component(index, 3)};
+    }
+  };
+  Lotus::Texture texture;
+  texture.width = static_cast<std::uint32_t>(width);
+  texture.height = static_cast<std::uint32_t>(height);
+  if (bytes) {
+    texture.format = srgb ? Lotus::TextureFormat::Rgba8Srgb
+                          : Lotus::TextureFormat::Rgba8Unorm;
+    texture.texels.resize(texels * 4);
+    for (std::size_t index = 0; index < texels; ++index) {
+      const std::array<double, 4> value = rgba(index);
+      for (int c = 0; c < 4; ++c) {
+        texture.texels[index * 4 + c] =
+            static_cast<std::uint8_t>(std::lround(value[c] * 255.0));
+      }
+    }
+    return texture;
+  }
+  if (type == HioTypeSignedByte || type == HioTypeSignedShort ||
+      type == HioTypeUnsignedInt || type == HioTypeInt) {
+    error = "its pixel format is not supported";
+    return std::nullopt;
+  }
+  texture.format = Lotus::TextureFormat::Rgba32Float;
+  texture.texels.resize(texels * 16);
+  for (std::size_t index = 0; index < texels; ++index) {
+    std::array<double, 4> value = rgba(index);
+    for (int c = 0; c < 4; ++c) {
+      if (srgb && c < 3) {
+        value[c] = value[c] <= 0.04045
+                       ? value[c] / 12.92
+                       : std::pow((value[c] + 0.055) / 1.055, 2.4);
+      }
+      const auto texel = static_cast<float>(value[c]);
+      if (!std::isfinite(texel)) {
+        error = "a texel is not finite";
+        return std::nullopt;
+      }
+      std::memcpy(texture.texels.data() + index * 16 + c * 4, &texel,
+          sizeof(texel));
+    }
+  }
+  return texture;
+}
+
 class AdapterState {
 public:
   AdapterState() {
@@ -276,13 +422,36 @@ public:
     world_.BindMaterial(id.GetString(), material.GetString());
   }
 
-  void SyncMaterial(const SdfPath& id, const Lotus::Material& material) {
+  // Stores the material IR under the material's path, with the textures its
+  // lookups name. An image is decoded when the first material names its
+  // key and removed when the last one stops; one that cannot be decoded
+  // warns and leaves its lookups to their fallbacks.
+  void SyncMaterial(const SdfPath& id,
+      const HdLotusMaterialTranslation& translation) {
     std::scoped_lock lock(mutex_);
-    world_.SetMaterial(id.GetString(), material);
+    std::vector<std::string> keys;
+    for (const HdLotusTextureRequest& request : translation.textures) {
+      keys.push_back(request.key);
+      if (texture_users_[request.key]++ != 0) {
+        continue;
+      }
+      std::string error;
+      if (auto texture = LoadTexture(request, error)) {
+        world_.SetTexture(request.key, std::move(*texture));
+      } else {
+        TF_WARN("Lotus cannot read the texture %s of %s: %s",
+            request.file.c_str(), id.GetText(), error.c_str());
+      }
+    }
+    ReleaseTextures(id);
+    material_textures_[id] = std::move(keys);
+    world_.SetMaterial(id.GetString(), translation.material);
   }
 
   void RemoveMaterial(const SdfPath& id) {
     std::scoped_lock lock(mutex_);
+    ReleaseTextures(id);
+    material_textures_.erase(id);
     world_.RemoveMaterial(id.GetString());
   }
 
@@ -415,6 +584,21 @@ public:
   }
 
 private:
+  // Drops the material's hold on the textures it named.
+  void ReleaseTextures(const SdfPath& id) {
+    const auto found = material_textures_.find(id);
+    if (found == material_textures_.end()) {
+      return;
+    }
+    for (const std::string& key : found->second) {
+      if (--texture_users_[key] == 0) {
+        texture_users_.erase(key);
+        world_.RemoveTexture(key);
+      }
+    }
+    found->second.clear();
+  }
+
   // The snapshot with every mesh in `exclusion` hidden. The hidden copy of
   // the scene is made only when the world's scene or the exclusion changes,
   // and not at all when the exclusion hides nothing, so an unchanged frame
@@ -449,6 +633,11 @@ private:
 
   std::mutex mutex_;
   Lotus::RenderWorld world_;
+  // The texture keys each material names, and how many materials name each
+  // key.
+  std::unordered_map<SdfPath, std::vector<std::string>, SdfPath::Hash>
+      material_textures_;
+  std::unordered_map<std::string, std::size_t> texture_users_;
   // The latest pass's exclusion, the scene it selected from and the result.
   std::shared_ptr<const MeshExclusion> exclusion_;
   std::shared_ptr<const Lotus::LotusScene> selection_source_;
@@ -624,7 +813,7 @@ public:
         TF_WARN("Lotus uses the default material for %s: %s",
             GetId().GetText(), translation.unsupported.c_str());
       }
-      state_->SyncMaterial(GetId(), translation.material);
+      state_->SyncMaterial(GetId(), translation);
     }
     *dirty_bits = Clean;
   }
@@ -660,16 +849,17 @@ public:
     if (bits == HdChangeTracker::Clean) {
       return;
     }
-    // Authoring or removing a `normals` primvar, or changing its
-    // interpolation, may dirty the primvars rather than the normals.
-    const bool normals_dirty =
+    // Authoring or removing a `normals` or texture-coordinate primvar, or
+    // changing its interpolation, may dirty the primvars rather than the
+    // normals.
+    const bool primvars_dirty =
         !initialized_ ||
         HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->normals) ||
         (bits & HdChangeTracker::DirtyPrimvar);
     const bool geometry_dirty = !initialized_ ||
                                 (bits & HdChangeTracker::DirtyTopology) ||
                                 HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points) ||
-                                normals_dirty;
+                                primvars_dirty;
     if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
       topology_ = GetMeshTopology(delegate);
     }
@@ -680,8 +870,8 @@ public:
                     ? value.UncheckedGet<VtVec3fArray>()
                     : VtVec3fArray{};
     }
-    if (normals_dirty) {
-      ReadNormals(delegate);
+    if (primvars_dirty) {
+      ReadPrimvars(delegate);
     }
     if (!initialized_ || HdChangeTracker::IsTransformDirty(bits, GetId())) {
       instance_.world_from_object = ToLotusMatrix(delegate->GetTransform(GetId()));
@@ -749,132 +939,193 @@ private:
     return transforms;
   }
 
-  // The authored `normals` primvar, flattened, and its interpolation, or no
-  // value. An index out of range leaves the values unflattened, which
-  // CornerNormals then rejects by their count.
-  void ReadNormals(HdSceneDelegate* delegate) {
-    normals_ = VtValue();
+  // A primvar's values, flattened when indexed, and its interpolation.
+  struct PrimvarValues {
+    VtValue value;
+    HdInterpolation interpolation = HdInterpolationConstant;
+  };
+
+  // Reads the authored `normals` primvar and every other primvar of float
+  // pairs, the texture-coordinate sets, by name. An index out of range
+  // leaves the values unflattened, which CornerValues then rejects by their
+  // count.
+  void ReadPrimvars(HdSceneDelegate* delegate) {
+    normals_ = PrimvarValues{};
+    texcoords_.clear();
     for (const HdInterpolation interpolation :
         {HdInterpolationConstant, HdInterpolationUniform, HdInterpolationVarying,
             HdInterpolationVertex, HdInterpolationFaceVarying}) {
       for (const HdPrimvarDescriptor& primvar :
           GetPrimvarDescriptors(delegate, interpolation)) {
-        if (primvar.name != HdTokens->normals) {
+        if (primvar.name == HdTokens->points ||
+            primvar.name == HdTokens->displayColor ||
+            primvar.name == HdTokens->displayOpacity ||
+            primvar.name == HdTokens->widths) {
           continue;
         }
-        normals_interpolation_ = interpolation;
-        if (!primvar.indexed) {
-          normals_ = GetNormals(delegate);
-          return;
+        PrimvarValues values{ReadFlattened(delegate, primvar), interpolation};
+        if (primvar.name == HdTokens->normals) {
+          normals_ = std::move(values);
+        } else if (values.value.IsHolding<VtVec2fArray>() ||
+                   values.value.IsHolding<VtVec2dArray>() ||
+                   values.value.IsHolding<VtVec2hArray>()) {
+          texcoords_[primvar.name.GetString()] = std::move(values);
         }
-        VtIntArray indices;
-        normals_ = GetIndexedPrimvar(delegate, HdTokens->normals, &indices);
-        if (!normals_.IsHolding<VtVec3fArray>() || indices.empty()) {
-          return;
-        }
-        const VtVec3fArray& values = normals_.UncheckedGet<VtVec3fArray>();
-        VtVec3fArray flattened;
-        flattened.reserve(indices.size());
-        for (const int index : indices) {
-          if (index < 0 || static_cast<std::size_t>(index) >= values.size()) {
-            return;
-          }
-          flattened.push_back(values[static_cast<std::size_t>(index)]);
-        }
-        normals_ = VtValue(std::move(flattened));
-        return;
       }
     }
   }
 
-  // One normal per triangle corner from the authored normals, or none when
-  // there are none or they cannot be used, which warns.
-  std::vector<std::array<float, 3>> CornerNormals(const VtVec3iArray& triangles,
+  // The primvar's value, with an indexed primvar's indices applied.
+  VtValue ReadFlattened(HdSceneDelegate* delegate,
+      const HdPrimvarDescriptor& primvar) {
+    if (!primvar.indexed) {
+      return GetPrimvar(delegate, primvar.name);
+    }
+    VtIntArray indices;
+    VtValue value = GetIndexedPrimvar(delegate, primvar.name, &indices);
+    if (indices.empty()) {
+      return value;
+    }
+    const auto flatten = [&](const auto* values) {
+      using Array = std::remove_cv_t<std::remove_pointer_t<decltype(values)>>;
+      if (values == nullptr) {
+        return false;
+      }
+      Array flattened;
+      flattened.reserve(indices.size());
+      for (const int index : indices) {
+        if (index < 0 || static_cast<std::size_t>(index) >= values->size()) {
+          return true;
+        }
+        flattened.push_back((*values)[static_cast<std::size_t>(index)]);
+      }
+      value = VtValue(std::move(flattened));
+      return true;
+    };
+    const auto held = [&](auto* type) {
+      using Array = std::remove_pointer_t<decltype(type)>;
+      return value.IsHolding<Array>() ? &value.UncheckedGet<Array>() : nullptr;
+    };
+    flatten(held(static_cast<VtVec3fArray*>(nullptr))) ||
+        flatten(held(static_cast<VtVec2fArray*>(nullptr))) ||
+        flatten(held(static_cast<VtVec2dArray*>(nullptr))) ||
+        flatten(held(static_cast<VtVec2hArray*>(nullptr)));
+    return value;
+  }
+
+  // One value per triangle corner from primvar values of N floats each, or
+  // none when there are none or they cannot be used, which warns. `what`
+  // names them in the warning.
+  template <std::size_t N>
+  std::vector<std::array<float, N>> CornerValues(const PrimvarValues& primvar,
+      const std::string& what, const VtVec3iArray& triangles,
       const VtIntArray& primitive_params) const {
-    if (normals_.IsEmpty()) {
+    using Value = std::array<float, N>;
+    if (primvar.value.IsEmpty()) {
       return {};
     }
     const auto unusable = [&](const char* reason) {
-      TF_WARN("Lotus ignores the normals of %s: %s", GetId().GetText(), reason);
-      return std::vector<std::array<float, 3>>{};
+      TF_WARN("Lotus ignores the %s of %s: %s", what.c_str(), GetId().GetText(),
+          reason);
+      return std::vector<Value>{};
     };
-    if (!normals_.IsHolding<VtVec3fArray>()) {
-      return unusable("they are not an array of float triples");
+    std::vector<Value> values;
+    const auto read = [&](const auto& array) {
+      values.reserve(array.size());
+      for (const auto& element : array) {
+        Value value{};
+        for (std::size_t c = 0; c < N; ++c) {
+          value[c] = static_cast<float>(element[c]);
+        }
+        values.push_back(value);
+      }
+    };
+    if constexpr (N == 3) {
+      if (!primvar.value.IsHolding<VtVec3fArray>()) {
+        return unusable("they are not an array of float triples");
+      }
+      read(primvar.value.UncheckedGet<VtVec3fArray>());
+    } else {
+      if (primvar.value.IsHolding<VtVec2fArray>()) {
+        read(primvar.value.UncheckedGet<VtVec2fArray>());
+      } else if (primvar.value.IsHolding<VtVec2dArray>()) {
+        read(primvar.value.UncheckedGet<VtVec2dArray>());
+      } else if (primvar.value.IsHolding<VtVec2hArray>()) {
+        read(primvar.value.UncheckedGet<VtVec2hArray>());
+      } else {
+        return unusable("they are not an array of float pairs");
+      }
     }
-    const VtVec3fArray& normals = normals_.UncheckedGet<VtVec3fArray>();
-    std::vector<std::array<float, 3>> corners;
+    std::vector<Value> corners;
     corners.reserve(3 * triangles.size());
-    const auto add = [&](const GfVec3f& normal) {
-      corners.push_back({normal[0], normal[1], normal[2]});
-    };
-    switch (normals_interpolation_) {
+    switch (primvar.interpolation) {
     case HdInterpolationConstant:
-      if (normals.empty()) {
+      if (values.empty()) {
         return unusable("a constant primvar without a value");
       }
-      corners.assign(3 * triangles.size(),
-          {normals[0][0], normals[0][1], normals[0][2]});
+      corners.assign(3 * triangles.size(), values[0]);
       break;
     case HdInterpolationUniform:
-      if (normals.size() != topology_.GetFaceVertexCounts().size()) {
+      if (values.size() != topology_.GetFaceVertexCounts().size()) {
         return unusable("a uniform primvar needs one value per face");
       }
       for (const int param : primitive_params) {
-        const GfVec3f& normal = normals[static_cast<std::size_t>(
+        const Value& value = values[static_cast<std::size_t>(
             HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(param))];
-        add(normal);
-        add(normal);
-        add(normal);
+        corners.insert(corners.end(), 3, value);
       }
       break;
     case HdInterpolationVarying:
     case HdInterpolationVertex:
-      if (normals.size() != points_.size()) {
+      if (values.size() != points_.size()) {
         return unusable("a vertex or varying primvar needs one value per "
                         "point");
       }
       for (const GfVec3i& triangle : triangles) {
-        add(normals[static_cast<std::size_t>(triangle[0])]);
-        add(normals[static_cast<std::size_t>(triangle[1])]);
-        add(normals[static_cast<std::size_t>(triangle[2])]);
+        for (int corner = 0; corner < 3; ++corner) {
+          corners.push_back(values[static_cast<std::size_t>(triangle[corner])]);
+        }
       }
       break;
     case HdInterpolationFaceVarying: {
-      if (normals.size() != topology_.GetFaceVertexIndices().size()) {
+      if (values.size() != topology_.GetFaceVertexIndices().size()) {
         return unusable("a face-varying primvar needs one value per face "
                         "vertex");
       }
       // Triangulated the way ComputeTriangleIndices triangulates the faces,
       // holes and orientation included. Unchanged means the values already
       // are per triangle corner, as on triangles without holes.
+      using Array = std::conditional_t<N == 3, VtVec3fArray, VtVec2fArray>;
       VtValue triangulated;
       const HdMeshComputationResult result =
           HdMeshUtil(&topology_, GetId())
-              .ComputeTriangulatedFaceVaryingPrimvar(normals.cdata(),
-                  static_cast<int>(normals.size()), HdTypeFloatVec3,
-                  &triangulated);
+              .ComputeTriangulatedFaceVaryingPrimvar(values.data(),
+                  static_cast<int>(values.size()),
+                  N == 3 ? HdTypeFloatVec3 : HdTypeFloatVec2, &triangulated);
       if (result == HdMeshComputationResult::Unchanged) {
-        triangulated = normals_;
+        corners = values;
+        break;
       }
       if (result == HdMeshComputationResult::Error ||
-          !triangulated.IsHolding<VtVec3fArray>() ||
-          triangulated.UncheckedGet<VtVec3fArray>().size() !=
-              3 * triangles.size()) {
+          !triangulated.IsHolding<Array>() ||
+          triangulated.UncheckedGet<Array>().size() != 3 * triangles.size()) {
         return unusable("their face-varying triangulation failed");
       }
-      for (const GfVec3f& normal : triangulated.UncheckedGet<VtVec3fArray>()) {
-        add(normal);
-      }
+      values.clear();
+      read(triangulated.UncheckedGet<Array>());
+      corners = std::move(values);
       break;
     }
     default:
       return unusable("their interpolation is not supported");
     }
-    if (!std::all_of(corners.begin(), corners.end(),
-            [](const std::array<float, 3>& normal) {
-              return std::isfinite(normal[0]) && std::isfinite(normal[1]) &&
-                     std::isfinite(normal[2]);
-            })) {
+    if (corners.size() != 3 * triangles.size()) {
+      return unusable("their face-varying triangulation failed");
+    }
+    if (!std::all_of(corners.begin(), corners.end(), [](const Value& value) {
+          return std::all_of(value.begin(), value.end(),
+              [](float component) { return std::isfinite(component); });
+        })) {
       return unusable("a value is not finite");
     }
     return corners;
@@ -922,15 +1173,24 @@ private:
       geometry.source_faces.push_back(static_cast<std::uint32_t>(
           HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(param)));
     }
-    geometry.normals = CornerNormals(triangles, primitive_params);
+    geometry.normals =
+        CornerValues<3>(normals_, "normals", triangles, primitive_params);
+    for (const auto& [name, values] : texcoords_) {
+      auto corners = CornerValues<2>(values,
+          "texture coordinates " + name, triangles, primitive_params);
+      if (!corners.empty()) {
+        geometry.texcoords[name] = std::move(corners);
+      }
+    }
     return geometry;
   }
 
   std::shared_ptr<AdapterState> state_;
   HdMeshTopology topology_;
   VtVec3fArray points_;
-  VtValue normals_;
-  HdInterpolation normals_interpolation_ = HdInterpolationConstant;
+  PrimvarValues normals_;
+  // The float-pair primvars by name.
+  std::map<std::string, PrimvarValues> texcoords_;
   Lotus::MeshInstance instance_;
   bool initialized_ = false;
 };

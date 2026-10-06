@@ -33,6 +33,7 @@ validation:
     - renderer.ray_query.timestamp
     - renderer.path.bsdf
     - renderer.path.normals
+    - renderer.path.textures
     - renderer.path.multibounce
     - renderer.path.accumulation
     - renderer.path.reference

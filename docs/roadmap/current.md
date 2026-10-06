@@ -112,9 +112,16 @@ Against the scope of
   material bindings
   ([scene reference](../reference/SCENE.md#materials),
   [evidence](../reports/2026-10-05-material-ir.md)).
-- ⬜ **Textures.** `UsdUVTexture` and `UsdPrimvarReader_float2` for the
-  translated inputs, which needs texture coordinates on the GPU scene and
-  texture residency.
+- ✅ **Textures.** `UsdUVTexture` lookups, with `UsdPrimvarReader_float2`
+  texture coordinates, for base colour, roughness, metallic and emission:
+  named per-corner texture-coordinate sets in the mesh geometry and the GPU
+  scene; sRGB, linear and float images resident in a bindless texture
+  table; bilinear filtering at level 0 with every wrap mode, scale, bias
+  and fallback; Hydra's float-pair primvars, and images decoded with Hio.
+  The committed reference images are reproduced bit for bit
+  ([scene reference](../reference/SCENE.md#materials-and-environment),
+  [evidence](../reports/2026-10-06-textures.md)). Mipmaps and ray cones,
+  `UsdTransform2d`, wrap metadata and UDIMs are not supported.
 - ✅ **Authored normals** as shading normals: per-corner normals in the
   mesh geometry and the GPU scene, interpolated and transformed at each
   hit, with the geometric surface still bounding reflection; Hydra's
@@ -124,7 +131,9 @@ Against the scope of
   [evidence](../reports/2026-10-06-authored-normals.md)).
 - ⬜ **Computed normals.** Smooth normals for meshes without authored ones
   whose subdivision scheme asks for a smooth surface, as Storm computes.
-- ⬜ **Normal maps.** `UsdPreviewSurface`'s `normal` input, after textures.
+- ⬜ **Normal maps.** `UsdPreviewSurface`'s `normal` input: a texture
+  lookup in tangent space, which needs tangent frames from the texture
+  coordinates.
 - ⬜ **Opacity and an alpha policy.** `opacity` and `opacityThreshold`,
   which needs non-opaque geometry in the acceleration structures.
 - ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the

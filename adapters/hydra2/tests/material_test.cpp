@@ -231,7 +231,10 @@ void TranslatorCases() {
           {TfToken("roughness"), VtValue(std::string("rough"))}}));
   Expect("values of other types", translation.material, Lotus::Material{});
 
-  // A connection wins over an authored value; the terminal node is last.
+  // A connection wins over an authored value; the terminal node is last. A
+  // texture lookup is translated (texture_test.cpp checks how); a texture
+  // without a file is a lookup of no image, which returns its fallback. A
+  // colour output cannot drive a scalar, which keeps its default.
   HdMaterialNetworkMap textured =
       Surface(preview, {{TfToken("diffuseColor"), VtValue(GfVec3f(0.5F))},
                            {TfToken("roughness"), VtValue(0.25F)}});
@@ -242,12 +245,17 @@ void TranslatorCases() {
   network.nodes.insert(network.nodes.begin(), texture);
   network.relationships.push_back({texture.path, TfToken("rgb"),
       SdfPath("/Material/Surface"), TfToken("diffuseColor")});
+  network.relationships.push_back({texture.path, TfToken("rgb"),
+      SdfPath("/Material/Surface"), TfToken("roughness")});
   translation = HdLotusTranslateMaterial(textured);
-  Expect("a connected input", translation.material,
-      MakeMaterial({0.18F, 0.18F, 0.18F}, 0.25F, 0, {0, 0, 0}));
+  Lotus::Material lookup = Lotus::Material{};
+  lookup.base_color_texture =
+      Lotus::TextureInput{HdLotusTextureKey("", TfToken("auto"))};
+  Expect("connected inputs", translation.material, lookup);
   Check(translation.connected_inputs == std::vector<TfToken>{
-                                           TfToken("diffuseColor")},
-      "the connected input was not reported");
+                                           TfToken("roughness")} &&
+            translation.textures.empty(),
+      "the untranslated connection was not reported");
 }
 
 // Syncs and executes one render pass.
@@ -387,9 +395,15 @@ int main(int argc, char** argv) try {
       MakeMaterial({0.75F, 0.125F, 0.0625F}, 0.25F, 0.75F, {2, 1, 0.5F}));
   Expect("Clamped", materials.at("/Looks/Clamped"),
       MakeMaterial({1, 0, 0.5F}, 1, 0, {0, 3, 0}));
-  // The connected diffuse colour is not evaluated yet; the specular
-  // workflow ignores metallic.
-  Expect("Specular", materials.at("/Looks/Specular"),
+  // The diffuse colour is a lookup of an image that cannot be read, which
+  // returns its fallback; the specular workflow ignores metallic.
+  Lotus::Material specular = materials.at("/Looks/Specular");
+  Check(specular.base_color_texture &&
+            specular.base_color_texture->texture.ends_with("missing.png|auto") &&
+            !first.scene->textures.contains(specular.base_color_texture->texture),
+      "the Specular lookup does not name its missing image");
+  specular.base_color_texture.reset();
+  Expect("Specular", specular,
       MakeMaterial({0.18F, 0.18F, 0.18F}, 0.125F, 0, {0, 0, 0}));
   Expect("Unknown", materials.at("/Looks/Unknown"), Lotus::Material{});
   if (gpu) {
