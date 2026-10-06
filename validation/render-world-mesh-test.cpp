@@ -71,6 +71,12 @@ int main() try {
   invalid = geometry;
   invalid.source_faces.clear();
   Reject([&] { world.SetMesh("/mesh", invalid, instance); });
+  invalid = geometry;
+  invalid.normals = {{0, 0, 1}, {0, 0, 1}};
+  Reject([&] { world.SetMesh("/mesh", invalid, instance); });
+  invalid.normals = {{0, 0, 1}, {0, 0, 1},
+      {0, std::numeric_limits<float>::infinity(), 1}};
+  Reject([&] { world.SetMesh("/mesh", invalid, instance); });
   Reject([&] { world.SetMesh("", geometry, instance); });
   auto invalid_instance = instance;
   invalid_instance.world_from_object[0] = std::numeric_limits<float>::infinity();
@@ -180,6 +186,26 @@ int main() try {
   Check(world.Commit().triangle_count == 1 &&
       instanced.scene->meshes.at("/mesh").instance.instancer_transforms->size() == 2,
       "an ordinary placement was not restored or changed a retained snapshot");
+
+  // Normals are geometry: adding or changing them replaces the buffer, and
+  // a zero normal is valid.
+  geometry.normals = {{0, 0, 1}, {0.5F, 0, 2}, {0, 0, 0}};
+  const auto plain = world.Commit();
+  world.SetMesh("/mesh", geometry, instance);
+  const auto normal = world.Commit();
+  Check(normal.revision == plain.revision + 1 &&
+      normal.scene->meshes.at("/mesh").geometry->normals == geometry.normals &&
+      plain.scene->meshes.at("/mesh").geometry->normals.empty() &&
+      normal.scene->meshes.at("/mesh").material ==
+          plain.scene->meshes.at("/mesh").material,
+      "adding normals was lost or changed a retained geometry buffer");
+  world.SetMesh("/mesh", geometry, instance);
+  Check(world.Commit().scene == normal.scene,
+      "unchanged normals replaced the geometry");
+  geometry.normals.clear();
+  world.SetMesh("/mesh", geometry, instance);
+  Check(world.Commit().scene->meshes.at("/mesh").geometry->normals.empty(),
+      "removing normals was lost");
 
   world.SetMesh("/other", geometry, instance);
   const auto multiple = world.Commit();

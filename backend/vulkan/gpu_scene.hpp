@@ -31,7 +31,10 @@ struct GpuInstanceRecord {
   std::uint32_t geometry_slot;
   // The instance's entry in the material table.
   std::uint32_t material_slot;
-  std::uint32_t reserved[2];
+  // Device address of the geometry's corner normals, three floats per
+  // triangle corner; zero when it has none or without acceleration
+  // structures.
+  std::uint64_t normals;
 };
 static_assert(sizeof(GpuInstanceRecord) == 96);
 
@@ -119,12 +122,15 @@ private:
   };
 
   // A geometry buffer holds the positions (three floats each) followed, at
-  // `index_offset`, by the triangles (three uint32 each).
+  // `index_offset`, by the triangles (three uint32 each) and, at
+  // `normal_offset`, by the corner normals (three floats each), if any.
   struct Geometry {
     // Keeps the address that identifies this buffer unique while resident.
     std::shared_ptr<const MeshGeometry> source;
     DeviceBuffer buffer;
     VkDeviceSize index_offset = 0;
+    // Zero without normals: the positions start the buffer.
+    VkDeviceSize normal_offset = 0;
     std::uint32_t vertex_count = 0;
     std::uint32_t triangle_count = 0;
     AccelerationStructure blas;

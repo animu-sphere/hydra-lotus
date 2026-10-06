@@ -96,13 +96,16 @@ static_assert(sizeof(PathConstants) == 96 &&
 // The path tracer's kPass specialization constant.
 constexpr std::uint32_t kCameraPass = 0;
 constexpr std::uint32_t kRadiancePass = 1;
+constexpr std::uint32_t kNormalPass = 2;
 
 // What one frame draws: the bootstrap triangle into the RGBA8 targets, or
 // the scene into the RGBA32F targets, either the camera pass alone
-// (barycentrics) or the camera pass's depth and then the radiance pass.
+// (barycentrics or shading normals) or the camera pass's depth and then the
+// radiance pass.
 enum class FramePass {
   Bootstrap,
   Barycentrics,
+  ShadingNormal,
   Radiance,
 };
 
@@ -355,6 +358,7 @@ public:
       vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
       vkDestroyPipeline(device_, camera_pipeline_, nullptr);
       vkDestroyPipeline(device_, depth_pipeline_, nullptr);
+      vkDestroyPipeline(device_, normal_pipeline_, nullptr);
       vkDestroyPipeline(device_, radiance_pipeline_, nullptr);
       vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
       vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
@@ -402,9 +406,9 @@ public:
     scene_targets_.color_pixel_bytes = 16;
     if (ray_query_.available && !ray_shaders.vertex.empty() &&
         !ray_shaders.fragment.empty()) {
-      // One shader module serves three pipelines: the camera pass with
-      // and without colour writes, and the radiance pass, which leaves
-      // depth to the camera pass.
+      // One shader module serves four pipelines: the camera pass with
+      // and without colour writes, the normal pass, and the radiance pass,
+      // which leaves depth to the camera pass.
       if (!CreateRayResources(detail) ||
           !CreateRenderPass(kSceneColorFormat, scene_render_pass_, detail) ||
           !CreatePipelineLayout(true, ray_layout_, detail) ||
@@ -415,6 +419,8 @@ public:
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kCameraPass, false}, depth_pipeline_,
               detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kNormalPass}, normal_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRadiancePass, true, false},
               radiance_pipeline_, detail))
@@ -442,16 +448,23 @@ public:
       return Evidence(FrameStatus::Skip, ray_query_.detail);
     if (camera_pipeline_ == VK_NULL_HANDLE)
       return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
-    if (settings.output != SceneOutput::Radiance &&
-        settings.output != SceneOutput::Barycentrics)
+    FramePass pass = FramePass::Radiance;
+    switch (settings.output) {
+    case SceneOutput::Radiance:
+      break;
+    case SceneOutput::Barycentrics:
+      pass = FramePass::Barycentrics;
+      break;
+    case SceneOutput::ShadingNormal:
+      pass = FramePass::ShadingNormal;
+      break;
+    default:
       return Evidence(FrameStatus::Fail, "unknown scene output");
+    }
     ray_constants_.world_to_clip = VulkanWorldToClip(draw.world_to_clip);
     if (!Invert(ray_constants_.world_to_clip, ray_constants_.clip_to_world))
       return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
-    return RenderFrame(draw, target, frame_count,
-        settings.output == SceneOutput::Barycentrics ? FramePass::Barycentrics
-                                                     : FramePass::Radiance,
-        settings);
+    return RenderFrame(draw, target, frame_count, pass, settings);
   }
 
   GpuFrameEvidence RenderFrame(const DrawSummary& draw,
@@ -793,8 +806,9 @@ private:
     // still uploads its buffers and reports why it builds no BLAS or TLAS.
     acceleration_ = ProbeAccelerationStructures(physical_device_);
     ray_query_ = vulkan_internal::ProbeRayQueries(physical_device_, acceleration_);
-    // The scene passes write RGBA32F, and the radiance pass accumulates
-    // into a storage image from the fragment stage.
+    // The scene passes write RGBA32F, the radiance pass accumulates into a
+    // storage image from the fragment stage, and the instance records hold
+    // 64-bit normal addresses.
     if (ray_query_.available) {
       VkPhysicalDeviceFeatures features{};
       vkGetPhysicalDeviceFeatures(physical_device_, &features);
@@ -809,6 +823,10 @@ private:
         ray_query_ = {false, "the device does not support "
                              "fragmentStoresAndAtomics, which radiance "
                              "accumulation requires"};
+      } else if (features.shaderInt64 != VK_TRUE) {
+        ray_query_ = {false, "the device does not support shaderInt64, which "
+                             "the instance records' normal addresses "
+                             "require"};
       } else if ((scene_color.optimalTilingFeatures & scene_required) !=
                  scene_required) {
         ray_query_ = {false, "RGBA32F colour attachments with storage and "
@@ -845,6 +863,7 @@ private:
     VkPhysicalDeviceFeatures enabled_features{};
     enabled_features.fragmentStoresAndAtomics =
         ray_query_.available ? VK_TRUE : VK_FALSE;
+    enabled_features.shaderInt64 = ray_query_.available ? VK_TRUE : VK_FALSE;
     std::vector<const char*> extensions;
     VkDeviceCreateInfo device_create{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     device_create.pNext = &enabled_vulkan11;
@@ -1376,8 +1395,9 @@ private:
       if (trace) {
         // The camera pass first: in Radiance output, for depth alone.
         vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pass == FramePass::Barycentrics ? camera_pipeline_
-                                            : depth_pipeline_);
+            pass == FramePass::Barycentrics    ? camera_pipeline_
+            : pass == FramePass::ShadingNormal ? normal_pipeline_
+                                               : depth_pipeline_);
         vkCmdSetViewport(command_, 0, 1, &viewport);
         vkCmdSetScissor(command_, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1456,6 +1476,7 @@ private:
   VkRenderPass scene_render_pass_ = VK_NULL_HANDLE;
   VkPipeline camera_pipeline_ = VK_NULL_HANDLE;
   VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline normal_pipeline_ = VK_NULL_HANDLE;
   VkPipeline radiance_pipeline_ = VK_NULL_HANDLE;
   VkPipelineLayout ray_layout_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;

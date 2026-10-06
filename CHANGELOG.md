@@ -9,6 +9,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Authored normals as shading normals (Renderer Phase 1.5).
+  `MeshGeometry::normals` holds one object-space normal per triangle
+  corner; the GPU scene stores them after the triangles and the instance
+  record carries their address. The path tracer interpolates them,
+  transforms them by the inverse transpose and samples the BSDF around
+  them, falling back to the geometric normal where they vanish or face
+  away from the ray, and ends a path whose sampled direction lies below
+  the geometric surface. `SceneOutput::ShadingNormal` renders the shading
+  normal as a diagnostic. The Hydra adapter reads the `normals` primvar in
+  every interpolation, indexed ones included. `renderer.path.normals` and
+  `lotus-renderer-hydra-normals` check them. The scene passes now require
+  `shaderInt64`.
+
 - The Lotus material IR (Renderer Phase 1.5). `Lotus::Material`
   (`include/lotus/material.hpp`) holds constant base colour, roughness,
   metallic and emission. `LotusScene::materials` keys them; meshes bind to

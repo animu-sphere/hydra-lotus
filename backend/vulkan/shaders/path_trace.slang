@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The reference path tracer (design policy section 9) as fullscreen fragment
 // passes. The camera pass traces each pixel centre for depth and the
-// barycentric intersection diagnostic. The radiance pass adds one camera
+// barycentric intersection diagnostic, or the shading normal diagnostic in
+// the normal pass. The radiance pass adds one camera
 // path per pixel, through a box-filtered point of the pixel, to a
 // floating-point accumulation image and writes the accumulated mean: brute-
 // force BSDF sampling, emissive surfaces, a constant environment and Russian
@@ -23,7 +24,11 @@ struct InstanceRecord {
   uint3* triangles;
   uint geometry_slot;
   uint material_slot;
-  uint reserved[2];
+  // The address of three float3 normals per triangle, or 0 without authored
+  // normals. An address, not a pointer: comparing a pointer with null makes
+  // slangc emit a pointer variable that the SPIR-V validator of Vulkan SDK
+  // 1.3.290 rejects (no AliasedPointer decoration).
+  uint64_t normals;
 };
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
@@ -63,10 +68,11 @@ struct PathConstants {
 [[vk::binding(2, 0)]] [[vk::image_format("rgba32f")]]
 RWTexture2D<float4> accumulation;
 
-// Which pass a pipeline runs: kCameraPass or kRadiancePass.
+// Which pass a pipeline runs: kCameraPass, kRadiancePass or kNormalPass.
 [vk::constant_id(0)] const uint kPass = 0;
 static const uint kCameraPass = 0;
 static const uint kRadiancePass = 1;
+static const uint kNormalPass = 2;
 // Bounces before Russian roulette may end a path.
 static const uint kRouletteBounces = 3;
 static const float kMaxSurvival = 0.95;
@@ -124,9 +130,40 @@ struct SurfaceHit {
   float3 position;
   // The geometric normal, facing the incoming ray. Surfaces are two-sided.
   float3 normal;
+  // The normal the BSDF is evaluated around: on the geometric normal's side
+  // and facing the incoming ray.
+  float3 shading_normal;
   SurfaceBsdf bsdf;
   Spectrum emission;
 };
+
+// A hit's object-space corner normals `n` (one per row) interpolated at the
+// hit, in world space and turned to the geometric normal's side. The
+// geometric normal stands in where the interpolated normal vanishes and
+// where it faces away from the incoming ray, which the BSDF could not
+// reflect.
+float3 ShadingNormal(float3x3 n, float2 barycentrics,
+    float4x4 world_from_object, float3 geometric, float3 direction) {
+  const float3 object = n[0] + barycentrics.x * (n[1] - n[0]) +
+                        barycentrics.y * (n[2] - n[0]);
+  // Normals transform by the inverse transpose of the linear part. Its
+  // cofactor matrix is that times the determinant, whose sign the
+  // orientation below discards, and needs no inverse.
+  const float3 c0 = mul(world_from_object, float4(1.0, 0.0, 0.0, 0.0)).xyz;
+  const float3 c1 = mul(world_from_object, float4(0.0, 1.0, 0.0, 0.0)).xyz;
+  const float3 c2 = mul(world_from_object, float4(0.0, 0.0, 1.0, 0.0)).xyz;
+  const float3 world = cross(c1, c2) * object.x + cross(c2, c0) * object.y +
+                       cross(c0, c1) * object.z;
+  const float length2 = dot(world, world);
+  if (!(length2 > 0.0) || isinf(length2)) {
+    return geometric;
+  }
+  float3 shading = world * rsqrt(length2);
+  if (dot(shading, geometric) < 0.0) {
+    shading = -shading;
+  }
+  return dot(shading, direction) < 0.0 ? shading : geometric;
+}
 
 // Surface hit reconstruction from the instance record and the geometry and
 // material it addresses. Interpolating the world-space corners keeps the position on
@@ -145,6 +182,15 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
                      hit.barycentrics.y * (p2 - p0);
   const float3 normal = normalize(cross(p1 - p0, p2 - p0));
   surface.normal = dot(normal, direction) > 0.0 ? -normal : normal;
+  surface.shading_normal = surface.normal;
+  if (instance.normals != 0) {
+    const uint corner = hit.primitive * 3;
+    const float3x3 normals = float3x3(((float3*)instance.normals)[corner],
+        ((float3*)instance.normals)[corner + 1],
+        ((float3*)instance.normals)[corner + 2]);
+    surface.shading_normal = ShadingNormal(normals, hit.barycentrics,
+        instance.world_from_object, surface.normal, direction);
+  }
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
   surface.bsdf = MakeSurfaceBsdf(
@@ -192,7 +238,7 @@ Spectrum TracePath(inout PathState path, Hit hit) {
       }
       path.throughput = path.throughput / survival;
     }
-    const ShadingFrame basis = MakeShadingFrame(surface.normal);
+    const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
     float3 u;
     u.x = NextRandom(path.rngState);
     u.y = NextRandom(path.rngState);
@@ -202,10 +248,16 @@ Spectrum TracePath(inout PathState path, Hit hit) {
             sample)) {
       break;
     }
+    const float3 wi = normalize(basis.ToWorld(sample.wi));
+    // Above the shading normal but below the geometric surface, a direction
+    // would leave through the surface, which only reflects: the path ends.
+    if (dot(wi, surface.normal) <= 0.0) {
+      break;
+    }
     path.throughput = path.throughput * sample.weight;
     path.lastPdf = sample.pdf;
     path.ray.Origin = OffsetRayOrigin(surface.position, surface.normal);
-    path.ray.Direction = normalize(basis.ToWorld(sample.wi));
+    path.ray.Direction = wi;
     path.ray.TMin = 0.0;
     path.ray.TMax = kFloatMax;
     ++path.depth;
@@ -238,7 +290,8 @@ struct FragmentOutput {
 };
 
 // The camera pass: the pixel centre's closest hit, as its projected depth
-// and barycentric weights. Misses keep the attachments.
+// and barycentric weights, or in the normal pass its world-space shading
+// normal. Misses keep the attachments.
 FragmentOutput CameraPass(VertexOutput input) {
   const RayDesc ray = CameraRay(input.ndc);
   Hit hit;
@@ -249,8 +302,13 @@ FragmentOutput CameraPass(VertexOutput input) {
   float4 clip = mul(frame.world_to_clip, float4(position, 1.0));
   FragmentOutput output;
   output.depth = clip.z / clip.w;
-  output.color = float4(1.0 - hit.barycentrics.x - hit.barycentrics.y,
-      hit.barycentrics.x, hit.barycentrics.y, 1.0);
+  if (kPass == kNormalPass) {
+    output.color =
+        float4(ReconstructHit(hit, ray.Direction).shading_normal, 1.0);
+  } else {
+    output.color = float4(1.0 - hit.barycentrics.x - hit.barycentrics.y,
+        hit.barycentrics.x, hit.barycentrics.y, 1.0);
+  }
   return output;
 }
 

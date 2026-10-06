@@ -13,6 +13,10 @@ a `SceneMesh` record. Keys iterate in deterministic order.
 
 - `MeshGeometry` contains object-space float positions, uint32 triangle
   indices and one authored coarse-face index per triangle (`source_faces`).
+  Its optional `normals` are authored object-space shading normals, one
+  per triangle corner (corner `k` of triangle `t` at `3t + k`), so every
+  interpolation a host has reaches the core the same way. They need not be
+  unit length; empty means the surface shades with its geometric normal.
 - `MeshInstance` contains visibility and `world_from_object`, using the
   core's column-major matrix convention for column vectors.
 - Without `MeshInstance::instancer_transforms` a mesh has one ordinary
@@ -26,7 +30,8 @@ a `SceneMesh` record. Keys iterate in deterministic order.
 `SetMesh` validates and owns the geometry, inserting or replacing the keyed
 record. Instancer transforms are copied with the record. `SetMeshInstance` updates an existing placement without copying its
 geometry. `RemoveMesh` removes the keyed record. Invalid indices, mismatched
-face mappings, non-finite positions or transforms (instancer transforms included), empty insertion keys and
+face mappings, normals that are not one per triangle corner or not
+finite, non-finite positions or transforms (instancer transforms included), empty insertion keys and
 instance updates without geometry throw `std::invalid_argument` without
 changing the world.
 
@@ -118,14 +123,18 @@ empty plan records no GPU work.
 
 - Each resident geometry has one device-local buffer: the positions as
   tightly packed float triples, then, at an offset aligned to the device's
-  storage-buffer offset alignment, the triangles as uint32 triples.
+  storage-buffer offset alignment, the triangles as uint32 triples and,
+  when the geometry has normals, at the next aligned offset, the corner
+  normals as float triples. Normals are geometry: changing them uploads a
+  new buffer and builds a new BLAS, as a point edit does.
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
   deterministic sequence of plans.
 - One device-local instance buffer holds a 96-byte record per instance:
   the column-major `world_from_object`, the device addresses of its
   geometry's positions and triangles (zero without acceleration
-  structures), the geometry slot and the material slot. It grows when
+  structures), the geometry slot, the material slot and the address of
+  its corner normals (zero without normals). It grows when
   needed and is rewritten only when the instances change.
 - One device-local material table holds a 32-byte record per material:
   base colour and roughness, then emission and metallic. It reaches the
@@ -141,7 +150,8 @@ empty plan records no GPU work.
 
 `GpuSceneStats` reports resident geometry, instances, material table
 entries, their bytes and lifetime upload counts. `ReadBackScene` copies the
-device buffers back for validation, the material table included. A failed update or readback leaves the renderer failed, as a
+device buffers back for validation, the corner normals
+(`GpuGeometryContents::normals`) and the material table included. A failed update or readback leaves the renderer failed, as a
 failed frame does: create a renderer and reset the extraction.
 
 The scene pass traverses the acceleration structures built from these
@@ -211,10 +221,11 @@ durations; it is a SKIP without timestamp support
 vertex and fragment SPIR-V paths (`path_trace.vert.spv`,
 `path_trace.frag.spv`). On devices with acceleration structures,
 `VK_KHR_ray_query` and the `rayQuery` feature, it enables ray queries;
-The scene passes also need `fragmentStoresAndAtomics` and RGBA32F colour
-attachments with storage and readback; `RayQueryCapability` reports support
+The scene passes also need `fragmentStoresAndAtomics`, `shaderInt64` (the
+instance records' normal addresses) and RGBA32F colour attachments with
+storage and readback; `RayQueryCapability` reports support
 and the reason when any of these is absent. Supplying both shader paths
-creates the scene render pass, three persistent pipelines specialized from
+creates the scene render pass, four persistent pipelines specialized from
 the one fragment module (below), a descriptor set and a uniform block
 alongside the bootstrap pipeline. Missing
 shader files on a supported device fail creation; omitting the paths
@@ -236,6 +247,9 @@ through the existing depth test, and misses preserve the clear or
 preceding attachment values. What the colour holds is
 `PathTracingSettings::output`: `Barycentrics` is the camera pass's closest
 triangle's barycentric weights with alpha 1, the intersection diagnostic;
+`ShadingNormal` is the world-space shading normal (below) the path tracer
+would evaluate the hit's BSDF around, with alpha 1, the normal diagnostic
+of [design policy section 25](../design/DESIGN_POLICY.md#25-debug-and-validation);
 `Radiance`, the default, is the accumulated path-traced radiance of the
 *radiance pass* (below), drawn after the camera pass has written depth.
 The TLAS and accumulation-image descriptors and the uniform block (the
@@ -262,9 +276,17 @@ one brute-force camera path per pixel per sample, with no light sampling.
 - **Hit reconstruction.** The instance record's transform places the hit
   triangle's corners in world space; the position is interpolated from the
   barycentrics, and the geometric normal is turned to face the incoming
-  ray. Surfaces are two-sided and have no shading normals, since normals
-  are not extracted yet. The hit's material is the material table's entry
-  at the instance record's material slot.
+  ray. Surfaces are two-sided. The hit's material is the material table's
+  entry at the instance record's material slot.
+- **Shading normal.** With authored normals, the hit triangle's corner
+  normals are interpolated with the barycentrics, transformed by the
+  cofactor matrix of the transform's linear part (the inverse transpose up
+  to a scale) and normalized, then turned to the geometric normal's side.
+  The geometric normal stands in without authored normals, where the
+  interpolated normal vanishes, and where the shading normal faces away
+  from the incoming ray, which the BSDF could not reflect. The BSDF is
+  sampled and evaluated around the shading normal; ray origins are still
+  offset along the geometric one.
 - **Emission** is added at every hit, the camera's included.
 - **BSDF.** A Lambert lobe with albedo `base_color` and a GGX metal lobe,
   mixed by `metallic`. The metal has Schlick's Fresnel from `base_color`,
@@ -279,7 +301,9 @@ one brute-force camera path per pixel per sample, with no light sampling.
   the environment radiance. Camera rays that miss do not see it.
 - **Termination.** A path ends after `PathTracingSettings::max_bounces`
   scattering events (64 by default; 0 keeps only the emission the camera
-  sees), when a sampled direction is not above the surface, or by Russian
+  sees), when a sampled direction is not above the shading normal's
+  hemisphere or not above the geometric surface (a surface only reflects;
+  with authored normals the second can happen alone), or by Russian
   roulette: before the fourth and every later scattering event, it
   continues with probability `min(max throughput component, 0.95)` and its
   throughput is divided by that probability.
@@ -325,6 +349,10 @@ the scene, and their count.
 `renderer.path.bsdf` and `renderer.path.multibounce` check the transport
 against radiance known in closed form or by independent quadrature
 ([report](../reports/2026-10-05-bsdf-multibounce.md));
+`renderer.path.normals` checks the `ShadingNormal` output against an
+independent double-precision oracle, and Lambert and mirror radiance that
+authored normals decide
+([report](../reports/2026-10-06-authored-normals.md));
 `renderer.path.accumulation` checks the box filter's coverage against the
 projected triangle's area in each pixel, unclamped HDR output, split frames
 and the restart rules
@@ -391,9 +419,22 @@ visibility or instancer update does not fetch or re-triangulate geometry.
 Coarse polygons use OpenUSD's
 [`HdMeshUtil` triangulation](https://openusd.org/dev/api/class_hd_mesh_util.html):
 fan triangles, winding normalization, hole-face exclusion and coarse-face
-mapping. Subdivision refinement, general concave-polygon tessellation,
-normals and face-varying primvars are not implemented. Materials are
-[below](#materials).
+mapping. Subdivision refinement, general concave-polygon tessellation and
+face-varying primvars other than normals are not implemented. Materials
+are [below](#materials).
+
+The `normals` primvar, which UsdImaging takes from `primvars:normals` over
+the `normals` attribute, becomes the corner normals: a constant value for
+every corner, a uniform value per corner of its face's triangles, a vertex
+or varying value by the corner's point, and face-varying values
+triangulated by `HdMeshUtil` the way the faces are, holes and orientation
+included. Indexed primvars are flattened. Normals whose count does not
+match their interpolation, with an index out of range, of another type
+than float triples or with a non-finite value are ignored with a warning,
+and the mesh renders with geometric normals. A mesh without authored
+normals is not given computed ones, whatever its subdivision scheme, so a
+coarse mesh shades faceted. Normals are read when the normals or the
+primvars are dirty.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -406,7 +447,7 @@ On ray-query devices each pass adds one sample with `RenderScene`, with
 `max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
 default) and `sample_index` to the `lotus:sampleIndex` render setting (0 by
 default); the render pass and the colour buffer report convergence when the
-accumulation reaches its sample count. Point, topology, transform,
+accumulation reaches its sample count. Point, normal, topology, transform,
 visibility and instancer edits, like camera, framing and
 `lotus:sampleIndex` changes, restart the accumulation. Other devices
 retain the bootstrap path and converge after one pass. Lights are not read

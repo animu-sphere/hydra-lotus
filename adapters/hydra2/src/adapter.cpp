@@ -645,6 +645,7 @@ public:
 
   HdDirtyBits GetInitialDirtyBitsMask() const override {
     return HdChangeTracker::DirtyPoints | HdChangeTracker::DirtyTopology |
+           HdChangeTracker::DirtyNormals | HdChangeTracker::DirtyPrimvar |
            HdChangeTracker::DirtyTransform | HdChangeTracker::DirtyVisibility |
            HdChangeTracker::DirtyRenderTag | HdChangeTracker::DirtyInstancer |
            HdChangeTracker::DirtyInstanceIndex |
@@ -659,9 +660,16 @@ public:
     if (bits == HdChangeTracker::Clean) {
       return;
     }
+    // Authoring or removing a `normals` primvar, or changing its
+    // interpolation, may dirty the primvars rather than the normals.
+    const bool normals_dirty =
+        !initialized_ ||
+        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->normals) ||
+        (bits & HdChangeTracker::DirtyPrimvar);
     const bool geometry_dirty = !initialized_ ||
                                 (bits & HdChangeTracker::DirtyTopology) ||
-                                HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points);
+                                HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points) ||
+                                normals_dirty;
     if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
       topology_ = GetMeshTopology(delegate);
     }
@@ -671,6 +679,9 @@ public:
       points_ = value.IsHolding<VtVec3fArray>()
                     ? value.UncheckedGet<VtVec3fArray>()
                     : VtVec3fArray{};
+    }
+    if (normals_dirty) {
+      ReadNormals(delegate);
     }
     if (!initialized_ || HdChangeTracker::IsTransformDirty(bits, GetId())) {
       instance_.world_from_object = ToLotusMatrix(delegate->GetTransform(GetId()));
@@ -738,6 +749,137 @@ private:
     return transforms;
   }
 
+  // The authored `normals` primvar, flattened, and its interpolation, or no
+  // value. An index out of range leaves the values unflattened, which
+  // CornerNormals then rejects by their count.
+  void ReadNormals(HdSceneDelegate* delegate) {
+    normals_ = VtValue();
+    for (const HdInterpolation interpolation :
+        {HdInterpolationConstant, HdInterpolationUniform, HdInterpolationVarying,
+            HdInterpolationVertex, HdInterpolationFaceVarying}) {
+      for (const HdPrimvarDescriptor& primvar :
+          GetPrimvarDescriptors(delegate, interpolation)) {
+        if (primvar.name != HdTokens->normals) {
+          continue;
+        }
+        normals_interpolation_ = interpolation;
+        if (!primvar.indexed) {
+          normals_ = GetNormals(delegate);
+          return;
+        }
+        VtIntArray indices;
+        normals_ = GetIndexedPrimvar(delegate, HdTokens->normals, &indices);
+        if (!normals_.IsHolding<VtVec3fArray>() || indices.empty()) {
+          return;
+        }
+        const VtVec3fArray& values = normals_.UncheckedGet<VtVec3fArray>();
+        VtVec3fArray flattened;
+        flattened.reserve(indices.size());
+        for (const int index : indices) {
+          if (index < 0 || static_cast<std::size_t>(index) >= values.size()) {
+            return;
+          }
+          flattened.push_back(values[static_cast<std::size_t>(index)]);
+        }
+        normals_ = VtValue(std::move(flattened));
+        return;
+      }
+    }
+  }
+
+  // One normal per triangle corner from the authored normals, or none when
+  // there are none or they cannot be used, which warns.
+  std::vector<std::array<float, 3>> CornerNormals(const VtVec3iArray& triangles,
+      const VtIntArray& primitive_params) const {
+    if (normals_.IsEmpty()) {
+      return {};
+    }
+    const auto unusable = [&](const char* reason) {
+      TF_WARN("Lotus ignores the normals of %s: %s", GetId().GetText(), reason);
+      return std::vector<std::array<float, 3>>{};
+    };
+    if (!normals_.IsHolding<VtVec3fArray>()) {
+      return unusable("they are not an array of float triples");
+    }
+    const VtVec3fArray& normals = normals_.UncheckedGet<VtVec3fArray>();
+    std::vector<std::array<float, 3>> corners;
+    corners.reserve(3 * triangles.size());
+    const auto add = [&](const GfVec3f& normal) {
+      corners.push_back({normal[0], normal[1], normal[2]});
+    };
+    switch (normals_interpolation_) {
+    case HdInterpolationConstant:
+      if (normals.empty()) {
+        return unusable("a constant primvar without a value");
+      }
+      corners.assign(3 * triangles.size(),
+          {normals[0][0], normals[0][1], normals[0][2]});
+      break;
+    case HdInterpolationUniform:
+      if (normals.size() != topology_.GetFaceVertexCounts().size()) {
+        return unusable("a uniform primvar needs one value per face");
+      }
+      for (const int param : primitive_params) {
+        const GfVec3f& normal = normals[static_cast<std::size_t>(
+            HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(param))];
+        add(normal);
+        add(normal);
+        add(normal);
+      }
+      break;
+    case HdInterpolationVarying:
+    case HdInterpolationVertex:
+      if (normals.size() != points_.size()) {
+        return unusable("a vertex or varying primvar needs one value per "
+                        "point");
+      }
+      for (const GfVec3i& triangle : triangles) {
+        add(normals[static_cast<std::size_t>(triangle[0])]);
+        add(normals[static_cast<std::size_t>(triangle[1])]);
+        add(normals[static_cast<std::size_t>(triangle[2])]);
+      }
+      break;
+    case HdInterpolationFaceVarying: {
+      if (normals.size() != topology_.GetFaceVertexIndices().size()) {
+        return unusable("a face-varying primvar needs one value per face "
+                        "vertex");
+      }
+      // Triangulated the way ComputeTriangleIndices triangulates the faces,
+      // holes and orientation included. Unchanged means the values already
+      // are per triangle corner, as on triangles without holes.
+      VtValue triangulated;
+      const HdMeshComputationResult result =
+          HdMeshUtil(&topology_, GetId())
+              .ComputeTriangulatedFaceVaryingPrimvar(normals.cdata(),
+                  static_cast<int>(normals.size()), HdTypeFloatVec3,
+                  &triangulated);
+      if (result == HdMeshComputationResult::Unchanged) {
+        triangulated = normals_;
+      }
+      if (result == HdMeshComputationResult::Error ||
+          !triangulated.IsHolding<VtVec3fArray>() ||
+          triangulated.UncheckedGet<VtVec3fArray>().size() !=
+              3 * triangles.size()) {
+        return unusable("their face-varying triangulation failed");
+      }
+      for (const GfVec3f& normal : triangulated.UncheckedGet<VtVec3fArray>()) {
+        add(normal);
+      }
+      break;
+    }
+    default:
+      return unusable("their interpolation is not supported");
+    }
+    if (!std::all_of(corners.begin(), corners.end(),
+            [](const std::array<float, 3>& normal) {
+              return std::isfinite(normal[0]) && std::isfinite(normal[1]) &&
+                     std::isfinite(normal[2]);
+            })) {
+      return unusable("a value is not finite");
+    }
+    return corners;
+  }
+
   Lotus::MeshGeometry ExtractGeometry() const {
     const auto& counts = topology_.GetFaceVertexCounts();
     const auto& indices = topology_.GetFaceVertexIndices();
@@ -780,12 +922,15 @@ private:
       geometry.source_faces.push_back(static_cast<std::uint32_t>(
           HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(param)));
     }
+    geometry.normals = CornerNormals(triangles, primitive_params);
     return geometry;
   }
 
   std::shared_ptr<AdapterState> state_;
   HdMeshTopology topology_;
   VtVec3fArray points_;
+  VtValue normals_;
+  HdInterpolation normals_interpolation_ = HdInterpolationConstant;
   Lotus::MeshInstance instance_;
   bool initialized_ = false;
 };
