@@ -71,6 +71,14 @@ void ValidateGeometry(const MeshGeometry& geometry) {
       }
     }
   }
+  if (!geometry.normals.empty() &&
+      geometry.normals.size() != 3 * geometry.triangles.size()) {
+    throw std::invalid_argument("mesh normals need one per triangle corner");
+  }
+  if (!std::all_of(geometry.normals.begin(), geometry.normals.end(),
+          [](const std::array<float, 3>& normal) { return Finite(normal); })) {
+    throw std::invalid_argument("mesh normals must be finite");
+  }
 }
 
 } // namespace

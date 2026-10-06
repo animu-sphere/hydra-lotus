@@ -164,9 +164,9 @@ Lotus::Camera BootstrapCamera() {
   return camera;
 }
 
-// Whether the GPU scene's buffers hold exactly the scene's resident geometry
-// and each placement of its visible meshes, in the update plan's order, with
-// its material.
+// Whether the GPU scene's buffers hold exactly the scene's resident geometry,
+// normals included, and each placement of its visible meshes, in the update
+// plan's order, with its material.
 bool SceneMatches(const Lotus::GpuSceneContents& contents,
     const Lotus::LotusScene& scene) {
   if (contents.status != Lotus::FrameStatus::Pass ||
@@ -199,6 +199,7 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
       if (geometry == contents.geometries.end() ||
           geometry->positions != mesh.geometry->positions ||
           geometry->triangles != mesh.geometry->triangles ||
+          geometry->normals != mesh.geometry->normals ||
           gpu.world_from_object != placement ||
           gpu.material_slot >= contents.materials.size() ||
           contents.materials[gpu.material_slot] !=
@@ -248,7 +249,7 @@ struct AccelerationVerdict {
 
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
 // transform edit, a material binding, a material edit, a material removal,
-// an environment edit, a hide, a point edit,
+// an environment edit, a hide, a point and normal edit,
 // instancer placements and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
 // Acceleration-structure mismatches go to `acceleration` instead.
 std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
@@ -406,19 +407,24 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
              before.tlas_updates == 1,
       "hide", "expected a TLAS rebuild and no BLAS build");
 
+  // The new geometry also carries corner normals, which follow its
+  // triangles in the same buffer.
   const std::uint32_t triangle_slot =
       renderer.ReadBackScene().instances.at(0).geometry_slot;
-  world.SetMesh("/triangle", {{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}}, {0}}, Lotus::MeshInstance{});
-  if (auto failure = apply("point edit"); !failure.empty())
+  world.SetMesh("/triangle",
+      {{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}}, {0},
+          {{0, 0, 1}, {0.5F, 0, 1}, {0, -0.25F, 2}}},
+      Lotus::MeshInstance{});
+  if (auto failure = apply("point and normal edit"); !failure.empty())
     return failure;
   if (before.resident_geometries != 2 || before.geometry_uploads != 3 ||
       before.geometry_releases != 1 ||
       renderer.ReadBackScene().instances.at(0).geometry_slot != triangle_slot) {
-    return "point edit: the geometry was not replaced in its slot";
+    return "point and normal edit: the geometry was not replaced in its slot";
   }
   expect(before.blas_builds == 3 && before.tlas_builds == 3 &&
              before.tlas_updates == 1,
-      "point edit", "expected one BLAS build and a TLAS rebuild");
+      "point and normal edit", "expected one BLAS build and a TLAS rebuild");
 
   // An instancer places one resident geometry, with one BLAS, several times.
   Lotus::MeshInstance prototype;
@@ -1215,6 +1221,321 @@ std::string BsdfFailure(PathScenes& scenes) {
   return {};
 }
 
+using Vec3 = std::array<double, 3>;
+
+Vec3 Subtract(const Vec3& a, const Vec3& b) {
+  return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+double Dot(const Vec3& a, const Vec3& b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+Vec3 Cross(const Vec3& a, const Vec3& b) {
+  return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]};
+}
+
+Vec3 Normalize(const Vec3& a) {
+  const double length = std::sqrt(Dot(a, a));
+  return {a[0] / length, a[1] / length, a[2] / length};
+}
+
+// `matrix` applied to a point (w = 1) or a direction (w = 0).
+Vec3 TransformVec3(const Lotus::Matrix4& matrix, const Vec3& value, double w) {
+  const auto result = Transform(matrix, {value[0], value[1], value[2], w});
+  return {result[0], result[1], result[2]};
+}
+
+Lotus::Matrix4 Translation(float x, float y, float z) {
+  Lotus::Matrix4 matrix = Lotus::IdentityMatrix();
+  matrix[12] = x;
+  matrix[13] = y;
+  matrix[14] = z;
+  return matrix;
+}
+
+Lotus::Matrix4 Scaling(float x, float y, float z) {
+  Lotus::Matrix4 matrix = Lotus::IdentityMatrix();
+  matrix[0] = x;
+  matrix[5] = y;
+  matrix[10] = z;
+  return matrix;
+}
+
+// Right-handed rotations by `degrees` about the X and Y axes.
+Lotus::Matrix4 RotationX(double degrees) {
+  const auto c = static_cast<float>(std::cos(degrees * 3.14159265358979323846 / 180));
+  const auto s = static_cast<float>(std::sin(degrees * 3.14159265358979323846 / 180));
+  Lotus::Matrix4 matrix = Lotus::IdentityMatrix();
+  matrix[5] = c;
+  matrix[6] = s;
+  matrix[9] = -s;
+  matrix[10] = c;
+  return matrix;
+}
+
+Lotus::Matrix4 RotationY(double degrees) {
+  const auto c = static_cast<float>(std::cos(degrees * 3.14159265358979323846 / 180));
+  const auto s = static_cast<float>(std::sin(degrees * 3.14159265358979323846 / 180));
+  Lotus::Matrix4 matrix = Lotus::IdentityMatrix();
+  matrix[0] = c;
+  matrix[2] = -s;
+  matrix[8] = s;
+  matrix[10] = c;
+  return matrix;
+}
+
+// A square of side 2 in the XY plane, as two triangles.
+Lotus::MeshGeometry Square() {
+  Lotus::MeshGeometry square;
+  square.positions = {{{-1, -1, 0}}, {{1, -1, 0}}, {{1, 1, 0}}, {{-1, 1, 0}}};
+  square.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+  square.source_faces = {0, 0};
+  return square;
+}
+
+// Each triangle corner takes its vertex's normal.
+void SetVertexNormals(Lotus::MeshGeometry& geometry,
+    const std::vector<std::array<float, 3>>& vertex_normals) {
+  geometry.normals.clear();
+  for (const auto& triangle : geometry.triangles)
+    for (const std::uint32_t index : triangle)
+      geometry.normals.push_back(vertex_normals[index]);
+}
+
+// An orthographic camera looking down -Z from z = 3, seeing x and y in
+// [-1, 1] and z in [-7, 2].
+Lotus::Camera OrthographicCamera() {
+  Lotus::Camera camera = BootstrapCamera();
+  camera.projection = Lotus::IdentityMatrix();
+  camera.projection[10] = -2.0F / 9.0F;
+  camera.projection[14] = -11.0F / 9.0F;
+  return camera;
+}
+
+// Independent oracle for the ShadingNormal output of OrthographicCamera's
+// view: intersects each pixel centre's ray with the world-space triangles in
+// double precision and applies the shading-normal rules to the hit. Pixels
+// whose outcome a rounding error could change are skipped: near triangle
+// edges and where the interpolated normal is nearly tangent to the
+// geometric surface or to the ray. Counts the pixels of each rule.
+std::string ShadingNormalFailure(const Lotus::FrameSnapshot& snapshot,
+    const Lotus::OffscreenTarget& target, const Lotus::GpuFrameEvidence& frame,
+    std::string& summary) {
+  const std::vector<float> values = ColorValues(frame.color);
+  const Vec3 direction{0, 0, -1};
+  std::size_t geometric = 0;
+  std::size_t interpolated = 0;
+  std::size_t flipped = 0;
+  std::size_t fallback = 0;
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      const Vec3 origin{2.0 * (x + 0.5) / target.width - 1.0,
+          1.0 - 2.0 * (y + 0.5) / target.height, 2.0};
+      struct Closest {
+        double t = 9.0;
+        double u = 0;
+        double v = 0;
+        std::array<Vec3, 3> corners{};
+        const Lotus::SceneMesh* mesh = nullptr;
+        std::size_t triangle = 0;
+      } closest;
+      for (const auto& [key, mesh] : snapshot.scene->meshes) {
+        (void)key;
+        const auto& geometry = *mesh.geometry;
+        for (std::size_t index = 0; index < geometry.triangles.size(); ++index) {
+          std::array<Vec3, 3> corners;
+          for (int corner = 0; corner < 3; ++corner) {
+            const auto& position = geometry.positions[geometry.triangles[index][corner]];
+            corners[corner] = TransformVec3(mesh.instance.world_from_object,
+                {position[0], position[1], position[2]}, 1.0);
+          }
+          // Moeller-Trumbore.
+          const Vec3 edge1 = Subtract(corners[1], corners[0]);
+          const Vec3 edge2 = Subtract(corners[2], corners[0]);
+          const Vec3 p = Cross(direction, edge2);
+          const double determinant = Dot(edge1, p);
+          if (std::abs(determinant) < 1e-12)
+            continue;
+          const Vec3 s = Subtract(origin, corners[0]);
+          const double u = Dot(s, p) / determinant;
+          const Vec3 q = Cross(s, edge1);
+          const double v = Dot(direction, q) / determinant;
+          const double t = Dot(edge2, q) / determinant;
+          if (u < 0 || v < 0 || u + v > 1 || t <= 0 || t >= closest.t)
+            continue;
+          closest = {t, u, v, corners, &mesh, index};
+        }
+      }
+      const std::size_t pixel = std::size_t{y} * target.width + x;
+      const float* actual = &values[pixel * 4];
+      if (closest.mesh == nullptr) {
+        if (!std::equal(actual, actual + 4, target.clear_color.begin()))
+          return "a missed pixel changed at " + std::to_string(x) + "," + std::to_string(y);
+        continue;
+      }
+      if (std::min({closest.u, closest.v, 1 - closest.u - closest.v}) < 0.02)
+        continue;
+      Vec3 normal = Normalize(Cross(Subtract(closest.corners[1], closest.corners[0]),
+          Subtract(closest.corners[2], closest.corners[0])));
+      if (Dot(normal, direction) > 0)
+        normal = {-normal[0], -normal[1], -normal[2]};
+      Vec3 expected = normal;
+      const auto& normals = closest.mesh->geometry->normals;
+      if (normals.empty()) {
+        ++geometric;
+      } else {
+        Vec3 object{};
+        for (int axis = 0; axis < 3; ++axis) {
+          const auto corner = [&](std::size_t k) {
+            return double{normals[3 * closest.triangle + k][axis]};
+          };
+          object[axis] = corner(0) + closest.u * (corner(1) - corner(0)) +
+                         closest.v * (corner(2) - corner(0));
+        }
+        // The inverse transpose of the linear part, up to a scale.
+        const Lotus::Matrix4& m = closest.mesh->instance.world_from_object;
+        const Vec3 c0 = TransformVec3(m, {1, 0, 0}, 0.0);
+        const Vec3 c1 = TransformVec3(m, {0, 1, 0}, 0.0);
+        const Vec3 c2 = TransformVec3(m, {0, 0, 1}, 0.0);
+        Vec3 world{};
+        for (int axis = 0; axis < 3; ++axis)
+          world[axis] = Cross(c1, c2)[axis] * object[0] +
+                        Cross(c2, c0)[axis] * object[1] +
+                        Cross(c0, c1)[axis] * object[2];
+        Vec3 shading = Normalize(world);
+        const double side = Dot(shading, normal);
+        if (std::abs(side) < 0.02)
+          continue;
+        if (side < 0)
+          shading = {-shading[0], -shading[1], -shading[2]};
+        const double facing = Dot(shading, direction);
+        if (std::abs(facing) < 0.02)
+          continue;
+        if (facing > 0) {
+          ++fallback;
+        } else {
+          expected = shading;
+          ++(side < 0 ? flipped : interpolated);
+        }
+      }
+      for (int c = 0; c < 3; ++c) {
+        if (std::abs(actual[c] - expected[c]) > 2e-3 || actual[3] != 1.0F)
+          return "shading normal (" + std::to_string(actual[0]) + ", " +
+                 std::to_string(actual[1]) + ", " + std::to_string(actual[2]) +
+                 ") instead of (" + std::to_string(expected[0]) + ", " +
+                 std::to_string(expected[1]) + ", " + std::to_string(expected[2]) +
+                 ") at " + std::to_string(x) + "," + std::to_string(y);
+      }
+    }
+  }
+  summary = "shading normals: " + std::to_string(interpolated) +
+            " interpolated, " + std::to_string(flipped) + " flipped, " +
+            std::to_string(fallback) + " facing away, " +
+            std::to_string(geometric) + " geometric pixels";
+  if (interpolated == 0 || flipped == 0 || fallback == 0 || geometric == 0)
+    return "the scene does not exercise every rule: " + summary;
+  return {};
+}
+
+// Authored normals through the GpuScene to the path tracer. The shading
+// normal diagnostic of interpolated corner normals under non-uniform scales
+// and rotations, against an independent oracle; then single-scattering
+// scenes whose radiance the shading normal decides.
+std::string NormalsFailure(PathScenes& scenes) {
+  Lotus::RenderWorld& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  // A tilted, non-uniformly scaled square whose vertex normals vary enough
+  // that some point below its surface and some away from the camera; a
+  // triangle without normals; and a square turned to show its back.
+  Lotus::MeshGeometry curved = Square();
+  SetVertexNormals(curved,
+      {{-0.6F, -0.6F, 1}, {0.9F, -0.3F, 0.6F}, {0.3F, 0.9F, -0.2F}, {-1.2F, 0.5F, 0.2F}});
+  Lotus::MeshInstance curved_instance;
+  curved_instance.world_from_object = Lotus::Multiply(Translation(-0.45F, 0, 0),
+      Lotus::Multiply(RotationX(40), Scaling(0.5F, 0.8F, 3)));
+  world.SetMesh("/curved", curved, curved_instance);
+  world.SetMesh("/flat",
+      {{{0.2F, -0.9F, 0}, {0.9F, -0.9F, 0}, {0.55F, -0.1F, -0.5F}}, {{0, 1, 2}}, {0}},
+      Lotus::MeshInstance{});
+  Lotus::MeshGeometry behind = Square();
+  SetVertexNormals(behind,
+      {{0.3F, 0.2F, 1}, {-0.2F, 0.4F, 1}, {0, -0.5F, 1}, {0.6F, 0, 1}});
+  Lotus::MeshInstance behind_instance;
+  behind_instance.world_from_object = Lotus::Multiply(Translation(0.55F, 0.5F, 0),
+      Lotus::Multiply(RotationY(180), Scaling(0.35F, 0.4F, 1)));
+  world.SetMesh("/behind", behind, behind_instance);
+  Lotus::PathTracingSettings diagnostic;
+  diagnostic.output = Lotus::SceneOutput::ShadingNormal;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(diagnostic, frame); !failure.empty())
+    return "shading normal output: " + failure;
+  std::string summary;
+  if (auto failure = ShadingNormalFailure(world.Commit(), scenes.Target(), frame, summary);
+      !failure.empty())
+    return failure;
+  scenes.Summarize(summary);
+  world.RemoveMesh("/curved");
+  world.RemoveMesh("/flat");
+  world.RemoveMesh("/behind");
+
+  // A Lambert plane facing the camera under a white environment. With its
+  // geometric normal, or authored normals of any length along it, each
+  // sample reflects albedo exactly.
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  Lotus::MeshGeometry plane = Square();
+  for (auto& position : plane.positions) {
+    position[0] *= 4.0F;
+    position[1] *= 4.0F;
+  }
+  Lotus::Material lambert;
+  lambert.base_color = {0.5F, 0.25F, 0.75F};
+  const Rgb albedo{0.5, 0.25, 0.75};
+  plane.normals.assign(6, {0, 0, 3});
+  world.SetMesh("/plane", plane, Lotus::MeshInstance{});
+  Paint(world, "/plane", lambert);
+  if (auto failure = scenes.ExpectExact(64, albedo); !failure.empty())
+    return "Lambert, normals along the geometric normal: " + failure;
+  // Tilted by 60 degrees, the cosine-weighted directions around the shading
+  // normal that leave above the plane are the tilted plane's sky view
+  // factor, (1 + cos 60) / 2; the rest end the path.
+  plane.normals.assign(6, {0.866025404F, 0, 0.5F});
+  world.SetMesh("/plane", plane, Lotus::MeshInstance{});
+  if (auto failure = scenes.ExpectMean("Lambert, shading normal tilted 60 degrees",
+          64, {0.75 * albedo[0], 0.75 * albedo[1], 0.75 * albedo[2]});
+      !failure.empty())
+    return "Lambert, shading normal tilted 60 degrees: " + failure;
+
+  // A white near-mirror under a black environment, beside an emissive wall
+  // outside the view. Its geometric normal reflects the camera's rays back
+  // up into the dark; shading normals tilted 30 degrees towards the wall
+  // reflect them 60 degrees from the vertical onto it.
+  world.SetEnvironment({});
+  Lotus::Material mirror;
+  mirror.base_color = {1.0F, 1.0F, 1.0F};
+  mirror.roughness = 0.0F;
+  mirror.metallic = 1.0F;
+  plane.normals.clear();
+  world.SetMesh("/plane", plane, Lotus::MeshInstance{});
+  Paint(world, "/plane", mirror);
+  Lotus::Material wall;
+  wall.base_color = {0.0F, 0.0F, 0.0F};
+  wall.emission = {2.0F, 1.0F, 0.5F};
+  world.SetMesh("/wall",
+      {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}},
+          {{0, 1, 2}, {0, 2, 3}}, {0, 0}},
+      Lotus::MeshInstance{});
+  Paint(world, "/wall", wall);
+  if (auto failure = scenes.ExpectExact(64, {0.0, 0.0, 0.0}); !failure.empty())
+    return "mirror, geometric normal: " + failure;
+  plane.normals.assign(6, {0.5F, 0, 0.866025404F});
+  world.SetMesh("/plane", plane, Lotus::MeshInstance{});
+  if (auto failure = scenes.ExpectExact(64, {2.0, 1.0, 0.5}); !failure.empty())
+    return "mirror, shading normals tilted 30 degrees: " + failure;
+  return {};
+}
+
 // A closed Lambert box seen from inside: every path bounces until it ends,
 // and the environment must never reach it. Bounce-limited radiance is exact,
 // L = Le (1 + a + ... + a^n); the unlimited mean is Le / (1 - a).
@@ -1935,6 +2256,7 @@ int main(int argc, char** argv) {
             failure.empty() ? summary : failure});
       };
       run("renderer.path.bsdf", BsdfFailure);
+      run("renderer.path.normals", NormalsFailure);
       run("renderer.path.multibounce", MultibounceFailure);
       run("renderer.path.accumulation", AccumulationFailure);
       run("renderer.path.reference", [&](PathScenes& reference_scenes) {
@@ -1944,6 +2266,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
       checks.push_back({"renderer.path.bsdf", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.normals", "skip", ray_query.detail});
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
@@ -1953,6 +2276,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.ray_query.triangle", Status(setup_status), setup_error});
     checks.push_back({"renderer.ray_query.timestamp", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.bsdf", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.normals", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});

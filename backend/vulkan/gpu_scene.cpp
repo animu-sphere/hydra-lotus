@@ -39,6 +39,27 @@ VkDeviceSize AlignUp(VkDeviceSize value, VkDeviceSize alignment) {
   return (value + alignment - 1) / alignment * alignment;
 }
 
+// Where a geometry buffer's triangles and corner normals start, and its
+// size. Each section is aligned so a pass could bind it as its own storage
+// buffer range; `normal_offset` is zero without normals.
+struct GeometryLayout {
+  VkDeviceSize index_offset = 0;
+  VkDeviceSize normal_offset = 0;
+  VkDeviceSize size = 0;
+};
+
+GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
+  GeometryLayout layout;
+  layout.index_offset =
+      AlignUp(geometry.positions.size() * kVec3Bytes, alignment);
+  layout.size = layout.index_offset + geometry.triangles.size() * kVec3Bytes;
+  if (!geometry.normals.empty()) {
+    layout.normal_offset = AlignUp(layout.size, alignment);
+    layout.size = layout.normal_offset + geometry.normals.size() * kVec3Bytes;
+  }
+  return layout;
+}
+
 bool CreateBuffer(VkPhysicalDevice physical_device, VkDevice device,
     VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
@@ -357,6 +378,12 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
         }
       }
     }
+    if (!geometry->normals.empty() &&
+        geometry->normals.size() != 3 * geometry->triangles.size()) {
+      detail = "the scene update uploads normals that are not one per "
+               "triangle corner";
+      return false;
+    }
     if (acceleration_ && geometry->triangles.size() > max_primitives_) {
       std::ostringstream message;
       message << "the scene update uploads geometry with "
@@ -594,9 +621,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   // table, then the TLAS build input.
   VkDeviceSize staging_bytes = 0;
   for (const auto& geometry : update.geometry_uploads) {
-    staging_bytes +=
-        AlignUp(geometry->positions.size() * kVec3Bytes, index_alignment_) +
-        geometry->triangles.size() * kVec3Bytes;
+    staging_bytes += LayOut(*geometry, index_alignment_).size;
   }
   const VkDeviceSize instance_bytes =
       update.instances.size() * kInstanceBytes;
@@ -654,18 +679,23 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     geometry.triangle_count =
         static_cast<std::uint32_t>(source->triangles.size());
     const VkDeviceSize position_bytes = geometry.vertex_count * kVec3Bytes;
-    geometry.index_offset = AlignUp(position_bytes, index_alignment_);
-    const VkDeviceSize size =
-        geometry.index_offset + geometry.triangle_count * kVec3Bytes;
+    const VkDeviceSize triangle_bytes = geometry.triangle_count * kVec3Bytes;
+    const GeometryLayout layout = LayOut(*source, index_alignment_);
+    geometry.index_offset = layout.index_offset;
+    geometry.normal_offset = layout.normal_offset;
+    const VkDeviceSize size = layout.size;
     if (!CreateDeviceBuffer(size, geometry_usage, geometry.buffer, detail)) {
       return false;
     }
-    std::memcpy(staging + offset, source->positions.data(), position_bytes);
     // Zeroed padding keeps the device contents deterministic.
-    std::memset(staging + offset + position_bytes, 0,
-        geometry.index_offset - position_bytes);
+    std::memset(staging + offset, 0, size);
+    std::memcpy(staging + offset, source->positions.data(), position_bytes);
     std::memcpy(staging + offset + geometry.index_offset,
-        source->triangles.data(), geometry.triangle_count * kVec3Bytes);
+        source->triangles.data(), triangle_bytes);
+    if (geometry.normal_offset != 0) {
+      std::memcpy(staging + offset + geometry.normal_offset,
+          source->normals.data(), source->normals.size() * kVec3Bytes);
+    }
     copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
     offset += size;
 
@@ -758,6 +788,9 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       if (geometry.buffer.address != 0) {
         record.positions = geometry.buffer.address;
         record.triangles = geometry.buffer.address + geometry.index_offset;
+        if (geometry.normal_offset != 0) {
+          record.normals = geometry.buffer.address + geometry.normal_offset;
+        }
       }
       record.material_slot = instance.material;
       std::memcpy(staging + offset + index * kInstanceBytes, &record,
@@ -1103,6 +1136,11 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
         geometry.vertex_count * kVec3Bytes);
     std::memcpy(copy.triangles.data(), bytes + offset + geometry.index_offset,
         geometry.triangle_count * kVec3Bytes);
+    if (geometry.normal_offset != 0) {
+      copy.normals.resize(3 * std::size_t{geometry.triangle_count});
+      std::memcpy(copy.normals.data(), bytes + offset + geometry.normal_offset,
+          copy.normals.size() * kVec3Bytes);
+    }
     contents.geometries.push_back(std::move(copy));
     offset += geometry.buffer.size;
   }

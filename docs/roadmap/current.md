@@ -115,7 +115,16 @@ Against the scope of
 - ⬜ **Textures.** `UsdUVTexture` and `UsdPrimvarReader_float2` for the
   translated inputs, which needs texture coordinates on the GPU scene and
   texture residency.
-- ⬜ **Normal.** Authored normals, then `normal` maps, as shading normals.
+- ✅ **Authored normals** as shading normals: per-corner normals in the
+  mesh geometry and the GPU scene, interpolated and transformed at each
+  hit, with the geometric surface still bounding reflection; Hydra's
+  `normals` primvar in every interpolation. The committed reference images
+  are reproduced bit for bit
+  ([scene reference](../reference/SCENE.md#path-tracing),
+  [evidence](../reports/2026-10-06-authored-normals.md)).
+- ⬜ **Computed normals.** Smooth normals for meshes without authored ones
+  whose subdivision scheme asks for a smooth surface, as Storm computes.
+- ⬜ **Normal maps.** `UsdPreviewSurface`'s `normal` input, after textures.
 - ⬜ **Opacity and an alpha policy.** `opacity` and `opacityThreshold`,
   which needs non-opaque geometry in the acceleration structures.
 - ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the

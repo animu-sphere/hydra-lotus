@@ -169,6 +169,8 @@ struct GpuGeometryContents {
   std::uint32_t slot = 0;
   std::vector<std::array<float, 3>> positions;
   std::vector<std::array<std::uint32_t, 3>> triangles;
+  // One per triangle corner, as MeshGeometry::normals; empty without them.
+  std::vector<std::array<float, 3>> normals;
 };
 
 struct GpuInstanceContents {
@@ -210,6 +212,10 @@ enum class SceneOutput {
   // The pixel centre's closest triangle's barycentric weights: the
   // intersection diagnostic. Not accumulated.
   Barycentrics,
+  // The world-space shading normal, unit length, that the path tracer
+  // evaluates the BSDF around at the pixel centre's closest hit (design
+  // policy section 25). Not accumulated.
+  ShadingNormal,
 };
 
 // The reference path tracer's settings.
@@ -253,7 +259,7 @@ public:
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
 
   // Ray queries, plus what the scene passes need besides: fragment-stage
-  // storage writes and RGBA32F colour attachments.
+  // storage writes, 64-bit shader integers and RGBA32F colour attachments.
   [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
   // Trace the uploaded scene through draw.world_to_clip as the camera (the
   // bootstrap counts are ignored), into RGBA32F colour and D32 depth.
@@ -267,8 +273,8 @@ public:
   // has hit retain the colour attachment. The accumulation restarts when
   // the camera, the target's size or windows, `sample_index`,
   // `max_bounces` or the scene (any nonempty UpdateScene) changes.
-  // Barycentrics writes the pixel centre's hit with alpha 1 and leaves the
-  // accumulation as it is.
+  // Barycentrics and ShadingNormal write the pixel centre's hit with alpha 1
+  // and leave the accumulation as it is.
   //
   // Missing ray-query support returns Skip. A singular camera returns Fail.
   [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,

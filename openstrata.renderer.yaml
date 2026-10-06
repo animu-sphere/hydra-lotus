@@ -32,6 +32,7 @@ validation:
     - renderer.ray_query.triangle
     - renderer.ray_query.timestamp
     - renderer.path.bsdf
+    - renderer.path.normals
     - renderer.path.multibounce
     - renderer.path.accumulation
     - renderer.path.reference
