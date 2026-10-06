@@ -13,9 +13,12 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -164,15 +167,61 @@ Lotus::Camera BootstrapCamera() {
   return camera;
 }
 
+// Whether a GPU material table entry holds `material`: its constants and
+// lookup parameters, and for each lookup whose key names a scene texture,
+// the slot of a resident texture with the same texels. A lookup without one
+// samples no slot.
+bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
+    const Lotus::Material& material, const Lotus::LotusScene& scene,
+    const Lotus::GpuSceneContents& contents) {
+  Lotus::Material expected = material;
+  expected.texcoords.clear();
+  const std::array<std::optional<Lotus::TextureInput>*, 4> inputs{
+      &expected.base_color_texture, &expected.roughness_texture,
+      &expected.metallic_texture, &expected.emission_texture};
+  for (std::size_t index = 0; index < inputs.size(); ++index) {
+    const std::uint32_t slot = gpu.texture_slots[index];
+    if (!inputs[index]->has_value()) {
+      if (slot != Lotus::kNoTextureSlot)
+        return false;
+      continue;
+    }
+    const auto texture = scene.textures.find((*inputs[index])->texture);
+    (*inputs[index])->texture.clear();
+    if (texture == scene.textures.end()) {
+      if (slot != Lotus::kNoTextureSlot)
+        return false;
+      continue;
+    }
+    const auto resident = std::find_if(contents.textures.begin(),
+        contents.textures.end(),
+        [&](const Lotus::GpuTextureContents& t) { return t.slot == slot; });
+    if (resident == contents.textures.end() ||
+        resident->texture != *texture->second)
+      return false;
+  }
+  return gpu.material == expected;
+}
+
 // Whether the GPU scene's buffers hold exactly the scene's resident geometry,
-// normals included, and each placement of its visible meshes, in the update
-// plan's order, with its material.
+// normals and texture coordinates included, its textures, and each placement
+// of its visible meshes, in the update plan's order, with its material and
+// the texture-coordinate set the material reads.
 bool SceneMatches(const Lotus::GpuSceneContents& contents,
     const Lotus::LotusScene& scene) {
   if (contents.status != Lotus::FrameStatus::Pass ||
       (!contents.instances.empty() &&
-          contents.materials.size() != scene.materials.size() + 1)) {
+          contents.materials.size() != scene.materials.size() + 1) ||
+      contents.textures.size() != scene.textures.size()) {
     return false;
+  }
+  for (const auto& [id, texture] : scene.textures) {
+    (void)id;
+    if (std::none_of(contents.textures.begin(), contents.textures.end(),
+            [&](const Lotus::GpuTextureContents& t) {
+              return t.texture == *texture;
+            }))
+      return false;
   }
   std::set<const Lotus::MeshGeometry*> resident;
   std::size_t instance = 0;
@@ -191,20 +240,29 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
         return false;
       }
       const Lotus::GpuInstanceContents& gpu = contents.instances[instance++];
-      const auto material = scene.materials.find(mesh.material);
+      const auto found = scene.materials.find(mesh.material);
+      const Lotus::Material material =
+          found == scene.materials.end() ? Lotus::Material{} : found->second;
       const auto geometry = std::find_if(contents.geometries.begin(),
           contents.geometries.end(), [&](const Lotus::GpuGeometryContents& g) {
             return g.slot == gpu.geometry_slot;
           });
+      std::vector<std::vector<std::array<float, 2>>> texcoords;
+      std::uint32_t set = Lotus::kNoTexcoords;
+      for (const auto& [name, values] : mesh.geometry->texcoords) {
+        if (name == material.texcoords && Lotus::HasTextureInputs(material))
+          set = static_cast<std::uint32_t>(texcoords.size());
+        texcoords.push_back(values);
+      }
       if (geometry == contents.geometries.end() ||
           geometry->positions != mesh.geometry->positions ||
           geometry->triangles != mesh.geometry->triangles ||
           geometry->normals != mesh.geometry->normals ||
-          gpu.world_from_object != placement ||
+          geometry->texcoords != texcoords ||
+          gpu.world_from_object != placement || gpu.texcoords != set ||
           gpu.material_slot >= contents.materials.size() ||
-          contents.materials[gpu.material_slot] !=
-              (material == scene.materials.end() ? Lotus::Material{}
-                                                 : material->second)) {
+          !MaterialMatches(contents.materials[gpu.material_slot], material,
+              scene, contents)) {
         return false;
       }
     }
@@ -250,7 +308,9 @@ struct AccelerationVerdict {
 // Drives the renderer's GPU scene through insertion, an unchanged commit, a
 // transform edit, a material binding, a material edit, a material removal,
 // an environment edit, a hide, a point and normal edit,
-// instancer placements and removal, comparing the device buffers with the CPU scene after each. Returns an empty string on success.
+// instancer placements, texture insertion, edit and removal, and removal,
+// comparing the device buffers and images with the CPU scene after each.
+// Returns an empty string on success.
 // Acceleration-structure mismatches go to `acceleration` instead.
 std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     AccelerationVerdict& acceleration) {
@@ -482,17 +542,87 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
              before.tlas_updates == 2,
       "ordinary placement", "expected a TLAS rebuild and no BLAS build");
 
+  // Textures become images in the texture table; the geometry carries two
+  // texture-coordinate sets, of which the material reads the second. One
+  // lookup's key names no texture, so it samples none.
+  const Lotus::GpuSceneStats placed = before;
+  Lotus::Texture checker;
+  checker.width = 2;
+  checker.height = 2;
+  checker.format = Lotus::TextureFormat::Rgba8Srgb;
+  checker.texels = {255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255,
+      255, 255};
+  Lotus::Texture radiance;
+  radiance.width = 1;
+  radiance.height = 2;
+  radiance.format = Lotus::TextureFormat::Rgba32Float;
+  const float hdr[8] = {4.0F, 2.0F, 1.0F, 1.0F, 0.5F, 0.25F, 8.0F, 0.0F};
+  radiance.texels.resize(sizeof(hdr));
+  std::memcpy(radiance.texels.data(), hdr, sizeof(hdr));
+  world.SetTexture("/checker", checker);
+  world.SetTexture("/radiance", radiance);
+  Lotus::MeshGeometry mapped{{{0, 0, 2}, {1, 0, 2}, {0, 1, 2}}, {{0, 1, 2}}, {0}};
+  mapped.texcoords["map1"] = {{{0, 0}}, {{1, 0}}, {{0, 1}}};
+  mapped.texcoords["st"] = {{{0.25F, 0}}, {{2, 0}}, {{0, -1}}};
+  world.SetMesh("/triangle", mapped, Lotus::MeshInstance{});
+  Lotus::Material textured;
+  textured.base_color_texture = Lotus::TextureInput{"/checker"};
+  textured.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  textured.base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
+  textured.roughness_texture = Lotus::TextureInput{"/missing", 2};
+  textured.roughness_texture->fallback = {0.1F, 0.2F, 0.3F, 0.4F};
+  textured.emission_texture = Lotus::TextureInput{"/radiance"};
+  textured.emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  textured.emission_texture->scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  textured.emission_texture->bias = {0.5F, 0.0F, 0.0F, 0.0F};
+  textured.texcoords = "st";
+  textured.texcoord_fallback = {0.5F, 0.75F};
+  world.SetMaterial("/textured", textured);
+  world.BindMaterial("/triangle", "/textured");
+  if (auto failure = apply("texture insertion"); !failure.empty())
+    return failure;
+  if (before.resident_textures != 2 || before.texture_uploads != 2 ||
+      before.texture_bytes != 2 * 2 * 4 + 1 * 2 * 16 ||
+      before.material_writes != placed.material_writes + 1 ||
+      before.upload_submissions != placed.upload_submissions + 1) {
+    return "texture insertion: unexpected texture or material table counts";
+  }
+
+  const Lotus::GpuSceneStats inserted_textures = before;
+  checker.texels[0] = 128;
+  world.SetTexture("/checker", checker);
+  if (auto failure = apply("texture edit"); !failure.empty())
+    return failure;
+  if (before.resident_textures != 2 || before.texture_uploads != 3 ||
+      before.texture_releases != 1 ||
+      before.geometry_uploads != inserted_textures.geometry_uploads ||
+      before.instance_writes != inserted_textures.instance_writes ||
+      before.material_writes != inserted_textures.material_writes + 1) {
+    return "texture edit: the texture was not replaced alone with the table";
+  }
+
+  world.RemoveTexture("/radiance");
+  if (auto failure = apply("texture removal"); !failure.empty())
+    return failure;
+  if (before.resident_textures != 1 || before.texture_releases != 2 ||
+      before.texture_bytes != 2 * 2 * 4) {
+    return "texture removal: the texture stayed resident";
+  }
+
   world.RemoveMesh("/quad");
   world.RemoveMesh("/triangle");
   world.RemoveMesh("/empty");
+  world.RemoveMaterial("/textured");
+  world.RemoveTexture("/checker");
   if (auto failure = apply("removal"); !failure.empty())
     return failure;
   if (before.resident_geometries != 0 || before.instance_count != 0 ||
-      before.geometry_bytes != 0 || before.geometry_releases != 3 ||
+      before.geometry_bytes != 0 || before.geometry_releases != 4 ||
+      before.resident_textures != 0 || before.texture_bytes != 0 ||
       stats().upload_submissions != before.upload_submissions) {
-    return "removal: the GPU scene kept geometry or instances";
+    return "removal: the GPU scene kept geometry, textures or instances";
   }
-  expect(before.blas_builds == 3 && before.tlas_builds == 7 &&
+  expect(before.blas_builds == 4 && before.tlas_builds == 8 &&
              before.tlas_updates == 2,
       "removal", "expected an empty TLAS rebuild");
   return {};
@@ -1109,17 +1239,22 @@ public:
     return std::exchange(summary_, {});
   }
 
-  // Removes every mesh and the environment from the world and the GPU scene,
-  // and restores the target.
+  // Removes every mesh, material and texture and the environment from the
+  // world and the GPU scene, and restores the target.
   std::string Clear() {
-    std::vector<std::string> keys;
     const auto snapshot = world_.Commit();
     for (const auto& [key, mesh] : snapshot.scene->meshes) {
       (void)mesh;
-      keys.push_back(key);
-    }
-    for (const std::string& key : keys)
       world_.RemoveMesh(key);
+    }
+    for (const auto& [key, material] : snapshot.scene->materials) {
+      (void)material;
+      world_.RemoveMaterial(key);
+    }
+    for (const auto& [key, texture] : snapshot.scene->textures) {
+      (void)texture;
+      world_.RemoveTexture(key);
+    }
     world_.SetEnvironment({});
     target_ = DefaultTarget();
     const auto upload = renderer_.UpdateScene(extraction_.Update(world_.Commit()));
@@ -1533,6 +1668,494 @@ std::string NormalsFailure(PathScenes& scenes) {
   world.SetMesh("/plane", plane, Lotus::MeshInstance{});
   if (auto failure = scenes.ExpectExact(64, {2.0, 1.0, 0.5}); !failure.empty())
     return "mirror, shading normals tilted 30 degrees: " + failure;
+  return {};
+}
+
+using Rgba = std::array<double, 4>;
+
+// Texel (i, j) of a texture, row j from the top, in linear values: sRGB
+// colour channels are decoded first, as Vulkan does before filtering.
+Rgba Texel(const Lotus::Texture& texture, int i, int j) {
+  const std::size_t index = std::size_t(j) * texture.width + std::size_t(i);
+  Rgba texel{};
+  if (texture.format == Lotus::TextureFormat::Rgba32Float) {
+    float values[4];
+    std::memcpy(values, texture.texels.data() + index * 16, sizeof(values));
+    for (int c = 0; c < 4; ++c)
+      texel[c] = values[c];
+    return texel;
+  }
+  for (int c = 0; c < 4; ++c) {
+    const double value = texture.texels[index * 4 + c] / 255.0;
+    texel[c] = texture.format == Lotus::TextureFormat::Rgba8Srgb && c < 3
+                   ? (value <= 0.04045 ? value / 12.92
+                                       : std::pow((value + 0.055) / 1.055, 2.4))
+                   : value;
+  }
+  return texel;
+}
+
+// Vulkan's wrapping of integer texel coordinate `i`, or nothing for the
+// transparent black border.
+std::optional<int> WrapTexel(int i, int size, Lotus::TextureWrap wrap) {
+  switch (wrap) {
+  case Lotus::TextureWrap::Repeat:
+    return ((i % size) + size) % size;
+  case Lotus::TextureWrap::Mirror: {
+    const int m = ((i % (2 * size)) + 2 * size) % (2 * size) - size;
+    return size - 1 - (m >= 0 ? m : -(1 + m));
+  }
+  case Lotus::TextureWrap::Clamp:
+    return std::clamp(i, 0, size - 1);
+  case Lotus::TextureWrap::Black:
+    break;
+  }
+  if (i < 0 || i >= size)
+    return std::nullopt;
+  return i;
+}
+
+// A value the device computes, and how far it may be from it.
+struct Expected {
+  Rgba value{};
+  Rgba tolerance{1e-6, 1e-6, 1e-6, 1e-6};
+};
+
+// Independent oracle of a lookup: Vulkan's bilinear filter at level 0 at
+// texture coordinates (s, t), whose t runs up from the image's bottom row,
+// times scale plus bias; the unscaled fallback without a texture. A device
+// with 8 bits of subtexel precision rounds each filter weight to 1/256 of a
+// texel, which moves the value by up to 2^-7 of the four texels' spread.
+// Devices decode sRGB less precisely than this oracle: up to 0.7% of the
+// value on an RTX A5000, so sRGB colour channels allow 1% of the larger
+// texel.
+Expected LookupOracle(const Lotus::LotusScene& scene,
+    const Lotus::TextureInput& input, double s, double t) {
+  const auto found = scene.textures.find(input.texture);
+  if (found == scene.textures.end())
+    return {{input.fallback[0], input.fallback[1], input.fallback[2],
+        input.fallback[3]}};
+  const Lotus::Texture& texture = *found->second;
+  const double u = s * texture.width - 0.5;
+  const double v = (1.0 - t) * texture.height - 0.5;
+  const int i0 = static_cast<int>(std::floor(u));
+  const int j0 = static_cast<int>(std::floor(v));
+  const double a = u - i0;
+  const double b = v - j0;
+  Rgba result{};
+  Rgba low{1e30, 1e30, 1e30, 1e30};
+  Rgba high{-1e30, -1e30, -1e30, -1e30};
+  for (int dj = 0; dj < 2; ++dj) {
+    for (int di = 0; di < 2; ++di) {
+      const auto i = WrapTexel(i0 + di, static_cast<int>(texture.width), input.wrap_s);
+      const auto j = WrapTexel(j0 + dj, static_cast<int>(texture.height), input.wrap_t);
+      const Rgba texel = i && j ? Texel(texture, *i, *j) : Rgba{};
+      const double weight = (di == 0 ? 1 - a : a) * (dj == 0 ? 1 - b : b);
+      for (int c = 0; c < 4; ++c) {
+        result[c] += weight * texel[c];
+        low[c] = std::min(low[c], texel[c]);
+        high[c] = std::max(high[c], texel[c]);
+      }
+    }
+  }
+  Expected expected;
+  for (int c = 0; c < 4; ++c) {
+    expected.value[c] = result[c] * input.scale[c] + input.bias[c];
+    const double decoding =
+        texture.format == Lotus::TextureFormat::Rgba8Srgb && c < 3
+            ? 0.01 * high[c]
+            : 0.0;
+    expected.tolerance[c] =
+        ((high[c] - low[c]) / 128.0 + decoding + 2e-4) *
+            std::abs(input.scale[c]) +
+        1e-6;
+  }
+  return expected;
+}
+
+// The closest hit of OrthographicCamera's ray through a pixel centre, in
+// double precision: the mesh, its triangle and the hit's barycentrics.
+struct OrthographicHit {
+  const Lotus::SceneMesh* mesh = nullptr;
+  std::size_t triangle = 0;
+  double u = 0;
+  double v = 0;
+};
+
+OrthographicHit TraceOrthographic(const Lotus::LotusScene& scene,
+    const Lotus::OffscreenTarget& target, std::uint32_t x, std::uint32_t y) {
+  const Vec3 origin{2.0 * (x + 0.5) / target.width - 1.0,
+      1.0 - 2.0 * (y + 0.5) / target.height, 2.0};
+  const Vec3 direction{0, 0, -1};
+  OrthographicHit closest;
+  double closest_t = 9.0;
+  for (const auto& [key, mesh] : scene.meshes) {
+    (void)key;
+    if (!mesh.instance.visible)
+      continue;
+    const auto& geometry = *mesh.geometry;
+    for (std::size_t index = 0; index < geometry.triangles.size(); ++index) {
+      std::array<Vec3, 3> corners;
+      for (int corner = 0; corner < 3; ++corner) {
+        const auto& position = geometry.positions[geometry.triangles[index][corner]];
+        corners[corner] = TransformVec3(mesh.instance.world_from_object,
+            {position[0], position[1], position[2]}, 1.0);
+      }
+      // Moeller-Trumbore.
+      const Vec3 edge1 = Subtract(corners[1], corners[0]);
+      const Vec3 edge2 = Subtract(corners[2], corners[0]);
+      const Vec3 p = Cross(direction, edge2);
+      const double determinant = Dot(edge1, p);
+      if (std::abs(determinant) < 1e-12)
+        continue;
+      const Vec3 s = Subtract(origin, corners[0]);
+      const double u = Dot(s, p) / determinant;
+      const Vec3 q = Cross(s, edge1);
+      const double v = Dot(direction, q) / determinant;
+      const double t = Dot(edge2, q) / determinant;
+      if (u < 0 || v < 0 || u + v > 1 || t <= 0 || t >= closest_t)
+        continue;
+      closest_t = t;
+      closest = {&mesh, index, u, v};
+    }
+  }
+  return closest;
+}
+
+// What the Albedo or RoughnessMetallic output shows at a hit, by the texture
+// rules applied in double precision.
+Expected SurfaceOracle(const Lotus::LotusScene& scene, const OrthographicHit& hit,
+    Lotus::SceneOutput output) {
+  const auto found = scene.materials.find(hit.mesh->material);
+  const Lotus::Material material =
+      found == scene.materials.end() ? Lotus::Material{} : found->second;
+  std::array<double, 2> st{material.texcoord_fallback[0],
+      material.texcoord_fallback[1]};
+  const auto set = hit.mesh->geometry->texcoords.find(material.texcoords);
+  if (set != hit.mesh->geometry->texcoords.end()) {
+    for (int axis = 0; axis < 2; ++axis) {
+      const auto corner = [&](std::size_t k) {
+        return double{set->second[3 * hit.triangle + k][axis]};
+      };
+      st[axis] = corner(0) + hit.u * (corner(1) - corner(0)) +
+                 hit.v * (corner(2) - corner(0));
+    }
+  }
+  const auto lookup = [&](const Lotus::TextureInput& input) {
+    return LookupOracle(scene, input, st[0], st[1]);
+  };
+  const auto unit = [](double value) { return std::clamp(value, 0.0, 1.0); };
+  Expected expected;
+  if (output == Lotus::SceneOutput::Albedo) {
+    expected.value = {material.base_color[0], material.base_color[1],
+        material.base_color[2], 1.0};
+    if (material.base_color_texture) {
+      const Expected value = lookup(*material.base_color_texture);
+      for (int c = 0; c < 3; ++c) {
+        expected.value[c] = unit(value.value[c]);
+        expected.tolerance[c] = value.tolerance[c];
+      }
+    }
+    return expected;
+  }
+  expected.value = {material.roughness, material.metallic, 0.0, 1.0};
+  const std::array<const std::optional<Lotus::TextureInput>*, 2> inputs{
+      &material.roughness_texture, &material.metallic_texture};
+  for (int c = 0; c < 2; ++c) {
+    if (*inputs[c]) {
+      const Expected value = lookup(**inputs[c]);
+      const std::uint32_t channel = (*inputs[c])->channel;
+      expected.value[c] = unit(value.value[channel]);
+      expected.tolerance[c] = value.tolerance[channel];
+    }
+  }
+  return expected;
+}
+
+// Renders a surface diagnostic of OrthographicCamera's view and compares
+// each pixel centre with SurfaceOracle, skipping pixels near triangle edges.
+// Counts the pixels per mesh.
+std::string SurfaceOutputFailure(PathScenes& scenes, Lotus::SceneOutput output,
+    std::map<std::string, std::size_t>& pixels) {
+  Lotus::PathTracingSettings settings;
+  settings.output = output;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  const auto snapshot = scenes.World().Commit();
+  const Lotus::OffscreenTarget& target = scenes.Target();
+  const std::vector<float> values = ColorValues(frame.color);
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      const OrthographicHit hit = TraceOrthographic(*snapshot.scene, target, x, y);
+      const float* actual = &values[(std::size_t{y} * target.width + x) * 4];
+      if (hit.mesh == nullptr) {
+        if (!std::equal(actual, actual + 4, target.clear_color.begin()))
+          return "a missed pixel changed at " + std::to_string(x) + "," + std::to_string(y);
+        continue;
+      }
+      if (std::min({hit.u, hit.v, 1 - hit.u - hit.v}) < 0.02)
+        continue;
+      const Expected expected = SurfaceOracle(*snapshot.scene, hit, output);
+      for (int c = 0; c < 4; ++c) {
+        if (std::abs(actual[c] - expected.value[c]) > expected.tolerance[c]) {
+          const Rgba& want = expected.value;
+          return "(" + std::to_string(actual[0]) + ", " + std::to_string(actual[1]) +
+                 ", " + std::to_string(actual[2]) + ", " + std::to_string(actual[3]) +
+                 ") instead of (" + std::to_string(want[0]) + ", " +
+                 std::to_string(want[1]) + ", " + std::to_string(want[2]) + ", " +
+                 std::to_string(want[3]) + ") +- " +
+                 std::to_string(expected.tolerance[c]) + " at " +
+                 std::to_string(x) + "," + std::to_string(y);
+        }
+      }
+      for (const auto& [key, mesh] : snapshot.scene->meshes)
+        if (&mesh == hit.mesh)
+          ++pixels[key];
+    }
+  }
+  return {};
+}
+
+// A Texture whose texel (i, j), row j from the top, is texel(i, j).
+Lotus::Texture MakeTexture(std::uint32_t width, std::uint32_t height,
+    Lotus::TextureFormat format,
+    const std::function<std::array<double, 4>(std::uint32_t, std::uint32_t)>& texel) {
+  Lotus::Texture texture;
+  texture.width = width;
+  texture.height = height;
+  texture.format = format;
+  texture.texels.resize(std::size_t{width} * height * Lotus::TexelBytes(format));
+  for (std::uint32_t j = 0; j < height; ++j) {
+    for (std::uint32_t i = 0; i < width; ++i) {
+      const std::array<double, 4> value = texel(i, j);
+      const std::size_t index = std::size_t{j} * width + i;
+      for (int c = 0; c < 4; ++c) {
+        if (format == Lotus::TextureFormat::Rgba32Float) {
+          const auto component = static_cast<float>(value[c]);
+          std::memcpy(texture.texels.data() + index * 16 + c * 4, &component, 4);
+        } else {
+          texture.texels[index * 4 + c] =
+              static_cast<std::uint8_t>(std::lround(std::clamp(value[c], 0.0, 1.0) * 255));
+        }
+      }
+    }
+  }
+  return texture;
+}
+
+// A square of side 2 placed at `world_from_object`, with one
+// texture-coordinate set per entry of `sets`, each of four corner (s, t)
+// in the order of its positions.
+Lotus::MeshGeometry MappedSquare(
+    const std::map<std::string, std::array<std::array<float, 2>, 4>>& sets) {
+  Lotus::MeshGeometry square = Square();
+  for (const auto& [name, corners] : sets) {
+    auto& set = square.texcoords[name];
+    for (const auto& triangle : square.triangles)
+      for (const std::uint32_t index : triangle)
+        set.push_back(corners[index]);
+  }
+  return square;
+}
+
+// Texture lookups through the GpuScene to the path tracer. The Albedo and
+// RoughnessMetallic diagnostics of sRGB, linear and float textures under
+// every wrap mode, scale and bias, channel selection, a missing texture's
+// fallback and a mesh without the material's texture-coordinate set, against
+// an independent oracle of Vulkan's bilinear filter, before and after a
+// texture edit; then the radiance of textured Lambert and emissive surfaces.
+std::string TexturesFailure(PathScenes& scenes) {
+  Lotus::RenderWorld& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  const auto checker = [](std::uint32_t i, std::uint32_t j) {
+    return std::array<double, 4>{((37 * i + 91 * j) % 256) / 255.0,
+        ((113 * i + 29 * j + 64) % 256) / 255.0,
+        ((71 * i * j + 17 * i + 200) % 256) / 255.0, ((i + j) % 2) ? 0.25 : 1.0};
+  };
+  world.SetTexture("/checker",
+      MakeTexture(4, 4, Lotus::TextureFormat::Rgba8Srgb, checker));
+  world.SetTexture("/linear",
+      MakeTexture(3, 2, Lotus::TextureFormat::Rgba8Unorm,
+          [](std::uint32_t i, std::uint32_t j) {
+            return std::array<double, 4>{0.1 * i, 0.3 + 0.2 * j + 0.1 * i,
+                0.5, 1.0 - 0.4 * j - 0.15 * i};
+          }));
+  world.SetTexture("/float",
+      MakeTexture(2, 3, Lotus::TextureFormat::Rgba32Float,
+          [](std::uint32_t i, std::uint32_t j) {
+            return std::array<double, 4>{-0.5 + 0.75 * i + 0.5 * j,
+                1.5 - 0.6 * j, 0.25 + 0.3 * i, 1.0};
+          }));
+  const auto place = [](float x, float y) {
+    return Lotus::Multiply(Translation(x, y, 0), Scaling(0.45F, 0.45F, 1));
+  };
+  // Upper left: repeat along s, mirror along t, reading "st".
+  Lotus::MeshInstance instance;
+  instance.world_from_object = place(-0.5F, 0.5F);
+  world.SetMesh("/repeat",
+      MappedSquare({{"st", {{{-0.6F, -0.4F}, {1.7F, -0.4F}, {1.7F, 1.3F}, {-0.6F, 1.3F}}}}}),
+      instance);
+  Lotus::Material repeat;
+  repeat.base_color_texture = Lotus::TextureInput{"/checker"};
+  repeat.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  repeat.base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
+  repeat.texcoords = "st";
+  Paint(world, "/repeat", repeat);
+  // Upper right: clamp along s, the black border along t, scaled and biased.
+  instance.world_from_object = place(0.5F, 0.5F);
+  world.SetMesh("/clamp",
+      MappedSquare({{"st", {{{-0.5F, -0.5F}, {1.5F, -0.5F}, {1.5F, 1.5F}, {-0.5F, 1.5F}}}}}),
+      instance);
+  Lotus::Material clamp;
+  clamp.base_color_texture = Lotus::TextureInput{"/checker"};
+  clamp.base_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  clamp.base_color_texture->wrap_t = Lotus::TextureWrap::Black;
+  clamp.base_color_texture->scale = {1.0F, 0.5F, 1.0F, 1.0F};
+  clamp.base_color_texture->bias = {0.0F, 0.25F, 0.0F, 0.0F};
+  clamp.texcoords = "st";
+  Paint(world, "/clamp", clamp);
+  // Lower left: a float texture, read through the second of two sets and
+  // pushed out of [0, 1], which the base colour clamps.
+  instance.world_from_object = place(-0.5F, -0.5F);
+  world.SetMesh("/float",
+      MappedSquare({{"map1", {{{9, 9}, {9, 9}, {9, 9}, {9, 9}}}},
+          {"uv", {{{0.9F, -0.2F}, {1.1F, 1.2F}, {-0.3F, 1.0F}, {0.1F, 0.0F}}}}}),
+      instance);
+  Lotus::Material floating;
+  floating.base_color_texture = Lotus::TextureInput{"/float"};
+  floating.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  floating.base_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  floating.base_color_texture->scale = {0.5F, 1.0F, 1.0F, 1.0F};
+  floating.base_color_texture->bias = {0.1F, 0.0F, -0.2F, 0.0F};
+  floating.texcoords = "uv";
+  Paint(world, "/float", floating);
+  // Lower right: a lookup whose texture is missing, and one on a mesh
+  // without the set its material reads.
+  world.SetMesh("/missing",
+      {{{0.05F, -0.95F, 0}, {0.95F, -0.95F, 0}, {0.05F, -0.05F, 0}},
+          {{0, 1, 2}}, {0}},
+      Lotus::MeshInstance{});
+  Lotus::Material missing;
+  missing.base_color_texture = Lotus::TextureInput{"/absent"};
+  missing.base_color_texture->fallback = {0.2F, 0.4F, 0.6F, 1.0F};
+  missing.roughness_texture = Lotus::TextureInput{"/absent", 3};
+  missing.roughness_texture->fallback = {0.0F, 0.0F, 0.0F, 0.375F};
+  Paint(world, "/missing", missing);
+  world.SetMesh("/unmapped",
+      {{{0.95F, -0.95F, 0}, {0.95F, -0.05F, 0}, {0.1F, -0.05F, 0}},
+          {{0, 1, 2}}, {0}},
+      Lotus::MeshInstance{});
+  Lotus::Material unmapped = repeat;
+  unmapped.texcoord_fallback = {0.3F, 0.8F};
+  Paint(world, "/unmapped", unmapped);
+
+  std::map<std::string, std::size_t> albedo;
+  if (auto failure = SurfaceOutputFailure(scenes, Lotus::SceneOutput::Albedo, albedo);
+      !failure.empty())
+    return "albedo: " + failure;
+  // Roughness from green and metallic from alpha of a linear texture.
+  repeat.roughness_texture = Lotus::TextureInput{"/linear", 1};
+  repeat.roughness_texture->wrap_s = Lotus::TextureWrap::Mirror;
+  repeat.roughness_texture->wrap_t = Lotus::TextureWrap::Repeat;
+  repeat.roughness_texture->scale = {1.0F, 1.5F, 1.0F, 1.0F};
+  repeat.metallic_texture = Lotus::TextureInput{"/linear", 3};
+  repeat.metallic_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  repeat.metallic_texture->bias = {0.0F, 0.0F, 0.0F, -0.125F};
+  Paint(world, "/repeat", repeat);
+  clamp.metallic_texture = Lotus::TextureInput{"/checker", 0};
+  Paint(world, "/clamp", clamp);
+  std::map<std::string, std::size_t> parameters;
+  if (auto failure = SurfaceOutputFailure(scenes,
+          Lotus::SceneOutput::RoughnessMetallic, parameters);
+      !failure.empty())
+    return "roughness and metallic: " + failure;
+  // A texture edit replaces the image that the descriptors name.
+  world.SetTexture("/checker",
+      MakeTexture(4, 4, Lotus::TextureFormat::Rgba8Srgb,
+          [&](std::uint32_t i, std::uint32_t j) { return checker(3 - i, j); }));
+  std::map<std::string, std::size_t> edited;
+  if (auto failure = SurfaceOutputFailure(scenes, Lotus::SceneOutput::Albedo, edited);
+      !failure.empty())
+    return "albedo after a texture edit: " + failure;
+  std::ostringstream line;
+  line << "albedo and roughness/metallic pixels against the bilinear oracle:";
+  for (const auto& [key, count] : albedo)
+    line << ' ' << key << ' ' << count << '/' << parameters[key];
+  scenes.Summarize(line.str());
+  for (const char* key : {"/repeat", "/clamp", "/float", "/missing", "/unmapped"})
+    if (albedo[key] == 0 || parameters[key] == 0 || edited[key] == 0)
+      return std::string("no pixel of ") + key + " was compared";
+  for (const char* key : {"/repeat", "/clamp", "/float", "/missing", "/unmapped"})
+    world.RemoveMesh(key);
+
+  // A Lambert square filling the view under a white environment, with an
+  // 8x8 albedo texture and an 8x8 float emission texture of 2x2 blocks. The
+  // bilinear filter is constant within each block, half a texel from its
+  // edges, so a pixel there reflects its block's albedo exactly and adds its
+  // emission; with no bounces it shows the emission alone.
+  const std::array<Rgb, 4> block_albedo{
+      {{0.75, 0.25, 0.5}, {0.125, 0.5, 1.0}, {1.0, 1.0, 0.25}, {0.375, 0.0, 0.625}}};
+  const std::array<Rgb, 4> block_emission{
+      {{0.5, 0.0, 0.0}, {0.0, 2.0, 0.25}, {0.0, 0.0, 0.0}, {4.0, 1.0, 3.0}}};
+  const auto block = [](std::uint32_t i, std::uint32_t j) { return (j / 4) * 2 + i / 4; };
+  world.SetTexture("/blocks",
+      MakeTexture(8, 8, Lotus::TextureFormat::Rgba8Unorm,
+          [&](std::uint32_t i, std::uint32_t j) {
+            const Rgb& value = block_albedo[block(i, j)];
+            return std::array<double, 4>{value[0], value[1], value[2], 1.0};
+          }));
+  world.SetTexture("/glow",
+      MakeTexture(8, 8, Lotus::TextureFormat::Rgba32Float,
+          [&](std::uint32_t i, std::uint32_t j) {
+            const Rgb& value = block_emission[block(i, j)];
+            return std::array<double, 4>{value[0], value[1], value[2], 1.0};
+          }));
+  world.SetMesh("/wall",
+      MappedSquare({{"st", {{{0, 0}, {1, 0}, {1, 1}, {0, 1}}}}}),
+      Lotus::MeshInstance{});
+  Lotus::Material wall;
+  wall.base_color_texture = Lotus::TextureInput{"/blocks"};
+  wall.emission_texture = Lotus::TextureInput{"/glow"};
+  wall.texcoords = "st";
+  Paint(world, "/wall", wall);
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  const Lotus::OffscreenTarget& target = scenes.Target();
+  // 64 pixels span 8 texels, so a block's constant interior is pixels
+  // [4, 28) from the image's block edges.
+  for (const std::uint32_t bounces : {64U, 0U}) {
+    Lotus::PathTracingSettings settings;
+    settings.max_bounces = bounces;
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(settings, frame, 4); !failure.empty())
+      return "textured radiance: " + failure;
+    const std::vector<float> values = ColorValues(frame.color);
+    std::size_t checked = 0;
+    for (std::uint32_t y = 0; y < target.height; ++y) {
+      for (std::uint32_t x = 0; x < target.width; ++x) {
+        if (x % 32 < 4 || x % 32 >= 28 || y % 32 < 4 || y % 32 >= 28)
+          continue;
+        // Texture rows run from the top, as image rows do.
+        const std::uint32_t index = block(x / 8, y / 8);
+        for (int c = 0; c < 3; ++c) {
+          // The albedo as the 8-bit texels hold it.
+          const double quantized =
+              std::lround(block_albedo[index][c] * 255) / 255.0;
+          const double want =
+              block_emission[index][c] + (bounces == 0 ? 0.0 : quantized);
+          const float actual = values[(std::size_t{y} * target.width + x) * 4 + c];
+          if (std::abs(actual - want) > 1e-6 + 1e-4 * want)
+            return "textured radiance with " + std::to_string(bounces) +
+                   " bounces: " + std::to_string(actual) + " instead of " +
+                   std::to_string(want) + " at " + std::to_string(x) + "," +
+                   std::to_string(y);
+        }
+        ++checked;
+      }
+    }
+    scenes.Summarize("textured radiance with " + std::to_string(bounces) +
+                     " bounces: " + std::to_string(checked) + " block-interior pixels exact");
+  }
   return {};
 }
 
@@ -2257,6 +2880,7 @@ int main(int argc, char** argv) {
       };
       run("renderer.path.bsdf", BsdfFailure);
       run("renderer.path.normals", NormalsFailure);
+      run("renderer.path.textures", TexturesFailure);
       run("renderer.path.multibounce", MultibounceFailure);
       run("renderer.path.accumulation", AccumulationFailure);
       run("renderer.path.reference", [&](PathScenes& reference_scenes) {
@@ -2267,6 +2891,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
       checks.push_back({"renderer.path.bsdf", "skip", ray_query.detail});
       checks.push_back({"renderer.path.normals", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.textures", "skip", ray_query.detail});
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
@@ -2277,6 +2902,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.ray_query.timestamp", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.bsdf", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.normals", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.textures", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});

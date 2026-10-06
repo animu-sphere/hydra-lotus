@@ -45,6 +45,9 @@ struct MeshGeometry {
   // shades with its geometric normal. They need not be unit length; a zero
   // normal shades with the geometric normal too.
   std::vector<std::array<float, 3>> normals;
+  // Named texture-coordinate sets, one (s, t) per triangle corner, laid out
+  // as `normals`. A material's texture inputs read the set it names.
+  std::map<std::string, std::vector<std::array<float, 2>>> texcoords;
 
   bool operator==(const MeshGeometry&) const = default;
 };
@@ -80,6 +83,10 @@ struct LotusScene {
   // The material IR, keyed by stable host-supplied identifiers that meshes
   // bind to, in deterministic order.
   std::map<std::string, Material> materials;
+  // The textures that materials' texture inputs name, keyed by stable
+  // host-supplied identifiers, in deterministic order. Texels are shared
+  // with retained snapshots.
+  std::map<std::string, std::shared_ptr<const Texture>> textures;
   // Constant environment radiance, linear RGB, arriving from every direction
   // a path escapes in. Camera rays that miss do not see it.
   std::array<float, 3> environment{0.0F, 0.0F, 0.0F};
@@ -112,6 +119,10 @@ public:
   // The meshes bound to a removed material keep their binding and use the
   // default Material until it returns.
   void RemoveMaterial(const std::string& id);
+  // Inserts or replaces a texture; the texture inputs that name its key read
+  // it. Removing it makes them return their fallback until it returns.
+  void SetTexture(const std::string& id, Texture texture);
+  void RemoveTexture(const std::string& id);
   void SetEnvironment(const std::array<float, 3>& radiance);
   [[nodiscard]] FrameSnapshot Commit();
 

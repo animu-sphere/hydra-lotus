@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <unordered_set>
@@ -21,6 +22,10 @@ namespace {
 constexpr VkDeviceSize kVec3Bytes = 3 * sizeof(float);
 static_assert(sizeof(std::array<float, 3>) == kVec3Bytes &&
               sizeof(std::array<std::uint32_t, 3>) == kVec3Bytes);
+constexpr VkDeviceSize kVec2Bytes = 2 * sizeof(float);
+static_assert(sizeof(std::array<float, 2>) == kVec2Bytes);
+// Texel copies start at multiples of the largest texel.
+constexpr VkDeviceSize kTexelAlignment = 16;
 constexpr VkDeviceSize kInstanceBytes = sizeof(GpuInstanceRecord);
 constexpr VkDeviceSize kMaterialBytes = sizeof(GpuMaterialRecord);
 constexpr VkDeviceSize kTlasInstanceBytes =
@@ -39,12 +44,13 @@ VkDeviceSize AlignUp(VkDeviceSize value, VkDeviceSize alignment) {
   return (value + alignment - 1) / alignment * alignment;
 }
 
-// Where a geometry buffer's triangles and corner normals start, and its
-// size. Each section is aligned so a pass could bind it as its own storage
-// buffer range; `normal_offset` is zero without normals.
+// Where a geometry buffer's triangles, corner normals and texture-coordinate
+// sets start, and its size. Each section is aligned so a pass could bind it
+// as its own storage buffer range; `normal_offset` is zero without normals.
 struct GeometryLayout {
   VkDeviceSize index_offset = 0;
   VkDeviceSize normal_offset = 0;
+  std::vector<VkDeviceSize> texcoord_offsets;
   VkDeviceSize size = 0;
 };
 
@@ -57,7 +63,29 @@ GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
     layout.normal_offset = AlignUp(layout.size, alignment);
     layout.size = layout.normal_offset + geometry.normals.size() * kVec3Bytes;
   }
+  for (const auto& [name, texcoords] : geometry.texcoords) {
+    (void)name;
+    layout.texcoord_offsets.push_back(AlignUp(layout.size, alignment));
+    layout.size = layout.texcoord_offsets.back() + texcoords.size() * kVec2Bytes;
+  }
   return layout;
+}
+
+VkFormat TextureVkFormat(TextureFormat format) {
+  switch (format) {
+  case TextureFormat::Rgba8Unorm:
+    return VK_FORMAT_R8G8B8A8_UNORM;
+  case TextureFormat::Rgba8Srgb:
+    return VK_FORMAT_R8G8B8A8_SRGB;
+  case TextureFormat::Rgba32Float:
+    return VK_FORMAT_R32G32B32A32_SFLOAT;
+  }
+  return VK_FORMAT_UNDEFINED;
+}
+
+VkDeviceSize TextureBytes(const Texture& texture) {
+  return VkDeviceSize{texture.width} * texture.height *
+         TexelBytes(texture.format);
 }
 
 bool CreateBuffer(VkPhysicalDevice physical_device, VkDevice device,
@@ -150,12 +178,35 @@ bool ValidRadiance(const std::array<float, 3>& values) {
       [](float value) { return std::isfinite(value) && value >= 0.0F; });
 }
 
-bool ValidMaterial(const Material& material) {
+bool ValidTextureInput(const std::optional<TextureInput>& input,
+    bool colour) {
+  if (!input) {
+    return true;
+  }
+  const auto finite = [](const std::array<float, 4>& values) {
+    return std::all_of(values.begin(), values.end(),
+        [](float value) { return std::isfinite(value); });
+  };
+  return input->channel <= (colour ? 0U : 3U) &&
+         static_cast<std::uint32_t>(input->wrap_s) < 4 &&
+         static_cast<std::uint32_t>(input->wrap_t) < 4 &&
+         finite(input->scale) && finite(input->bias) &&
+         finite(input->fallback);
+}
+
+bool ValidMaterial(const SceneMaterial& entry) {
+  const Material& material = entry.material;
   const auto unit = [](float value) { return value >= 0.0F && value <= 1.0F; };
   return std::all_of(material.base_color.begin(), material.base_color.end(),
              unit) &&
          unit(material.roughness) && unit(material.metallic) &&
-         ValidRadiance(material.emission);
+         ValidRadiance(material.emission) &&
+         ValidTextureInput(material.base_color_texture, true) &&
+         ValidTextureInput(material.roughness_texture, false) &&
+         ValidTextureInput(material.metallic_texture, false) &&
+         ValidTextureInput(material.emission_texture, true) &&
+         std::isfinite(material.texcoord_fallback[0]) &&
+         std::isfinite(material.texcoord_fallback[1]);
 }
 
 VkTransformMatrixKHR TlasTransform(const Matrix4& world_from_object) {
@@ -238,6 +289,7 @@ bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
   index_alignment_ = std::max<VkDeviceSize>(4,
       properties.limits.minStorageBufferOffsetAlignment);
   max_allocations_ = properties.limits.maxMemoryAllocationCount;
+  max_texture_size_ = properties.limits.maxImageDimension2D;
   timestamp_period_ = properties.limits.timestampPeriod;
   std::uint32_t queue_count = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_count,
@@ -326,6 +378,12 @@ void GpuScene::Destroy() {
   slots_.clear();
   free_slots_.clear();
   slot_of_.clear();
+  for (GpuTexture& texture : textures_) {
+    DestroyTexture(texture);
+  }
+  textures_.clear();
+  free_texture_slots_.clear();
+  texture_slot_of_.clear();
   tlas_blas_ids_.clear();
   tlas_transforms_.clear();
   tlas_built_ = false;
@@ -384,6 +442,14 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
                "triangle corner";
       return false;
     }
+    if (!std::all_of(geometry->texcoords.begin(), geometry->texcoords.end(),
+            [&](const auto& set) {
+              return set.second.size() == 3 * geometry->triangles.size();
+            })) {
+      detail = "the scene update uploads texture coordinates that are not "
+               "one per triangle corner";
+      return false;
+    }
     if (acceleration_ && geometry->triangles.size() > max_primitives_) {
       std::ostringstream message;
       message << "the scene update uploads geometry with "
@@ -394,6 +460,55 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
       return false;
     }
   }
+  std::unordered_set<const Texture*> released_textures;
+  for (const Texture* texture : update.texture_releases) {
+    if (!texture_slot_of_.contains(texture) ||
+        !released_textures.insert(texture).second) {
+      detail = "the scene update releases a texture that is not resident";
+      return false;
+    }
+  }
+  std::unordered_set<const Texture*> uploaded_textures;
+  for (const auto& texture : update.texture_uploads) {
+    if (!texture || (texture_slot_of_.contains(texture.get()) &&
+                        !released_textures.contains(texture.get())) ||
+        !uploaded_textures.insert(texture.get()).second) {
+      detail = "the scene update uploads a texture that is already resident";
+      return false;
+    }
+    if (TextureVkFormat(texture->format) == VK_FORMAT_UNDEFINED ||
+        texture->width == 0 || texture->height == 0 ||
+        texture->texels.size() != TextureBytes(*texture)) {
+      detail = "the scene update uploads a texture whose texels do not "
+               "match its size and format";
+      return false;
+    }
+    if (texture->width > max_texture_size_ ||
+        texture->height > max_texture_size_) {
+      std::ostringstream message;
+      message << "the scene update uploads a " << texture->width << 'x'
+              << texture->height << " texture but this device's images are "
+              << "at most " << max_texture_size_ << " texels on a side";
+      detail = message.str();
+      return false;
+    }
+  }
+  const std::uint64_t textures =
+      static_cast<std::uint64_t>(texture_slot_of_.size()) -
+      released_textures.size() + uploaded_textures.size();
+  if (textures > kMaxTextures) {
+    std::ostringstream message;
+    message << "the scene update makes " << textures
+            << " textures resident but the GPU scene holds at most "
+            << kMaxTextures;
+    detail = message.str();
+    return false;
+  }
+  const auto texture_resident = [&](const Texture* texture) {
+    return (texture_slot_of_.contains(texture) &&
+               !released_textures.contains(texture)) ||
+           uploaded_textures.contains(texture);
+  };
   if (!update.instances_changed && !update.instances.empty()) {
     detail = "the scene update lists instances without replacing them";
     return false;
@@ -417,9 +532,22 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = "the scene update has a material value out of range";
     return false;
   }
-  const std::size_t material_count = update.materials_changed
-                                         ? update.materials.size()
-                                         : material_table_.size();
+  // The table after this plan must sample only resident textures, whether
+  // the plan replaces it or not.
+  const std::vector<SceneMaterial>& table =
+      update.materials_changed ? update.materials : material_table_;
+  for (const SceneMaterial& entry : table) {
+    const auto inputs = TextureInputs(entry.material);
+    for (std::size_t index = 0; index < inputs.size(); ++index) {
+      const Texture* texture = entry.textures[index];
+      if (texture != nullptr &&
+          (!inputs[index]->has_value() || !texture_resident(texture))) {
+        detail = "a material samples a texture that is not resident";
+        return false;
+      }
+    }
+  }
+  const std::size_t material_count = table.size();
   for (const SceneInstance& instance : update.instances) {
     if (!resident(instance.geometry) && !uploaded.contains(instance.geometry)) {
       detail = "a scene instance references geometry that is not resident";
@@ -427,6 +555,12 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     }
     if (instance.material >= material_count) {
       detail = "a scene instance references a material outside the table";
+      return false;
+    }
+    if (instance.texcoords != kNoTexcoords &&
+        instance.texcoords >= instance.geometry->texcoords.size()) {
+      detail = "a scene instance reads a texture-coordinate set its geometry "
+               "does not have";
       return false;
     }
   }
@@ -448,12 +582,13 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = message.str();
     return false;
   }
-  // One allocation per geometry, and one per BLAS, plus the instance,
-  // material and staging buffers and, with acceleration structures, the
-  // TLAS, its build input and the scratch buffer.
+  // One allocation per geometry, one per BLAS and one per texture, plus the
+  // instance, material and staging buffers and, with acceleration
+  // structures, the TLAS, its build input and the scratch buffer.
   const std::uint64_t geometries = static_cast<std::uint64_t>(slot_of_.size()) -
                                    released.size() + uploaded.size();
-  const std::uint64_t allocations = geometries * (acceleration_ ? 2 : 1) + 3 +
+  const std::uint64_t allocations = geometries * (acceleration_ ? 2 : 1) +
+                                    textures + 3 +
                                     (acceleration_ ? 3 : 0) +
                                     kReservedAllocations;
   if (allocations > max_allocations_) {
@@ -481,6 +616,93 @@ void GpuScene::Release(const MeshGeometry* geometry) {
   free_slots_.insert(slot);
   slot_of_.erase(found);
   ++stats_.geometry_releases;
+}
+
+void GpuScene::Release(const Texture* texture) {
+  const auto found = texture_slot_of_.find(texture);
+  const std::uint32_t slot = found->second;
+  stats_.texture_bytes -= textures_[slot].bytes;
+  // As for geometry, no submission still samples it. A material that did is
+  // rewritten by this plan, and the scene passes leave its descriptor
+  // unread.
+  DestroyTexture(textures_[slot]);
+  free_texture_slots_.insert(slot);
+  texture_slot_of_.erase(found);
+  ++texture_generation_;
+  ++stats_.texture_releases;
+}
+
+bool GpuScene::CreateTexture(const Texture& source, GpuTexture& texture,
+    std::string& detail) {
+  const VkFormat format = TextureVkFormat(source.format);
+  VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  create.imageType = VK_IMAGE_TYPE_2D;
+  create.format = format;
+  create.extent = {source.width, source.height, 1};
+  create.mipLevels = 1;
+  create.arrayLayers = 1;
+  create.samples = VK_SAMPLE_COUNT_1_BIT;
+  create.tiling = VK_IMAGE_TILING_OPTIMAL;
+  // Transfer source serves ReadBack.
+  create.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  create.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  if (!VulkanOk(vkCreateImage(device_, &create, nullptr, &texture.image),
+          "vkCreateImage(texture)", detail)) {
+    DestroyTexture(texture);
+    return false;
+  }
+  VkMemoryRequirements requirements{};
+  vkGetImageMemoryRequirements(device_, texture.image, &requirements);
+  const std::uint32_t memory_type =
+      FindMemoryType(physical_device_, requirements.memoryTypeBits,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
+    detail = "no suitable memory type for a texture is available";
+    DestroyTexture(texture);
+    return false;
+  }
+  VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  allocate.allocationSize = requirements.size;
+  allocate.memoryTypeIndex = memory_type;
+  if (!VulkanOk(vkAllocateMemory(device_, &allocate, nullptr, &texture.memory),
+          "vkAllocateMemory(texture)", detail) ||
+      !VulkanOk(vkBindImageMemory(device_, texture.image, texture.memory, 0),
+          "vkBindImageMemory(texture)", detail)) {
+    DestroyTexture(texture);
+    return false;
+  }
+  VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  view.image = texture.image;
+  view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  view.format = format;
+  view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  view.subresourceRange.levelCount = 1;
+  view.subresourceRange.layerCount = 1;
+  if (!VulkanOk(vkCreateImageView(device_, &view, nullptr, &texture.view),
+          "vkCreateImageView(texture)", detail)) {
+    DestroyTexture(texture);
+    return false;
+  }
+  texture.bytes = TextureBytes(source);
+  return true;
+}
+
+void GpuScene::DestroyTexture(GpuTexture& texture) {
+  vkDestroyImageView(device_, texture.view, nullptr);
+  vkDestroyImage(device_, texture.image, nullptr);
+  vkFreeMemory(device_, texture.memory, nullptr);
+  texture = GpuTexture{};
+}
+
+std::vector<VkImageView> GpuScene::TextureViews() const {
+  std::vector<VkImageView> views;
+  views.reserve(textures_.size());
+  for (const GpuTexture& texture : textures_) {
+    views.push_back(texture.view);
+  }
+  return views;
 }
 
 bool GpuScene::CreateDeviceBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
@@ -610,16 +832,25 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
                                  : instance_count_ != 0;
   const bool write_materials = !materials_current_ && has_instances;
   if (update.geometry_releases.empty() && update.geometry_uploads.empty() &&
+      update.texture_releases.empty() && update.texture_uploads.empty() &&
       !update.instances_changed && !write_materials) {
     return true;
   }
   for (const MeshGeometry* geometry : update.geometry_releases) {
     Release(geometry);
   }
+  for (const Texture* texture : update.texture_releases) {
+    Release(texture);
+  }
 
-  // Staging holds the geometry uploads, the instance records, the material
-  // table, then the TLAS build input.
+  // Staging holds the texture uploads, the geometry uploads, the instance
+  // records, the material table, then the TLAS build input.
   VkDeviceSize staging_bytes = 0;
+  for (const auto& texture : update.texture_uploads) {
+    staging_bytes = AlignUp(staging_bytes, kTexelAlignment) +
+                    TextureBytes(*texture);
+  }
+  staging_bytes = AlignUp(staging_bytes, kTexelAlignment);
   for (const auto& geometry : update.geometry_uploads) {
     staging_bytes += LayOut(*geometry, index_alignment_).size;
   }
@@ -671,6 +902,37 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
 
   auto* staging = static_cast<std::uint8_t*>(staging_.mapped);
   VkDeviceSize offset = 0;
+  std::vector<std::pair<VkImage, VkBufferImageCopy>> texture_copies;
+  for (const auto& source : update.texture_uploads) {
+    GpuTexture texture;
+    if (!CreateTexture(*source, texture, detail)) {
+      return false;
+    }
+    texture.source = source;
+    offset = AlignUp(offset, kTexelAlignment);
+    std::memcpy(staging + offset, source->texels.data(), texture.bytes);
+    VkBufferImageCopy region{};
+    region.bufferOffset = offset;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {source->width, source->height, 1};
+    texture_copies.push_back({texture.image, region});
+    offset += texture.bytes;
+    stats_.texture_bytes += texture.bytes;
+    std::uint32_t slot = 0;
+    if (free_texture_slots_.empty()) {
+      slot = static_cast<std::uint32_t>(textures_.size());
+      textures_.push_back(std::move(texture));
+    } else {
+      slot = *free_texture_slots_.begin();
+      free_texture_slots_.erase(free_texture_slots_.begin());
+      textures_[slot] = std::move(texture);
+    }
+    texture_slot_of_[source.get()] = slot;
+    ++texture_generation_;
+    ++stats_.texture_uploads;
+  }
+  offset = AlignUp(offset, kTexelAlignment);
   std::vector<std::pair<VkBuffer, VkBufferCopy>> copies;
   for (const auto& source : update.geometry_uploads) {
     Geometry geometry;
@@ -683,6 +945,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     const GeometryLayout layout = LayOut(*source, index_alignment_);
     geometry.index_offset = layout.index_offset;
     geometry.normal_offset = layout.normal_offset;
+    geometry.texcoord_offsets = layout.texcoord_offsets;
     const VkDeviceSize size = layout.size;
     if (!CreateDeviceBuffer(size, geometry_usage, geometry.buffer, detail)) {
       return false;
@@ -695,6 +958,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     if (geometry.normal_offset != 0) {
       std::memcpy(staging + offset + geometry.normal_offset,
           source->normals.data(), source->normals.size() * kVec3Bytes);
+    }
+    std::size_t set = 0;
+    for (const auto& [name, texcoords] : source->texcoords) {
+      (void)name;
+      std::memcpy(staging + offset + geometry.texcoord_offsets[set++],
+          texcoords.data(), texcoords.size() * kVec2Bytes);
     }
     copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
     offset += size;
@@ -791,8 +1060,13 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         if (geometry.normal_offset != 0) {
           record.normals = geometry.buffer.address + geometry.normal_offset;
         }
+        if (instance.texcoords != kNoTexcoords) {
+          record.texcoords = geometry.buffer.address +
+                             geometry.texcoord_offsets[instance.texcoords];
+        }
       }
       record.material_slot = instance.material;
+      record.texcoord_set = instance.texcoords;
       std::memcpy(staging + offset + index * kInstanceBytes, &record,
           kInstanceBytes);
     }
@@ -826,7 +1100,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       }
     }
     for (std::size_t index = 0; index < material_table_.size(); ++index) {
-      const Material& material = material_table_[index];
+      const SceneMaterial& entry = material_table_[index];
+      const Material& material = entry.material;
       GpuMaterialRecord record{};
       std::copy(material.base_color.begin(), material.base_color.end(),
           record.base_color_roughness);
@@ -834,6 +1109,29 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       std::copy(material.emission.begin(), material.emission.end(),
           record.emission_metallic);
       record.emission_metallic[3] = material.metallic;
+      record.texcoord_fallback[0] = material.texcoord_fallback[0];
+      record.texcoord_fallback[1] = material.texcoord_fallback[1];
+      const auto inputs = TextureInputs(material);
+      for (std::size_t input = 0; input < inputs.size(); ++input) {
+        GpuTextureInputRecord& lookup = record.inputs[input];
+        if (!inputs[input]->has_value()) {
+          continue;
+        }
+        const TextureInput& source = **inputs[input];
+        lookup.channel = source.channel;
+        lookup.sampler = static_cast<std::uint32_t>(source.wrap_s) * 4 +
+                         static_cast<std::uint32_t>(source.wrap_t);
+        std::copy(source.scale.begin(), source.scale.end(), lookup.scale);
+        std::copy(source.bias.begin(), source.bias.end(), lookup.bias);
+        std::copy(source.fallback.begin(), source.fallback.end(),
+            lookup.fallback);
+        if (entry.textures[input] == nullptr) {
+          lookup.mode = kFallbackLookup;
+        } else {
+          lookup.mode = kTextureLookup;
+          lookup.texture = texture_slot_of_.at(entry.textures[input]);
+        }
+      }
       std::memcpy(staging + offset + index * kMaterialBytes, &record,
           kMaterialBytes);
     }
@@ -951,10 +1249,41 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     tlas_info.scratchData.deviceAddress = scratch;
   }
 
-  if (!copies.empty() || builds) {
+  const bool copying = !copies.empty() || !texture_copies.empty();
+  if (copying || builds) {
     if (!Flush(staging_, detail) || !BeginCommands(detail)) {
       return false;
     }
+    // New images go to the transfer layout for their copies, then to the
+    // layout the scene passes sample.
+    const auto transition = [&](VkImageLayout from, VkImageLayout to,
+                                VkAccessFlags source_access,
+                                VkAccessFlags destination_access,
+                                VkPipelineStageFlags source_stage,
+                                VkPipelineStageFlags destination_stage) {
+      if (texture_copies.empty()) {
+        return;
+      }
+      std::vector<VkImageMemoryBarrier> barriers;
+      for (const auto& [image, region] : texture_copies) {
+        (void)region;
+        VkImageMemoryBarrier& barrier = barriers.emplace_back();
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcAccessMask = source_access;
+        barrier.dstAccessMask = destination_access;
+        barrier.oldLayout = from;
+        barrier.newLayout = to;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.layerCount = 1;
+      }
+      vkCmdPipelineBarrier(command_, source_stage, destination_stage, 0, 0,
+          nullptr, 0, nullptr, static_cast<std::uint32_t>(barriers.size()),
+          barriers.data());
+    };
     // Each phase's closing timestamp waits for the phase's commands; the
     // barriers between phases keep the next phase from starting earlier.
     const bool timed = timestamps_ != VK_NULL_HANDLE;
@@ -967,9 +1296,21 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       vkCmdResetQueryPool(command_, timestamps_, 0, kTimestampCount);
     }
     stamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0);
+    transition(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT);
+    for (const auto& [image, region] : texture_copies) {
+      vkCmdCopyBufferToImage(command_, staging_.buffer, image,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    }
     for (const auto& [buffer, region] : copies) {
       vkCmdCopyBuffer(command_, staging_.buffer, buffer, 1, &region);
     }
+    // Later submissions sample the textures or copy them back.
+    transition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     // Acceleration-structure builds and later submissions read the scene in
     // shaders, copy it back or overwrite it.
     VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -1042,7 +1383,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       timings_.available = true;
       // A phase with no commands measures only the gap between two
       // timestamps, so it reports 0.
-      timings_.upload_gpu_ms = copies.empty() ? 0.0 : milliseconds(0);
+      timings_.upload_gpu_ms = copying ? milliseconds(0) : 0.0;
       timings_.blas_build_gpu_ms = blas_builds.empty() ? 0.0 : milliseconds(1);
       timings_.tlas_build_gpu_ms = build_tlas ? milliseconds(2) : 0.0;
     }
@@ -1052,6 +1393,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.instance_bytes = instance_count_ * kInstanceBytes;
   stats_.material_count = material_count_;
   stats_.material_bytes = material_count_ * kMaterialBytes;
+  stats_.resident_textures =
+      static_cast<std::uint32_t>(texture_slot_of_.size());
   if (acceleration_) {
     stats_.blas_count = stats_.resident_geometries;
     stats_.tlas_instance_count =
@@ -1067,8 +1410,16 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
   const VkDeviceSize material_bytes = material_count_ * kMaterialBytes;
   const VkDeviceSize tlas_input_bytes =
       tlas_built_ ? tlas_blas_ids_.size() * kTlasInstanceBytes : 0;
-  const VkDeviceSize total = stats_.geometry_bytes + instance_bytes +
-                             material_bytes + tlas_input_bytes;
+  VkDeviceSize total = stats_.geometry_bytes + instance_bytes +
+                       material_bytes + tlas_input_bytes;
+  // The textures follow, each at an aligned offset.
+  std::vector<VkDeviceSize> texture_offsets(textures_.size());
+  for (std::size_t slot = 0; slot < textures_.size(); ++slot) {
+    if (textures_[slot].source) {
+      texture_offsets[slot] = AlignUp(total, kTexelAlignment);
+      total = texture_offsets[slot] + textures_[slot].bytes;
+    }
+  }
   if (total == 0) {
     contents.status = FrameStatus::Pass;
     return true;
@@ -1108,6 +1459,53 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     vkCmdCopyBuffer(command_, tlas_instances_.buffer, readback.buffer, 1,
         &region);
   }
+  // Each texture leaves the sampled layout for its copy and returns to it.
+  std::vector<VkImageMemoryBarrier> to_source;
+  for (const GpuTexture& texture : textures_) {
+    if (!texture.source) {
+      continue;
+    }
+    VkImageMemoryBarrier& image = to_source.emplace_back();
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    image.srcAccessMask = 0;
+    image.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    image.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    image.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    image.image = texture.image;
+    image.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    image.subresourceRange.levelCount = 1;
+    image.subresourceRange.layerCount = 1;
+  }
+  if (!to_source.empty()) {
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+        static_cast<std::uint32_t>(to_source.size()), to_source.data());
+    for (std::size_t slot = 0; slot < textures_.size(); ++slot) {
+      const GpuTexture& texture = textures_[slot];
+      if (!texture.source) {
+        continue;
+      }
+      VkBufferImageCopy region{};
+      region.bufferOffset = texture_offsets[slot];
+      region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      region.imageSubresource.layerCount = 1;
+      region.imageExtent = {texture.source->width, texture.source->height, 1};
+      vkCmdCopyImageToBuffer(command_, texture.image,
+          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
+    }
+    std::vector<VkImageMemoryBarrier> to_sampled = to_source;
+    for (VkImageMemoryBarrier& image : to_sampled) {
+      image.srcAccessMask = 0;
+      image.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      image.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      image.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+        static_cast<std::uint32_t>(to_sampled.size()), to_sampled.data());
+  }
   VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -1141,6 +1539,12 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
       std::memcpy(copy.normals.data(), bytes + offset + geometry.normal_offset,
           copy.normals.size() * kVec3Bytes);
     }
+    for (const VkDeviceSize texcoord_offset : geometry.texcoord_offsets) {
+      auto& set = copy.texcoords.emplace_back(
+          3 * std::size_t{geometry.triangle_count});
+      std::memcpy(set.data(), bytes + offset + texcoord_offset,
+          set.size() * kVec2Bytes);
+    }
     contents.geometries.push_back(std::move(copy));
     offset += geometry.buffer.size;
   }
@@ -1153,6 +1557,7 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
         std::end(record.world_from_object), instance.world_from_object.begin());
     instance.geometry_slot = record.geometry_slot;
     instance.material_slot = record.material_slot;
+    instance.texcoords = record.texcoord_set;
     contents.instances.push_back(instance);
   }
   offset += instance_bytes;
@@ -1160,13 +1565,35 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     GpuMaterialRecord record{};
     std::memcpy(&record, bytes + offset + index * kMaterialBytes,
         kMaterialBytes);
-    Material& material = contents.materials.emplace_back();
+    GpuMaterialContents& entry = contents.materials.emplace_back();
+    Material& material = entry.material;
     std::copy(record.base_color_roughness, record.base_color_roughness + 3,
         material.base_color.begin());
     material.roughness = record.base_color_roughness[3];
     std::copy(record.emission_metallic, record.emission_metallic + 3,
         material.emission.begin());
     material.metallic = record.emission_metallic[3];
+    material.texcoord_fallback = {record.texcoord_fallback[0],
+        record.texcoord_fallback[1]};
+    std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
+        &material.base_color_texture, &material.roughness_texture,
+        &material.metallic_texture, &material.emission_texture};
+    for (std::size_t input = 0; input < inputs.size(); ++input) {
+      const GpuTextureInputRecord& lookup = record.inputs[input];
+      if (lookup.mode == kConstantInput) {
+        continue;
+      }
+      TextureInput& decoded = inputs[input]->emplace();
+      decoded.channel = lookup.channel;
+      decoded.wrap_s = static_cast<TextureWrap>(lookup.sampler / 4);
+      decoded.wrap_t = static_cast<TextureWrap>(lookup.sampler % 4);
+      std::copy(lookup.scale, lookup.scale + 4, decoded.scale.begin());
+      std::copy(lookup.bias, lookup.bias + 4, decoded.bias.begin());
+      std::copy(lookup.fallback, lookup.fallback + 4, decoded.fallback.begin());
+      if (lookup.mode == kTextureLookup) {
+        entry.texture_slots[input] = lookup.texture;
+      }
+    }
   }
   offset += material_bytes;
   for (VkDeviceSize index = 0; index * kTlasInstanceBytes < tlas_input_bytes;
@@ -1186,6 +1613,19 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
         found == slot_of_blas.end() ? kNoSlot : found->second;
     instance.mask = record.mask;
     contents.tlas_instances.push_back(instance);
+  }
+  for (std::size_t slot = 0; slot < textures_.size(); ++slot) {
+    const GpuTexture& texture = textures_[slot];
+    if (!texture.source) {
+      continue;
+    }
+    GpuTextureContents& copy = contents.textures.emplace_back();
+    copy.slot = static_cast<std::uint32_t>(slot);
+    copy.texture.width = texture.source->width;
+    copy.texture.height = texture.source->height;
+    copy.texture.format = texture.source->format;
+    copy.texture.texels.assign(bytes + texture_offsets[slot],
+        bytes + texture_offsets[slot] + texture.bytes);
   }
   DestroyBuffer(device_, readback);
   contents.status = FrameStatus::Pass;

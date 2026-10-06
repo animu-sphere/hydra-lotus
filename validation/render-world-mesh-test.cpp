@@ -2,6 +2,7 @@
 #include <lotus/extraction.hpp>
 
 #include <array>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -206,6 +207,83 @@ int main() try {
   world.SetMesh("/mesh", geometry, instance);
   Check(world.Commit().scene->meshes.at("/mesh").geometry->normals.empty(),
       "removing normals was lost");
+
+  // Texture-coordinate sets are geometry too, one (s, t) per corner.
+  invalid = geometry;
+  invalid.texcoords["st"] = {{{0, 0}}, {{1, 0}}};
+  Reject([&] { world.SetMesh("/mesh", invalid, instance); });
+  invalid.texcoords["st"] = {{{0, 0}}, {{1, 0}},
+      {{0, std::numeric_limits<float>::quiet_NaN()}}};
+  Reject([&] { world.SetMesh("/mesh", invalid, instance); });
+  invalid.texcoords = {{"", {{{0, 0}}, {{1, 0}}, {{0, 1}}}}};
+  Reject([&] { world.SetMesh("/mesh", invalid, instance); });
+  const auto untextured = world.Commit();
+  geometry.texcoords["st"] = {{{0, 0}}, {{1, 0}}, {{0, -2}}};
+  world.SetMesh("/mesh", geometry, instance);
+  const auto uv = world.Commit();
+  Check(uv.revision == untextured.revision + 1 &&
+      uv.scene->meshes.at("/mesh").geometry->texcoords == geometry.texcoords &&
+      untextured.scene->meshes.at("/mesh").geometry->texcoords.empty(),
+      "adding texture coordinates was lost or changed a retained geometry "
+      "buffer");
+
+  // Textures are keyed like materials, and a texture input names one by
+  // key, which need not hold a texture yet.
+  Lotus::Texture texture;
+  texture.width = 2;
+  texture.height = 1;
+  texture.format = Lotus::TextureFormat::Rgba32Float;
+  texture.texels.resize(2 * 16);
+  auto invalid_texture = texture;
+  invalid_texture.texels.pop_back();
+  Reject([&] { world.SetTexture("/tex", invalid_texture); });
+  invalid_texture = texture;
+  invalid_texture.width = 0;
+  invalid_texture.texels.clear();
+  Reject([&] { world.SetTexture("/tex", invalid_texture); });
+  invalid_texture = texture;
+  const float infinity = std::numeric_limits<float>::infinity();
+  std::memcpy(invalid_texture.texels.data() + 4, &infinity, sizeof(float));
+  Reject([&] { world.SetTexture("/tex", invalid_texture); });
+  Reject([&] { world.SetTexture("", texture); });
+  invalid_material = material;
+  invalid_material.base_color_texture = Lotus::TextureInput{};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material.base_color_texture = Lotus::TextureInput{"/tex", 1};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material = material;
+  invalid_material.roughness_texture = Lotus::TextureInput{"/tex", 4};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material.roughness_texture = Lotus::TextureInput{"/tex", 3};
+  invalid_material.roughness_texture->bias[2] =
+      std::numeric_limits<float>::quiet_NaN();
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material = material;
+  invalid_material.texcoord_fallback[1] = infinity;
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  Check(world.Commit().revision == uv.revision,
+      "rejected textures or texture inputs changed the scene revision");
+  material.metallic_texture = Lotus::TextureInput{"/tex", 3};
+  material.texcoords = "st";
+  world.SetMaterial("/paint", material);
+  world.SetTexture("/tex", texture);
+  const auto textured = world.Commit();
+  const auto texels = textured.scene->textures.at("/tex");
+  Check(textured.revision == uv.revision + 1 && *texels == texture &&
+      textured.scene->materials.at("/paint") == material,
+      "a texture or a textured material was lost");
+  world.SetTexture("/tex", texture);
+  Check(world.Commit().scene == textured.scene,
+      "an unchanged texture replaced the scene");
+  world.RemoveTexture("/tex");
+  world.RemoveTexture("/missing");
+  const auto untextured_scene = world.Commit();
+  Check(untextured_scene.scene->textures.empty() &&
+      textured.scene->textures.at("/tex") == texels &&
+      untextured_scene.scene->materials.at("/paint") == material,
+      "removing a texture changed a retained snapshot or its material");
+  geometry.texcoords.clear();
+  world.SetMesh("/mesh", geometry, instance);
 
   world.SetMesh("/other", geometry, instance);
   const auto multiple = world.Commit();

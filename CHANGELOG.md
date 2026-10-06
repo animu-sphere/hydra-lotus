@@ -9,6 +9,24 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Textures (Renderer Phase 1.5). A material input can be a texture lookup
+  (`Lotus::TextureInput`: a texture key, the channel a scalar reads, wrap
+  modes, scale, bias and fallback) that reads the mesh's texture-coordinate
+  set the material names (`MeshGeometry::texcoords`, one (s, t) per
+  triangle corner). `LotusScene::textures` keys decoded `Lotus::Texture`s:
+  8-bit linear, 8-bit sRGB or float. The update plan uploads and releases
+  textures and resolves each lookup's texture (`SceneMaterial`) and each
+  instance's set. The GPU scene keeps one image per texture in a bindless
+  table of 1,024 that the path tracer samples bilinearly, and reads them
+  back. `SceneOutput::Albedo` and `SceneOutput::RoughnessMetallic` render
+  the inputs after the lookups. The Hydra adapter translates `UsdUVTexture`
+  with `UsdPrimvarReader_float2`, decodes images with Hio and reads every
+  float-pair primvar as a texture-coordinate set. `renderer.path.textures`,
+  `renderer.scene.upload` and `lotus-renderer-hydra-texture` (and `-gpu`)
+  check them. The scene passes now also require
+  `descriptorBindingPartiallyBound` and
+  `shaderSampledImageArrayNonUniformIndexing`.
+
 - Authored normals as shading normals (Renderer Phase 1.5).
   `MeshGeometry::normals` holds one object-space normal per triangle
   corner; the GPU scene stores them after the triangles and the instance
@@ -183,6 +201,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   wrapper.
 
 ### Changed
+
+- `SceneUpdate::materials` holds `SceneMaterial`s (a material and the
+  textures its lookups read) and `GpuSceneContents::materials`
+  `GpuMaterialContents` (a material and its lookups' texture slots). The GPU
+  instance record grows from 96 to 112 bytes and the material record from
+  32 to 304. The `ShadingNormal` output is one of three surface-pass
+  diagnostics. `UsdPreviewSurface` inputs driven by a `UsdUVTexture` are
+  translated instead of left at their defaults. The Cornell reference is
+  reproduced bit for bit.
 
 - `SurfaceMaterial` and `RenderWorld::SetMeshMaterial` are replaced by the
   material IR: `SetMaterial`, `RemoveMaterial` and `BindMaterial`.

@@ -35,16 +35,55 @@ struct GpuInstanceRecord {
   // triangle corner; zero when it has none or without acceleration
   // structures.
   std::uint64_t normals;
+  // Device address of the texture-coordinate set the material's lookups
+  // read, two floats per triangle corner; zero when there is none or
+  // without acceleration structures.
+  std::uint64_t texcoords;
+  // That set's index in the geometry's sets, or kNoTexcoords.
+  std::uint32_t texcoord_set;
+  std::uint32_t reserved;
 };
-static_assert(sizeof(GpuInstanceRecord) == 96);
+static_assert(sizeof(GpuInstanceRecord) == 112);
+
+// GpuTextureInputRecord::mode.
+inline constexpr std::uint32_t kConstantInput = 0;
+inline constexpr std::uint32_t kTextureLookup = 1;
+inline constexpr std::uint32_t kFallbackLookup = 2;
+
+// One material input's texture lookup. Its mirror is `TextureInputRecord`
+// in shaders/path_trace.slang.
+struct GpuTextureInputRecord {
+  // The texture table slot a kTextureLookup samples.
+  std::uint32_t texture;
+  // The sampler of its wrap modes: wrap_s * 4 + wrap_t.
+  std::uint32_t sampler;
+  std::uint32_t channel;
+  // kConstantInput, kTextureLookup or kFallbackLookup (the key names no
+  // texture).
+  std::uint32_t mode;
+  float scale[4];
+  float bias[4];
+  float fallback[4];
+};
+static_assert(sizeof(GpuTextureInputRecord) == 64);
 
 // One material table element: the material IR as the scene pass evaluates
-// it. Its mirror is `MaterialRecord` in shaders/path_trace.slang.
+// it. Its mirror is `MaterialRecord` in shaders/path_trace.slang. The inputs
+// are in TextureInputs order.
 struct GpuMaterialRecord {
   float base_color_roughness[4];
   float emission_metallic[4];
+  // The texture coordinates without a set, then two unused floats.
+  float texcoord_fallback[4];
+  GpuTextureInputRecord inputs[kMaterialTextureInputs];
 };
-static_assert(sizeof(GpuMaterialRecord) == 32);
+static_assert(sizeof(GpuMaterialRecord) == 304);
+
+// The texture table: the size of the scene passes' sampled-image array, and
+// so the most textures a GPU scene holds.
+inline constexpr std::uint32_t kMaxTextures = 1024;
+// One sampler per pair of TextureWrap modes.
+inline constexpr std::uint32_t kTextureSamplers = 16;
 
 // Whether a physical device can build acceleration structures, decided
 // before the device is created. When `available`, the device must be
@@ -110,6 +149,13 @@ public:
   [[nodiscard]] VkDeviceAddress MaterialAddress() const {
     return materials_.address;
   }
+  // The texture table: one view per slot, VK_NULL_HANDLE for a free slot.
+  // Views are in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. The generation
+  // changes whenever a view is created or destroyed.
+  [[nodiscard]] std::vector<VkImageView> TextureViews() const;
+  [[nodiscard]] std::uint64_t TextureGeneration() const {
+    return texture_generation_;
+  }
   [[nodiscard]] const std::array<float, 3>& Environment() const {
     return environment_;
   }
@@ -122,8 +168,10 @@ private:
   };
 
   // A geometry buffer holds the positions (three floats each) followed, at
-  // `index_offset`, by the triangles (three uint32 each) and, at
-  // `normal_offset`, by the corner normals (three floats each), if any.
+  // `index_offset`, by the triangles (three uint32 each), at
+  // `normal_offset`, by the corner normals (three floats each), if any, and
+  // at each of `texcoord_offsets`, by a texture-coordinate set (two floats
+  // per corner).
   struct Geometry {
     // Keeps the address that identifies this buffer unique while resident.
     std::shared_ptr<const MeshGeometry> source;
@@ -131,6 +179,7 @@ private:
     VkDeviceSize index_offset = 0;
     // Zero without normals: the positions start the buffer.
     VkDeviceSize normal_offset = 0;
+    std::vector<VkDeviceSize> texcoord_offsets;
     std::uint32_t vertex_count = 0;
     std::uint32_t triangle_count = 0;
     AccelerationStructure blas;
@@ -139,8 +188,23 @@ private:
     std::uint64_t blas_id = 0;
   };
 
+  // A texture's image, in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL once
+  // uploaded, and its view.
+  struct GpuTexture {
+    // Keeps the address that identifies this texture unique while resident.
+    std::shared_ptr<const Texture> source;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDeviceSize bytes = 0;
+  };
+
   bool Validate(const SceneUpdate& update, std::string& detail) const;
   void Release(const MeshGeometry* geometry);
+  void Release(const Texture* texture);
+  bool CreateTexture(const Texture& source, GpuTexture& texture,
+      std::string& detail);
+  void DestroyTexture(GpuTexture& texture);
   bool CreateDeviceBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
       DeviceBuffer& buffer, std::string& detail);
   bool CreateAccelerationStructure(VkAccelerationStructureTypeKHR type,
@@ -167,12 +231,18 @@ private:
   std::vector<Geometry> slots_;
   std::set<std::uint32_t> free_slots_;
   std::unordered_map<const MeshGeometry*, std::uint32_t> slot_of_;
+  // The texture table, slots assigned as the geometry's are.
+  std::vector<GpuTexture> textures_;
+  std::set<std::uint32_t> free_texture_slots_;
+  std::unordered_map<const Texture*, std::uint32_t> texture_slot_of_;
+  std::uint64_t texture_generation_ = 0;
+  VkDeviceSize max_texture_size_ = 0;
   DeviceBuffer instances_;
   std::uint32_t instance_count_ = 0;
   // The plans' material table. It reaches the device with the first
   // instances and with each change after that; until then the device holds
   // no entries.
-  std::vector<Material> material_table_{Material{}};
+  std::vector<SceneMaterial> material_table_{SceneMaterial{}};
   bool materials_current_ = false;
   DeviceBuffer materials_;
   std::uint32_t material_count_ = 0;

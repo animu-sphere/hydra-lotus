@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -102,16 +103,20 @@ struct GpuSceneStats {
   std::uint32_t instance_count = 0;
   // Entries in the material table, the default material included.
   std::uint32_t material_count = 0;
-  // Device bytes of the geometry buffers, of the instances and of the
-  // material table in use.
+  std::uint32_t resident_textures = 0;
+  // Device bytes of the geometry buffers, of the instances, of the
+  // material table in use and of the textures' texels.
   std::uint64_t geometry_bytes = 0;
   std::uint64_t instance_bytes = 0;
   std::uint64_t material_bytes = 0;
-  // Lifetime: geometry buffers created and destroyed, instance buffer and
-  // material table rewrites, upload submissions and bytes copied through
-  // staging. An empty update changes none of them.
+  std::uint64_t texture_bytes = 0;
+  // Lifetime: geometry buffers and textures created and destroyed, instance
+  // buffer and material table rewrites, upload submissions and bytes copied
+  // through staging. An empty update changes none of them.
   std::uint64_t geometry_uploads = 0;
   std::uint64_t geometry_releases = 0;
+  std::uint64_t texture_uploads = 0;
+  std::uint64_t texture_releases = 0;
   std::uint64_t instance_writes = 0;
   std::uint64_t material_writes = 0;
   std::uint64_t upload_submissions = 0;
@@ -144,8 +149,8 @@ struct GpuSceneTimings {
   // False when the call submitted no GPU work or the queue has no timestamp
   // support; the durations are then 0.
   bool available = false;
-  // Copying the staged geometry, instance records, material table and TLAS
-  // build input; 0 when there was nothing to copy.
+  // Copying the staged geometry, textures, instance records, material table
+  // and TLAS build input; 0 when there was nothing to copy.
   double upload_gpu_ms = 0.0;
   // Building the uploaded geometries' BLASes; 0 when there were none.
   double blas_build_gpu_ms = 0.0;
@@ -171,6 +176,8 @@ struct GpuGeometryContents {
   std::vector<std::array<std::uint32_t, 3>> triangles;
   // One per triangle corner, as MeshGeometry::normals; empty without them.
   std::vector<std::array<float, 3>> normals;
+  // Each texture-coordinate set, in MeshGeometry::texcoords key order.
+  std::vector<std::vector<std::array<float, 2>>> texcoords;
 };
 
 struct GpuInstanceContents {
@@ -178,6 +185,30 @@ struct GpuInstanceContents {
   std::uint32_t geometry_slot = 0;
   // The instance's index in GpuSceneContents::materials.
   std::uint32_t material_slot = 0;
+  // The texture-coordinate set its lookups read, as SceneInstance::texcoords.
+  std::uint32_t texcoords = kNoTexcoords;
+};
+
+// A texture as the device holds it. A slot is its index in the GPU scene's
+// texture table, the array the scene passes sample.
+struct GpuTextureContents {
+  std::uint32_t slot = 0;
+  Texture texture;
+};
+
+// GpuMaterialContents::texture_slots for an input that reads no resident
+// texture: a constant, or a lookup that returns its fallback.
+inline constexpr std::uint32_t kNoTextureSlot =
+    std::numeric_limits<std::uint32_t>::max();
+
+// A material table entry as the device holds it. `material` has the
+// constants, the texture inputs with empty keys and no texture-coordinate
+// set name; `texture_slots` has, per TextureInputs entry, the slot of the
+// texture it samples.
+struct GpuMaterialContents {
+  Material material;
+  std::array<std::uint32_t, kMaterialTextureInputs> texture_slots{
+      kNoTextureSlot, kNoTextureSlot, kNoTextureSlot, kNoTextureSlot};
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three
@@ -197,7 +228,9 @@ struct GpuSceneContents {
   std::vector<GpuGeometryContents> geometries;
   std::vector<GpuInstanceContents> instances;
   // The material table the instances index; empty until the first instances.
-  std::vector<Material> materials;
+  std::vector<GpuMaterialContents> materials;
+  // Resident textures in slot order.
+  std::vector<GpuTextureContents> textures;
   // The TLAS build input in instance order; empty without acceleration
   // structures.
   std::vector<GpuTlasInstanceContents> tlas_instances;
@@ -216,6 +249,12 @@ enum class SceneOutput {
   // evaluates the BSDF around at the pixel centre's closest hit (design
   // policy section 25). Not accumulated.
   ShadingNormal,
+  // The base colour, after texture lookups, at the pixel centre's closest
+  // hit, with alpha 1: the albedo diagnostic. Not accumulated.
+  Albedo,
+  // The roughness and metallic, after texture lookups, at the pixel
+  // centre's closest hit, as (roughness, metallic, 0, 1). Not accumulated.
+  RoughnessMetallic,
 };
 
 // The reference path tracer's settings.
@@ -246,8 +285,8 @@ struct PathTracingSettings {
 // back.
 //
 // The renderer also owns the GPU scene: one device-local buffer and one BLAS
-// per resident geometry, an instance buffer and a TLAS, changed only by
-// UpdateScene. RenderScene path-traces them; Render is the bootstrap.
+// per resident geometry, one image per resident texture, an instance buffer,
+// a material table and a TLAS, changed only by UpdateScene. RenderScene path-traces them; Render is the bootstrap.
 class OffscreenRenderer {
 public:
   virtual ~OffscreenRenderer() = default;
@@ -259,7 +298,9 @@ public:
       const OffscreenTarget& target, std::uint32_t frame_count) = 0;
 
   // Ray queries, plus what the scene passes need besides: fragment-stage
-  // storage writes, 64-bit shader integers and RGBA32F colour attachments.
+  // storage writes, 64-bit shader integers, RGBA32F colour attachments,
+  // a partially bound array of sampled textures indexed non-uniformly, and
+  // linear filtering of RGBA32F textures.
   [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
   // Trace the uploaded scene through draw.world_to_clip as the camera (the
   // bootstrap counts are ignored), into RGBA32F colour and D32 depth.
@@ -273,7 +314,7 @@ public:
   // has hit retain the colour attachment. The accumulation restarts when
   // the camera, the target's size or windows, `sample_index`,
   // `max_bounces` or the scene (any nonempty UpdateScene) changes.
-  // Barycentrics and ShadingNormal write the pixel centre's hit with alpha 1
+  // The other outputs write the pixel centre's hit with alpha 1
   // and leave the accumulation as it is.
   //
   // Missing ray-query support returns Skip. A singular camera returns Fail.

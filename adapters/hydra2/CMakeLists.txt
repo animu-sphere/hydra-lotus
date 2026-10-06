@@ -4,9 +4,9 @@ if(NOT LOTUS_WITH_VULKAN)
   message(FATAL_ERROR
     "LOTUS_ENABLE_HYDRA2 requires a Vulkan 1.3 SDK and slangc")
 endif()
-if(NOT TARGET hd OR NOT TARGET plug)
+if(NOT TARGET hd OR NOT TARGET hio OR NOT TARGET plug)
   message(FATAL_ERROR
-    "The OpenUSD package must provide the hd and plug CMake targets")
+    "The OpenUSD package must provide the hd, hio and plug CMake targets")
 endif()
 
 # The co-built runtime is implementation detail of the module. It is not an
@@ -20,6 +20,7 @@ target_link_libraries(lotus-hydra2-runtime
   PRIVATE
     Lotus::RenderExtraction
     Lotus::Vulkan
+    hio
     ${CMAKE_DL_LIBS})
 target_compile_features(lotus-hydra2-runtime PUBLIC cxx_std_20)
 target_compile_definitions(lotus-hydra2-runtime PRIVATE
@@ -144,6 +145,13 @@ if(LOTUS_BUILD_TESTS)
   target_compile_definitions(lotus-hydra2-normals-test PRIVATE
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 
+  add_executable(lotus-hydra2-texture-test tests/texture_test.cpp)
+  target_link_libraries(lotus-hydra2-texture-test
+    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf hio)
+  target_compile_definitions(lotus-hydra2-texture-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-texture-test hdLotus)
+
   add_executable(lotus-hydra2-deterministic-test tests/deterministic_test.cpp)
   target_link_libraries(lotus-hydra2-deterministic-test
     PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
@@ -190,11 +198,16 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-material-test --gpu)
   add_test(NAME lotus-renderer-hydra-normals
     COMMAND lotus-hydra2-normals-test)
+  add_test(NAME lotus-renderer-hydra-texture
+    COMMAND lotus-hydra2-texture-test)
+  add_test(NAME lotus-renderer-hydra-texture-gpu
+    COMMAND lotus-hydra2-texture-test --gpu)
   set_tests_properties(
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
     lotus-renderer-hydra-material-gpu
+    lotus-renderer-hydra-texture-gpu
     PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
   set_tests_properties(
     lotus-renderer-plugin-discovery
@@ -209,6 +222,8 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-material
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-normals
+    lotus-renderer-hydra-texture
+    lotus-renderer-hydra-texture-gpu
     PROPERTIES ENVIRONMENT_MODIFICATION
       "${_lotus_pxr_runtime_modifications}")
 
