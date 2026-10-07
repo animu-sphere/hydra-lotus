@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Constant `displayColor` fallback for Hydra meshes without a material
+  binding, including indexed colours and live colour edits. Authored
+  materials take priority; missing or unusable colours keep the default
+  grey. Private fallback materials are released on binding, colour removal
+  and mesh removal. The Hydra material CPU and GPU tests cover these
+  transitions and rendered radiance.
+
 - Textures (Renderer Phase 1.5). A material input can be a texture lookup
   (`Lotus::TextureInput`: a texture key, the channel a scalar reads, wrap
   modes, scale, bias and fallback) that reads the mesh's texture-coordinate

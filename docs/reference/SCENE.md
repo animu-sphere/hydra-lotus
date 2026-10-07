@@ -545,8 +545,8 @@ Every other primvar whose values are float pairs (`float2`, `double2` or
 `half2`, such as `texCoord2f[] primvars:st`) becomes a texture-coordinate
 set of its name, expanded to corners in the same way, indexed ones
 flattened; one that cannot be used warns and is left out. `points`,
-`displayColor`, `displayOpacity` and `widths` are not read. They are read
-with the normals.
+`displayOpacity` and `widths` are not read. Texture-coordinate sets and
+constant `displayColor` are read with the normals.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -707,8 +707,19 @@ returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.
 `opacity`, `opacityThreshold`, `normal`, `ior`, `specularColor`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
-read, and a mesh without a binding does not fall back to its
-`displayColor`.
+read.
+
+A mesh without a material binding uses its constant `displayColor` as
+linear RGB base colour, with components clamped to [0, 1], and the other
+material defaults. The adapter stores this private material under the
+mesh's `lotus:displayColor` property path, which cannot collide with a
+material prim path. Indexed constants are supported; absent, empty,
+malformed or non-finite colours use the default grey. Other interpolation
+modes are not supported and warn. Authored bindings always win, including
+missing or unsupported materials. Primvar edits update the colour, and
+binding a surface, removing the colour or removing the mesh releases the
+private material. CTest `lotus-renderer-hydra-material` and its `-gpu`
+variant check these transitions and the rendered radiance.
 
 The adapter decodes each image a material names with Hio
 (`HioImage::OpenForReading` under the source colour space) when the first
