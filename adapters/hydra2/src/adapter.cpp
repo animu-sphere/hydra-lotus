@@ -409,19 +409,22 @@ public:
     world_.SetEnvironment(kFallbackEnvironment);
   }
 
-  // A mesh's material binding is the bound material's SdfPath string.
+  // A mesh's material binding is the bound material's SdfPath string, or
+  // a private material for its constant displayColor when it is unbound.
   void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
-      const Lotus::MeshInstance& instance, const SdfPath& material) {
+      const Lotus::MeshInstance& instance, const SdfPath& material,
+      const std::optional<std::array<float, 3>>& display_color) {
     std::scoped_lock lock(mutex_);
     world_.SetMesh(id.GetString(), std::move(geometry), instance);
-    world_.BindMaterial(id.GetString(), material.GetString());
+    BindMeshMaterial(id, material, display_color);
   }
 
   void SyncInstance(const SdfPath& id, const Lotus::MeshInstance& instance,
-      const SdfPath& material) {
+      const SdfPath& material,
+      const std::optional<std::array<float, 3>>& display_color) {
     std::scoped_lock lock(mutex_);
     world_.SetMeshInstance(id.GetString(), instance);
-    world_.BindMaterial(id.GetString(), material.GetString());
+    BindMeshMaterial(id, material, display_color);
   }
 
   // Stores the material IR under the material's path, with the textures its
@@ -460,6 +463,7 @@ public:
   void RemoveMesh(const SdfPath& id) {
     std::scoped_lock lock(mutex_);
     world_.RemoveMesh(id.GetString());
+    world_.RemoveMaterial(DisplayColorMaterialKey(id));
   }
 
   Lotus::FrameSnapshot GetFrameSnapshot() {
@@ -586,6 +590,27 @@ public:
   }
 
 private:
+  // A property path cannot collide with an authored material prim path.
+  static std::string DisplayColorMaterialKey(const SdfPath& id) {
+    return id.AppendProperty(TfToken("lotus:displayColor")).GetString();
+  }
+
+  // Called with mutex_ held. Authored bindings always win, including ones
+  // whose material is missing or unsupported and uses the default surface.
+  void BindMeshMaterial(const SdfPath& id, const SdfPath& material,
+      const std::optional<std::array<float, 3>>& display_color) {
+    const std::string key = DisplayColorMaterialKey(id);
+    if (material.IsEmpty() && display_color) {
+      Lotus::Material fallback;
+      fallback.base_color = *display_color;
+      world_.SetMaterial(key, fallback);
+      world_.BindMaterial(id.GetString(), key);
+    } else {
+      world_.BindMaterial(id.GetString(), material.GetString());
+      world_.RemoveMaterial(key);
+    }
+  }
+
   // Drops the material's hold on the textures it named.
   void ReleaseTextures(const SdfPath& id) {
     const auto found = material_textures_.find(id);
@@ -890,9 +915,10 @@ public:
     }
     try {
       if (geometry_dirty) {
-        state_->SyncMesh(GetId(), ExtractGeometry(), instance_, GetMaterialId());
+        state_->SyncMesh(GetId(), ExtractGeometry(), instance_, GetMaterialId(),
+            display_color_);
       } else {
-        state_->SyncInstance(GetId(), instance_, GetMaterialId());
+        state_->SyncInstance(GetId(), instance_, GetMaterialId(), display_color_);
       }
       initialized_ = true;
     } catch (const std::invalid_argument& error) {
@@ -947,20 +973,25 @@ private:
     HdInterpolation interpolation = HdInterpolationConstant;
   };
 
-  // Reads the authored `normals` primvar and every other primvar of float
-  // pairs, the texture-coordinate sets, by name. An index out of range
+  // Reads constant displayColor, the authored `normals` primvar and every
+  // other primvar of float pairs, the texture-coordinate sets, by name.
+  // An index out of range
   // leaves the values unflattened, which CornerValues then rejects by their
   // count.
   void ReadPrimvars(HdSceneDelegate* delegate) {
     normals_ = PrimvarValues{};
     texcoords_.clear();
+    display_color_.reset();
     for (const HdInterpolation interpolation :
         {HdInterpolationConstant, HdInterpolationUniform, HdInterpolationVarying,
             HdInterpolationVertex, HdInterpolationFaceVarying}) {
       for (const HdPrimvarDescriptor& primvar :
           GetPrimvarDescriptors(delegate, interpolation)) {
+        if (primvar.name == HdTokens->displayColor) {
+          ReadDisplayColor(delegate, primvar, interpolation);
+          continue;
+        }
         if (primvar.name == HdTokens->points ||
-            primvar.name == HdTokens->displayColor ||
             primvar.name == HdTokens->displayOpacity ||
             primvar.name == HdTokens->widths) {
           continue;
@@ -975,6 +1006,53 @@ private:
         }
       }
     }
+  }
+
+  // Only one constant linear RGB colour is supported. Validate indices
+  // before selecting a value, so a malformed indexed constant cannot use
+  // an unindexed value by accident.
+  void ReadDisplayColor(HdSceneDelegate* delegate,
+      const HdPrimvarDescriptor& primvar, HdInterpolation interpolation) {
+    const auto unusable = [&](const char* reason) {
+      TF_WARN("Lotus ignores the displayColor of %s: %s", GetId().GetText(), reason);
+    };
+    if (interpolation != HdInterpolationConstant) {
+      unusable("only constant interpolation is supported");
+      return;
+    }
+    VtIntArray indices;
+    const VtValue value = primvar.indexed
+                              ? GetIndexedPrimvar(delegate, primvar.name, &indices)
+                              : GetPrimvar(delegate, primvar.name);
+    if (value.IsEmpty()) {
+      return;
+    }
+    if (!value.IsHolding<VtVec3fArray>()) {
+      unusable("expected float triples");
+      return;
+    }
+    const auto& colors = value.UncheckedGet<VtVec3fArray>();
+    std::size_t index = 0;
+    if (!indices.empty()) {
+      if (indices.size() != 1 || indices[0] < 0 ||
+          static_cast<std::size_t>(indices[0]) >= colors.size()) {
+        unusable("expected one valid constant index");
+        return;
+      }
+      index = static_cast<std::size_t>(indices[0]);
+    } else if (colors.size() != 1) {
+      if (!colors.empty()) unusable("expected one constant value");
+      return;
+    }
+    std::array<float, 3> color{};
+    for (std::size_t c = 0; c < color.size(); ++c) {
+      if (!std::isfinite(colors[index][c])) {
+        unusable("a value is not finite");
+        return;
+      }
+      color[c] = std::clamp(colors[index][c], 0.0F, 1.0F);
+    }
+    display_color_ = color;
   }
 
   // The primvar's value, with an indexed primvar's indices applied.
@@ -1220,6 +1298,7 @@ private:
   PrimvarValues normals_;
   // The float-pair primvars by name.
   std::map<std::string, PrimvarValues> texcoords_;
+  std::optional<std::array<float, 3>> display_color_;
   Lotus::MeshInstance instance_;
   bool initialized_ = false;
 };

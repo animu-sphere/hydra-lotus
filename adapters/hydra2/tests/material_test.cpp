@@ -18,6 +18,7 @@
 #include <pxr/imaging/hd/task.h>
 #include <pxr/imaging/hd/tokens.h>
 #include <pxr/usd/sdf/layer.h>
+#include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/relationship.h>
 #include <pxr/usd/usd/stage.h>
@@ -131,6 +132,9 @@ def Mesh "Glowing" (
 )
 {
     rel material:binding = </Looks/Glow>
+    color3f[] primvars:displayColor = [(0, 1, 0)] (
+        interpolation = "constant"
+    )
     int[] faceVertexCounts = [4]
     int[] faceVertexIndices = [0, 1, 2, 3]
     point3f[] points = [(0, -1, 0), (1, -1, 0), (1, 1, 0), (0, 1, 0)]
@@ -430,7 +434,7 @@ int main(int argc, char** argv) try {
   }
 
   // A new binding.
-  const UsdPrim unbound = stage->GetPrimAtPath(SdfPath("/Unbound"));
+  UsdPrim unbound = stage->GetPrimAtPath(SdfPath("/Unbound"));
   unbound.AddAppliedSchema(TfToken("MaterialBindingAPI"));
   unbound.CreateRelationship(TfToken("material:binding"))
       .SetTargets({SdfPath("/Looks/Glow")});
@@ -453,6 +457,85 @@ int main(int argc, char** argv) try {
     Check(delegate.GetGpuSceneStats().material_count == 5,
         "the GPU material table kept the removed material");
   }
+
+  // A bound surface wins over displayColor. Removing the binding reveals
+  // the mesh's constant colour, including subsequent edits and indexing.
+  const auto display_color = unbound.CreateAttribute(
+      TfToken("primvars:displayColor"), SdfValueTypeNames->Color3fArray);
+  display_color.SetMetadata(TfToken("interpolation"), VtValue(TfToken("constant")));
+  display_color.Set(VtVec3fArray{GfVec3f(0.25F, 0.5F, 0.75F)});
+  const Lotus::FrameSnapshot bound_color = sync();
+  Check(binding(bound_color, "/Unbound") == "/Looks/Glow" &&
+            bound_color.scene->materials.size() == removed.scene->materials.size(),
+      "displayColor overrode a bound surface or left an unused material");
+  unbound.GetRelationship(TfToken("material:binding")).ClearTargets(true);
+  const auto expect_color = [&](const char* step,
+                                const std::array<float, 3>& expected) {
+    const Lotus::FrameSnapshot snapshot = sync();
+    const auto found = snapshot.scene->materials.find(binding(snapshot, "/Unbound"));
+    Check(found != snapshot.scene->materials.end(),
+        std::string(step) + ": displayColor has no material");
+    Expect(step, found->second, MakeMaterial(expected, 0.5F, 0, {0, 0, 0}));
+    Check(snapshot.scene->meshes.at("/Unbound").geometry ==
+              first.scene->meshes.at("/Unbound").geometry,
+        std::string(step) + ": a colour edit replaced the geometry");
+    if (gpu) ExpectRadiance(step, color, 1, expected);
+    return snapshot;
+  };
+  const auto colored = expect_color("constant displayColor", {0.25F, 0.5F, 0.75F});
+  const std::string color_material = binding(colored, "/Unbound");
+  display_color.Set(VtVec3fArray{GfVec3f(0.75F, 0.25F, 0.125F)});
+  expect_color("displayColor edit", {0.75F, 0.25F, 0.125F});
+  display_color.Set(VtVec3fArray{GfVec3f(1.5F, -0.25F, 0.5F)});
+  expect_color("clamped displayColor", {1, 0, 0.5F});
+
+  unbound.GetRelationship(TfToken("material:binding"))
+      .SetTargets({SdfPath("/Looks/Glow")});
+  const auto color_rebound = sync();
+  Check(binding(color_rebound, "/Unbound") == "/Looks/Glow" &&
+            !color_rebound.scene->materials.contains(color_material),
+      "binding a surface did not release the displayColor material");
+  display_color.Set(VtVec3fArray{GfVec3f(0.125F, 0.75F, 0.25F)});
+  sync();
+  unbound.GetRelationship(TfToken("material:binding")).ClearTargets(true);
+  expect_color("removed binding", {0.125F, 0.75F, 0.25F});
+
+  const auto expect_default = [&](const char* step) {
+    const auto snapshot = sync();
+    Check(binding(snapshot, "/Unbound").empty() &&
+              !snapshot.scene->materials.contains(color_material),
+        std::string(step) + ": did not release the displayColor material");
+    if (gpu) ExpectRadiance(step, color, 1, {0.18F, 0.18F, 0.18F});
+  };
+  display_color.Set(VtVec3fArray{GfVec3f(std::numeric_limits<float>::quiet_NaN())});
+  expect_default("non-finite displayColor");
+  display_color.Set(VtVec3fArray{});
+  expect_default("empty displayColor");
+  display_color.Set(VtVec3fArray{GfVec3f(0.25F), GfVec3f(0.75F)});
+  expect_default("invalid constant count");
+  display_color.Set(VtVec3fArray{GfVec3f(0.25F)});
+  display_color.SetMetadata(TfToken("interpolation"), VtValue(TfToken("vertex")));
+  expect_default("unsupported displayColor interpolation");
+  display_color.SetMetadata(TfToken("interpolation"), VtValue(TfToken("constant")));
+  const auto color_indices = unbound.CreateAttribute(
+      TfToken("primvars:displayColor:indices"), SdfValueTypeNames->IntArray);
+  color_indices.Set(VtIntArray{3});
+  expect_default("invalid displayColor index");
+  display_color.Set(VtVec3fArray{GfVec3f(0.25F), GfVec3f(0.5F, 0.125F, 0.75F)});
+  color_indices.Set(VtIntArray{1});
+  expect_color("indexed constant displayColor", {0.5F, 0.125F, 0.75F});
+  unbound.RemoveProperty(TfToken("primvars:displayColor:indices"));
+  unbound.RemoveProperty(TfToken("primvars:displayColor"));
+  expect_default("removed displayColor");
+  const auto replacement_color = unbound.CreateAttribute(
+      TfToken("primvars:displayColor"), SdfValueTypeNames->Color3fArray);
+  replacement_color.Set(VtVec3fArray{GfVec3f(0.25F, 0.5F, 0.75F)});
+  expect_color("reauthored displayColor", {0.25F, 0.5F, 0.75F});
+  stage->RemovePrim(SdfPath("/Unbound"));
+  const auto removed_mesh = sync();
+  Check(!removed_mesh.scene->meshes.contains("/Unbound") &&
+            !removed_mesh.scene->materials.contains(color_material),
+      "removing a mesh left its displayColor material");
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';
