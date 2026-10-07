@@ -40,8 +40,9 @@ struct MeshGeometry {
   std::vector<std::array<float, 3>> positions;
   std::vector<std::array<std::uint32_t, 3>> triangles;
   std::vector<std::uint32_t> source_faces;
-  // Authored object-space shading normals, one per triangle corner: corner k
-  // of triangle t is normals[3 * t + k]. Empty means none, and the surface
+  // Object-space shading normals, authored or computed by the host, one per
+  // triangle corner: normals[3 * t + k] is corner k of triangle t.
+  // Empty means none, and the surface
   // shades with its geometric normal. They need not be unit length; a zero
   // normal shades with the geometric normal too.
   std::vector<std::array<float, 3>> normals;
