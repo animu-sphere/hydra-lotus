@@ -33,7 +33,9 @@
 #include <pxr/imaging/hd/renderPassState.h>
 #include <pxr/imaging/hd/resourceRegistry.h>
 #include <pxr/imaging/hd/rprimCollection.h>
+#include <pxr/imaging/hd/smoothNormals.h>
 #include <pxr/imaging/hd/tokens.h>
+#include <pxr/imaging/hd/vertexAdjacency.h>
 #include <pxr/imaging/hio/image.h>
 #include <pxr/imaging/hio/types.h>
 
@@ -1160,6 +1162,10 @@ private:
     Lotus::MeshGeometry geometry;
     geometry.positions.reserve(points_.size());
     for (const GfVec3f& point : points_) {
+      if (!std::isfinite(point[0]) || !std::isfinite(point[1]) ||
+          !std::isfinite(point[2])) {
+        throw std::invalid_argument("mesh positions must be finite");
+      }
       geometry.positions.push_back({point[0], point[1], point[2]});
     }
     geometry.triangles.reserve(triangles.size());
@@ -1175,11 +1181,34 @@ private:
     }
     geometry.normals =
         CornerValues<3>(normals_, "normals", triangles, primitive_params);
+    // Storm's coarse smooth normals, before triangulation: each vertex's
+    // incident polygon corners contribute their edge cross products. This
+    // preserves polygon weighting and handles left-handed orientation. As
+    // in Storm, hole faces contribute to adjacency although not rendered.
+    // Usable authored normals always win; none and bilinear stay faceted.
+    if (geometry.normals.empty() && !triangles.empty() &&
+        topology_.GetScheme() != TfToken("none") &&
+        topology_.GetScheme() != TfToken("bilinear")) {
+      if (points_.size() > static_cast<std::size_t>(
+                               std::numeric_limits<int>::max())) {
+        throw std::invalid_argument("too many points for smooth normals");
+      }
+      Hd_VertexAdjacency adjacency;
+      adjacency.BuildAdjacencyTable(&topology_);
+      VtVec3fArray smooth = Hd_SmoothNormals::ComputeSmoothNormals(
+          &adjacency, static_cast<int>(points_.size()), points_.cdata());
+      // The helper stops at the last topology index. Unreferenced trailing
+      // points still need values for our vertex-primvar count check.
+      smooth.resize(points_.size(), GfVec3f(0));
+      geometry.normals = CornerValues<3>(
+          PrimvarValues{VtValue(std::move(smooth)), HdInterpolationVertex},
+          "computed normals", triangles, primitive_params);
+    }
     for (const auto& [name, values] : texcoords_) {
-      auto corners = CornerValues<2>(values,
+      auto texcoord_corners = CornerValues<2>(values,
           "texture coordinates " + name, triangles, primitive_params);
-      if (!corners.empty()) {
-        geometry.texcoords[name] = std::move(corners);
+      if (!texcoord_corners.empty()) {
+        geometry.texcoords[name] = std::move(texcoord_corners);
       }
     }
     return geometry;

@@ -129,8 +129,12 @@ Against the scope of
   are reproduced bit for bit
   ([scene reference](../reference/SCENE.md#path-tracing),
   [evidence](../reports/2026-10-06-authored-normals.md)).
-- ⬜ **Computed normals.** Smooth normals for meshes without authored ones
-  whose subdivision scheme asks for a smooth surface, as Storm computes.
+- ✅ **Computed normals.** Storm's coarse smooth normals for meshes without
+  usable authored ones whose subdivision scheme is neither `none` nor
+  `bilinear`; updated on point and topology edits, with authored normals
+  taking priority ([scene reference](../reference/SCENE.md#hydra-extraction),
+  [evidence](../reports/2026-10-07-computed-normals.md)). Subdivision refinement,
+  limit normals and crease evaluation remain unsupported.
 - ⬜ **Normal maps.** `UsdPreviewSurface`'s `normal` input: a texture
   lookup in tangent space, which needs tangent frames from the texture
   coordinates.

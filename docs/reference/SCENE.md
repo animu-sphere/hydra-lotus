@@ -13,7 +13,7 @@ a `SceneMesh` record. Keys iterate in deterministic order.
 
 - `MeshGeometry` contains object-space float positions, uint32 triangle
   indices and one authored coarse-face index per triangle (`source_faces`).
-  Its optional `normals` are authored object-space shading normals, one
+  Its optional `normals` are object-space shading normals, one
   per triangle corner (corner `k` of triangle `t` at `3t + k`), so every
   interpolation a host has reaches the core the same way. They need not be
   unit length; empty means the surface shades with its geometric normal.
@@ -364,11 +364,11 @@ one brute-force camera path per pixel per sample, with no light sampling.
   wrap modes, at (s, 1 - t), since texture rows run from the top. The
   results replace the constants before the BSDF is built. A material
   without lookups reads no texture coordinates.
-- **Shading normal.** With authored normals, the hit triangle's corner
+- **Shading normal.** With supplied normals, the hit triangle's corner
   normals are interpolated with the barycentrics, transformed by the
   cofactor matrix of the transform's linear part (the inverse transpose up
   to a scale) and normalized, then turned to the geometric normal's side.
-  The geometric normal stands in without authored normals, where the
+  The geometric normal stands in without supplied normals, where the
   interpolated normal vanishes, and where the shading normal faces away
   from the incoming ray, which the BSDF could not reflect. The BSDF is
   sampled and evaluated around the shading normal; ray origins are still
@@ -521,10 +521,25 @@ triangulated by `HdMeshUtil` the way the faces are, holes and orientation
 included. Indexed primvars are flattened. Normals whose count does not
 match their interpolation, with an index out of range, of another type
 than float triples or with a non-finite value are ignored with a warning,
-and the mesh renders with geometric normals. A mesh without authored
-normals is not given computed ones, whatever its subdivision scheme, so a
-coarse mesh shades faceted. Normals are read when the normals or the
-primvars are dirty.
+and the mesh uses the same fallback as one without authored normals.
+Authored normals are read when the normals or the primvars are dirty.
+
+Without usable authored normals, a mesh whose subdivision scheme is neither
+`none` nor `bilinear` receives Storm's coarse smooth normals, using
+`Hd_VertexAdjacency` and `Hd_SmoothNormals` from `hd`. Each point's incident
+polygon corners contribute their edge cross products before triangulation;
+the sum is normalized and expanded to triangle corners. Left-handed
+orientation reverses the contributions. As in Storm, hole faces contribute
+to adjacency even though they are not traced. Unreferenced points and
+degenerate corners contribute zero; a vanishing interpolated normal uses
+the geometric normal in the shader. Point and topology edits recompute the
+normals, including scheme, orientation and hole changes; removing authored
+normals restores the fallback. Usable authored normals win on every scheme.
+This smooths the coarse mesh; it does not refine subdivision surfaces or
+evaluate limit normals or subdivision creases. `none` and `bilinear` without
+authored normals retain geometric shading normals. The UsdImaging test
+compares the generated corners with an independent double-precision oracle
+([evidence](../reports/2026-10-07-computed-normals.md)).
 
 Every other primvar whose values are float pairs (`float2`, `double2` or
 `half2`, such as `texCoord2f[] primvars:st`) becomes a texture-coordinate
