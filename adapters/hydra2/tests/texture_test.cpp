@@ -179,6 +179,26 @@ void TranslatorCases() {
                 translation.connected_inputs.end(), TfToken("normal")) !=
                 translation.connected_inputs.end(),
       "a scalar normal connection was not reported as untranslated");
+
+  parameters[TfToken("opacity")] = VtValue(-0.5F);
+  parameters[TfToken("opacityThreshold")] = VtValue(1.5F);
+  translation = HdLotusTranslateMaterial(map);
+  Check(translation.material.opacity == 0 && translation.material.opacity_threshold == 1,
+      "opacity constants were not clamped");
+  parameters[TfToken("opacity")] = VtValue(std::numeric_limits<float>::quiet_NaN());
+  parameters[TfToken("opacityThreshold")] = VtValue(std::numeric_limits<float>::infinity());
+  translation = HdLotusTranslateMaterial(map);
+  Check(translation.material.opacity == 1 && translation.material.opacity_threshold == 0,
+      "non-finite opacity constants did not keep defaults");
+  network.relationships.push_back({SdfPath("/Material/Albedo"), TfToken("a"), surface, TfToken("opacity")});
+  translation = HdLotusTranslateMaterial(map);
+  albedo.channel = 3;
+  Check(translation.material.opacity_texture == albedo && translation.textures.size() == 1,
+      "an alpha lookup was not translated or its shared image was duplicated");
+  network.relationships.back().outputName = TfToken("rgb");
+  translation = HdLotusTranslateMaterial(map);
+  Check(!translation.material.opacity_texture && translation.material.opacity == 1,
+      "a colour connection was accepted as scalar opacity");
 }
 
 // Writes an 8-bit PNG of `channels` channels, rows from the top.
@@ -360,6 +380,70 @@ def Mesh "Wall" (prepend apiSchemas = ["MaterialBindingAPI"])
     int[] faceVertexCounts = [4]
     int[] faceVertexIndices = [0, 1, 2, 3]
     point3f[] points = [(6, -20, -0.5), (6, 20, -0.5), (6, 20, -10), (6, -20, -10)]
+}
+)usda";
+
+constexpr const char* kOpacityStage = R"usda(#usda 1.0
+def Scope "Looks"
+{
+    def Material "Cutout"
+    {
+        token outputs:surface.connect = </Looks/Cutout/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0, 0, 0)
+            color3f inputs:emissiveColor = (4, 0, 0)
+            float inputs:opacity.connect = </Looks/Cutout/Alpha.outputs:a>
+            float inputs:opacityThreshold = 0.5
+            token outputs:surface
+        }
+        def Shader "Alpha"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @alpha.png@
+            float2 inputs:st.connect = </Looks/Cutout/Reader.outputs:result>
+            token inputs:wrapS = "clamp"
+            token inputs:wrapT = "clamp"
+            float4 inputs:fallback = (0, 0, 0, 0.5)
+            float4 inputs:scale = (1, 1, 1, 1)
+            float outputs:a
+        }
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+    def Material "Back"
+    {
+        token outputs:surface.connect = </Looks/Back/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0, 0, 0)
+            color3f inputs:emissiveColor = (0, 2, 1)
+            token outputs:surface
+        }
+    }
+}
+def Mesh "Quad" (prepend apiSchemas = ["MaterialBindingAPI"])
+{
+    rel material:binding = </Looks/Cutout>
+    uniform token subdivisionScheme = "none"
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(-1, -1, -0.5), (1, -1, -0.5), (1, 1, -0.5), (-1, 1, -0.5)]
+    texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (interpolation = "faceVarying")
+}
+def Mesh "Back" (prepend apiSchemas = ["MaterialBindingAPI"])
+{
+    rel material:binding = </Looks/Back>
+    uniform token subdivisionScheme = "none"
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(-1, -1, 0.5), (1, -1, 0.5), (1, 1, 0.5), (-1, 1, 0.5)]
 }
 )usda";
 
@@ -671,6 +755,83 @@ int main(int argc, char** argv) try {
             disconnected.scene->textures.empty(),
       "disconnecting the normal input kept its image");
   expect_normal_radiance({1, 1, 1});
+  WritePng(directory / "alpha.png", 2, 1, 4, {255, 255, 255, 0, 255, 255, 255, 255});
+  WritePng(directory / "alpha-reversed.png", 2, 1, 4, {255, 255, 255, 255, 255, 255, 255, 0});
+  Check(stage->GetRootLayer()->ImportFromString(kOpacityStage), "could not replace the stage with the alpha scene");
+  const auto masked = sync();
+  const auto alpha_image = Find(masked, "alpha.png", "auto");
+  const auto& cutout = masked.scene->materials.at("/Looks/Cutout");
+  Check(cutout.opacity_texture && cutout.opacity_texture->channel == 3 &&
+            cutout.texcoords == "st" && cutout.opacity_threshold == 0.5F && alpha_image,
+      "the stage alpha lookup and threshold did not reach the IR");
+  const auto expect_mask = [&](int mode) {
+    if (!gpu) return;
+    const auto* data = static_cast<const float*>(color.Map());
+    Check(data != nullptr, "could not map the alpha colour buffer");
+    for (int p = 0; p < kSize * kSize; ++p) {
+      const bool front = mode == 2 || (mode == 0 ? p % kSize >= kSize / 2 : p % kSize < kSize / 2);
+      const std::array<float, 4> expected = front ? std::array<float, 4>{4, 0, 0, 1} : std::array<float, 4>{0, 2, 1, 1};
+      for (int c = 0; c < 4; ++c)
+        Check(std::isfinite(data[p * 4 + c]) && std::abs(data[p * 4 + c] - expected[c]) < 1e-4F,
+            "alpha-masked colour differs at pixel " + std::to_string(p));
+    }
+    color.Unmap();
+  };
+  expect_mask(0);
+  const auto alpha_shader = stage->GetPrimAtPath(SdfPath("/Looks/Cutout/Alpha"));
+  alpha_shader.GetAttribute(TfToken("inputs:file")).Set(SdfAssetPath("alpha-reversed.png"));
+  const auto alpha_edited = sync();
+  Check(alpha_edited.scene->meshes.at("/Quad").geometry == masked.scene->meshes.at("/Quad").geometry &&
+            !Find(alpha_edited, "alpha.png", "auto") && Find(alpha_edited, "alpha-reversed.png", "auto"),
+      "an alpha-image edit did not replace only the image");
+  expect_mask(1);
+  const auto opacity_surface = stage->GetPrimAtPath(SdfPath("/Looks/Cutout/Surface"));
+  opacity_surface.GetAttribute(TfToken("inputs:opacityThreshold")).Set(0.25F);
+  const auto threshold_edited = sync();
+  Check(threshold_edited.scene->materials.at("/Looks/Cutout").opacity_threshold == 0.25F &&
+            Find(threshold_edited, "alpha-reversed.png", "auto") == Find(alpha_edited, "alpha-reversed.png", "auto"),
+      "a threshold edit did not keep its image");
+  opacity_surface.GetAttribute(TfToken("inputs:opacityThreshold")).Set(0.5F);
+  alpha_shader.GetAttribute(TfToken("inputs:file")).Set(SdfAssetPath("missing-alpha.png"));
+  alpha_shader.GetAttribute(TfToken("inputs:scale")).Set(GfVec4f(0));
+  const auto missing_alpha = sync();
+  Check(missing_alpha.scene->textures.empty(), "a missing alpha image kept a resident image");
+  expect_mask(2); // Unscaled fallback is exactly the threshold.
+  auto opacity_attribute = opacity_surface.GetAttribute(TfToken("inputs:opacity"));
+  opacity_attribute.ClearConnections();
+  opacity_attribute.Set(1.0F);
+  const auto opaque_again = sync();
+  Check(!opaque_again.scene->materials.at("/Looks/Cutout").opacity_texture &&
+            opaque_again.scene->textures.empty() &&
+            opaque_again.scene->meshes.at("/Quad").geometry == masked.scene->meshes.at("/Quad").geometry,
+      "disconnecting alpha changed geometry or kept a lookup");
+  expect_mask(2);
+  // Continuous coverage through Hydra: emission and the background surface
+  // form an analytic Bernoulli mixture. Use all pixels, not a chosen seed's
+  // individual decisions, and bound the mean by five standard errors.
+  opacity_surface.GetAttribute(TfToken("inputs:opacityThreshold")).Set(0.0F);
+  opacity_attribute.Set(0.25F);
+  delegate.SetRenderSetting(HdRenderSettingsTokens->convergedSamplesPerPixel, VtValue(64));
+  for (int sample = 0; sample < (gpu ? 64 : 1); ++sample) sync();
+  if (gpu) {
+    const auto* data = static_cast<const float*>(color.Map());
+    Check(data != nullptr, "could not map stochastic-alpha colour");
+    std::array<double, 3> mean{};
+    for (int p = 0; p < kSize * kSize; ++p) {
+      Check(data[p * 4 + 3] == 1, "opaque background lost its alpha");
+      for (int c = 0; c < 3; ++c) {
+        Check(std::isfinite(data[p * 4 + c]), "non-finite stochastic-alpha colour");
+        mean[c] += data[p * 4 + c] / (kSize * kSize);
+      }
+    }
+    color.Unmap();
+    const std::array<double, 3> expected{1, 1.5, 0.75};
+    const std::array<double, 3> difference{4, 2, 1};
+    const double standard_error = std::sqrt(0.25 * 0.75 / (kSize * kSize * 64));
+    for (int c = 0; c < 3; ++c)
+      Check(std::abs(mean[c] - expected[c]) <= 5 * standard_error * difference[c] + 1e-5,
+          "Hydra alpha mean differs from the analytic layer mixture");
+  }
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

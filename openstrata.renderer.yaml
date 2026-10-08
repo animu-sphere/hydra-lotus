@@ -35,6 +35,7 @@ validation:
     - renderer.path.normals
     - renderer.path.textures
     - renderer.path.normal_maps
+    - renderer.path.opacity
     - renderer.path.multibounce
     - renderer.path.accumulation
     - renderer.path.reference

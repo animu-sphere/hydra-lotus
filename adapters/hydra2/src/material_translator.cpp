@@ -29,6 +29,8 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (metallic)
     (roughness)
     (normal)
+    (opacity)
+    (opacityThreshold)
     (useSpecularWorkflow)
     (file)
     (st)
@@ -349,6 +351,10 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
   }
   surface.Color(Tokens->normal, material.normal,
       material.normal_texture, -1.0, 1.0);
+  surface.Scalar(Tokens->opacity, material.opacity,
+      &material.opacity_texture, 0.0, 1.0);
+  surface.Scalar(Tokens->opacityThreshold, material.opacity_threshold,
+      nullptr, 0.0, 1.0);
   return translation;
 }
 

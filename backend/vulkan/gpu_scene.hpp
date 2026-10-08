@@ -76,9 +76,11 @@ struct GpuMaterialRecord {
   // The texture coordinates without a set, then two unused floats.
   float texcoord_fallback[4];
   float normal[4];
+  // Opacity, opacity threshold, then two unused floats.
+  float opacity[4];
   GpuTextureInputRecord inputs[kMaterialTextureInputs];
 };
-static_assert(sizeof(GpuMaterialRecord) == 384);
+static_assert(sizeof(GpuMaterialRecord) == 464);
 
 // The texture table: the size of the scene passes' sampled-image array, and
 // so the most textures a GPU scene holds.

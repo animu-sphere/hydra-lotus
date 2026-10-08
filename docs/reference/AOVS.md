@@ -32,6 +32,13 @@ that waits for convergence redraws until then.
 
 ## Storage and binding
 
+On ray-query devices, depth is the pixel centre's closest alpha-accepted
+surface. Cut-outs apply their mask; fractional opacity uses one fixed
+per-pixel coverage realization at sample index 0, independent of progressive
+colour samples. Depth is not averaged. With a transparent clear, colour
+alpha also accounts for material presence coverage
+([scene reference](SCENE.md#primary-rays)).
+
 Buffers are single-sample, two-dimensional (`dimensions.z == 1`). Allocation
 accepts only the four formats above. Zero width or height can be allocated,
 but an empty buffer cannot be bound for rendering. Negative dimensions,

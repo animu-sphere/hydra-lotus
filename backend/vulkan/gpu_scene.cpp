@@ -208,6 +208,8 @@ bool ValidMaterial(const SceneMaterial& entry) {
          std::all_of(material.normal.begin(), material.normal.end(),
              [](float value) { return value >= -1.0F && value <= 1.0F; }) &&
          ValidTextureInput(material.normal_texture, true) &&
+         unit(material.opacity) && unit(material.opacity_threshold) &&
+         ValidTextureInput(material.opacity_texture, false) &&
          std::isfinite(material.texcoord_fallback[0]) &&
          std::isfinite(material.texcoord_fallback[1]);
 }
@@ -975,7 +977,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       BlasBuild& build = blas_builds.emplace_back();
       build.geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
       build.geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-      build.geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+      // A geometry can be shared by opaque and alpha materials, and material
+      // edits must not rebuild its BLAS. Let the query test every candidate.
+      // A fractional coverage test must run only once per intersection.
+      build.geometry.flags = VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
       VkAccelerationStructureGeometryTrianglesDataKHR& triangles =
           build.geometry.geometry.triangles;
       triangles.sType =
@@ -1115,6 +1120,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       record.texcoord_fallback[0] = material.texcoord_fallback[0];
       record.texcoord_fallback[1] = material.texcoord_fallback[1];
       std::copy(material.normal.begin(), material.normal.end(), record.normal);
+      record.opacity[0] = material.opacity;
+      record.opacity[1] = material.opacity_threshold;
       const auto inputs = TextureInputs(material);
       for (std::size_t input = 0; input < inputs.size(); ++input) {
         GpuTextureInputRecord& lookup = record.inputs[input];
@@ -1580,10 +1587,12 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     material.texcoord_fallback = {record.texcoord_fallback[0],
         record.texcoord_fallback[1]};
     std::copy(record.normal, record.normal + 3, material.normal.begin());
+    material.opacity = record.opacity[0];
+    material.opacity_threshold = record.opacity[1];
     std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
         &material.base_color_texture, &material.roughness_texture,
         &material.metallic_texture, &material.emission_texture,
-        &material.normal_texture};
+        &material.normal_texture, &material.opacity_texture};
     for (std::size_t input = 0; input < inputs.size(); ++input) {
       const GpuTextureInputRecord& lookup = record.inputs[input];
       if (lookup.mode == kConstantInput) {

@@ -298,6 +298,24 @@ int main() try {
             update.instances[0].texcoords == Lotus::kNoTexcoords,
       "the identity normal kept reading a UV frame without lookups");
 
+  // An opacity-only lookup selects UVs and resolves its sixth texture slot.
+  // Changing coverage without changing the lookup touches only the table.
+  painted.opacity_texture = Lotus::TextureInput{"/t/unused", 3};
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && update.instances_changed &&
+            update.instances[0].texcoords == 1 &&
+            update.materials[2].textures[5] != nullptr &&
+            update.geometry_uploads.empty(),
+      "an opacity-only texture did not select its coordinates and image");
+  painted.opacity = 0.25F;
+  painted.opacity_threshold = 0.5F;
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && !update.instances_changed &&
+            update.geometry_uploads.empty() && update.texture_uploads.empty(),
+      "a coverage edit changed geometry or instances");
+
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
   world.RemoveMaterial("/m/metal");

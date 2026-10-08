@@ -209,7 +209,7 @@ struct GpuMaterialContents {
   Material material;
   std::array<std::uint32_t, kMaterialTextureInputs> texture_slots{
       kNoTextureSlot, kNoTextureSlot, kNoTextureSlot, kNoTextureSlot,
-      kNoTextureSlot};
+      kNoTextureSlot, kNoTextureSlot};
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three
@@ -305,7 +305,9 @@ public:
   [[nodiscard]] virtual BackendCapability RayQueryCapability() const = 0;
   // Trace the uploaded scene through draw.world_to_clip as the camera (the
   // bootstrap counts are ignored), into RGBA32F colour and D32 depth.
-  // Depth is the pixel centre's closest hit; misses retain clears.
+  // Depth is the pixel centre's closest alpha-accepted hit; misses retain
+  // clears. Fractional coverage uses a fixed per-pixel seed (sample index 0)
+  // for depth and diagnostics, independent of progressive radiance samples.
   //
   // Radiance adds `frame_count` path-traced samples per pixel, at most up
   // to `settings.max_samples`, to a floating-point accumulation and writes

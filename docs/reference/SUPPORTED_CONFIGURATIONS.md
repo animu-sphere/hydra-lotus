@@ -22,6 +22,9 @@ local run, and the report named in the row holds its detail.
 | Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` | NVIDIA RTX A5000 | Accumulation and path-tracing checks, 8/8 tests and strict evidence validation passed | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Float colour AOVs, progressive usdview convergence, 14/14 tests and strict evidence validation passed | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
 | Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained ray-query and path-tracing SKIPs | [HDR accumulation](../reports/2026-10-05-hdr-accumulation.md) |
+| Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` | NVIDIA RTX A5000 | Opacity masks and coverage, 8/8 tests and strict evidence validation passed | [Opacity](../reports/2026-10-08-opacity.md) |
+| Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Alpha image/threshold edits and stochastic AOV coverage, 23/23 tests and strict evidence validation passed | [Opacity](../reports/2026-10-08-opacity.md) |
+| Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained GPU SKIPs | [Opacity](../reports/2026-10-08-opacity.md) |
 
 ## Requirements
 
