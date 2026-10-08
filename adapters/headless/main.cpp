@@ -180,7 +180,8 @@ bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
   const std::array<std::optional<Lotus::TextureInput>*, Lotus::kMaterialTextureInputs> inputs{
       &expected.base_color_texture, &expected.roughness_texture,
       &expected.metallic_texture, &expected.emission_texture,
-      &expected.normal_texture, &expected.opacity_texture};
+      &expected.normal_texture, &expected.opacity_texture,
+      &expected.specular_color_texture};
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const std::uint32_t slot = gpu.texture_slots[index];
     if (!inputs[index]->has_value()) {
@@ -588,6 +589,11 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   textured.opacity_threshold = 0.5F;
   textured.opacity_texture = Lotus::TextureInput{"/checker"};
   textured.opacity_texture->channel = 3;
+  textured.ior = 2.0F;
+  textured.use_specular_workflow = true;
+  textured.specular_color = {0.1F, 0.3F, 0.5F};
+  textured.specular_color_texture = Lotus::TextureInput{"/checker"};
+  textured.specular_color_texture->scale = {0.5F, 0.75F, 1, 1};
   world.SetMaterial("/textured", textured);
   world.BindMaterial("/triangle", "/textured");
   if (auto failure = apply("texture insertion"); !failure.empty())
@@ -1075,7 +1081,7 @@ using Rgb = std::array<double, 3>;
 // inverse CDF in half-vector space, independent of the shader's visible-
 // normal sampling: with h distributed as D(h) cos(theta_h),
 // E = integral of F G2 (wo.h) / (cos_view cos(theta_h)).
-Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view) {
+Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view, double f90 = 1.0) {
   constexpr int kSteps = 1024;
   constexpr double kPi = 3.14159265358979323846;
   const double alpha = std::max(roughness * roughness, 1.0e-3);
@@ -1101,12 +1107,33 @@ Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view) {
       const double schlick = std::pow(1.0 - cos_oh, 5.0);
       const double common = g2 * cos_oh / (cos_view * h[2]);
       for (int c = 0; c < 3; ++c)
-        sum[c] += (f0[c] + (1.0 - f0[c]) * schlick) * common;
+        sum[c] += (f0[c] + (f90 - f0[c]) * schlick) * common;
     }
   }
   for (double& value : sum)
     value /= double{kSteps} * kSteps;
   return sum;
+}
+
+// Independent hemispherical integral: GGX uses half-vector quadrature;
+// the separable diffuse coat integrates analytically, since the cosine-
+// weighted average of (1-cos(theta))^5 is 1/21.
+Rgb SurfaceAlbedo(const Lotus::Material& material, double cos_view) {
+  const double m = material.use_specular_workflow ? 0.0 : material.metallic;
+  const double ratio = (double{material.ior} - 1) / (double{material.ior} + 1);
+  const double edge = material.use_specular_workflow || material.ior > 1 ? 1 : 0;
+  Rgb dielectric{}, f0{};
+  for (int c = 0; c < 3; ++c) {
+    dielectric[c] = material.use_specular_workflow ? material.specular_color[c] : ratio * ratio;
+    f0[c] = m * material.base_color[c] + (1 - m) * dielectric[c];
+  }
+  Rgb result = GgxAlbedo(f0, material.roughness, cos_view, m + (1 - m) * edge);
+  for (int c = 0; c < 3; ++c) {
+    const double exit = 1 - dielectric[c] - (edge - dielectric[c]) * std::pow(1 - cos_view, 5);
+    const double entry = 1 - dielectric[c] - (edge - dielectric[c]) / 21;
+    result[c] += material.base_color[c] * (1 - m) * exit * entry;
+  }
+  return result;
 }
 
 // The path-tracing scenes' world, camera and target, and the GPU scene
@@ -1216,6 +1243,7 @@ public:
       pixels += 1;
       for (int c = 0; c < 3; ++c) {
         const double value = values[pixel * 4 + c];
+        if (!std::isfinite(value)) return "non-finite radiance in a mean comparison";
         sum[c] += value;
         squares[c] += value * value;
       }
@@ -1301,6 +1329,7 @@ std::string BsdfFailure(PathScenes& scenes) {
   Lotus::MeshInstance front;
   world.SetMesh("/panel", triangle, front);
   Lotus::Material lambert;
+  lambert.ior = 1;
   lambert.base_color = {0.5F, 0.25F, 0.75F};
   lambert.emission = {0.1F, 0.05F, 0.0F};
   Paint(world, "/panel", lambert);
@@ -1357,12 +1386,42 @@ std::string BsdfFailure(PathScenes& scenes) {
     material.roughness = entry.roughness;
     material.metallic = entry.metallic;
     Paint(world, "/plane", material);
-    const Rgb metal = GgxAlbedo(entry.base, entry.roughness, cos_tilt);
-    Rgb expected{};
-    for (int c = 0; c < 3; ++c)
-      expected[c] = entry.metallic * metal[c] + (1.0 - entry.metallic) * entry.base[c];
+    const Rgb expected = SurfaceAlbedo(material, cos_tilt);
     if (auto failure = scenes.ExpectMean(entry.name, 16, expected); !failure.empty())
       return std::string(entry.name) + ": " + failure;
+  }
+  // Normal and grazing views, dark and white bases, two indices, rough
+  // and near-mirror lobes, coloured F0 and metallic ignored by the specular
+  // workflow. White furnace values are also bounded by incident radiance.
+  for (const float cos_view : {1.0F, 0.5F, 0.125F}) {
+    tilted.world_from_object[5] = cos_view;
+    tilted.world_from_object[6] = std::sqrt(1 - cos_view * cos_view);
+    tilted.world_from_object[9] = -tilted.world_from_object[6];
+    tilted.world_from_object[10] = cos_view;
+    // Enlarge so the grazing plane still covers the whole view.
+    auto large = plane;
+    for (auto& p : large.positions)
+      for (float& v : p)
+        v *= 4;
+    world.SetMesh("/plane", large, tilted);
+    for (int mode = 0; mode < 6; ++mode) {
+      Lotus::Material material;
+      material.base_color = mode % 2 == 0 ? std::array<float, 3>{0, 0, 0} : std::array<float, 3>{1, 1, 1};
+      material.ior = mode == 2 ? 2.5F : 1.5F;
+      material.roughness = mode == 0 ? 0 : (mode == 1 ? 1 : 0.5F);
+      material.use_specular_workflow = mode >= 3;
+      material.specular_color = mode == 4 ? std::array<float, 3>{0, 0, 0} :
+          (mode == 5 ? std::array<float, 3>{1, 1, 1} : std::array<float, 3>{0.7F, 0.2F, 0.05F});
+      material.metallic = mode >= 3 ? 1.0F : 0.0F;
+      Paint(world, "/plane", material);
+      const Rgb expected = SurfaceAlbedo(material, cos_view);
+      for (double value : expected)
+        if (value > 1.00001)
+          return "white furnace integral exceeds one";
+      const std::string name = "dielectric mode " + std::to_string(mode) + " cos " + std::to_string(cos_view);
+      if (auto failure = scenes.ExpectMean(name.c_str(), 32, expected); !failure.empty())
+        return name + ": " + failure;
+    }
   }
   return {};
 }
@@ -1637,6 +1696,7 @@ std::string NormalsFailure(PathScenes& scenes) {
   }
   Lotus::Material lambert;
   lambert.base_color = {0.5F, 0.25F, 0.75F};
+  lambert.ior = 1;
   const Rgb albedo{0.5, 0.25, 0.75};
   plane.normals.assign(6, {0, 0, 3});
   world.SetMesh("/plane", plane, Lotus::MeshInstance{});
@@ -1667,6 +1727,7 @@ std::string NormalsFailure(PathScenes& scenes) {
   Paint(world, "/plane", mirror);
   Lotus::Material wall;
   wall.base_color = {0.0F, 0.0F, 0.0F};
+  wall.ior = 1;
   wall.emission = {2.0F, 1.0F, 0.5F};
   world.SetMesh("/wall",
       {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}},
@@ -2204,6 +2265,7 @@ std::string NormalMapsFailure(PathScenes& scenes) {
   Paint(world, "/plane", mirror);
   Lotus::Material wall;
   wall.base_color = {0, 0, 0};
+  wall.ior = 1;
   wall.emission = {2, 1, 0.5F};
   world.SetMesh("/wall", {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, Lotus::MeshInstance{});
   Paint(world, "/wall", wall);
@@ -2233,10 +2295,12 @@ std::string OpacityFailure(PathScenes& scenes) {
   behind.world_from_object = Translation(0, 0, -2);
   world.SetMesh("/back", square, behind);
   Lotus::Material front;
+  front.ior = 1;
   front.base_color = {1, 0, 0};
   front.emission = {4, 0, 0};
   front.texcoords = "st";
   Lotus::Material back;
+  back.ior = 1;
   back.base_color = {0, 1, 0};
   back.emission = {0, 2, 1};
   Paint(world, "/front", front);
@@ -2343,6 +2407,7 @@ std::string OpacityFailure(PathScenes& scenes) {
   behind.world_from_object = Translation(0, 0, -1);
   world.SetMesh("/middle", square, behind);
   Lotus::Material middle;
+  middle.ior = 1;
   middle.base_color = {0, 0, 0};
   middle.emission = {0, 2, 0};
   middle.opacity = 0.5F;
@@ -2572,6 +2637,7 @@ std::string TexturesFailure(PathScenes& scenes) {
       Lotus::MeshInstance{});
   Lotus::Material wall;
   wall.base_color_texture = Lotus::TextureInput{"/blocks"};
+  wall.ior = 1;
   wall.emission_texture = Lotus::TextureInput{"/glow"};
   wall.texcoords = "st";
   Paint(world, "/wall", wall);
@@ -2612,6 +2678,49 @@ std::string TexturesFailure(PathScenes& scenes) {
     scenes.Summarize("textured radiance with " + std::to_string(bounces) +
                      " bounces: " + std::to_string(checked) + " block-interior pixels exact");
   }
+  // A specular-only image drives the coat on a diffuse plane. Independent
+  // texel decoding and analytic/half-vector integrals predict its furnace
+  // radiance. Replacement, missing-image fallback and lookup overflow must
+  // all update transport without replacing the plane.
+  wall = Lotus::Material{};
+  wall.use_specular_workflow = true;
+  wall.base_color = {0.4F, 0.2F, 0.1F};
+  wall.specular_color = {0.3F, 0.1F, 0.05F};
+  wall.specular_color_texture = Lotus::TextureInput{"/specular"};
+  wall.specular_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  wall.specular_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  wall.specular_color_texture->scale = {2, 0.5F, 1, 1};
+  wall.specular_color_texture->bias = {-0.1F, 0.1F, 0.05F, 0};
+  wall.specular_color_texture->fallback = {0.8F, 0.3F, 0.1F, 1};
+  wall.texcoords = "st";
+  for (int mode = 0; mode < 5; ++mode) {
+    if (mode < 3) {
+      const auto format = mode == 1 ? Lotus::TextureFormat::Rgba8Srgb : Lotus::TextureFormat::Rgba32Float;
+      world.SetTexture("/specular", MakeTexture(1, 1, format,
+                                        [mode](std::uint32_t, std::uint32_t) -> Rgba {
+                                          return mode == 2 ? Rgba{0.9, 0.4, 0.2, 1} : Rgba{0.2, 0.6, 0.3, 1};
+                                        }));
+    } else if (mode == 3) {
+      world.RemoveTexture("/specular");
+    } else {
+      world.SetTexture("/specular", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
+                                        [](std::uint32_t, std::uint32_t) -> Rgba { return {2, 1, 1, 1}; }));
+      wall.specular_color_texture->scale[0] = std::numeric_limits<float>::max();
+    }
+    Paint(world, "/wall", wall);
+    const auto snapshot = world.Commit();
+    const auto sampled = LookupOracle(*snapshot.scene, *wall.specular_color_texture, 0.5, 0.5);
+    Lotus::Material evaluated = wall;
+    bool finite = true;
+    for (int c = 0; c < 3; ++c)
+      finite &= std::isfinite(static_cast<float>(sampled.value[c]));
+    if (finite)
+      for (int c = 0; c < 3; ++c)
+        evaluated.specular_color[c] = static_cast<float>(std::clamp(sampled.value[c], 0.0, 1.0));
+    const std::string name = "specular texture mode " + std::to_string(mode);
+    if (auto failure = scenes.ExpectMean(name.c_str(), 32, SurfaceAlbedo(evaluated, 1)); !failure.empty())
+      return name + ": " + failure;
+  }
   return {};
 }
 
@@ -2634,6 +2743,7 @@ std::string MultibounceFailure(PathScenes& scenes) {
   Lotus::Material material;
   material.base_color = {0.5F, 0.25F, 0.75F};
   material.emission = {0.1F, 0.15F, 0.025F};
+  material.ior = 1;
   Paint(world, "/box", material);
   world.SetEnvironment({1.0F, 1.0F, 1.0F});
   for (const std::uint32_t bounces : {0U, 1U, 3U}) {
@@ -2731,6 +2841,7 @@ std::string AccumulationFailure(PathScenes& scenes) {
   Lotus::Material material;
   material.base_color = {0.5F, 0.25F, 0.75F};
   material.emission = {2.5F, 1.25F, 0.5F};
+  material.ior = 1;
   Paint(world, "/panel", material);
   world.SetEnvironment({2.0F, 1.0F, 0.5F});
   const Rgb radiance{0.5 * 2.0 + 2.5, 0.25 * 1.0 + 1.25, 0.75 * 0.5 + 0.5};

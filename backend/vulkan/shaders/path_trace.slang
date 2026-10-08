@@ -57,6 +57,7 @@ static const uint kMetallicInput = 2;
 static const uint kEmissionInput = 3;
 static const uint kNormalInput = 4;
 static const uint kOpacityInput = 5;
+static const uint kSpecularInput = 6;
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
 // table, the Lotus material IR.
@@ -66,7 +67,8 @@ struct MaterialRecord {
   float4 texcoord_fallback;
   float4 normal;
   float4 opacity;
-  TextureInputRecord inputs[6];
+  float4 specular_ior;
+  TextureInputRecord inputs[7];
 };
 
 // Mirrors PathConstants in vulkan_backend.cpp.
@@ -363,13 +365,15 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   surface.metallic = material.emission_metallic.w;
   float3 emission = material.emission_metallic.xyz;
   float3 tangent_normal = material.normal.xyz;
+  float3 specular = material.specular_ior.xyz;
   // A texture lookup replaces its input's constant, clamped into the
   // input's range.
   if (material.inputs[kBaseColorInput].mode != kConstantInput ||
       material.inputs[kRoughnessInput].mode != kConstantInput ||
       material.inputs[kMetallicInput].mode != kConstantInput ||
       material.inputs[kEmissionInput].mode != kConstantInput ||
-      material.inputs[kNormalInput].mode != kConstantInput) {
+      material.inputs[kNormalInput].mode != kConstantInput ||
+      material.inputs[kSpecularInput].mode != kConstantInput) {
     const float2 st = HitTexcoords(instance, material, hit);
     TextureInputRecord input = material.inputs[kBaseColorInput];
     if (input.mode != kConstantInput) {
@@ -391,6 +395,11 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
     if (input.mode != kConstantInput) {
       tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
     }
+    input = material.inputs[kSpecularInput];
+    if (input.mode != kConstantInput) {
+      const float3 value = Lookup(input, st).xyz;
+      specular = all(isfinite(value)) ? saturate(value) : material.specular_ior.xyz;
+    }
   }
   // Preserve the constant-material reference path exactly, including the
   // interpolated normal's rounding, when the input is the identity.
@@ -400,7 +409,8 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
         surface.normal, direction);
   }
   surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
-      surface.roughness, surface.metallic);
+      surface.roughness, surface.metallic, material.specular_ior.w,
+      material.normal.w != 0.0, SpectrumFromRgb(specular));
   surface.emission = SpectrumFromRgb(emission);
   return surface;
 }

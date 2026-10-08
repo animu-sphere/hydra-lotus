@@ -150,11 +150,15 @@ Against the scope of
   ([scene reference](../reference/SCENE.md#materials-and-environment),
   [evidence](../reports/2026-10-08-opacity.md)). Glass, refraction and
   `opacityMode` interpretation remain unsupported.
-- ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the
-  specular workflow
-  ([design policy §17](../design/DESIGN_POLICY.md#17-material), priority 2).
-  It changes the transport, so the reference images are regenerated with
-  it.
+- ✅ **A GGX dielectric specular layer** over Lambert, from constant `ior`
+  and the specular workflow's constant or RGB-textured `specularColor`.
+  Fresnel attenuates the diffuse base on entry and exit; sampling uses the
+  full BSDF and matching mixture PDF. The reference images are regenerated
+  for the changed transport
+  ([scene reference](../reference/SCENE.md#path-tracing),
+  [evidence](../reports/2026-10-08-dielectric-specular.md)). Transmission,
+  internal-reflection and multiple-scattering compensation remain outside
+  this minimal model.
 
 ## Backend follow-up
 

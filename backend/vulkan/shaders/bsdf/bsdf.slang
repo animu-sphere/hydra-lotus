@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // The reference path tracer's surface BSDF (design policy section 17): a
-// Lambert lobe and a GGX metal lobe, mixed by `metallic`. Directions are in
+// Fresnel-attenuated Lambert base and a GGX reflection lobe. Directions are in
 // the shading frame, z along the normal facing the outgoing direction, and
 // both point away from the surface.
 module bsdf;
@@ -18,21 +18,50 @@ public struct SurfaceBsdf {
   // GGX alpha: roughness squared.
   public float alpha;
   public float metallic;
+  public Spectrum dielectric_f0;
+  public float dielectric_f90;
+  public Spectrum f0;
+  public float f90;
 };
 
 public SurfaceBsdf MakeSurfaceBsdf(Spectrum base_color, float roughness,
-    float metallic) {
+    float metallic, float ior, bool specular_workflow, Spectrum specular) {
   SurfaceBsdf bsdf;
   bsdf.base_color = base_color;
   bsdf.alpha = max(roughness * roughness, kMinAlpha);
-  bsdf.metallic = metallic;
+  bsdf.metallic = specular_workflow ? 0.0 : metallic;
+  // This form avoids overflow for large finite indices.
+  const float ratio = 1.0 - 2.0 / (ior + 1.0);
+  bsdf.dielectric_f0 = specular_workflow ? specular : SpectrumConstant(ratio * ratio);
+  bsdf.dielectric_f90 = specular_workflow || ior > 1.0 ? 1.0 : 0.0;
+  bsdf.f0 = base_color * bsdf.metallic +
+      bsdf.dielectric_f0 * (1.0 - bsdf.metallic);
+  // Preserve the established metal lobe's white Schlick grazing limit.
+  bsdf.f90 = bsdf.metallic + (1.0 - bsdf.metallic) * bsdf.dielectric_f90;
   return bsdf;
 }
 
 // Schlick's Fresnel approximation.
-Spectrum FresnelSchlick(Spectrum f0, float cos_theta) {
+Spectrum FresnelSchlick(Spectrum f0, float f90, float cos_theta) {
   const float weight = pow(saturate(1.0 - cos_theta), 5.0);
-  return f0 * (1.0 - weight) + SpectrumConstant(weight);
+  return f0 * (1.0 - weight) + SpectrumConstant(f90 * weight);
+}
+
+// A reciprocal, single-scattering coat: light crosses the dielectric on
+// entry and exit. Internal diffuse reflection and GGX multiple scattering
+// are not compensated. Index-matched materials recover uncoated Lambert.
+Spectrum DielectricTransmission(SurfaceBsdf bsdf, float cos_theta) {
+  const Spectrum fresnel = FresnelSchlick(bsdf.dielectric_f0,
+      bsdf.dielectric_f90, cos_theta);
+  return SpectrumConstant(1.0) + fresnel * -1.0;
+}
+
+float SpecularProbability(SurfaceBsdf bsdf, float3 wo) {
+  if (bsdf.metallic == 1.0) return 1.0;
+  if (bsdf.dielectric_f90 == 0.0) return bsdf.metallic;
+  const float dielectric = clamp(MaxComponent(FresnelSchlick(
+      bsdf.dielectric_f0, bsdf.dielectric_f90, wo.z)), 0.05, 0.95);
+  return bsdf.metallic + (1.0 - bsdf.metallic) * dielectric;
 }
 
 // The isotropic GGX normal distribution.
@@ -60,13 +89,13 @@ float3 SampleGgxVisibleNormal(float3 wo, float alpha, float2 u) {
   return normalize(float3(h_std.xy * alpha, h_std.z));
 }
 
-// The GGX metal's f * cos(theta_i), with the height-correlated Smith
+// GGX reflection's f * cos(theta_i), with the height-correlated Smith
 // masking-shadowing term.
 Spectrum GgxEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
   const float3 h = normalize(wo + wi);
   const float g2 = 1.0 /
       (1.0 + GgxLambda(wo, bsdf.alpha) + GgxLambda(wi, bsdf.alpha));
-  return FresnelSchlick(bsdf.base_color, dot(wo, h)) *
+  return FresnelSchlick(bsdf.f0, bsdf.f90, dot(wo, h)) *
          (GgxD(h, bsdf.alpha) * g2 / (4.0 * wo.z));
 }
 
@@ -84,8 +113,10 @@ public Spectrum BsdfEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
     return SpectrumConstant(0.0);
   }
   Spectrum value = bsdf.base_color * ((1.0 - bsdf.metallic) * wi.z / kPi);
-  if (bsdf.metallic > 0.0) {
-    value = value + GgxEvalCos(bsdf, wo, wi) * bsdf.metallic;
+  value = value * DielectricTransmission(bsdf, wo.z) *
+      DielectricTransmission(bsdf, wi.z);
+  if (bsdf.f90 > 0.0) {
+    value = value + GgxEvalCos(bsdf, wo, wi);
   }
   return value;
 }
@@ -96,9 +127,10 @@ public float BsdfPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
   if (wo.z <= 0.0 || wi.z <= 0.0) {
     return 0.0;
   }
-  float pdf = (1.0 - bsdf.metallic) * wi.z / kPi;
-  if (bsdf.metallic > 0.0) {
-    pdf += bsdf.metallic * GgxPdf(bsdf, wo, wi);
+  const float specular = SpecularProbability(bsdf, wo);
+  float pdf = (1.0 - specular) * wi.z / kPi;
+  if (specular > 0.0) {
+    pdf += specular * GgxPdf(bsdf, wo, wi);
   }
   return pdf;
 }
@@ -110,7 +142,7 @@ public struct BsdfSample {
   public float pdf;
 };
 
-// Chooses the GGX lobe with probability `metallic` (u.z), then a direction
+// Chooses GGX using the view Fresnel and metal fraction (u.z), then a direction
 // from it (u.xy). Returns false when no direction above the surface results.
 public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
     out BsdfSample sample) {
@@ -120,7 +152,7 @@ public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
   if (wo.z <= 0.0) {
     return false;
   }
-  if (u.z < bsdf.metallic) {
+  if (u.z < SpecularProbability(bsdf, wo)) {
     const float3 h = SampleGgxVisibleNormal(wo, bsdf.alpha, u.xy);
     sample.wi = 2.0 * dot(wo, h) * h - wo;
   } else {
@@ -131,5 +163,13 @@ public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
     return false;
   }
   sample.weight = BsdfEvalCos(bsdf, wo, sample.wi) / sample.pdf;
+  // For a pure GGX surface D cancels analytically. Avoid dividing two
+  // independently rounded, very large densities at near-mirror roughness.
+  if (bsdf.metallic == 1.0) {
+    const float3 h = normalize(wo + sample.wi);
+    const float lambda_o = GgxLambda(wo, bsdf.alpha);
+    sample.weight = FresnelSchlick(bsdf.f0, bsdf.f90, dot(wo, h)) *
+        ((1.0 + lambda_o) / (1.0 + lambda_o + GgxLambda(sample.wi, bsdf.alpha)));
+  }
   return IsFinite(sample.weight);
 }

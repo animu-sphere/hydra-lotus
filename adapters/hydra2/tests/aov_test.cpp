@@ -3,6 +3,7 @@
 
 #include <pxr/base/tf/errorMark.h>
 #include <pxr/imaging/hd/meshTopology.h>
+#include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPass.h>
 #include <pxr/imaging/hd/renderPassState.h>
@@ -62,6 +63,21 @@ public:
     }
     return {};
   }
+  SdfPath GetMaterialId(const SdfPath&) override {
+    return SdfPath("/scene/material");
+  }
+  VtValue GetMaterialResource(const SdfPath&) override {
+    // Index matching gives uncoated Lambert so the AOV format and
+    // convergence checks retain an exact radiance, independent of BSDF noise.
+    HdMaterialNode surface;
+    surface.path = SdfPath("/scene/material/surface");
+    surface.identifier = TfToken("UsdPreviewSurface");
+    surface.parameters[TfToken("ior")] = VtValue(1.0F);
+    HdMaterialNetworkMap network;
+    network.map[HdMaterialTerminalTokens->surface].nodes.push_back(surface);
+    network.terminals.push_back(surface.path);
+    return VtValue(network);
+  }
 };
 
 HdRenderPassAovBinding Bind(const TfToken& name, HdLotusRenderBuffer& buffer,
@@ -114,6 +130,10 @@ int main(int argc, char** argv) {
       Bind(HdAovTokens->depth, depth, VtValue(1.0F)),
       Bind(HdAovTokens->primId, ids, VtValue(-1))};
   TriangleScene scene(index.get());
+  std::unique_ptr<HdSprim> material(delegate.CreateSprim(
+      HdPrimTypeTokens->material, SdfPath("/scene/material")));
+  HdDirtyBits material_dirty = material->GetInitialDirtyBitsMask();
+  material->Sync(&scene, nullptr, &material_dirty);
   std::unique_ptr<HdRprim> mesh(delegate.CreateRprim(
       HdPrimTypeTokens->mesh, SdfPath("/scene/triangle")));
   HdDirtyBits dirty = mesh->GetInitialDirtyBitsMask();
@@ -122,7 +142,7 @@ int main(int argc, char** argv) {
   pass->Execute(state, {});
   const auto* pixels = static_cast<const std::uint8_t*>(color.Map());
   const auto center = (8 * 16 + 8) * 4;
-  // Path-traced, the default UsdPreviewSurface grey under the adapter's
+  // Path-traced, index-matched grey under the adapter's
   // white fallback environment reflects 0.18 (46 of 255).
   const bool triangle = pixels != nullptr && pixels[center + 3] == 255 &&
                         (!ray_query || std::all_of(pixels + center, pixels + center + 3,

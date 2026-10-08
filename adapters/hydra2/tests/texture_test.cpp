@@ -195,10 +195,28 @@ void TranslatorCases() {
   albedo.channel = 3;
   Check(translation.material.opacity_texture == albedo && translation.textures.size() == 1,
       "an alpha lookup was not translated or its shared image was duplicated");
-  network.relationships.back().outputName = TfToken("rgb");
+  network.relationships.back().inputName = TfToken("rgb");
   translation = HdLotusTranslateMaterial(map);
   Check(!translation.material.opacity_texture && translation.material.opacity == 1,
       "a colour connection was accepted as scalar opacity");
+  parameters[TfToken("useSpecularWorkflow")] = VtValue(1);
+  connect("/Material/Albedo", "rgb", surface, "specularColor");
+  translation = HdLotusTranslateMaterial(map);
+  albedo.channel = 0;
+  Check(translation.material.use_specular_workflow &&
+            translation.material.specular_color_texture == albedo &&
+            translation.textures.size() == 1,
+      "specular RGB was not translated or duplicated its shared image");
+  network.relationships.back().inputName = TfToken("g");
+  translation = HdLotusTranslateMaterial(map);
+  Check(!translation.material.specular_color_texture &&
+            std::find(translation.connected_inputs.begin(), translation.connected_inputs.end(), TfToken("specularColor")) != translation.connected_inputs.end(),
+      "a scalar specular colour connection was not reported");
+  parameters[TfToken("useSpecularWorkflow")] = VtValue(0);
+  network.relationships.back().inputName = TfToken("rgb");
+  translation = HdLotusTranslateMaterial(map);
+  Check(!translation.material.specular_color_texture,
+      "metallic workflow translated an unused specular colour texture");
 }
 
 // Writes an 8-bit PNG of `channels` channels, rows from the top.
@@ -229,6 +247,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor.connect = </Looks/Painted/Albedo.outputs:rgb>
             float inputs:roughness.connect = </Looks/Painted/Linear.outputs:g>
             color3f inputs:emissiveColor.connect = </Looks/Painted/Missing.outputs:rgb>
@@ -273,6 +292,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor.connect = </Looks/Gray/Texture.outputs:rgb>
             token outputs:surface
         }
@@ -326,6 +346,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor = (1, 1, 1)
             float inputs:roughness = 0
             float inputs:metallic = 1
@@ -357,6 +378,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor = (0, 0, 0)
             color3f inputs:emissiveColor = (2, 1, 0.5)
             token outputs:surface
@@ -392,6 +414,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor = (0, 0, 0)
             color3f inputs:emissiveColor = (4, 0, 0)
             float inputs:opacity.connect = </Looks/Cutout/Alpha.outputs:a>
@@ -422,6 +445,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform token info:id = "UsdPreviewSurface"
+            float inputs:ior = 1
             color3f inputs:diffuseColor = (0, 0, 0)
             color3f inputs:emissiveColor = (0, 2, 1)
             token outputs:surface
@@ -684,6 +708,26 @@ int main(int argc, char** argv) try {
   Check(moved.scene->meshes.at("/Quad").geometry->texcoords.at("map1")[1] ==
             std::array<float, 2>{3, 0},
       "a texture-coordinate edit was lost");
+
+  // A composed USD specular-only connection reuses the decoded image and
+  // its selected UV set. Workflow edits release the unused lookup.
+  const auto painted_surface = stage->GetPrimAtPath(SdfPath("/Looks/Painted/Surface"));
+  const auto workflow = painted_surface.CreateAttribute(TfToken("inputs:useSpecularWorkflow"), SdfValueTypeNames->Int);
+  workflow.Set(1);
+  const auto specular_input = painted_surface.CreateAttribute(TfToken("inputs:specularColor"), SdfValueTypeNames->Color3f);
+  specular_input.SetConnections({SdfPath("/Looks/Painted/Albedo.outputs:rgb")});
+  const auto specular = sync();
+  Check(specular.scene->materials.at("/Looks/Painted").use_specular_workflow &&
+            specular.scene->materials.at("/Looks/Painted").specular_color_texture ==
+                specular.scene->materials.at("/Looks/Painted").base_color_texture &&
+            Find(specular, "gray.png", "auto") == Find(refiled, "gray.png", "auto") &&
+            specular.scene->meshes.at("/Quad").geometry == moved.scene->meshes.at("/Quad").geometry,
+      "a specular connection did not reuse its image/UVs or changed geometry");
+  workflow.Set(0);
+  const auto metal_workflow = sync();
+  Check(!metal_workflow.scene->materials.at("/Looks/Painted").specular_color_texture &&
+            Find(metal_workflow, "gray.png", "auto") == Find(specular, "gray.png", "auto"),
+      "an unused specular lookup was retained or its shared image released");
 
   // Removing a material releases the images only it names.
   stage->RemovePrim(SdfPath("/Looks/Painted"));

@@ -33,7 +33,8 @@ struct RgbImage {
 
 // Replaces the world's camera and scene with the reference scene: a Cornell
 // box lit only by an emissive panel under its ceiling, with red and green
-// side walls, a GGX metal block and a Lambert block. Every camera ray enters
+// coated diffuse side walls, a GGX metal block and a coated diffuse block.
+// Every camera ray enters
 // the box, so every sample hits.
 void SetCornellBox(Lotus::RenderWorld& world);
 

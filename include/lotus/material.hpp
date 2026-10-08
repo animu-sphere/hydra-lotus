@@ -79,8 +79,15 @@ struct Material {
   std::array<float, 3> base_color{0.18F, 0.18F, 0.18F};
   // GGX roughness in [0, 1]; the microfacet alpha is its square.
   float roughness = 0.5F;
-  // The GGX metal's share of the reflectance in [0, 1]; the rest is Lambert.
+  // The metal's share in [0, 1]; the rest is a dielectric over Lambert.
   float metallic = 0.0F;
+  // Dielectric index relative to air, finite and >= 1. At 1 the dielectric
+  // interface disappears, leaving uncoated Lambert. Constant-only today.
+  float ior = 1.5F;
+  // In this workflow metallic and ior are ignored: specular_color supplies
+  // GGX F0 directly, with a white grazing limit, over the diffuse base.
+  bool use_specular_workflow = false;
+  std::array<float, 3> specular_color{0.0F, 0.0F, 0.0F};
   // Emitted radiance, non-negative, from both sides of the surface.
   std::array<float, 3> emission{0.0F, 0.0F, 0.0F};
   // Tangent-space shading normal in [-1, 1], normalized after evaluation.
@@ -103,6 +110,7 @@ struct Material {
   // so an 8-bit normal map typically uses scale 2, bias -1 and raw texels.
   std::optional<TextureInput> normal_texture;
   std::optional<TextureInput> opacity_texture;
+  std::optional<TextureInput> specular_color_texture;
   // Where the texture inputs look up: the mesh's texture-coordinate set of
   // this name (MeshGeometry::texcoords), or `texcoord_fallback` on a mesh
   // without one. Empty names no set.
@@ -113,15 +121,16 @@ struct Material {
 };
 
 // A material's texture inputs, in the order the GPU material table keeps
-// them: base colour, roughness, metallic, emission, normal, opacity.
-inline constexpr std::size_t kMaterialTextureInputs = 6;
+// them: base colour, roughness, metallic, emission, normal, opacity, specular.
+inline constexpr std::size_t kMaterialTextureInputs = 7;
 
 [[nodiscard]] inline std::array<const std::optional<TextureInput>*,
     kMaterialTextureInputs>
 TextureInputs(const Material& material) {
   return {&material.base_color_texture, &material.roughness_texture,
       &material.metallic_texture, &material.emission_texture,
-      &material.normal_texture, &material.opacity_texture};
+      &material.normal_texture, &material.opacity_texture,
+      &material.specular_color_texture};
 }
 
 // Whether any of the material's inputs is a texture lookup.

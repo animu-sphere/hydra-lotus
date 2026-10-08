@@ -281,6 +281,19 @@ int main() try {
   invalid_material = material;
   invalid_material.opacity_texture = Lotus::TextureInput{"/tex", 4};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  for (float value : {0.99F, -1.0F, infinity, std::numeric_limits<float>::quiet_NaN()}) {
+    invalid_material = material;
+    invalid_material.ior = value;
+    Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  }
+  for (float value : {-0.01F, 1.01F, infinity, std::numeric_limits<float>::quiet_NaN()}) {
+    invalid_material = material;
+    invalid_material.specular_color[1] = value;
+    Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  }
+  invalid_material = material;
+  invalid_material.specular_color_texture = Lotus::TextureInput{"/tex", 1};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   Check(world.Commit().revision == uv.revision,
       "rejected textures or texture inputs changed the scene revision");
   material.metallic_texture = Lotus::TextureInput{"/tex", 3};
@@ -289,6 +302,9 @@ int main() try {
   material.opacity = 0.75F;
   material.opacity_threshold = 0.5F;
   material.opacity_texture = Lotus::TextureInput{"/tex", 3};
+  material.use_specular_workflow = true;
+  material.specular_color = {0.7F, 0.2F, 0.05F};
+  material.specular_color_texture = Lotus::TextureInput{"/tex"};
   material.texcoords = "st";
   world.SetMaterial("/paint", material);
   world.SetTexture("/tex", texture);

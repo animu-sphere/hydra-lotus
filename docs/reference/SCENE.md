@@ -67,7 +67,10 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | --- | --- | --- | --- |
 | `base_color` | `(0.18, 0.18, 0.18)` | each in [0, 1] | Lambert albedo, and the metal's reflectance at normal incidence |
 | `roughness` | `0.5` | [0, 1] | GGX roughness; alpha is its square |
-| `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
+| `metallic` | `0` | [0, 1] | metal fraction; the remainder is a dielectric coat over Lambert |
+| `ior` | `1.5` | finite, ≥ 1 | constant dielectric index relative to air; 1 removes the interface |
+| `use_specular_workflow` | `false` | boolean | use explicit specular F0, ignoring metallic and ior |
+| `specular_color` | `(0, 0, 0)` | each in [0, 1] | specular-workflow F0, with a white grazing limit |
 | `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
 | `normal` | `(0, 0, 1)` | each in [-1, 1] | tangent-space shading normal, normalized after evaluation |
 | `opacity` | `1` | [0, 1] | surface coverage, optionally replaced by `opacity_texture` |
@@ -75,7 +78,7 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 
 Each input is a constant or, when its `TextureInput` is set
 (`base_color_texture`, `roughness_texture`, `metallic_texture`,
-`emission_texture`, `normal_texture`, `opacity_texture`), a texture lookup that replaces the constant, as
+`emission_texture`, `normal_texture`, `opacity_texture`, `specular_color_texture`), a texture lookup that replaces the constant, as
 `UsdUVTexture` does:
 
 - The lookup names a texture by its key in `LotusScene::textures`. A key
@@ -88,7 +91,7 @@ Each input is a constant or, when its `TextureInput` is set
   `texel * scale + bias` (defaults 1 and 0).
 - A colour input takes the result's red, green and blue (`channel` 0); a
   scalar input takes its `channel`, 0 to 3. The value is clamped into the
-  input's range: [0, 1] for base colour, roughness, metallic and opacity, and
+  input's range: [0, 1] for base colour, specular colour, roughness, metallic and opacity, and
   non-negative for emission and [-1, 1] for normal RGB.
 - The texture coordinates are the mesh's set named `Material::texcoords`,
   interpolated at the hit. A mesh without that set, or an empty name, uses
@@ -213,11 +216,12 @@ empty plan records no GPU work.
   the texture-coordinate set its material reads (zero and `kNoTexcoords`
   without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 464-byte record per material:
+- One device-local material table holds a 544-byte record per material:
   base colour and roughness, emission and metallic, the texture-coordinate
-  fallback, the constant tangent normal, opacity and threshold, then one 64-byte lookup per
+  fallback, the constant tangent normal (with the workflow flag in its fourth
+  component), opacity and threshold, specular colour and ior, then one 64-byte lookup per
   texture input, in the order base colour, roughness, metallic, emission,
-  normal and opacity: its texture slot, its sampler
+  normal, opacity and specular colour: its texture slot, its sampler
   (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
   a lookup whose key names no texture, which returns the fallback), scale,
   bias and fallback. It reaches the
@@ -432,15 +436,25 @@ one brute-force camera path per pixel per sample, with no light sampling.
   are computed per hit; there are no stored vertex tangents or MikkTSpace
   compatibility guarantees.
 - **Emission** is added at every hit, the camera's included.
-- **BSDF.** A Lambert lobe with albedo `base_color` and a GGX metal lobe,
-  mixed by `metallic`. The metal has Schlick's Fresnel from `base_color`,
-  the height-correlated Smith masking-shadowing term and alpha
-  `max(roughness², 0.001)`. A direction is sampled by choosing the metal
-  with probability `metallic`, then from the cosine-weighted hemisphere or
-  from GGX visible normals by spherical caps; its weight is the mixture's
-  f·cos divided by the mixture's density. A surface with `metallic` 0 is
-  Lambert only; a dielectric specular layer is later Renderer Phase 1.5
-  work.
+- **BSDF.** A dielectric GGX coat over Lambert, blended with the existing
+  GGX metal by `metallic`. Dielectric F0 is `((ior - 1)/(ior + 1))²`;
+  `ior = 1` removes the interface and recovers uncoated Lambert. In the
+  specular workflow, explicit `specular_color` supplies F0 and metallic and
+  ior are ignored. Schlick Fresnel has a white grazing limit (including
+  the established metal approximation). The diffuse base is attenuated
+  on both entry and exit by `(1 - F(wi.z)) (1 - F(wo.z))`, and by the
+  non-metal fraction. Reflection uses height-correlated Smith masking and
+  alpha `max(roughness², 0.001)`. This reciprocal, single-scattering coat
+  omits internal diffuse reflections, GGX multiple-scattering compensation,
+  transmission and refraction. A non-finite specular lookup falls back to
+  its constant F0. The GGX selection probability is the metal fraction plus
+  the non-metal fraction times the maximum component of view Fresnel,
+  clamped to [0.05, 0.95] for an active dielectric. The same probability
+  weights the GGX visible-normal and cosine-hemisphere PDFs. Samples use
+  the complete BSDF's f·cos divided by that mixture density; invalid
+  below-surface samples terminate without resampling. For pure metal,
+  the GGX density cancels analytically in the weight for mirror precision.
+  [Measured verification](../reports/2026-10-08-dielectric-specular.md).
 - **Environment.** A scattered ray that escapes adds the throughput times
   the environment radiance. Camera rays that miss do not see it.
 - **Termination.** A path ends after `PathTracingSettings::max_bounces`
@@ -517,10 +531,12 @@ The reference path tracer's images are of one fixed scene, rendered by
 
 - **Scene.** A Cornell box, 128×128 pixels, defined in
   `adapters/headless/reference.cpp`. The box spans [-1, 1]³ and is open
-  towards the camera. Its walls are Lambert: white floor, ceiling and back,
+  towards the camera. Its walls have a dielectric coat over Lambert:
+  white floor, ceiling and back,
   a red left wall and a green right wall. Under the ceiling hangs a black
   emitter with radiance (15, 13, 10). Inside stand a GGX metal block
-  (base (0.95, 0.85, 0.6), roughness 0.35) and a white Lambert block. The
+  (base (0.95, 0.85, 0.6), roughness 0.35) and a white coated diffuse block.
+  Dielectrics use the default ior 1.5 and roughness 0.5. The
   environment is black, the bounce limit is the default 64, and the camera
   is 3 units in front of the box with a 45° vertical field of view. Every
   camera ray enters the box, so every pixel's alpha is 1.
@@ -533,7 +549,8 @@ The reference path tracer's images are of one fixed scene, rendered by
     estimated from 64 accumulations of 16 samples. These are the same
     1024 samples.
 
-  Both files are committed in `validation/reference/`. Each is a
+  Both files are committed in `validation/reference/`, regenerated for
+  the dielectric coat ([evidence](../reports/2026-10-08-dielectric-specular.md)). Each is a
   little-endian RGB portable float map, with rows from the bottom.
 - **The compared images.** `renderer.path.reference` renders one
   accumulation from sample index 2²⁰, independent of the reference's
@@ -624,8 +641,7 @@ accumulation reaches its sample count. Point, normal, topology, transform,
 visibility and instancer edits, like camera, framing and
 `lotus:sampleIndex` changes, restart the accumulation. Other devices
 retain the bootstrap path and converge after one pass. Lights are not read
-yet: the adapter sets a constant white environment, so a Lambert surface no
-other surface occludes shows its albedo plus its emission. The host evidence log identifies the choice as
+yet: the adapter sets a constant white environment. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `sample_index`, `samples` and
 `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
@@ -746,6 +762,9 @@ the network's surface terminal when it is a `UsdPreviewSurface`:
 | `normal`, `normal_texture` | `normal` | signed RGB clamped to [-1, 1], then normalized in the shader |
 | `opacity`, `opacity_texture` | `opacity` | clamped to [0, 1]; scalar texture channels including alpha |
 | `opacity_threshold` | `opacityThreshold` | constant clamped to [0, 1] |
+| `ior` | `ior` | constant clamped to [1, largest finite float]; read in the metallic workflow |
+| `use_specular_workflow` | `useSpecularWorkflow` | constant; nonzero selects the specular workflow |
+| `specular_color`, `specular_color_texture` | `specularColor` | RGB clamped to [0, 1]; read only in the specular workflow |
 
 An unauthored input, a non-finite value and a value of another type take
 the input's default. An input a `UsdUVTexture` drives becomes a texture
@@ -769,7 +788,7 @@ texture-coordinate source) takes its default and is reported as connected.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.
-`opacityMode`, `ior`, `specularColor`,
+Texture-driven ior is reported as an untranslated connection. `opacityMode`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
 
