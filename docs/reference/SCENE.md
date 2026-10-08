@@ -70,10 +70,12 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
 | `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
 | `normal` | `(0, 0, 1)` | each in [-1, 1] | tangent-space shading normal, normalized after evaluation |
+| `opacity` | `1` | [0, 1] | surface coverage, optionally replaced by `opacity_texture` |
+| `opacity_threshold` | `0` | [0, 1] | positive values select binary masking; 0 selects stochastic coverage |
 
 Each input is a constant or, when its `TextureInput` is set
 (`base_color_texture`, `roughness_texture`, `metallic_texture`,
-`emission_texture`, `normal_texture`), a texture lookup that replaces the constant, as
+`emission_texture`, `normal_texture`, `opacity_texture`), a texture lookup that replaces the constant, as
 `UsdUVTexture` does:
 
 - The lookup names a texture by its key in `LotusScene::textures`. A key
@@ -86,7 +88,7 @@ Each input is a constant or, when its `TextureInput` is set
   `texel * scale + bias` (defaults 1 and 0).
 - A colour input takes the result's red, green and blue (`channel` 0); a
   scalar input takes its `channel`, 0 to 3. The value is clamped into the
-  input's range: [0, 1] for base colour, roughness and metallic, and
+  input's range: [0, 1] for base colour, roughness, metallic and opacity, and
   non-negative for emission and [-1, 1] for normal RGB.
 - The texture coordinates are the mesh's set named `Material::texcoords`,
   interpolated at the hit. A mesh without that set, or an empty name, uses
@@ -100,6 +102,17 @@ For the usual unsigned 8-bit encoding, author RGB scale 2, bias -1 and
 [UsdPreviewSurface specification](https://openusd.org/release/spec_usdpreviewsurface.html).
 Normal input evaluation and the tangent-frame fallback are described
 [below](#path-tracing).
+
+Opacity is **presence coverage**: when `opacity_threshold > 0`, opacity
+greater than or equal to it accepts the surface, and smaller values reject
+it. With threshold 0, acceptance has probability opacity. A rejected
+surface passes the ray straight through; an accepted one has its full BSDF
+and emission, without another opacity factor. This scales the expected
+entire surface response. It does not model glass, refraction, absorption,
+or the specification's `opacityMode = transparent` lighting response;
+`opacityMode` is not read. Thresholds are constants, not texture inputs.
+Non-finite evaluated texture opacity is treated as zero; finite results
+are clamped to [0, 1].
 
 A `Texture` holds decoded texels, four channels each, rows from the top of
 the image, so (s, t) = (0, 0) is its bottom-left corner as in USD:
@@ -200,11 +213,11 @@ empty plan records no GPU work.
   the texture-coordinate set its material reads (zero and `kNoTexcoords`
   without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 384-byte record per material:
+- One device-local material table holds a 464-byte record per material:
   base colour and roughness, emission and metallic, the texture-coordinate
-  fallback and the constant tangent normal, then one 64-byte lookup per
+  fallback, the constant tangent normal, opacity and threshold, then one 64-byte lookup per
   texture input, in the order base colour, roughness, metallic, emission,
-  normal: its texture slot, its sampler
+  normal and opacity: its texture slot, its sampler
   (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
   a lookup whose key names no texture, which returns the fallback), scale,
   bias and fallback. It reaches the
@@ -247,7 +260,11 @@ says why; `renderer.scene.acceleration` is then a SKIP.
 
 - Geometry buffers also carry device addresses and acceleration-structure
   build-input usage. A BLAS is built from the geometry buffer when it is
-  uploaded: one opaque triangle geometry, built for fast trace. It lives
+  uploaded: one non-opaque triangle geometry, built for fast trace with
+  `VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR`. The query evaluates
+  coverage before confirming candidates, once per intersection. Geometry
+  may be shared by different alpha materials, and coverage edits rewrite
+  the material table without rebuilding a BLAS or TLAS. It lives
   and dies with the buffer, so a point or topology edit builds a new BLAS,
   and hidden geometry keeps its BLAS. BLASes are neither refitted nor
   compacted.
@@ -320,14 +337,14 @@ explanation.
 `RenderScene` unprojects Vulkan near/far clip coordinates at pixel centres,
 using the inverse of `DrawSummary::world_to_clip` after clip-space conversion.
 It supports perspective (including an infinite far plane) and orthographic
-cameras, honours display/data windows, and traces opaque triangles without
+cameras, honours display/data windows, and traces triangles with material coverage without
 facing culling. Rays begin at the near plane and stop at the far plane. A
 singular or non-finite camera fails before recording GPU work.
 
 The scene passes render into their own RGBA32F colour and D32 depth
 targets, separate from the bootstrap's RGBA8 ones; each set follows the
 clear flags, target reuse and resize rules. The *camera pass* traces each
-pixel centre: its closest hit writes its projected Vulkan window depth
+pixel centre: its closest alpha-accepted hit writes its projected Vulkan window depth
 through the existing depth test, and misses preserve the clear or
 preceding attachment values. What the colour holds is
 `PathTracingSettings::output`: `Barycentrics` is the camera pass's closest
@@ -347,6 +364,11 @@ records' address and the settings) are updated before each synchronous
 submission, so scene rebuilds cannot leave a stale reference. Before any
 scene update, there is no TLAS and the passes only clear.
 
+Depth and surface diagnostics apply the same coverage policy, using a
+fixed per-pixel seed at sample index 0, independent of the progressive
+radiance sample. For fractional opacity, depth is one deterministic
+coverage realization, not averaged depth. Cut-outs give exact visibility.
+
 `GpuFrameEvidence::ray_query_used` identifies this path. Where the graphics
 queue supports timestamps, a persistent query pool measures the scene
 render pass, including clears and excluding readback; the last submission's
@@ -362,6 +384,15 @@ The `Radiance` output is the reference path tracer of
 in a fullscreen fragment pass (`backend/vulkan/shaders/path_trace.slang`):
 one brute-force camera path per pixel per sample, with no light sampling.
 
+- **Alpha acceptance.** Every triangle candidate evaluates only its opacity
+  input before confirmation. Rejection keeps the ray interval, without an
+  origin offset, scattering event, throughput change or bounce limit.
+  Primary and secondary rays use the same rule. Fractional coverage draws
+  from the path RNG; opacity 0, opacity 1 and masks consume no random
+  numbers, preserving the opaque reference sample sequence. Primary misses
+  use the clear background, secondary misses use the environment. Colour
+  alpha with a transparent clear estimates the probability that a primary
+  sample accepts any surface.
 - **Hit reconstruction.** The instance record's transform places the hit
   triangle's corners in world space; the position is interpolated from the
   barycentrics, and the geometric normal is turned to face the incoming
@@ -713,6 +744,8 @@ the network's surface terminal when it is a `UsdPreviewSurface`:
 | `metallic`, `metallic_texture` | `metallic` | clamped to [0, 1]; 0 under `useSpecularWorkflow` |
 | `emission`, `emission_texture` | `emissiveColor` | each component clamped to be non-negative |
 | `normal`, `normal_texture` | `normal` | signed RGB clamped to [-1, 1], then normalized in the shader |
+| `opacity`, `opacity_texture` | `opacity` | clamped to [0, 1]; scalar texture channels including alpha |
+| `opacity_threshold` | `opacityThreshold` | constant clamped to [0, 1] |
 
 An unauthored input, a non-finite value and a value of another type take
 the input's default. An input a `UsdUVTexture` drives becomes a texture
@@ -736,7 +769,7 @@ texture-coordinate source) takes its default and is reported as connected.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.
-`opacity`, `opacityThreshold`, `ior`, `specularColor`,
+`opacityMode`, `ior`, `specularColor`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
 

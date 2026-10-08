@@ -88,6 +88,12 @@ struct Material {
   // follows increasing s and the bitangent increasing t of `texcoords`;
   // without usable coordinates a stable orthonormal frame is used.
   std::array<float, 3> normal{0.0F, 0.0F, 1.0F};
+  // Surface coverage in [0, 1]. With a positive threshold, coverage is
+  // binary: opacity >= threshold accepts the surface. Otherwise a ray
+  // accepts it with probability opacity (straight-through on rejection,
+  // without a scattering event). This is presence, not refractive glass.
+  float opacity = 1.0F;
+  float opacity_threshold = 0.0F;
 
   std::optional<TextureInput> base_color_texture;
   std::optional<TextureInput> roughness_texture;
@@ -96,6 +102,7 @@ struct Material {
   // RGB already in tangent space: scale/bias belong to the texture input,
   // so an 8-bit normal map typically uses scale 2, bias -1 and raw texels.
   std::optional<TextureInput> normal_texture;
+  std::optional<TextureInput> opacity_texture;
   // Where the texture inputs look up: the mesh's texture-coordinate set of
   // this name (MeshGeometry::texcoords), or `texcoord_fallback` on a mesh
   // without one. Empty names no set.
@@ -106,15 +113,15 @@ struct Material {
 };
 
 // A material's texture inputs, in the order the GPU material table keeps
-// them: base colour, roughness, metallic, emission, normal.
-inline constexpr std::size_t kMaterialTextureInputs = 5;
+// them: base colour, roughness, metallic, emission, normal, opacity.
+inline constexpr std::size_t kMaterialTextureInputs = 6;
 
 [[nodiscard]] inline std::array<const std::optional<TextureInput>*,
     kMaterialTextureInputs>
 TextureInputs(const Material& material) {
   return {&material.base_color_texture, &material.roughness_texture,
       &material.metallic_texture, &material.emission_texture,
-      &material.normal_texture};
+      &material.normal_texture, &material.opacity_texture};
 }
 
 // Whether any of the material's inputs is a texture lookup.

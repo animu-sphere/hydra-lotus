@@ -16,6 +16,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -179,7 +180,7 @@ bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
   const std::array<std::optional<Lotus::TextureInput>*, Lotus::kMaterialTextureInputs> inputs{
       &expected.base_color_texture, &expected.roughness_texture,
       &expected.metallic_texture, &expected.emission_texture,
-      &expected.normal_texture};
+      &expected.normal_texture, &expected.opacity_texture};
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const std::uint32_t slot = gpu.texture_slots[index];
     if (!inputs[index]->has_value()) {
@@ -583,6 +584,10 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   textured.normal_texture = Lotus::TextureInput{"/checker"};
   textured.normal_texture->scale = {2, 2, 2, 1};
   textured.normal_texture->bias = {-1, -1, -1, 0};
+  textured.opacity = 0.75F;
+  textured.opacity_threshold = 0.5F;
+  textured.opacity_texture = Lotus::TextureInput{"/checker"};
+  textured.opacity_texture->channel = 3;
   world.SetMaterial("/textured", textured);
   world.BindMaterial("/triangle", "/textured");
   if (auto failure = apply("texture insertion"); !failure.empty())
@@ -2217,6 +2222,199 @@ std::string NormalMapsFailure(PathScenes& scenes) {
   return {};
 }
 
+// Coverage is tested against analytic layer mixtures, and the alpha mask
+// against the independent CPU bilinear oracle. No shader RNG is reproduced.
+std::string OpacityFailure(PathScenes& scenes) {
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  const auto square = MappedSquare({{"st", {{{0, 0}, {1, 0}, {1, 1}, {0, 1}}}}});
+  world.SetMesh("/front", square, Lotus::MeshInstance{});
+  Lotus::MeshInstance behind;
+  behind.world_from_object = Translation(0, 0, -2);
+  world.SetMesh("/back", square, behind);
+  Lotus::Material front;
+  front.base_color = {1, 0, 0};
+  front.emission = {4, 0, 0};
+  front.texcoords = "st";
+  Lotus::Material back;
+  back.base_color = {0, 1, 0};
+  back.emission = {0, 2, 1};
+  Paint(world, "/front", front);
+  Paint(world, "/back", back);
+  if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty()) return failure;
+  front.opacity = 0;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty()) return failure;
+  front.opacity = front.opacity_threshold = 0.5F;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
+    return "threshold equality: " + failure;
+  front.opacity = 0.499F;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
+    return "below threshold: " + failure;
+
+  Lotus::PathTracingSettings settings;
+  settings.output = Lotus::SceneOutput::Albedo;
+  Lotus::GpuFrameEvidence background;
+  if (auto failure = scenes.Render(settings, background); !failure.empty()) return failure;
+  front.opacity = 1;
+  Paint(world, "/front", front);
+  Lotus::GpuFrameEvidence foreground;
+  if (auto failure = scenes.Render(settings, foreground); !failure.empty()) return failure;
+  world.SetTexture("/alpha", MakeTexture(2, 1, Lotus::TextureFormat::Rgba8Srgb,
+      [](std::uint32_t i, std::uint32_t) -> Rgba { return {1, 1, 1, i == 0 ? 0.25 : 0.75}; }));
+  front.opacity_texture = Lotus::TextureInput{"/alpha", 3};
+  front.opacity_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  front.opacity_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  // Alpha must remain linear even in an sRGB image; exercise scale and bias.
+  front.opacity_texture->scale[3] = 0.8F;
+  front.opacity_texture->bias[3] = 0.1F;
+  Paint(world, "/front", front);
+  const auto mask_check = [&](bool mirrored) -> std::string {
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(settings, frame); !failure.empty()) return failure;
+    const auto snapshot = world.Commit();
+    const auto values = ColorValues(frame.color);
+    const auto fg = ColorValues(foreground.color);
+    const auto bg = ColorValues(background.color);
+    const auto& depths = frame.depth.payload;
+    const auto& fg_depth = foreground.depth.payload;
+    const auto& bg_depth = background.depth.payload;
+    const auto& lookup = *front.opacity_texture;
+    std::size_t accepted = 0, rejected = 0;
+    for (std::uint32_t y = 0; y < scenes.Target().height; ++y) {
+      for (std::uint32_t x = 0; x < scenes.Target().width; ++x) {
+        const double s = (x + 0.5) / scenes.Target().width;
+        const auto texel = LookupOracle(*snapshot.scene, lookup, mirrored ? 1 - s : s, 0.5);
+        const bool hit = std::clamp(texel.value[3], 0.0, 1.0) >= front.opacity_threshold;
+        hit ? ++accepted : ++rejected;
+        const std::size_t p = y * scenes.Target().width + x;
+        const auto& expected = hit ? fg : bg;
+        for (int c = 0; c < 4; ++c)
+          if (values[4 * p + c] != expected[4 * p + c])
+            return "alpha-mask albedo differs at pixel " + std::to_string(p);
+        if (std::abs(depths[p] - (hit ? fg_depth[p] : bg_depth[p])) > 1e-6)
+          return "alpha-mask depth differs at pixel " + std::to_string(p);
+      }
+    }
+    return accepted == 0 || rejected == 0 ? "alpha mask did not exercise both outcomes" : "";
+  };
+  if (auto failure = mask_check(false); !failure.empty()) return failure;
+  world.SetMesh("/front", MappedSquare({{"st", {{{1, 0}, {0, 0}, {0, 1}, {1, 1}}}}}), Lotus::MeshInstance{});
+  if (auto failure = mask_check(true); !failure.empty()) return "mirrored UVs: " + failure;
+  world.SetTexture("/alpha", MakeTexture(2, 1, Lotus::TextureFormat::Rgba8Srgb,
+      [](std::uint32_t i, std::uint32_t) -> Rgba { return {1, 1, 1, i == 0 ? 0.75 : 0.25}; }));
+  if (auto failure = mask_check(true); !failure.empty()) return "texture replacement: " + failure;
+  world.RemoveTexture("/alpha");
+  front.opacity_texture->fallback = {1, 1, 1, 0.5F};
+  front.opacity_texture->scale[3] = 0;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
+    return "unscaled missing-image fallback: " + failure;
+  world.SetTexture("/alpha", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
+      [](std::uint32_t, std::uint32_t) -> Rgba {
+        return {-0.25, 2, 1, std::numeric_limits<float>::max()};
+      }));
+  front.opacity_texture->scale = {1, 1, 1, 1};
+  front.opacity_texture->scale[3] = 2;
+  front.opacity_texture->bias = {0, 0, 0, 0};
+  front.texcoords = "absent";
+  front.texcoord_fallback = {0.5F, 0.5F};
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
+    return "non-finite float alpha: " + failure;
+  front.opacity_texture->channel = 0;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
+    return "negative red coverage: " + failure;
+  front.opacity_texture->channel = 1;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
+    return "clamped green coverage without a UV set: " + failure;
+  front.opacity_texture.reset();
+  front.base_color = {0, 0, 0};
+  back.base_color = {0, 0, 0};
+  Paint(world, "/back", back);
+  front.opacity = 0.25F;
+  front.opacity_threshold = 0;
+  Paint(world, "/front", front);
+  if (auto failure = scenes.ExpectMean("one coverage layer", 32, {1, 1.5, 0.75}); !failure.empty()) return failure;
+  behind.world_from_object = Translation(0, 0, -1);
+  world.SetMesh("/middle", square, behind);
+  Lotus::Material middle;
+  middle.base_color = {0, 0, 0};
+  middle.emission = {0, 2, 0};
+  middle.opacity = 0.5F;
+  Paint(world, "/middle", middle);
+  back.emission = {0, 0, 2};
+  Paint(world, "/back", back);
+  if (auto failure = scenes.ExpectMean("two independent coverage layers", 32, {1, 0.75, 0.75}); !failure.empty()) return failure;
+  world.RemoveMesh("/middle");
+  world.RemoveMesh("/back");
+  settings.output = Lotus::SceneOutput::Radiance;
+  settings.max_bounces = 0;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame, 32); !failure.empty()) return failure;
+  const auto values = ColorValues(frame.color);
+  double alpha = 0;
+  for (std::size_t p = 0; p * 4 < values.size(); ++p) {
+    const double a = values[4 * p + 3];
+    alpha += a;
+    for (int c = 0; c < 3; ++c) {
+      const double expected = a * front.emission[c] + (1 - a) * scenes.Target().clear_color[c];
+      if (std::abs(values[4 * p + c] - expected) > 1e-5)
+        return "background compositing differs from coverage alpha";
+    }
+  }
+  const double pixels = static_cast<double>(values.size() / 4);
+  const double tolerance = 5 * std::sqrt(0.25 * 0.75 / (pixels * 32));
+  if (std::abs(alpha / pixels - 0.25) > tolerance)
+    return "primary alpha differs from analytic 0.25 coverage";
+  Lotus::GpuFrameEvidence repeated;
+  settings.sample_index = 99;
+  if (auto failure = scenes.Render(settings, repeated); !failure.empty()) return failure;
+  if (frame.depth.payload != repeated.depth.payload)
+    return "progressive sample index changed fixed coverage depth";
+  settings.sample_index = 0;
+  if (auto failure = scenes.Render(settings, repeated, 32); !failure.empty()) return failure;
+  if (frame.color.payload != repeated.color.payload || frame.depth.payload != repeated.depth.payload)
+    return "fixed-seed alpha rendering was not repeatable";
+  if (auto failure = scenes.Clear(); !failure.empty()) return failure;
+
+  // A mirror's secondary ray crosses a cut-out outside the camera view.
+  // With max_bounces=1, rejected candidates must not consume another bounce.
+  world.SetCamera(OrthographicCamera());
+  auto plane = Square();
+  for (auto& p : plane.positions) { p[0] *= 4; p[1] *= 4; }
+  world.SetMesh("/mirror", plane, Lotus::MeshInstance{});
+  Lotus::Material mirror;
+  mirror.base_color = {1, 1, 1};
+  mirror.roughness = 0;
+  mirror.metallic = 1;
+  mirror.normal = {0.5F, 0, 0.866025404F};
+  Paint(world, "/mirror", mirror);
+  const auto wall = [](float x) -> Lotus::MeshGeometry {
+    return {{{x, -20, 0.5F}, {x, 20, 0.5F}, {x, 20, 10}, {x, -20, 10}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}};
+  };
+  world.SetMesh("/cutout", wall(3), Lotus::MeshInstance{});
+  front.opacity = 0;
+  front.opacity_threshold = 0.5F;
+  Paint(world, "/cutout", front);
+  world.SetMesh("/light", wall(6), Lotus::MeshInstance{});
+  Paint(world, "/light", back);
+  if (auto failure = scenes.ExpectExact(1, {0, 0, 2}); !failure.empty()) return "secondary cut-out: " + failure;
+  front.opacity = 1;
+  Paint(world, "/cutout", front);
+  if (auto failure = scenes.ExpectExact(1, {4, 0, 0}); !failure.empty()) return "secondary accepted surface: " + failure;
+  front.opacity = 0.25F;
+  front.opacity_threshold = 0;
+  Paint(world, "/cutout", front);
+  if (auto failure = scenes.ExpectMean("secondary coverage", 32, {1, 0, 1.5}); !failure.empty()) return failure;
+  scenes.Summarize("cut-outs, threshold equality, linear texture alpha, mirrored UVs, replacement, fallback, primary alpha and deterministic repeat passed");
+  return {};
+}
+
 // Texture lookups through the GpuScene to the path tracer. The Albedo and
 // RoughnessMetallic diagnostics of sRGB, linear and float textures under
 // every wrap mode, scale and bias, channel selection, a missing texture's
@@ -3140,6 +3338,7 @@ int main(int argc, char** argv) {
       run("renderer.path.normals", NormalsFailure);
       run("renderer.path.textures", TexturesFailure);
       run("renderer.path.normal_maps", NormalMapsFailure);
+      run("renderer.path.opacity", OpacityFailure);
       run("renderer.path.multibounce", MultibounceFailure);
       run("renderer.path.accumulation", AccumulationFailure);
       run("renderer.path.reference", [&](PathScenes& reference_scenes) {
@@ -3152,6 +3351,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.normals", "skip", ray_query.detail});
       checks.push_back({"renderer.path.textures", "skip", ray_query.detail});
       checks.push_back({"renderer.path.normal_maps", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.opacity", "skip", ray_query.detail});
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
@@ -3164,6 +3364,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.normals", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.textures", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.normal_maps", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.opacity", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});

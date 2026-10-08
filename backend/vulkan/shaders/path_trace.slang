@@ -56,6 +56,7 @@ static const uint kRoughnessInput = 1;
 static const uint kMetallicInput = 2;
 static const uint kEmissionInput = 3;
 static const uint kNormalInput = 4;
+static const uint kOpacityInput = 5;
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
 // table, the Lotus material IR.
@@ -64,7 +65,8 @@ struct MaterialRecord {
   float4 emission_metallic;
   float4 texcoord_fallback;
   float4 normal;
-  TextureInputRecord inputs[5];
+  float4 opacity;
+  TextureInputRecord inputs[6];
 };
 
 // Mirrors PathConstants in vulkan_backend.cpp.
@@ -138,17 +140,6 @@ struct Hit {
   float t;
 };
 
-bool Trace(RayDesc ray, out Hit hit) {
-  RayQuery<RAY_FLAG_FORCE_OPAQUE> query;
-  query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, ray);
-  while (query.Proceed()) {}
-  hit.instance = query.CommittedInstanceIndex();
-  hit.primitive = query.CommittedPrimitiveIndex();
-  hit.barycentrics = query.CommittedTriangleBarycentrics();
-  hit.t = query.CommittedRayT();
-  return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
-}
-
 // The camera ray through a point in normalized device coordinates. Starting
 // at the unprojected Vulkan z=0 handles perspective and orthographic
 // cameras, and clips geometry behind the near plane; z=1 bounds it.
@@ -205,6 +196,47 @@ float2 HitTexcoords(InstanceRecord instance, MaterialRecord material,
   const float2 t1 = ((float2*)instance.texcoords)[corner + 1];
   const float2 t2 = ((float2*)instance.texcoords)[corner + 2];
   return t0 + hit.barycentrics.x * (t1 - t0) + hit.barycentrics.y * (t2 - t0);
+}
+
+// Alpha is surface coverage. Rejected candidates leave the ray's interval
+// intact, with no offset, throughput change or scattering event. Geometry
+// forbids duplicate candidates so a fractional test cannot be retried.
+bool AcceptSurface(Hit hit, inout uint rng) {
+  const InstanceRecord instance = path_constants.instances[hit.instance];
+  const MaterialRecord material = path_constants.materials[instance.material_slot];
+  float opacity = material.opacity.x;
+  const TextureInputRecord input = material.inputs[kOpacityInput];
+  if (input.mode != kConstantInput) {
+    opacity = Lookup(input, HitTexcoords(instance, material, hit))[input.channel];
+    // Lookup arithmetic can overflow even with finite float texels.
+    opacity = isfinite(opacity) ? saturate(opacity) : 0.0;
+  }
+  if (material.opacity.y > 0.0) return opacity >= material.opacity.y;
+  if (opacity <= 0.0) return false;
+  if (opacity >= 1.0) return true;
+  return NextRandom(rng) < opacity;
+}
+
+bool Trace(RayDesc ray, inout uint rng, out Hit hit) {
+  RayQuery<RAY_FLAG_NONE> query;
+  query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, ray);
+  while (query.Proceed()) {
+    if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      Hit candidate;
+      candidate.instance = query.CandidateInstanceIndex();
+      candidate.primitive = query.CandidatePrimitiveIndex();
+      candidate.barycentrics = query.CandidateTriangleBarycentrics();
+      candidate.t = query.CandidateTriangleRayT();
+      if (AcceptSurface(candidate, rng)) query.CommitNonOpaqueTriangleHit();
+    }
+  }
+  hit = (Hit)0;
+  if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) return false;
+  hit.instance = query.CommittedInstanceIndex();
+  hit.primitive = query.CommittedPrimitiveIndex();
+  hit.barycentrics = query.CommittedTriangleBarycentrics();
+  hit.t = query.CommittedRayT();
+  return true;
 }
 
 // A hit's object-space corner normals `n` (one per row) interpolated at the
@@ -434,7 +466,7 @@ Spectrum TracePath(inout PathState path, Hit hit) {
     path.ray.TMin = 0.0;
     path.ray.TMax = kFloatMax;
     ++path.depth;
-    if (!Trace(path.ray, hit)) {
+    if (!Trace(path.ray, path.rngState, hit)) {
       path.radiance = path.radiance + path.throughput * environment;
       path.flags |= kPathDone;
     }
@@ -467,8 +499,12 @@ struct FragmentOutput {
 // surface. Misses keep the attachments.
 FragmentOutput CameraPass(VertexOutput input) {
   const RayDesc ray = CameraRay(input.ndc);
+  // Pixel-centre depth and diagnostics use a fixed coverage realization,
+  // independent of the progressive radiance sample and prior frames.
+  const uint2 pixel = uint2(input.position.xy);
+  uint rng = SeedRandom(pixel.y * path_constants.width + pixel.x, 0);
   Hit hit;
-  if (!Trace(ray, hit)) {
+  if (!Trace(ray, rng, hit)) {
     discard;
   }
   float3 position = ray.Origin + ray.Direction * hit.t;
@@ -516,7 +552,7 @@ FragmentOutput RadiancePass(VertexOutput input) {
     path.ray = CameraRay(film * path_constants.ndc_from_pixel.xy +
                          path_constants.ndc_from_pixel.zw);
     Hit hit;
-    if (Trace(path.ray, hit)) {
+    if (Trace(path.ray, path.rngState, hit)) {
       sum += float4(SpectrumToRgb(TracePath(path, hit)), 1.0);
     }
     accumulation[pixel] = sum;

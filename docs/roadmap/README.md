@@ -40,7 +40,7 @@ a version here when its predecessor is done.
 | --- | --- | --- |
 | Renderer Phase 0 — Foundation | 🚧 in progress (scaffold generated 2026-10-04) | v0.1.0 |
 | Renderer Phase 1 — Reference path tracer | ✅ exit criteria met ([reference images](../reports/2026-10-05-reference-images.md)), with deterministic mode through Hydra and per-pass GPU timestamps alongside ([current](current.md#renderer-phase-1--reference-path-tracer)) | unscheduled |
-| Renderer Phase 1.5 — Minimal material IR | 🚧 in progress (the material IR, constant `UsdPreviewSurface` translation, authored and computed normals, textures and normal maps, [current](current.md#renderer-phase-15--minimal-material-ir)) | unscheduled |
+| Renderer Phase 1.5 — Minimal material IR | 🚧 in progress (the material IR, constant `UsdPreviewSurface` translation, authored and computed normals, textures, normal maps and opacity coverage, [current](current.md#renderer-phase-15--minimal-material-ir)) | unscheduled |
 | Renderer Phase 2 — Wavefront path tracing | ⬜ | unscheduled |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |
 | Renderer Phase 4 — Temporal infrastructure | ⬜ | unscheduled |

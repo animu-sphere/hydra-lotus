@@ -142,8 +142,14 @@ Against the scope of
   ([scene reference](../reference/SCENE.md#path-tracing),
   [evidence](../reports/2026-10-08-normal-maps.md)). Stored vertex tangents
   and MikkTSpace compatibility are not implemented.
-- ⬜ **Opacity and an alpha policy.** `opacity` and `opacityThreshold`,
-  which needs non-opaque geometry in the acceleration structures.
+- ✅ **Opacity and an alpha policy.** Constant or scalar-textured `opacity`
+  and constant `opacityThreshold`: binary cut-outs for a positive threshold,
+  stochastic presence coverage otherwise, for primary and secondary rays
+  through non-opaque acceleration geometry. Depth uses a fixed coverage
+  realization; colour alpha estimates primary coverage
+  ([scene reference](../reference/SCENE.md#materials-and-environment),
+  [evidence](../reports/2026-10-08-opacity.md)). Glass, refraction and
+  `opacityMode` interpretation remain unsupported.
 - ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the
   specular workflow
   ([design policy §17](../design/DESIGN_POLICY.md#17-material), priority 2).

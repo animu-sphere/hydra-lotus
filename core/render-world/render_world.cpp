@@ -94,6 +94,11 @@ void ValidateMaterial(const Material& material) {
     throw std::invalid_argument("tangent normal components must be in [-1, 1]");
   }
   ValidateTextureInput(material.normal_texture, true);
+  if (!UnitInterval(material.opacity) ||
+      !UnitInterval(material.opacity_threshold)) {
+    throw std::invalid_argument("opacity and threshold must be in [0, 1]");
+  }
+  ValidateTextureInput(material.opacity_texture, false);
   if (!std::isfinite(material.texcoord_fallback[0]) ||
       !std::isfinite(material.texcoord_fallback[1])) {
     throw std::invalid_argument("texture coordinate fallback must be finite");

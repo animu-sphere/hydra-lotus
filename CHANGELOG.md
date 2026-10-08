@@ -9,6 +9,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opacity coverage and alpha masks (Renderer Phase 1.5).
+  `UsdPreviewSurface.opacity` translates constants or scalar texture lookups,
+  including alpha, and `opacityThreshold` translates constants. Positive
+  thresholds select cut-outs; zero selects stochastic presence coverage.
+  Non-opaque ray-query candidates test coverage for primary and secondary
+  rays without consuming bounces on rejected surfaces. Depth uses a fixed
+  coverage realization. `renderer.path.opacity` and the Hydra texture CPU
+  and GPU tests cover layer mixtures, background alpha, masks and edits.
+  Glass and `opacityMode` semantics are not implemented.
+
 - Tangent-space normal inputs and normal maps (Renderer Phase 1.5).
   `UsdPreviewSurface.normal` translates signed constants or RGB texture
   lookups, with authored scale, bias and colour space. The path tracer

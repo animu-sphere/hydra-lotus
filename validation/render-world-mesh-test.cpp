@@ -269,11 +269,26 @@ int main() try {
   invalid_material = material;
   invalid_material.normal_texture = Lotus::TextureInput{"/tex", 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  for (const float value : {-0.01F, 1.01F, infinity,
+           std::numeric_limits<float>::quiet_NaN()}) {
+    invalid_material = material;
+    invalid_material.opacity = value;
+    Reject([&] { world.SetMaterial("/paint", invalid_material); });
+    invalid_material = material;
+    invalid_material.opacity_threshold = value;
+    Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  }
+  invalid_material = material;
+  invalid_material.opacity_texture = Lotus::TextureInput{"/tex", 4};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   Check(world.Commit().revision == uv.revision,
       "rejected textures or texture inputs changed the scene revision");
   material.metallic_texture = Lotus::TextureInput{"/tex", 3};
   material.normal = {-1, 0.5F, 0};
   material.normal_texture = Lotus::TextureInput{"/tex"};
+  material.opacity = 0.75F;
+  material.opacity_threshold = 0.5F;
+  material.opacity_texture = Lotus::TextureInput{"/tex", 3};
   material.texcoords = "st";
   world.SetMaterial("/paint", material);
   world.SetTexture("/tex", texture);
