@@ -69,10 +69,11 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | `roughness` | `0.5` | [0, 1] | GGX roughness; alpha is its square |
 | `metallic` | `0` | [0, 1] | the GGX metal's share of the reflectance; the rest is Lambert |
 | `emission` | `(0, 0, 0)` | finite, ≥ 0 | radiance emitted from both sides |
+| `normal` | `(0, 0, 1)` | each in [-1, 1] | tangent-space shading normal, normalized after evaluation |
 
 Each input is a constant or, when its `TextureInput` is set
 (`base_color_texture`, `roughness_texture`, `metallic_texture`,
-`emission_texture`), a texture lookup that replaces the constant, as
+`emission_texture`, `normal_texture`), a texture lookup that replaces the constant, as
 `UsdUVTexture` does:
 
 - The lookup names a texture by its key in `LotusScene::textures`. A key
@@ -86,11 +87,19 @@ Each input is a constant or, when its `TextureInput` is set
 - A colour input takes the result's red, green and blue (`channel` 0); a
   scalar input takes its `channel`, 0 to 3. The value is clamped into the
   input's range: [0, 1] for base colour, roughness and metallic, and
-  non-negative for emission.
+  non-negative for emission and [-1, 1] for normal RGB.
 - The texture coordinates are the mesh's set named `Material::texcoords`,
   interpolated at the hit. A mesh without that set, or an empty name, uses
   `texcoord_fallback` (default (0, 0)). A material has one
   texture-coordinate source for all its lookups.
+
+The normal input is already signed tangent-space data. Lotus applies only
+the lookup's authored scale and bias, with no implicit decoding to [-1, 1].
+For the usual unsigned 8-bit encoding, author RGB scale 2, bias -1 and
+`sourceColorSpace = raw`, following the
+[UsdPreviewSurface specification](https://openusd.org/release/spec_usdpreviewsurface.html).
+Normal input evaluation and the tangent-frame fallback are described
+[below](#path-tracing).
 
 A `Texture` holds decoded texels, four channels each, rows from the top of
 the image, so (s, t) = (0, 0) is its bottom-left corner as in USD:
@@ -131,8 +140,8 @@ planned and returns a `SceneUpdate`:
   slot and texture-coordinate set) per placement of each visible mesh with
   triangles, in key order and then placement order. The set is the index,
   in key order, of the geometry's set that the material's lookups read, or
-  `kNoTexcoords` when the material has no texture input or the geometry no
-  such set;
+  `kNoTexcoords` when the material has neither a texture input nor a
+  non-identity constant normal, or the geometry has no such set;
 - `materials`: when `materials_changed`, the complete material table: the
   default `Material` at slot 0, then the scene's materials in key order,
   each a `SceneMaterial` with the resident texture each texture input's key
@@ -191,10 +200,11 @@ empty plan records no GPU work.
   the texture-coordinate set its material reads (zero and `kNoTexcoords`
   without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 304-byte record per material:
+- One device-local material table holds a 384-byte record per material:
   base colour and roughness, emission and metallic, the texture-coordinate
-  fallback, then one 64-byte lookup per texture input, in the order base
-  colour, roughness, metallic, emission: its texture slot, its sampler
+  fallback and the constant tangent normal, then one 64-byte lookup per
+  texture input, in the order base colour, roughness, metallic, emission,
+  normal: its texture slot, its sampler
   (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
   a lookup whose key names no texture, which returns the fallback), scale,
   bias and fallback. It reaches the
@@ -363,7 +373,8 @@ one brute-force camera path per pixel per sample, with no light sampling.
   texture as [above](#materials-and-environment), with the sampler of its
   wrap modes, at (s, 1 - t), since texture rows run from the top. The
   results replace the constants before the BSDF is built. A material
-  without lookups reads no texture coordinates.
+  without lookups interpolates no texture coordinates; a non-identity
+  constant normal may still read the set to build its tangent frame.
 - **Shading normal.** With supplied normals, the hit triangle's corner
   normals are interpolated with the barycentrics, transformed by the
   cofactor matrix of the transform's linear part (the inverse transpose up
@@ -373,6 +384,22 @@ one brute-force camera path per pixel per sample, with no light sampling.
   from the incoming ray, which the BSDF could not reflect. The BSDF is
   sampled and evaluated around the shading normal; ray origins are still
   offset along the geometric one.
+- **Normal maps.** After the mesh normal is evaluated, the material's
+  signed tangent normal perturbs it. The world-space triangle edges and
+  its selected corner UVs supply the UV Jacobian. The tangent follows
+  increasing s, projected perpendicular to the mesh shading normal and
+  normalized; the bitangent is its cross product with that normal, signed
+  towards increasing t. Mirrored UVs, mirrored transforms, non-uniform
+  scales and shear therefore retain their handedness. Tangents use USD's
+  upward t, independent of the image-row flip in texture sampling.
+  Missing coordinates, degenerate or ill-conditioned UVs, or a vanishing
+  projected tangent use the existing Duff normal-only orthonormal frame.
+  The mapped vector is normalized and turned to the geometric normal's
+  side. A zero or non-finite vector, or one facing away from the ray,
+  leaves the mesh shading normal. The identity `(0, 0, 1)` takes the
+  existing path exactly, preserving untextured reference images. Tangents
+  are computed per hit; there are no stored vertex tangents or MikkTSpace
+  compatibility guarantees.
 - **Emission** is added at every hit, the camera's included.
 - **BSDF.** A Lambert lobe with albedo `base_color` and a GGX metal lobe,
   mixed by `metallic`. The metal has Schlick's Fresnel from `base_color`,
@@ -443,6 +470,9 @@ authored normals decide
 outputs against an independent oracle of Vulkan's bilinear filter and
 address modes, and the exact radiance of textured Lambert and emissive
 surfaces ([report](../reports/2026-10-06-textures.md));
+`renderer.path.normal_maps` compares mapped shading normals with an
+independent UV-Jacobian and bilinear oracle, and checks exact mirror
+radiance ([report](../reports/2026-10-08-normal-maps.md));
 `renderer.path.accumulation` checks the box filter's coverage against the
 projected triangle's area in each pixel, unclamped HDR output, split frames
 and the restart rules
@@ -682,6 +712,7 @@ the network's surface terminal when it is a `UsdPreviewSurface`:
 | `roughness`, `roughness_texture` | `roughness` | clamped to [0, 1] |
 | `metallic`, `metallic_texture` | `metallic` | clamped to [0, 1]; 0 under `useSpecularWorkflow` |
 | `emission`, `emission_texture` | `emissiveColor` | each component clamped to be non-negative |
+| `normal`, `normal_texture` | `normal` | signed RGB clamped to [-1, 1], then normalized in the shader |
 
 An unauthored input, a non-finite value and a value of another type take
 the input's default. An input a `UsdUVTexture` drives becomes a texture
@@ -689,7 +720,7 @@ lookup:
 
 | `TextureInput` | `UsdUVTexture` | Rule |
 | --- | --- | --- |
-| `channel` | the connected output | `rgb` for a colour input; `r`, `g`, `b` or `a` for a scalar |
+| `channel` | the connected output | `rgb` for a colour or normal input; `r`, `g`, `b` or `a` for a scalar |
 | `texture` | `file`, `sourceColorSpace` | the key `<resolved path>|<colour space>`; the authored path when it does not resolve |
 | `wrap_s`, `wrap_t` | `wrapS`, `wrapT` | `black`, `clamp`, `repeat`, `mirror`; `useMetadata`, the default, is black |
 | `scale`, `bias`, `fallback` | the same inputs | float4, defaults (1, 1, 1, 1), (0, 0, 0, 0) and (0, 0, 0, 1) |
@@ -705,7 +736,7 @@ texture-coordinate source) takes its default and is reported as connected.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.
-`opacity`, `opacityThreshold`, `normal`, `ior`, `specularColor`,
+`opacity`, `opacityThreshold`, `ior`, `specularColor`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
 

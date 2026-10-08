@@ -10,6 +10,7 @@
 #include "material_translator.hpp"
 
 #include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4f.h>
 #include <pxr/imaging/hd/engine.h>
 #include <pxr/imaging/hd/renderIndex.h>
@@ -28,12 +29,14 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -149,6 +152,33 @@ void TranslatorCases() {
                 HdLotusTextureKey("", TfToken("auto")) &&
             translation.textures.size() == 1,
       "a texture without a file did not become a lookup of no image");
+
+  // Tangent normal constants keep signed components and reject non-finite
+  // values. RGB connections use the same authored scale/bias and colour
+  // space as other lookups; no implicit unsigned-to-signed conversion.
+  auto& parameters = network.nodes.back().parameters;
+  parameters[TfToken("normal")] = VtValue(GfVec3f(-2, 0.25F, 3));
+  translation = HdLotusTranslateMaterial(map);
+  Check(translation.material.normal == std::array<float, 3>{-1, 0.25F, 1},
+      "the tangent normal constant lost its sign or range");
+  parameters[TfToken("normal")] = VtValue(GfVec3f(0,
+      std::numeric_limits<float>::quiet_NaN(), 1));
+  translation = HdLotusTranslateMaterial(map);
+  Check(translation.material.normal == Lotus::Material{}.normal,
+      "a non-finite tangent normal did not keep the default");
+  connect("/Material/Albedo", "rgb", surface, "normal");
+  translation = HdLotusTranslateMaterial(map);
+  Check(translation.material.normal_texture == albedo &&
+            translation.textures.size() == 1,
+      "the normal lookup was not translated or decoded its shared image twice");
+  network.relationships.back() = {SdfPath("/Material/Albedo"), TfToken("g"),
+      surface, TfToken("normal")};
+  translation = HdLotusTranslateMaterial(map);
+  Check(!translation.material.normal_texture &&
+            std::find(translation.connected_inputs.begin(),
+                translation.connected_inputs.end(), TfToken("normal")) !=
+                translation.connected_inputs.end(),
+      "a scalar normal connection was not reported as untranslated");
 }
 
 // Writes an 8-bit PNG of `channels` channels, rows from the top.
@@ -262,6 +292,74 @@ def Mesh "Plain" (
     int[] faceVertexCounts = [3]
     int[] faceVertexIndices = [0, 1, 2]
     point3f[] points = [(4, 0, 0), (5, 0, 0), (4, 1, 0)]
+}
+)usda";
+
+// A raw 8-bit tangent normal turns a white mirror towards an emissive wall
+// outside the camera view. The unperturbed mirror sees the white environment.
+constexpr const char* kNormalStage = R"usda(#usda 1.0
+def Scope "Looks"
+{
+    def Material "Mirror"
+    {
+        token outputs:surface.connect = </Looks/Mirror/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (1, 1, 1)
+            float inputs:roughness = 0
+            float inputs:metallic = 1
+            normal3f inputs:normal.connect = </Looks/Mirror/Normal.outputs:rgb>
+            token outputs:surface
+        }
+        def Shader "Normal"
+        {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @normal.png@
+            token inputs:sourceColorSpace = "raw"
+            float2 inputs:st.connect = </Looks/Mirror/Reader.outputs:result>
+            float4 inputs:scale = (2, 2, 2, 1)
+            float4 inputs:bias = (-1, -1, -1, 0)
+            token inputs:wrapS = "clamp"
+            token inputs:wrapT = "clamp"
+            float3 outputs:rgb
+        }
+        def Shader "Reader"
+        {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            string inputs:varname = "st"
+            float2 outputs:result
+        }
+    }
+    def Material "Glow"
+    {
+        token outputs:surface.connect = </Looks/Glow/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0, 0, 0)
+            color3f inputs:emissiveColor = (2, 1, 0.5)
+            token outputs:surface
+        }
+    }
+}
+def Mesh "Quad" (prepend apiSchemas = ["MaterialBindingAPI"])
+{
+    rel material:binding = </Looks/Mirror>
+    uniform token subdivisionScheme = "none"
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(-4, -4, 0), (4, -4, 0), (4, 4, 0), (-4, 4, 0)]
+    texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+        interpolation = "faceVarying"
+    )
+}
+def Mesh "Wall" (prepend apiSchemas = ["MaterialBindingAPI"])
+{
+    rel material:binding = </Looks/Glow>
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(6, -20, -0.5), (6, 20, -0.5), (6, 20, -10), (6, -20, -10)]
 }
 )usda";
 
@@ -509,6 +607,70 @@ int main(int argc, char** argv) try {
   Check(removed.scene->textures.size() == 1 &&
             Find(removed, "gray.png", "raw") == gray,
       "a removed material's images were kept, or another material's lost");
+
+  WritePng(directory / "normal.png", 1, 1, 3, {191, 128, 238});
+  WritePng(directory / "normal-left.png", 1, 1, 3, {64, 128, 238});
+  Check(stage->GetRootLayer()->ImportFromString(kNormalStage),
+      "could not replace the stage with the normal-map scene");
+  const auto mapped_normal = sync();
+  const auto normal_image = Find(mapped_normal, "normal.png", "raw");
+  const auto& mirror = mapped_normal.scene->materials.at("/Looks/Mirror");
+  Check(mirror.normal_texture && mirror.texcoords == "st" &&
+            mirror.normal_texture->scale == std::array<float, 4>{2, 2, 2, 1} &&
+            mirror.normal_texture->bias == std::array<float, 4>{-1, -1, -1, 0} &&
+            normal_image && normal_image->format == Lotus::TextureFormat::Rgba8Unorm &&
+            normal_image->texels == std::vector<std::uint8_t>{191, 128, 238, 255} &&
+            mapped_normal.scene->textures.size() == 1,
+      "the stage's signed raw normal lookup did not reach the IR");
+  const auto expect_normal_radiance = [&](const std::array<float, 3>& expected) {
+    if (!gpu)
+      return;
+    const auto* data = static_cast<const float*>(color.Map());
+    Check(data != nullptr, "could not map the normal-map colour buffer");
+    for (int p = 0; p < kSize * kSize; ++p)
+      for (int c = 0; c < 3; ++c)
+        Check(std::isfinite(data[p * 4 + c]) &&
+                  std::abs(data[p * 4 + c] - expected[c]) <= 1e-4F,
+            "mapped mirror radiance differs: " + std::to_string(data[p * 4 + c]) +
+                " instead of " + std::to_string(expected[c]));
+    color.Unmap();
+  };
+  expect_normal_radiance({2, 1, 0.5F});
+  // Mirroring s turns the normal towards -X and away from the wall.
+  const auto st_attribute = stage->GetPrimAtPath(SdfPath("/Quad"))
+                                .GetAttribute(TfToken("primvars:st"));
+  st_attribute.Set(VtVec2fArray{{1, 0}, {0, 0}, {0, 1}, {1, 1}});
+  const auto mirrored_normal = sync();
+  Check(mirrored_normal.scene->meshes.at("/Quad").geometry !=
+                mapped_normal.scene->meshes.at("/Quad").geometry &&
+            Find(mirrored_normal, "normal.png", "raw") == normal_image,
+      "a normal-map UV edit did not replace geometry alone");
+  expect_normal_radiance({1, 1, 1});
+  st_attribute.Set(VtVec2fArray{{0, 0}, {1, 0}, {1, 1}, {0, 1}});
+  sync();
+  const auto normal_shader = stage->GetPrimAtPath(SdfPath("/Looks/Mirror/Normal"));
+  normal_shader.GetAttribute(TfToken("inputs:file")).Set(SdfAssetPath("normal-left.png"));
+  const auto edited_normal = sync();
+  Check(!Find(edited_normal, "normal.png", "raw") &&
+            Find(edited_normal, "normal-left.png", "raw") &&
+            edited_normal.scene->textures.size() == 1,
+      "a normal-map file edit kept the old image");
+  expect_normal_radiance({1, 1, 1});
+  normal_shader.GetAttribute(TfToken("inputs:scale")).Set(GfVec4f(0, 0, 0, 1));
+  normal_shader.GetAttribute(TfToken("inputs:bias")).Set(GfVec4f(0));
+  const auto zero_normal = sync();
+  Check(Find(zero_normal, "normal-left.png", "raw") ==
+            Find(edited_normal, "normal-left.png", "raw"),
+      "a normal scale edit decoded its image again");
+  expect_normal_radiance({1, 1, 1});
+  stage->GetPrimAtPath(SdfPath("/Looks/Mirror/Surface"))
+      .GetAttribute(TfToken("inputs:normal"))
+      .ClearConnections();
+  const auto disconnected = sync();
+  Check(!disconnected.scene->materials.at("/Looks/Mirror").normal_texture &&
+            disconnected.scene->textures.empty(),
+      "disconnecting the normal input kept its image");
+  expect_normal_radiance({1, 1, 1});
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

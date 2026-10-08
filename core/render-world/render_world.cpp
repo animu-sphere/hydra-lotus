@@ -88,6 +88,12 @@ void ValidateMaterial(const Material& material) {
   ValidateTextureInput(material.roughness_texture, false);
   ValidateTextureInput(material.metallic_texture, false);
   ValidateTextureInput(material.emission_texture, true);
+  if (!Finite(material.normal) ||
+      !std::all_of(material.normal.begin(), material.normal.end(),
+          [](float value) { return value >= -1.0F && value <= 1.0F; })) {
+    throw std::invalid_argument("tangent normal components must be in [-1, 1]");
+  }
+  ValidateTextureInput(material.normal_texture, true);
   if (!std::isfinite(material.texcoord_fallback[0]) ||
       !std::isfinite(material.texcoord_fallback[1])) {
     throw std::invalid_argument("texture coordinate fallback must be finite");
