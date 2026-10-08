@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Constant Hydra dome lighting from `DomeLight` colour, intensity, exposure
+  and inherited visibility. Multiple domes add into the existing environment;
+  deleting the last dome restores the white fallback. CPU and GPU tests
+  check live USD edits, exact mirror radiance, accumulation restarts and
+  unchanged geometry upload and acceleration build counters.
+
 - GGX dielectric reflection over Lambert (Renderer Phase 1.5), from constant
   `ior` or the specular workflow's constant/RGB-textured `specularColor`.
   Fresnel attenuates the diffuse base on entry and exit; view-dependent lobe

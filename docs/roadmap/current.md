@@ -173,11 +173,12 @@ Against the scope of
 
 ## Adapter follow-up
 
-- ⬜ **Hydra lights.** The adapter reads no light: every surface is lit by
-  a constant white fallback environment
-  ([scene reference](../reference/SCENE.md#hydra-extraction)). A dome
-  light's colour and intensity can feed the constant environment.
-  Materials are [Renderer Phase 1.5](#renderer-phase-15--minimal-material-ir).
+- ⬜ **Remaining Hydra lights.** Constant dome colour, intensity, exposure
+  and visibility feed the environment
+  ([scene reference](../reference/SCENE.md#lights),
+  [evidence](../reports/2026-10-08-dome-lights.md)). Environment textures,
+  other light types, colour temperature and light/shadow linking remain
+  unsupported; direct light sampling belongs to Renderer Phase 3.
 - ⬜ **No-clear restoration when switching AOV buffer sets.** The foundation
   renderer retains one colour/depth attachment pair at a time; preservation
   currently assumes successive passes reuse their bound buffers

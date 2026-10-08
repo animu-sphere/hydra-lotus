@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-08-dome-lights.md](2026-10-08-dome-lights.md) | Constant Hydra dome lighting: composed USD colour/intensity/exposure and visibility edits, additive domes and removal, analytic mirror radiance, accumulation restarts and unchanged geometry/build counters; Hydra 25/25 and strict evidence validation. |
 | [ost/](ost/) | The `ost` dogfooding series — one report per version exercised. Append-only; the newest report carries the live upstream ask list. |
 | [2026-10-04-foundation-camera-boundary.md](2026-10-04-foundation-camera-boundary.md) | Viewport camera integration and automatic public-header boundary discovery; core and viewport verification. |
 | [2026-10-04-foundation-aovs.md](2026-10-04-foundation-aovs.md) | Foundation AOV formats, binding validation, full-frame clears, attachment preservation and empty-scene output; core and Hydra verification. |
