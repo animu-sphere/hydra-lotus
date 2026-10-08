@@ -25,6 +25,7 @@
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/changeTracker.h>
 #include <pxr/imaging/hd/instancer.h>
+#include <pxr/imaging/hd/light.h>
 #include <pxr/imaging/hd/material.h>
 #include <pxr/imaging/hd/mesh.h>
 #include <pxr/imaging/hd/meshUtil.h>
@@ -259,8 +260,7 @@ void ApplyFraming(const HdRenderPassState& state,
       data.GetHeight()};
 }
 
-// Until dome lights are read, every surface is lit by a constant white
-// environment, so an unlit surface shows its albedo.
+// With no authored dome, retain the white environment used by the bootstrap.
 constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 
 // The scene keys of the meshes a render pass does not trace.
@@ -407,6 +407,17 @@ class AdapterState {
 public:
   AdapterState() {
     world_.SetEnvironment(kFallbackEnvironment);
+  }
+
+  void SyncDome(const SdfPath& id, const std::array<float, 3>& radiance) {
+    std::scoped_lock lock(mutex_);
+    domes_[id] = radiance;
+    UpdateEnvironment();
+  }
+
+  void RemoveDome(const SdfPath& id) {
+    std::scoped_lock lock(mutex_);
+    if (domes_.erase(id) != 0) UpdateEnvironment();
   }
 
   // A mesh's material binding is the bound material's SdfPath string, or
@@ -660,6 +671,21 @@ private:
 
   std::mutex mutex_;
   Lotus::RenderWorld world_;
+  // Path order makes the sum independent of Hydra's parallel sync order.
+  std::map<SdfPath, std::array<float, 3>> domes_;
+
+  void UpdateEnvironment() {
+    std::array<double, 3> sum{};
+    for (const auto& [id, radiance] : domes_) {
+      for (std::size_t c = 0; c < sum.size(); ++c) sum[c] += radiance[c];
+    }
+    std::array<float, 3> radiance{};
+    for (std::size_t c = 0; c < sum.size(); ++c) {
+      radiance[c] = static_cast<float>(std::min(sum[c],
+          static_cast<double>(std::numeric_limits<float>::max())));
+    }
+    world_.SetEnvironment(domes_.empty() ? kFallbackEnvironment : radiance);
+  }
   // The texture keys each material names, and how many materials name each
   // key.
   std::unordered_map<SdfPath, std::vector<std::string>, SdfPath::Hash>
@@ -841,6 +867,64 @@ public:
             GetId().GetText(), translation.unsupported.c_str());
       }
       state_->SyncMaterial(GetId(), translation);
+    }
+    *dirty_bits = Clean;
+  }
+
+private:
+  std::shared_ptr<AdapterState> state_;
+};
+
+// A uniform, untextured dome. Visibility shares HdLight::DirtyParams.
+// Fallback sprims have no state, so they cannot change authored lighting.
+class HdLotusDomeLight final : public HdLight {
+public:
+  HdLotusDomeLight(const SdfPath& id, std::shared_ptr<AdapterState> state)
+      : HdLight(id), state_(std::move(state)) {
+  }
+
+  ~HdLotusDomeLight() override {
+    if (state_) state_->RemoveDome(GetId());
+  }
+
+  HdDirtyBits GetInitialDirtyBitsMask() const override { return AllDirty; }
+
+  void Sync(HdSceneDelegate* delegate, HdRenderParam*,
+      HdDirtyBits* dirty_bits) override {
+    if (state_ && (*dirty_bits & (DirtyParams | DirtyResource))) {
+      std::array<float, 3> radiance{};
+      if (delegate->GetVisible(GetId())) {
+        const auto parameter = [&](const TfToken& token, auto fallback) {
+          using T = decltype(fallback);
+          const VtValue value = delegate->GetLightParamValue(GetId(), token);
+          return value.IsHolding<T>() ? value.UncheckedGet<T>() : fallback;
+        };
+        const GfVec3f color = parameter(HdLightTokens->color, GfVec3f(1.0F));
+        const float intensity = parameter(HdLightTokens->intensity, 1.0F);
+        const float exposure = parameter(HdLightTokens->exposure, 0.0F);
+        bool valid = std::isfinite(intensity) && std::isfinite(exposure);
+        for (std::size_t c = 0; c < radiance.size(); ++c) {
+          valid = valid && std::isfinite(color[c]);
+        }
+        if (valid && intensity > 0.0F) {
+          for (std::size_t c = 0; c < radiance.size(); ++c) {
+            // Double precision avoids intermediate overflow for representable
+            // RGB values. Zero channels stay zero at very large exposures.
+            const double value = color[c] > 0.0F
+                ? double(color[c]) * intensity * std::exp2(double(exposure))
+                : 0.0;
+            valid = valid && std::isfinite(value) &&
+                value <= std::numeric_limits<float>::max();
+            if (valid) radiance[c] = static_cast<float>(value);
+          }
+        }
+        if (!valid) {
+          radiance = {};
+          TF_WARN("Lotus ignores invalid or overflowing dome radiance on %s",
+              GetId().GetText());
+        }
+      }
+      state_->SyncDome(GetId(), radiance);
     }
     *dirty_bits = Clean;
   }
@@ -1610,7 +1694,8 @@ const TfTokenVector& HdLotusRenderDelegate::GetSupportedRprimTypes() const {
 
 const TfTokenVector& HdLotusRenderDelegate::GetSupportedSprimTypes() const {
   static const TfTokenVector types{
-      HdPrimTypeTokens->camera, HdPrimTypeTokens->material};
+      HdPrimTypeTokens->camera, HdPrimTypeTokens->material,
+      HdPrimTypeTokens->domeLight};
   return types;
 }
 
@@ -1658,6 +1743,9 @@ HdSprim* HdLotusRenderDelegate::CreateSprim(const TfToken& type_id,
   if (type_id == HdPrimTypeTokens->material) {
     return new HdLotusMaterial(sprim_id, impl_->state);
   }
+  if (type_id == HdPrimTypeTokens->domeLight) {
+    return new HdLotusDomeLight(sprim_id, impl_->state);
+  }
   return nullptr;
 }
 
@@ -1668,6 +1756,9 @@ HdSprim* HdLotusRenderDelegate::CreateFallbackSprim(
   }
   if (type_id == HdPrimTypeTokens->material) {
     return new HdLotusMaterial(SdfPath("/__lotusFallbackMaterial"), nullptr);
+  }
+  if (type_id == HdPrimTypeTokens->domeLight) {
+    return new HdLotusDomeLight(SdfPath("/__lotusFallbackDome"), nullptr);
   }
   return nullptr;
 }

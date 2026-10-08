@@ -640,12 +640,49 @@ default); the render pass and the colour buffer report convergence when the
 accumulation reaches its sample count. Point, normal, topology, transform,
 visibility and instancer edits, like camera, framing and
 `lotus:sampleIndex` changes, restart the accumulation. Other devices
-retain the bootstrap path and converge after one pass. Lights are not read
-yet: the adapter sets a constant white environment. The host evidence log identifies the choice as
+retain the bootstrap path and converge after one pass. Dome lights feed the
+constant environment as [below](#lights); an environment change restarts the
+accumulation. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `sample_index`, `samples` and
 `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass.
+
+### Lights
+
+The delegate supports `domeLight` sprims. Each visible dome contributes
+constant linear RGB radiance `color * intensity * 2^exposure`, using Hydra's
+`HdLightTokens` parameters and the defaults white, 1 and 0 from
+[UsdLux LightAPI](https://openusd.org/release/user_guides/schemas/usdLux/LightAPI.html).
+Visibility is read from the scene delegate, including inherited visibility;
+`HdLight::DirtyParams` covers it as well as parameter edits, and
+`DirtyResource` also refreshes the contribution. Transforms have no effect
+on a uniform environment.
+
+Contributions are summed in path order with double precision and stored in
+the existing `LotusScene::environment`. A hidden or zero-intensity dome
+contributes black. Negative intensity and colour channels are clamped to
+zero; non-finite inputs or a per-dome radiance outside float range warn and
+make that dome black. A sum above float range saturates to the largest finite
+float per channel. This numeric guard is not a useful rendering range.
+
+With no synced domes, the adapter uses its white fallback environment. An
+authored dome that is invisible, black or invalid still suppresses that
+fallback; destroying the last dome restores it. Fallback sprims never
+contribute. The aggregate changes the scene snapshot only when its RGB value
+changes, so equivalent lighting edits preserve the accumulation. An
+environment-only change neither uploads geometry nor rebuilds acceleration
+structures. Environment radiance continues to light secondary misses only;
+camera misses keep their AOV clear background.
+
+This is constant dome lighting only: environment textures, colour
+temperature, diffuse/specular contribution controls, light/shadow linking,
+light filters, instanced lights and other light types are not evaluated.
+There is no NEE or environment importance sampling. CTest
+`lotus-renderer-hydra-light` checks composed USD edits and snapshot lifetimes;
+its GPU-gated `-gpu` variant checks analytic mirror radiance, accumulation
+restarts and unchanged upload/build counters
+([evidence](../reports/2026-10-08-dome-lights.md)).
 
 ### Deterministic mode through Hydra
 
