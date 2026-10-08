@@ -602,6 +602,10 @@ public:
     evidence.samples_per_pixel =
         pass == FramePass::Radiance ? accumulated_samples_ : 0;
     evidence.validation_available = instance_state_.validation_available;
+    evidence.synchronization_validation_available =
+        instance_state_.synchronization_validation_available;
+    evidence.synchronization_validation_detail =
+        instance_state_.synchronization_validation_detail;
     evidence.validation_message_count = validation_.message_count;
     evidence.validation_detail = validation_.first_message.empty()
                                      ? instance_state_.validation_detail

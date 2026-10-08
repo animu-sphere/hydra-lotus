@@ -3518,6 +3518,19 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.scene.timestamp", Status(setup_status),
         setup_error});
   }
+  if (last.synchronization_validation_available) {
+    checks.push_back({"renderer.validation.synchronization",
+        last.validation_message_count == 0 ? "pass" : "fail",
+        last.validation_message_count == 0
+            ? "synchronization validation enabled; no validation messages"
+            : last.validation_detail});
+  } else {
+    checks.push_back({"renderer.validation.synchronization", "skip",
+        last.synchronization_validation_detail.empty()
+            ? "synchronization validation capture was unavailable: " +
+                  (last.validation_detail.empty() ? setup_error : last.validation_detail)
+            : last.synchronization_validation_detail});
+  }
   if (last.validation_available) {
     checks.push_back({"renderer.validation.messages",
         last.validation_message_count == 0 ? "pass" : "fail",

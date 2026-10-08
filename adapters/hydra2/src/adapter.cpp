@@ -138,6 +138,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " sample_index=" << sample_index
          << " samples=" << frame.samples_per_pixel
          << " converged=" << (converged ? 1 : 0)
+         << " synchronization_validation="
+         << (frame.synchronization_validation_available ? 1 : 0)
          << " validation_messages=" << frame.validation_message_count << '\n';
 }
 

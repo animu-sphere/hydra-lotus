@@ -58,6 +58,10 @@ struct GpuFrameEvidence {
   // the other outputs.
   std::uint32_t samples_per_pixel = 0;
   bool validation_available = false;
+  // Synchronization validation was explicitly enabled and its messages are
+  // captured by the same messenger. False carries an unavailable explanation.
+  bool synchronization_validation_available = false;
+  std::string synchronization_validation_detail;
   // Messages since the renderer was created.
   std::uint32_t validation_message_count = 0;
   std::string validation_detail;
@@ -342,10 +346,10 @@ struct RayQueryShaders {
   std::string fragment;
 };
 
-// Creates the device and pipeline, enabling Vulkan validation capture
-// whenever the loader offers it. Returns nullptr with `status`/`error`
-// describing why: the core-only configuration and missing device capability
-// report Skip, real failures Fail. Shader paths are explicit so build-tree and
+// Creates the device and pipeline, enabling Vulkan and synchronization
+// validation capture whenever the loader/layer offers it. Returns nullptr
+// with `status`/`error` describing why: the core-only configuration and missing
+// device capability report Skip, real failures Fail. Shader paths are explicit so build-tree and
 // install-tree layouts exercise the same backend code without source-tree
 // fallbacks.
 [[nodiscard]] std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(

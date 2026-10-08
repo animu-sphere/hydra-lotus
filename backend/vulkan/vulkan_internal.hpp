@@ -82,11 +82,15 @@ struct InstanceState {
   PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_messenger = nullptr;
   bool validation_available = false;
   std::string validation_detail;
+  bool synchronization_validation_available = false;
+  std::string synchronization_validation_detail;
 };
 
 // Create the instance, opting in to the Khronos validation layer and a debug
-// messenger whenever the loader offers both. Validation being unavailable is
-// recorded, not an error: evidence stays explicit either way.
+// messenger whenever the loader offers both. Synchronization validation is
+// explicitly enabled when the layer advertises VK_EXT_validation_features.
+// Validation being unavailable is recorded, not an error: evidence stays
+// explicit either way.
 inline bool CreateInstanceWithValidation(
     const char* application_name,
     const std::vector<const char*>& required_extensions,
@@ -117,9 +121,39 @@ inline bool CreateInstanceWithValidation(
   }
   const bool enable_validation = has_validation_layer && has_debug_utils;
   const char* validation_layer = "VK_LAYER_KHRONOS_validation";
+  // Explicit layer extensions are not included in the loader's global list.
+  bool has_validation_features = false;
+  if (enable_validation) {
+    std::uint32_t count = 0;
+    if (!VulkanOk(vkEnumerateInstanceExtensionProperties(validation_layer,
+                      &count, nullptr),
+            "enumerate validation layer extensions", detail)) {
+      return false;
+    }
+    std::vector<VkExtensionProperties> layer_extensions(count);
+    if (!VulkanOk(vkEnumerateInstanceExtensionProperties(validation_layer,
+                      &count, layer_extensions.data()),
+            "enumerate validation layer extensions", detail)) {
+      return false;
+    }
+    for (const VkExtensionProperties& extension : layer_extensions) {
+      if (std::string_view(extension.extensionName) ==
+          VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) {
+        has_validation_features = true;
+        break;
+      }
+    }
+  }
   std::vector<const char*> enabled_extensions = required_extensions;
   VkDebugUtilsMessengerCreateInfoEXT debug_create =
       DebugMessengerCreateInfo(validation);
+  const VkValidationFeatureEnableEXT synchronization =
+      VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+  VkValidationFeaturesEXT validation_features{
+      VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+  validation_features.pNext = &debug_create;
+  validation_features.enabledValidationFeatureCount = 1;
+  validation_features.pEnabledValidationFeatures = &synchronization;
   VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
   application.pApplicationName = application_name;
   application.applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
@@ -133,6 +167,10 @@ inline bool CreateInstanceWithValidation(
     instance_create.ppEnabledLayerNames = &validation_layer;
     enabled_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     instance_create.pNext = &debug_create;
+    if (has_validation_features) {
+      enabled_extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+      instance_create.pNext = &validation_features;
+    }
   }
   instance_create.enabledExtensionCount =
       static_cast<std::uint32_t>(enabled_extensions.size());
@@ -154,6 +192,7 @@ inline bool CreateInstanceWithValidation(
         create_debug(state.instance, &debug_create, nullptr,
             &state.debug_messenger) == VK_SUCCESS) {
       state.validation_available = true;
+      state.synchronization_validation_available = has_validation_features;
     } else {
       state.validation_detail =
           "VK_EXT_debug_utils messenger could not be created";
@@ -162,6 +201,12 @@ inline bool CreateInstanceWithValidation(
     state.validation_detail = "VK_LAYER_KHRONOS_validation is unavailable";
   } else {
     state.validation_detail = "VK_EXT_debug_utils is unavailable";
+  }
+  if (!state.validation_available) {
+    state.synchronization_validation_detail = state.validation_detail;
+  } else if (!has_validation_features) {
+    state.synchronization_validation_detail =
+        "VK_EXT_validation_features is unavailable from VK_LAYER_KHRONOS_validation";
   }
   return true;
 }
