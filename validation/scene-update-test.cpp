@@ -316,6 +316,23 @@ int main() try {
             update.geometry_uploads.empty() && update.texture_uploads.empty(),
       "a coverage edit changed geometry or instances");
 
+  painted.opacity_texture.reset();
+  painted.specular_color_texture = Lotus::TextureInput{"/t/unused"};
+  painted.use_specular_workflow = true;
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && !update.instances_changed &&
+            update.materials[2].textures[6] != nullptr &&
+            update.materials[2].textures[5] == nullptr && update.geometry_uploads.empty(),
+      "a specular-only lookup did not resolve the seventh texture slot");
+  painted.ior = 2.0F;
+  painted.specular_color = {0.1F, 0.3F, 0.5F};
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && !update.instances_changed &&
+            update.geometry_uploads.empty() && update.texture_uploads.empty(),
+      "a specular parameter edit changed geometry or instances");
+
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
   world.RemoveMaterial("/m/metal");

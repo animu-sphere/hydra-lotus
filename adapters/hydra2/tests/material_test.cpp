@@ -69,6 +69,7 @@ def Scope "Looks"
             uniform token info:id = "UsdPreviewSurface"
             color3f inputs:diffuseColor = (0.5, 0.25, 0.125)
             color3f inputs:emissiveColor = (1, 2, 3)
+            float inputs:ior = 1
             token outputs:surface
         }
     }
@@ -182,12 +183,13 @@ void Expect(const std::string& step, const Lotus::Material& actual,
 }
 
 Lotus::Material MakeMaterial(std::array<float, 3> base, float roughness,
-    float metallic, std::array<float, 3> emission) {
+    float metallic, std::array<float, 3> emission, float ior = 1.5F) {
   Lotus::Material material;
   material.base_color = base;
   material.roughness = roughness;
   material.metallic = metallic;
   material.emission = emission;
+  material.ior = ior;
   return material;
 }
 
@@ -220,6 +222,28 @@ void TranslatorCases() {
 
   constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
   constexpr float kInfinity = std::numeric_limits<float>::infinity();
+  translation = HdLotusTranslateMaterial(Surface(preview,
+      {{TfToken("ior"), VtValue(2.5F)}}));
+  Check(translation.material.ior == 2.5F, "ior was not translated");
+  translation = HdLotusTranslateMaterial(Surface(preview,
+      {{TfToken("ior"), VtValue(-1.0F)}}));
+  Check(translation.material.ior == 1, "ior was not clamped to index matching");
+  translation = HdLotusTranslateMaterial(Surface(preview,
+      {{TfToken("ior"), VtValue(kInfinity)}}));
+  Check(translation.material.ior == 1.5F, "non-finite ior did not keep its default");
+  translation = HdLotusTranslateMaterial(Surface(preview,
+      {{TfToken("useSpecularWorkflow"), VtValue(1)},
+          {TfToken("specularColor"), VtValue(GfVec3f(1.5F, -1, 0.25F))},
+          {TfToken("metallic"), VtValue(1.0F)}, {TfToken("ior"), VtValue(2.5F)}}));
+  Check(translation.material.use_specular_workflow && translation.material.metallic == 0 &&
+            translation.material.ior == 1.5F &&
+            translation.material.specular_color == std::array<float, 3>{1, 0, 0.25F},
+      "specular workflow did not translate F0 and ignore metallic/ior");
+  translation = HdLotusTranslateMaterial(Surface(preview,
+      {{TfToken("useSpecularWorkflow"), VtValue(1)},
+          {TfToken("specularColor"), VtValue(GfVec3f(0, kNaN, 1))}}));
+  Check(translation.material.specular_color == Lotus::Material{}.specular_color,
+      "non-finite specular colour did not keep its default");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("diffuseColor"), VtValue(GfVec3f(kNaN, 0.5F, 0.5F))},
           {TfToken("emissiveColor"), VtValue(GfVec3d(1e39, -2.0, 0.25))},
@@ -304,7 +328,54 @@ std::array<float, 3> Pixel(HdLotusRenderBuffer& buffer, int x) {
 // environment: every path scatters once and escapes, so each sample is
 // albedo + emission up to rounding.
 void ExpectRadiance(const std::string& step, HdLotusRenderBuffer& buffer,
-    int x, const std::array<float, 3>& expected) {
+    int x, const std::array<float, 3>& expected, bool dielectric = false,
+    const Lotus::Material& coating = Lotus::Material{}) {
+  if (dielectric) {
+    // Independent normal-incidence hemisphere quadrature for default GGX,
+    // plus the analytic diffuse coat integral. Average the uniform half
+    // plane; its pixel means estimate the Monte Carlo standard error.
+    constexpr int steps = 65536;
+    const double alpha = std::max(double{coating.roughness} * coating.roughness, 0.001);
+    const double alpha2 = alpha * alpha;
+    const double ratio = (double{coating.ior} - 1) / (double{coating.ior} + 1);
+    const double edge = coating.use_specular_workflow || coating.ior > 1 ? 1 : 0;
+    std::array<double, 3> f0{}, specular{};
+    for (int c = 0; c < 3; ++c)
+      f0[c] = coating.use_specular_workflow ? coating.specular_color[c] : ratio * ratio;
+    for (int i = 0; i < steps; ++i) {
+      const double z = (i + 0.5) / steps;
+      const double h2 = (1 + z) / 2;
+      const double denominator = h2 * (alpha2 - 1) + 1;
+      const double g = 2 / (1 + std::sqrt(1 + alpha2 * (1 - z * z) / (z * z)));
+      for (int c = 0; c < 3; ++c) {
+        const double fresnel = f0[c] + (edge - f0[c]) * std::pow(1 - std::sqrt(h2), 5);
+        specular[c] += fresnel * alpha2 * g / (2 * denominator * denominator * steps);
+      }
+    }
+    const auto* data = static_cast<const float*>(buffer.Map());
+    Check(data != nullptr, "could not map colour");
+    std::array<double, 3> sum{}, squares{};
+    for (int y = 0; y < kSize; ++y)
+      for (int col = (x < kSize / 2 ? 0 : kSize / 2);
+          col < (x < kSize / 2 ? kSize / 2 : kSize); ++col) {
+        for (int c = 0; c < 3; ++c) {
+          const double value = data[(y * kSize + col) * 4 + c];
+          Check(std::isfinite(value), "non-finite dielectric radiance");
+          sum[c] += value;
+          squares[c] += value * value;
+        }
+      }
+    buffer.Unmap();
+    constexpr double n = kSize * kSize / 2;
+    for (int c = 0; c < 3; ++c) {
+      const double want = expected[c] * (1 - f0[c]) * (1 - f0[c] - (edge - f0[c]) / 21) + specular[c] + coating.emission[c];
+      const double mean = sum[c] / n;
+      const double tolerance = 5 * std::sqrt(std::max(0.0, (squares[c] - n * mean * mean) / (n - 1) / n)) + 1e-5;
+      Check(std::abs(mean - want) <= tolerance, step + ": dielectric mean " +
+                                                    std::to_string(mean) + " instead of " + std::to_string(want));
+    }
+    return;
+  }
   const std::array<float, 3> actual = Pixel(buffer, x);
   for (int c = 0; c < 3; ++c) {
     Check(std::abs(actual[c] - expected[c]) <= 1e-5F * (1.0F + expected[c]),
@@ -347,7 +418,7 @@ int main(int argc, char** argv) try {
   Check(stage != nullptr, "could not open the test stage");
 
   HdRenderSettingsMap settings;
-  settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(1);
+  settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(128);
   HdLotusRenderDelegate delegate(settings);
   std::unique_ptr<HdRenderIndex> index(HdRenderIndex::New(&delegate, {}));
   Check(index != nullptr, "could not create the render index");
@@ -379,6 +450,9 @@ int main(int argc, char** argv) try {
   const auto sync = [&] {
     scene_indices.stageSceneIndex->ApplyPendingUpdates();
     engine.Execute(index.get(), &tasks);
+    if (gpu)
+      for (int i = 1; i < 128; ++i)
+        engine.Execute(index.get(), &tasks);
     return delegate.GetFrameSnapshot();
   };
 
@@ -407,13 +481,14 @@ int main(int argc, char** argv) try {
             !first.scene->textures.contains(specular.base_color_texture->texture),
       "the Specular lookup does not name its missing image");
   specular.base_color_texture.reset();
-  Expect("Specular", specular,
-      MakeMaterial({0.18F, 0.18F, 0.18F}, 0.125F, 0, {0, 0, 0}));
+  auto expected_specular = MakeMaterial({0.18F, 0.18F, 0.18F}, 0.125F, 0, {0, 0, 0});
+  expected_specular.use_specular_workflow = true;
+  Expect("Specular", specular, expected_specular);
   Expect("Unknown", materials.at("/Looks/Unknown"), Lotus::Material{});
   if (gpu) {
     Check(delegate.GetGpuSceneStats().material_count == 6,
         "the GPU material table does not hold the default and five materials");
-    ExpectRadiance("first frame", color, 1, {0.18F, 0.18F, 0.18F});
+    ExpectRadiance("first frame", color, 1, {0.18F, 0.18F, 0.18F}, true);
     ExpectRadiance("first frame", color, 6, {1.5F, 2.25F, 3.125F});
   }
 
@@ -423,7 +498,7 @@ int main(int argc, char** argv) try {
       .Set(GfVec3f(0.5F, 0.25F, 0.0F));
   const Lotus::FrameSnapshot edited = sync();
   Expect("Glow after its edit", edited.scene->materials.at("/Looks/Glow"),
-      MakeMaterial({0.5F, 0.25F, 0.125F}, 0.5F, 0, {0.5F, 0.25F, 0}));
+      MakeMaterial({0.5F, 0.25F, 0.125F}, 0.5F, 0, {0.5F, 0.25F, 0}, 1));
   for (const auto& [id, mesh] : edited.scene->meshes) {
     Check(mesh.geometry == first.scene->meshes.at(id).geometry &&
               mesh.material == first.scene->meshes.at(id).material,
@@ -479,7 +554,8 @@ int main(int argc, char** argv) try {
     Check(snapshot.scene->meshes.at("/Unbound").geometry ==
               first.scene->meshes.at("/Unbound").geometry,
         std::string(step) + ": a colour edit replaced the geometry");
-    if (gpu) ExpectRadiance(step, color, 1, expected);
+    if (gpu)
+      ExpectRadiance(step, color, 1, expected, true);
     return snapshot;
   };
   const auto colored = expect_color("constant displayColor", {0.25F, 0.5F, 0.75F});
@@ -505,7 +581,8 @@ int main(int argc, char** argv) try {
     Check(binding(snapshot, "/Unbound").empty() &&
               !snapshot.scene->materials.contains(color_material),
         std::string(step) + ": did not release the displayColor material");
-    if (gpu) ExpectRadiance(step, color, 1, {0.18F, 0.18F, 0.18F});
+    if (gpu)
+      ExpectRadiance(step, color, 1, {0.18F, 0.18F, 0.18F}, true);
   };
   display_color.Set(VtVec3fArray{GfVec3f(std::numeric_limits<float>::quiet_NaN())});
   expect_default("non-finite displayColor");
@@ -536,6 +613,33 @@ int main(int argc, char** argv) try {
   Check(!removed_mesh.scene->meshes.contains("/Unbound") &&
             !removed_mesh.scene->materials.contains(color_material),
       "removing a mesh left its displayColor material");
+  // Actual composed USD edits change the coat without replacing geometry.
+  const auto surface = stage->GetPrimAtPath(SdfPath("/Looks/Glow/Surface"));
+  auto coat = removed_mesh.scene->materials.at("/Looks/Glow");
+  surface.GetAttribute(TfToken("inputs:ior")).Set(2.5F);
+  coat.ior = 2.5F;
+  auto coated = sync();
+  Expect("ior edit", coated.scene->materials.at("/Looks/Glow"), coat);
+  if (gpu)
+    ExpectRadiance("ior edit", color, 6, coat.base_color, true, coat);
+  surface.CreateAttribute(TfToken("inputs:useSpecularWorkflow"), SdfValueTypeNames->Int).Set(1);
+  surface.CreateAttribute(TfToken("inputs:specularColor"), SdfValueTypeNames->Color3f).Set(GfVec3f(0.7F, 0.2F, 0.05F));
+  surface.CreateAttribute(TfToken("inputs:metallic"), SdfValueTypeNames->Float).Set(1.0F);
+  coat.use_specular_workflow = true;
+  coat.ior = 1.5F;
+  coat.specular_color = {0.7F, 0.2F, 0.05F};
+  coated = sync();
+  Expect("specular workflow", coated.scene->materials.at("/Looks/Glow"), coat);
+  Check(coated.scene->meshes.at("/Glowing").geometry == removed_mesh.scene->meshes.at("/Glowing").geometry,
+      "a coat edit replaced mesh geometry");
+  if (gpu)
+    ExpectRadiance("specular workflow", color, 6, coat.base_color, true, coat);
+  surface.GetAttribute(TfToken("inputs:specularColor")).Set(GfVec3f(0.1F, 0.4F, 0.8F));
+  coat.specular_color = {0.1F, 0.4F, 0.8F};
+  coated = sync();
+  Expect("specular colour edit", coated.scene->materials.at("/Looks/Glow"), coat);
+  if (gpu)
+    ExpectRadiance("specular colour edit", color, 6, coat.base_color, true, coat);
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

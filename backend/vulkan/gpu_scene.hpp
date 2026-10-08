@@ -78,9 +78,11 @@ struct GpuMaterialRecord {
   float normal[4];
   // Opacity, opacity threshold, then two unused floats.
   float opacity[4];
+  // Specular F0 RGB and ior; workflow flag uses normal.w.
+  float specular_ior[4];
   GpuTextureInputRecord inputs[kMaterialTextureInputs];
 };
-static_assert(sizeof(GpuMaterialRecord) == 464);
+static_assert(sizeof(GpuMaterialRecord) == 544);
 
 // The texture table: the size of the scene passes' sampled-image array, and
 // so the most textures a GPU scene holds.

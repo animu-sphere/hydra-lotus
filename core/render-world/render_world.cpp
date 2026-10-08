@@ -99,6 +99,15 @@ void ValidateMaterial(const Material& material) {
     throw std::invalid_argument("opacity and threshold must be in [0, 1]");
   }
   ValidateTextureInput(material.opacity_texture, false);
+  if (!std::isfinite(material.ior) || material.ior < 1.0F) {
+    throw std::invalid_argument("ior must be finite and >= 1");
+  }
+  if (!Finite(material.specular_color) ||
+      !std::all_of(material.specular_color.begin(), material.specular_color.end(),
+          UnitInterval)) {
+    throw std::invalid_argument("specular colour components must be in [0, 1]");
+  }
+  ValidateTextureInput(material.specular_color_texture, true);
   if (!std::isfinite(material.texcoord_fallback[0]) ||
       !std::isfinite(material.texcoord_fallback[1])) {
     throw std::invalid_argument("texture coordinate fallback must be finite");

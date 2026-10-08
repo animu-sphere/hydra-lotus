@@ -210,6 +210,9 @@ bool ValidMaterial(const SceneMaterial& entry) {
          ValidTextureInput(material.normal_texture, true) &&
          unit(material.opacity) && unit(material.opacity_threshold) &&
          ValidTextureInput(material.opacity_texture, false) &&
+         std::isfinite(material.ior) && material.ior >= 1.0F &&
+         std::all_of(material.specular_color.begin(), material.specular_color.end(), unit) &&
+         ValidTextureInput(material.specular_color_texture, true) &&
          std::isfinite(material.texcoord_fallback[0]) &&
          std::isfinite(material.texcoord_fallback[1]);
 }
@@ -1120,6 +1123,9 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       record.texcoord_fallback[0] = material.texcoord_fallback[0];
       record.texcoord_fallback[1] = material.texcoord_fallback[1];
       std::copy(material.normal.begin(), material.normal.end(), record.normal);
+      record.normal[3] = material.use_specular_workflow ? 1.0F : 0.0F;
+      std::copy(material.specular_color.begin(), material.specular_color.end(), record.specular_ior);
+      record.specular_ior[3] = material.ior;
       record.opacity[0] = material.opacity;
       record.opacity[1] = material.opacity_threshold;
       const auto inputs = TextureInputs(material);
@@ -1587,12 +1593,16 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     material.texcoord_fallback = {record.texcoord_fallback[0],
         record.texcoord_fallback[1]};
     std::copy(record.normal, record.normal + 3, material.normal.begin());
+    material.use_specular_workflow = record.normal[3] != 0.0F;
+    std::copy(record.specular_ior, record.specular_ior + 3, material.specular_color.begin());
+    material.ior = record.specular_ior[3];
     material.opacity = record.opacity[0];
     material.opacity_threshold = record.opacity[1];
     std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
         &material.base_color_texture, &material.roughness_texture,
         &material.metallic_texture, &material.emission_texture,
-        &material.normal_texture, &material.opacity_texture};
+        &material.normal_texture, &material.opacity_texture,
+        &material.specular_color_texture};
     for (std::size_t input = 0; input < inputs.size(); ++input) {
       const GpuTextureInputRecord& lookup = record.inputs[input];
       if (lookup.mode == kConstantInput) {

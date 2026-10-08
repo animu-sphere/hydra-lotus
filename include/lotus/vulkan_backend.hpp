@@ -209,7 +209,7 @@ struct GpuMaterialContents {
   Material material;
   std::array<std::uint32_t, kMaterialTextureInputs> texture_slots{
       kNoTextureSlot, kNoTextureSlot, kNoTextureSlot, kNoTextureSlot,
-      kNoTextureSlot, kNoTextureSlot};
+      kNoTextureSlot, kNoTextureSlot, kNoTextureSlot};
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three

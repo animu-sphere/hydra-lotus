@@ -60,7 +60,7 @@ Lotus::MeshInstance Block(const std::array<float, 3>& size, float degrees,
   return instance;
 }
 
-Lotus::Material Lambert(const std::array<float, 3>& albedo) {
+Lotus::Material CoatedDiffuse(const std::array<float, 3>& albedo) {
   Lotus::Material material;
   material.base_color = albedo;
   return material;
@@ -155,9 +155,9 @@ void SetCornellBox(Lotus::RenderWorld& world) {
       Quad({{{-1, -1, 1}}, {{-1, -1, -1}}, {{-1, 1, -1}}, {{-1, 1, 1}}}), placed);
   world.SetMesh("/cornell/right",
       Quad({{{1, -1, -1}}, {{1, -1, 1}}, {{1, 1, 1}}, {{1, 1, -1}}}), placed);
-  world.SetMaterial("/materials/white", Lambert(kWhite));
-  world.SetMaterial("/materials/red", Lambert(kRed));
-  world.SetMaterial("/materials/green", Lambert(kGreen));
+  world.SetMaterial("/materials/white", CoatedDiffuse(kWhite));
+  world.SetMaterial("/materials/red", CoatedDiffuse(kRed));
+  world.SetMaterial("/materials/green", CoatedDiffuse(kGreen));
   for (const char* wall : {"/cornell/floor", "/cornell/ceiling", "/cornell/back"})
     world.BindMaterial(wall, "/materials/white");
   world.BindMaterial("/cornell/left", "/materials/red");
@@ -168,7 +168,7 @@ void SetCornellBox(Lotus::RenderWorld& world) {
       Quad({{{-0.35F, 0.98F, 0.35F}}, {{-0.35F, 0.98F, -0.35F}},
           {{0.35F, 0.98F, -0.35F}}, {{0.35F, 0.98F, 0.35F}}}),
       placed);
-  Lotus::Material light = Lambert({0.0F, 0.0F, 0.0F});
+  Lotus::Material light = CoatedDiffuse({0.0F, 0.0F, 0.0F});
   light.emission = {15.0F, 13.0F, 10.0F};
   world.SetMaterial("/materials/light", light);
   world.BindMaterial("/cornell/light", "/materials/light");
@@ -189,7 +189,7 @@ void SetCornellBox(Lotus::RenderWorld& world) {
 
 void SetCornellRedWall(Lotus::RenderWorld& world, float scale) {
   world.SetMaterial("/materials/red",
-      Lambert({kRed[0] * scale, kRed[1] * scale, kRed[2] * scale}));
+      CoatedDiffuse({kRed[0] * scale, kRed[1] * scale, kRed[2] * scale}));
 }
 
 Comparison Compare(

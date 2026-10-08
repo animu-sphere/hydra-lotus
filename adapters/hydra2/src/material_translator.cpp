@@ -32,6 +32,8 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (opacity)
     (opacityThreshold)
     (useSpecularWorkflow)
+    (ior)
+    (specularColor)
     (file)
     (st)
     (wrapS)
@@ -348,13 +350,19 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
   if (specular_workflow == 0.0F) {
     surface.Scalar(Tokens->metallic, material.metallic,
         &material.metallic_texture, 0.0, 1.0);
+    surface.Scalar(Tokens->ior, material.ior, nullptr, 1.0, kLargest);
   }
+  material.use_specular_workflow = specular_workflow != 0.0F;
   surface.Color(Tokens->normal, material.normal,
       material.normal_texture, -1.0, 1.0);
   surface.Scalar(Tokens->opacity, material.opacity,
       &material.opacity_texture, 0.0, 1.0);
   surface.Scalar(Tokens->opacityThreshold, material.opacity_threshold,
       nullptr, 0.0, 1.0);
+  if (material.use_specular_workflow) {
+    surface.Color(Tokens->specularColor, material.specular_color,
+        material.specular_color_texture, 0.0, 1.0);
+  }
   return translation;
 }
 

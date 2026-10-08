@@ -9,6 +9,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- GGX dielectric reflection over Lambert (Renderer Phase 1.5), from constant
+  `ior` or the specular workflow's constant/RGB-textured `specularColor`.
+  Fresnel attenuates the diffuse base on entry and exit; view-dependent lobe
+  selection and its matching PDF sample the full BSDF. Index matching
+  (`ior = 1`) recovers uncoated Lambert. Core validation, GPU readback,
+  independent furnace integrals and Hydra edits cover the new inputs.
+  The Cornell mean and variance references are regenerated for this model.
+
 - Opacity coverage and alpha masks (Renderer Phase 1.5).
   `UsdPreviewSurface.opacity` translates constants or scalar texture lookups,
   including alpha, and `opacityThreshold` translates constants. Positive
