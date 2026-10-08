@@ -176,9 +176,10 @@ bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
     const Lotus::GpuSceneContents& contents) {
   Lotus::Material expected = material;
   expected.texcoords.clear();
-  const std::array<std::optional<Lotus::TextureInput>*, 4> inputs{
+  const std::array<std::optional<Lotus::TextureInput>*, Lotus::kMaterialTextureInputs> inputs{
       &expected.base_color_texture, &expected.roughness_texture,
-      &expected.metallic_texture, &expected.emission_texture};
+      &expected.metallic_texture, &expected.emission_texture,
+      &expected.normal_texture};
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const std::uint32_t slot = gpu.texture_slots[index];
     if (!inputs[index]->has_value()) {
@@ -250,7 +251,8 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
       std::vector<std::vector<std::array<float, 2>>> texcoords;
       std::uint32_t set = Lotus::kNoTexcoords;
       for (const auto& [name, values] : mesh.geometry->texcoords) {
-        if (name == material.texcoords && Lotus::HasTextureInputs(material))
+        if (name == material.texcoords &&
+            (Lotus::HasTextureInputs(material) || material.normal != Lotus::Material{}.normal))
           set = static_cast<std::uint32_t>(texcoords.size());
         texcoords.push_back(values);
       }
@@ -577,6 +579,10 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   textured.emission_texture->bias = {0.5F, 0.0F, 0.0F, 0.0F};
   textured.texcoords = "st";
   textured.texcoord_fallback = {0.5F, 0.75F};
+  textured.normal = {0.25F, -0.5F, 0.75F};
+  textured.normal_texture = Lotus::TextureInput{"/checker"};
+  textured.normal_texture->scale = {2, 2, 2, 1};
+  textured.normal_texture->bias = {-1, -1, -1, 0};
   world.SetMaterial("/textured", textured);
   world.BindMaterial("/triangle", "/textured");
   if (auto failure = apply("texture insertion"); !failure.empty())
@@ -1959,6 +1965,258 @@ Lotus::MeshGeometry MappedSquare(
   return square;
 }
 
+// A normal-map oracle: solve the world-space UV Jacobian directly in double
+// precision, then orthogonalize against the mesh's interpolated normal.
+// Unlike the shader this divides by the determinant without rescaling it.
+std::string NormalMapDiagnosticFailure(const Lotus::FrameSnapshot& snapshot,
+    const Lotus::OffscreenTarget& target, const Lotus::GpuFrameEvidence& frame,
+    std::map<std::string, std::size_t>& pixels) {
+  const auto values = ColorValues(frame.color);
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      const auto hit = TraceOrthographic(*snapshot.scene, target, x, y);
+      const float* actual = &values[(std::size_t{y} * target.width + x) * 4];
+      if (!hit.mesh) {
+        if (!std::equal(actual, actual + 4, target.clear_color.begin()))
+          return "normal-map diagnostic changed a missed pixel";
+        continue;
+      }
+      if (std::min({hit.u, hit.v, 1 - hit.u - hit.v}) < 0.02)
+        continue;
+      const auto& geometry = *hit.mesh->geometry;
+      const auto& transform = hit.mesh->instance.world_from_object;
+      const auto& triangle = geometry.triangles[hit.triangle];
+      std::array<Vec3, 3> positions;
+      for (int c = 0; c < 3; ++c) {
+        const auto& p = geometry.positions[triangle[c]];
+        positions[c] = TransformVec3(transform, {p[0], p[1], p[2]}, 1);
+      }
+      const Vec3 e1 = Subtract(positions[1], positions[0]);
+      const Vec3 e2 = Subtract(positions[2], positions[0]);
+      Vec3 geometric = Normalize(Cross(e1, e2));
+      if (geometric[2] < 0)
+        for (double& c : geometric)
+          c = -c;
+      Vec3 base = geometric;
+      if (!geometry.normals.empty()) {
+        Vec3 object{};
+        for (int c = 0; c < 3; ++c) {
+          const auto n = [&](std::size_t k) {
+            return geometry.normals[hit.triangle * 3 + k][c];
+          };
+          object[c] = n(0) + hit.u * (n(1) - n(0)) + hit.v * (n(2) - n(0));
+        }
+        const Vec3 a = TransformVec3(transform, {1, 0, 0}, 0);
+        const Vec3 b = TransformVec3(transform, {0, 1, 0}, 0);
+        const Vec3 c = TransformVec3(transform, {0, 0, 1}, 0);
+        Vec3 world{};
+        for (int axis = 0; axis < 3; ++axis)
+          world[axis] = Cross(b, c)[axis] * object[0] +
+                        Cross(c, a)[axis] * object[1] + Cross(a, b)[axis] * object[2];
+        if (Dot(world, world) > 0) {
+          base = Normalize(world);
+          if (Dot(base, geometric) < 0)
+            for (double& v : base)
+              v = -v;
+          if (base[2] <= 0)
+            base = geometric;
+        }
+      }
+      const auto& material = snapshot.scene->materials.at(hit.mesh->material);
+      // Duff's normal-only frame; fallback cases below have base = +Z,
+      // where this is simply the world X/Y frame.
+      const double a = -1 / (1 + base[2]);
+      Vec3 tangent{1 + base[0] * base[0] * a, base[0] * base[1] * a, -base[0]};
+      Vec3 bitangent{base[0] * base[1] * a, 1 + base[1] * base[1] * a, -base[1]};
+      std::array<double, 2> st{material.texcoord_fallback[0], material.texcoord_fallback[1]};
+      if (const auto set = geometry.texcoords.find(material.texcoords);
+          set != geometry.texcoords.end()) {
+        const auto& uv = set->second;
+        const auto& uv0 = uv[hit.triangle * 3];
+        const auto& uv1 = uv[hit.triangle * 3 + 1];
+        const auto& uv2 = uv[hit.triangle * 3 + 2];
+        const double ds1 = double(uv1[0]) - uv0[0], dt1 = double(uv1[1]) - uv0[1];
+        const double ds2 = double(uv2[0]) - uv0[0], dt2 = double(uv2[1]) - uv0[1];
+        st = {uv0[0] + hit.u * ds1 + hit.v * ds2,
+            uv0[1] + hit.u * dt1 + hit.v * dt2};
+        const double determinant = ds1 * dt2 - ds2 * dt1;
+        if (determinant != 0) {
+          Vec3 dpds{}, dpdt{};
+          for (int c = 0; c < 3; ++c) {
+            dpds[c] = (e1[c] * dt2 - e2[c] * dt1) / determinant;
+            dpdt[c] = (e2[c] * ds1 - e1[c] * ds2) / determinant;
+          }
+          const double projection = Dot(dpds, base);
+          for (int c = 0; c < 3; ++c)
+            dpds[c] -= projection * base[c];
+          tangent = Normalize(dpds);
+          bitangent = Cross(base, tangent);
+          if (Dot(bitangent, dpdt) < 0)
+            for (double& c : bitangent)
+              c = -c;
+        }
+      }
+      Vec3 mapped{material.normal[0], material.normal[1], material.normal[2]};
+      if (material.normal_texture) {
+        const auto lookup = LookupOracle(*snapshot.scene, *material.normal_texture, st[0], st[1]);
+        for (int c = 0; c < 3; ++c)
+          mapped[c] = std::clamp(lookup.value[c], -1.0, 1.0);
+      }
+      Vec3 expected = base;
+      if (Dot(mapped, mapped) > 0) {
+        for (int c = 0; c < 3; ++c)
+          expected[c] = mapped[0] * tangent[c] + mapped[1] * bitangent[c] + mapped[2] * base[c];
+        expected = Normalize(expected);
+        if (Dot(expected, geometric) < 0)
+          for (double& c : expected)
+            c = -c;
+        if (expected[2] <= 0)
+          expected = base;
+      }
+      for (int c = 0; c < 3; ++c) {
+        if (!std::isfinite(actual[c]) || std::abs(actual[c] - expected[c]) > 0.012 || actual[3] != 1)
+          return "normal map at " + std::to_string(x) + "," + std::to_string(y) +
+                 ": component " + std::to_string(c) + " is " + std::to_string(actual[c]) +
+                 " instead of " + std::to_string(expected[c]);
+      }
+      for (const auto& [key, mesh] : snapshot.scene->meshes)
+        if (&mesh == hit.mesh)
+          ++pixels[key];
+    }
+  }
+  return {};
+}
+
+std::string NormalMapsFailure(PathScenes& scenes) {
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  world.SetTexture("/normal", MakeTexture(3, 2, Lotus::TextureFormat::Rgba8Unorm,
+                                  [](std::uint32_t i, std::uint32_t j) -> Rgba {
+                                    return {0.3 + 0.2 * i, 0.35 + 0.3 * j, 0.9, 1};
+                                  }));
+  world.SetTexture("/signed", MakeTexture(2, 2, Lotus::TextureFormat::Rgba32Float,
+                                  [](std::uint32_t i, std::uint32_t j) -> Rgba {
+                                    return {-0.3 + 0.5 * i, -0.25 + 0.4 * j, 0.8, 1};
+                                  }));
+  using Uvs = std::array<std::array<float, 2>, 4>;
+  const Uvs regular{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+  const Uvs mirrored{{{1, 0}, {0, 0}, {0, 1}, {1, 1}}};
+  const Uvs rotated{{{0, 1}, {0, 0}, {1, 0}, {1, 1}}};
+  const Uvs degenerate{{{0.5F, 0.5F}, {0.5F, 0.5F}, {0.5F, 0.5F}, {0.5F, 0.5F}}};
+  for (int index = 0; index < 8; ++index) {
+    auto panel = MappedSquare({{"st", index == 1 ? mirrored : index == 2 ? rotated
+                                                          : index == 5   ? degenerate
+                                                                         : regular},
+        {"unused", rotated}});
+    Lotus::MeshInstance instance;
+    const float x = -0.75F + 0.5F * (index % 4);
+    const float y = index < 4 ? 0.5F : -0.5F;
+    instance.world_from_object = Lotus::Multiply(Translation(x, y, 0), Scaling(0.22F, 0.4F, 1));
+    if (index == 3) {
+      SetVertexNormals(panel, {{-0.2F, 0.1F, 1}, {0.4F, -0.2F, 1},
+                                  {0.3F, 0.3F, 1}, {-0.3F, 0.2F, 1}});
+      auto shear = Scaling(-0.22F, 0.4F, 1.8F);
+      shear[4] = 0.08F;
+      instance.world_from_object = Lotus::Multiply(Translation(x, y, 0),
+          Lotus::Multiply(RotationX(25), shear));
+    }
+    if (index == 4)
+      instance.world_from_object = Lotus::Multiply(instance.world_from_object, RotationY(180));
+    if (index == 6)
+      panel.texcoords.erase("st");
+    Lotus::Material material;
+    material.texcoords = "st";
+    material.texcoord_fallback = {0.5F, 0.5F};
+    material.normal_texture = Lotus::TextureInput{index == 2 ? "/signed" : "/normal"};
+    material.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
+    material.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
+    if (index != 2) {
+      material.normal_texture->scale = {2, 2, 2, 1};
+      material.normal_texture->bias = {-1, -1, -1, 0};
+    }
+    if (index == 7) {
+      material.normal_texture->texture = "/missing";
+      material.normal_texture->fallback = {-0.3F, 0.4F, 0.8F, 1};
+    }
+    const std::string key = "/panel" + std::to_string(index);
+    world.SetMesh(key, panel, instance);
+    Paint(world, key, material);
+  }
+  Lotus::PathTracingSettings diagnostic;
+  diagnostic.output = Lotus::SceneOutput::ShadingNormal;
+  const auto check = [&](const std::string& label) -> std::string {
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(diagnostic, frame); !failure.empty())
+      return failure;
+    std::map<std::string, std::size_t> pixels;
+    if (auto failure = NormalMapDiagnosticFailure(world.Commit(), scenes.Target(), frame, pixels);
+        !failure.empty())
+      return label + ": " + failure;
+    for (const auto& [key, mesh] : world.Commit().scene->meshes) {
+      (void)mesh;
+      if (pixels[key] < 40)
+        return label + ": insufficient coverage of " + key;
+    }
+    scenes.Summarize(label + ": " + std::to_string(pixels.size()) + " mapped panels");
+    return {};
+  };
+  if (auto failure = check("UV frames, smooth normals, mirrors, backfaces, fallbacks"); !failure.empty())
+    return failure;
+  world.SetTexture("/normal", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
+                                  [](std::uint32_t, std::uint32_t) -> Rgba { return {0.75, 0.25, 1, 1}; }));
+  if (auto failure = check("texture edit"); !failure.empty())
+    return failure;
+  auto material = world.Commit().scene->materials.at("/panel7");
+  material.normal_texture->fallback = {0, 0, 0, 1};
+  world.SetMaterial("/panel7", material);
+  if (auto failure = check("zero normal fallback"); !failure.empty())
+    return failure;
+  material.normal_texture.reset();
+  material.normal = {0.3F, -0.4F, -0.8F};
+  world.SetMaterial("/panel7", material);
+  if (auto failure = check("constant signed normal"); !failure.empty())
+    return failure;
+  material.normal = {1, 0, 0};
+  world.SetMaterial("/panel7", material);
+  if (auto failure = check("tangent normal fallback"); !failure.empty())
+    return failure;
+  if (auto failure = scenes.Clear(); !failure.empty())
+    return failure;
+
+  // Exact mirror radiance proves the mapped normal reaches BSDF sampling,
+  // not just its diagnostic: only the tilted mirror can see the bright wall.
+  world.SetCamera(OrthographicCamera());
+  auto plane = MappedSquare({{"st", regular}});
+  for (auto& p : plane.positions) {
+    p[0] *= 4;
+    p[1] *= 4;
+  }
+  world.SetMesh("/plane", plane, Lotus::MeshInstance{});
+  Lotus::Material mirror;
+  mirror.base_color = {1, 1, 1};
+  mirror.roughness = 0;
+  mirror.metallic = 1;
+  Paint(world, "/plane", mirror);
+  Lotus::Material wall;
+  wall.base_color = {0, 0, 0};
+  wall.emission = {2, 1, 0.5F};
+  world.SetMesh("/wall", {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, Lotus::MeshInstance{});
+  Paint(world, "/wall", wall);
+  if (auto failure = scenes.ExpectExact(4, {0, 0, 0}); !failure.empty())
+    return failure;
+  world.SetTexture("/tilt", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
+                                [](std::uint32_t, std::uint32_t) -> Rgba { return {0.5, 0, 0.866025404, 1}; }));
+  mirror.normal_texture = Lotus::TextureInput{"/tilt"};
+  mirror.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  mirror.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  mirror.texcoords = "st";
+  Paint(world, "/plane", mirror);
+  if (auto failure = scenes.ExpectExact(4, {2, 1, 0.5}); !failure.empty())
+    return "mapped mirror: " + failure;
+  scenes.Summarize("mapped mirror: exact emissive-wall radiance at 4 spp");
+  return {};
+}
+
 // Texture lookups through the GpuScene to the path tracer. The Albedo and
 // RoughnessMetallic diagnostics of sRGB, linear and float textures under
 // every wrap mode, scale and bias, channel selection, a missing texture's
@@ -2881,6 +3139,7 @@ int main(int argc, char** argv) {
       run("renderer.path.bsdf", BsdfFailure);
       run("renderer.path.normals", NormalsFailure);
       run("renderer.path.textures", TexturesFailure);
+      run("renderer.path.normal_maps", NormalMapsFailure);
       run("renderer.path.multibounce", MultibounceFailure);
       run("renderer.path.accumulation", AccumulationFailure);
       run("renderer.path.reference", [&](PathScenes& reference_scenes) {
@@ -2892,6 +3151,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.bsdf", "skip", ray_query.detail});
       checks.push_back({"renderer.path.normals", "skip", ray_query.detail});
       checks.push_back({"renderer.path.textures", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.normal_maps", "skip", ray_query.detail});
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
@@ -2903,6 +3163,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.bsdf", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.normals", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.textures", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.normal_maps", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});

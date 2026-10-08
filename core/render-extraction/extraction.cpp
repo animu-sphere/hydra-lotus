@@ -79,7 +79,7 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
         // The set the material's lookups read, by its position in key order.
         std::uint32_t texcoords = kNoTexcoords;
         const Material& bound = materials[material].material;
-        if (HasTextureInputs(bound)) {
+        if (HasTextureInputs(bound) || bound.normal != Material{}.normal) {
           const auto set = geometry->texcoords.find(bound.texcoords);
           if (set != geometry->texcoords.end()) {
             texcoords = static_cast<std::uint32_t>(

@@ -28,6 +28,7 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (emissiveColor)
     (metallic)
     (roughness)
+    (normal)
     (useSpecularWorkflow)
     (file)
     (st)
@@ -346,6 +347,8 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
     surface.Scalar(Tokens->metallic, material.metallic,
         &material.metallic_texture, 0.0, 1.0);
   }
+  surface.Color(Tokens->normal, material.normal,
+      material.normal_texture, -1.0, 1.0);
   return translation;
 }
 

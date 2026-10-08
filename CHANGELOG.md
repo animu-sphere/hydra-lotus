@@ -9,6 +9,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Tangent-space normal inputs and normal maps (Renderer Phase 1.5).
+  `UsdPreviewSurface.normal` translates signed constants or RGB texture
+  lookups, with authored scale, bias and colour space. The path tracer
+  builds per-hit UV frames about the mesh shading normal, preserving
+  mirrored UVs and transforms, with a stable frame for absent or degenerate
+  UVs. Headless normal diagnostics and exact mirror radiance, plus Hydra
+  image, UV and connection edits, cover the implementation.
+
 - Constant `displayColor` fallback for Hydra meshes without a material
   binding, including indexed colours and live colour edits. Authored
   materials take priority; missing or unusable colours keep the default

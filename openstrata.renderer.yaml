@@ -34,6 +34,7 @@ validation:
     - renderer.path.bsdf
     - renderer.path.normals
     - renderer.path.textures
+    - renderer.path.normal_maps
     - renderer.path.multibounce
     - renderer.path.accumulation
     - renderer.path.reference

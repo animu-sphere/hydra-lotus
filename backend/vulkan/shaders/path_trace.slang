@@ -55,6 +55,7 @@ static const uint kBaseColorInput = 0;
 static const uint kRoughnessInput = 1;
 static const uint kMetallicInput = 2;
 static const uint kEmissionInput = 3;
+static const uint kNormalInput = 4;
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
 // table, the Lotus material IR.
@@ -62,7 +63,8 @@ struct MaterialRecord {
   float4 base_color_roughness;
   float4 emission_metallic;
   float4 texcoord_fallback;
-  TextureInputRecord inputs[4];
+  float4 normal;
+  TextureInputRecord inputs[5];
 };
 
 // Mirrors PathConstants in vulkan_backend.cpp.
@@ -233,9 +235,72 @@ float3 ShadingNormal(float3x3 n, float2 barycentrics,
   return dot(shading, direction) < 0.0 ? shading : geometric;
 }
 
+// UV differentials in world space, orthonormalized about the interpolated
+// shading normal. Preserve the handedness of mirrored UVs and transforms.
+// Missing, degenerate or ill-conditioned UVs use a stable normal-only frame.
+ShadingFrame TangentFrame(InstanceRecord instance, Hit hit, float3 edge1,
+    float3 edge2, float3 normal) {
+  ShadingFrame basis = MakeShadingFrame(normal);
+  if (instance.texcoords == 0) {
+    return basis;
+  }
+  const uint corner = hit.primitive * 3;
+  const float2 st0 = ((float2*)instance.texcoords)[corner];
+  float2 uv1 = ((float2*)instance.texcoords)[corner + 1] - st0;
+  float2 uv2 = ((float2*)instance.texcoords)[corner + 2] - st0;
+  const float uv_scale = max(max(abs(uv1.x), abs(uv1.y)),
+      max(abs(uv2.x), abs(uv2.y)));
+  const float edge_scale = max(max(max(abs(edge1.x), abs(edge1.y)), abs(edge1.z)),
+      max(max(abs(edge2.x), abs(edge2.y)), abs(edge2.z)));
+  if (!(uv_scale > 0.0) || isinf(uv_scale) ||
+      !(edge_scale > 0.0) || isinf(edge_scale)) {
+    return basis;
+  }
+  uv1 /= uv_scale;
+  uv2 /= uv_scale;
+  edge1 /= edge_scale;
+  edge2 /= edge_scale;
+  const float determinant = uv1.x * uv2.y - uv1.y * uv2.x;
+  if (!(abs(determinant) > 1e-8)) {
+    return basis;
+  }
+  // Only the determinant's sign matters after normalization.
+  const float orientation = determinant < 0.0 ? -1.0 : 1.0;
+  float3 tangent = orientation * (edge1 * uv2.y - edge2 * uv1.y);
+  const float3 bitangent = orientation * (edge2 * uv1.x - edge1 * uv2.x);
+  tangent -= normal * dot(normal, tangent);
+  const float length2 = dot(tangent, tangent);
+  if (!(length2 > 1e-16) || isinf(length2)) {
+    return basis;
+  }
+  basis.tangent = tangent * rsqrt(length2);
+  basis.bitangent = cross(normal, basis.tangent);
+  if (dot(basis.bitangent, bitangent) < 0.0) {
+    basis.bitangent = -basis.bitangent;
+  }
+  return basis;
+}
+
+// Normal inputs are already signed tangent-space data. A zero or non-finite
+// vector leaves the mesh normal. Keep reflection on the geometric side and
+// fall back to the mesh normal if the mapped normal faces away from the ray.
+float3 MappedNormal(float3 tangent_normal, ShadingFrame basis,
+    float3 geometric, float3 direction) {
+  const float magnitude = max(max(abs(tangent_normal.x), abs(tangent_normal.y)),
+      abs(tangent_normal.z));
+  if (!(magnitude > 0.0) || !all(isfinite(tangent_normal))) {
+    return basis.normal;
+  }
+  float3 shading = normalize(basis.ToWorld(tangent_normal / magnitude));
+  if (dot(shading, geometric) < 0.0) {
+    shading = -shading;
+  }
+  return dot(shading, direction) < 0.0 ? shading : basis.normal;
+}
+
 // Surface hit reconstruction from the instance record and the geometry and
-// material it addresses. Interpolating the world-space corners keeps the position on
-// the triangle's plane.
+// material it addresses. Interpolating the world-space corners keeps the
+// position on the triangle's plane.
 SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   const InstanceRecord instance = path_constants.instances[hit.instance];
   const uint3 triangle = instance.triangles[hit.primitive];
@@ -265,12 +330,14 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   surface.roughness = material.base_color_roughness.w;
   surface.metallic = material.emission_metallic.w;
   float3 emission = material.emission_metallic.xyz;
+  float3 tangent_normal = material.normal.xyz;
   // A texture lookup replaces its input's constant, clamped into the
   // input's range.
   if (material.inputs[kBaseColorInput].mode != kConstantInput ||
       material.inputs[kRoughnessInput].mode != kConstantInput ||
       material.inputs[kMetallicInput].mode != kConstantInput ||
-      material.inputs[kEmissionInput].mode != kConstantInput) {
+      material.inputs[kEmissionInput].mode != kConstantInput ||
+      material.inputs[kNormalInput].mode != kConstantInput) {
     const float2 st = HitTexcoords(instance, material, hit);
     TextureInputRecord input = material.inputs[kBaseColorInput];
     if (input.mode != kConstantInput) {
@@ -288,6 +355,17 @@ SurfaceHit ReconstructHit(Hit hit, float3 direction) {
     if (input.mode != kConstantInput) {
       emission = max(Lookup(input, st).xyz, 0.0);
     }
+    input = material.inputs[kNormalInput];
+    if (input.mode != kConstantInput) {
+      tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
+    }
+  }
+  // Preserve the constant-material reference path exactly, including the
+  // interpolated normal's rounding, when the input is the identity.
+  if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
+    surface.shading_normal = MappedNormal(tangent_normal,
+        TangentFrame(instance, hit, p1 - p0, p2 - p0, surface.shading_normal),
+        surface.normal, direction);
   }
   surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
       surface.roughness, surface.metallic);

@@ -135,9 +135,13 @@ Against the scope of
   taking priority ([scene reference](../reference/SCENE.md#hydra-extraction),
   [evidence](../reports/2026-10-07-computed-normals.md)). Subdivision refinement,
   limit normals and crease evaluation remain unsupported.
-- ⬜ **Normal maps.** `UsdPreviewSurface`'s `normal` input: a texture
-  lookup in tangent space, which needs tangent frames from the texture
-  coordinates.
+- ✅ **Normal maps.** `UsdPreviewSurface`'s signed tangent-space `normal`
+  constant or texture input, evaluated about per-hit frames from the
+  selected texture coordinates, with mirrored UVs and transforms, smooth
+  normals and a stable fallback for missing or degenerate UVs
+  ([scene reference](../reference/SCENE.md#path-tracing),
+  [evidence](../reports/2026-10-08-normal-maps.md)). Stored vertex tangents
+  and MikkTSpace compatibility are not implemented.
 - ⬜ **Opacity and an alpha policy.** `opacity` and `opacityThreshold`,
   which needs non-opaque geometry in the acceleration structures.
 - ⬜ **A GGX dielectric specular layer** over Lambert, from `ior` and the

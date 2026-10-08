@@ -261,9 +261,19 @@ int main() try {
   invalid_material = material;
   invalid_material.texcoord_fallback[1] = infinity;
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material = material;
+  invalid_material.normal = {0, infinity, 1};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material.normal = {0, -1.01F, 1};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
+  invalid_material = material;
+  invalid_material.normal_texture = Lotus::TextureInput{"/tex", 1};
+  Reject([&] { world.SetMaterial("/paint", invalid_material); });
   Check(world.Commit().revision == uv.revision,
       "rejected textures or texture inputs changed the scene revision");
   material.metallic_texture = Lotus::TextureInput{"/tex", 3};
+  material.normal = {-1, 0.5F, 0};
+  material.normal_texture = Lotus::TextureInput{"/tex"};
   material.texcoords = "st";
   world.SetMaterial("/paint", material);
   world.SetTexture("/tex", texture);

@@ -45,7 +45,7 @@ struct HdLotusMaterialTranslation {
 [[nodiscard]] std::string HdLotusTextureKey(const std::string& file,
     const TfToken& source_color_space);
 
-// Reads the diffuseColor, emissiveColor, metallic and roughness of the
+// Reads the diffuseColor, emissiveColor, metallic, roughness and normal of the
 // network's UsdPreviewSurface surface: an authored constant, or a texture
 // lookup where a UsdUVTexture drives the input, its texture coordinates a
 // UsdPrimvarReader_float2 or its own st. Constants outside the IR's ranges

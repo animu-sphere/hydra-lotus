@@ -218,6 +218,7 @@ int main() try {
   missing.texture = "/t/missing";
   missing.channel = 1;
   painted.roughness_texture = missing;
+  painted.normal_texture = Lotus::TextureInput{"/t/checker"};
   painted.texcoords = "st";
   world.SetMaterial("/m/painted", painted);
   world.BindMaterial("/a", "/m/painted");
@@ -226,14 +227,15 @@ int main() try {
   const auto* mapped_a = textured.scene->meshes.at("/a").geometry.get();
   update = extraction.Update(textured);
   Check(update.texture_releases.empty() && update.texture_uploads.size() == 1 &&
-      update.texture_uploads[0].get() == checker_texture &&
-      update.materials_changed && update.materials.size() == 3 &&
-      update.materials[2].material == painted &&
-      update.materials[2].textures ==
-          std::array<const Lotus::Texture*, 4>{checker_texture} &&
-      update.instances_changed && update.instances.size() == 1 &&
-      update.instances[0].geometry == mapped_a &&
-      update.instances[0].material == 2 && update.instances[0].texcoords == 1,
+            update.texture_uploads[0].get() == checker_texture &&
+            update.materials_changed && update.materials.size() == 3 &&
+            update.materials[2].material == painted &&
+            update.materials[2].textures ==
+                std::array<const Lotus::Texture*, Lotus::kMaterialTextureInputs>{
+                    checker_texture, nullptr, nullptr, nullptr, checker_texture} &&
+            update.instances_changed && update.instances.size() == 1 &&
+            update.instances[0].geometry == mapped_a &&
+            update.instances[0].material == 2 && update.instances[0].texcoords == 1,
       "a textured material did not upload its texture, resolve its keys or "
       "select its texture-coordinate set");
 
@@ -249,6 +251,7 @@ int main() try {
       update.texture_uploads.size() == 1 &&
       update.texture_uploads[0].get() == replaced &&
       update.materials_changed && update.materials[2].textures[0] == replaced &&
+      update.materials[2].textures[4] == replaced &&
       !update.instances_changed && update.geometry_uploads.empty(),
       "a texture edit did not replace exactly the texture and the table");
 
@@ -265,7 +268,8 @@ int main() try {
   Check(update.texture_releases == std::vector<const Lotus::Texture*>{
                                        replaced} &&
       update.texture_uploads.empty() && update.materials_changed &&
-      update.materials[2].textures == std::array<const Lotus::Texture*, 4>{} &&
+      update.materials[2].textures ==
+          std::array<const Lotus::Texture*, Lotus::kMaterialTextureInputs>{} &&
       !update.instances_changed,
       "a texture removal did not release it and leave its lookup without one");
   world.SetTexture("/t/unused", checker);
@@ -273,6 +277,26 @@ int main() try {
   Check(update.texture_uploads.size() == 1 && !update.materials_changed &&
       !update.instances_changed,
       "a texture no material names was not resident on its own");
+
+  // A constant tangent normal still needs its named UV frame even without
+  // a texture lookup. Restoring the identity stops reading the set.
+  painted.base_color_texture.reset();
+  painted.roughness_texture.reset();
+  painted.normal_texture.reset();
+  painted.normal = {0.5F, 0, 0.866025404F};
+  painted.texcoords = "st";
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && update.instances_changed &&
+            update.instances[0].texcoords == 1 &&
+            update.geometry_uploads.empty() && update.texture_uploads.empty(),
+      "a constant tangent normal did not select its UV frame");
+  painted.normal = Lotus::Material{}.normal;
+  world.SetMaterial("/m/painted", painted);
+  update = extraction.Update(world.Commit());
+  Check(update.materials_changed && update.instances_changed &&
+            update.instances[0].texcoords == Lotus::kNoTexcoords,
+      "the identity normal kept reading a UV frame without lookups");
 
   world.RemoveMesh("/a");
   world.RemoveMesh("/empty");
