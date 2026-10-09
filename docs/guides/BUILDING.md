@@ -35,6 +35,10 @@ layer advertises `VK_EXT_validation_features`. The report's
 explained `SKIP`. The Vulkan-only CTest
 `lotus-renderer-synchronization-validation` checks both synchronized writes and
 an intentionally missing barrier; the invalid commands are never submitted.
+It probes Vulkan 1.3 driver support before enabling validation and returns
+CTest SKIP 77 for `VK_ERROR_INCOMPATIBLE_DRIVER`. Other setup errors still
+fail. `lotus-renderer-synchronization-no-driver` verifies the explained SKIP
+with driver discovery restricted to a missing manifest in its child process.
 The usdview smoke test checks the same enablement in Hydra when the headless
 report says synchronization validation is available.
 

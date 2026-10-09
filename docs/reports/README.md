@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-09-synchronization-ci.md](2026-10-09-synchronization-ci.md) | Hosted Hydra CI failed on missing Vulkan driver support; explicit driver probing and a child-process no-driver regression test. |
 | [2026-10-08-synchronization-validation.md](2026-10-08-synchronization-validation.md) | Explicit synchronization validation in the shared Vulkan instance setup, clean writes and an intentionally missing barrier, per-frame Hydra enablement and explained unavailable evidence; core 9/9, Hydra 26/26 and runtime-free 8/8. |
 | [2026-10-08-dome-lights.md](2026-10-08-dome-lights.md) | Constant Hydra dome lighting: composed USD colour/intensity/exposure and visibility edits, additive domes and removal, analytic mirror radiance, accumulation restarts and unchanged geometry/build counters; Hydra 25/25 and strict evidence validation. |
 | [ost/](ost/) | The `ost` dogfooding series — one report per version exercised. Append-only; the newest report carries the live upstream ask list. |

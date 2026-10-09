@@ -37,6 +37,19 @@ void Check(VkResult result, const char* operation) {
 int Run() {
   Resources resources;
   std::string detail;
+  // Establish Vulkan 1.3 driver support before enabling validation. Only an
+  // incompatible driver is a capability SKIP; other setup errors still fail.
+  VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  application.apiVersion = VK_API_VERSION_1_3;
+  VkInstanceCreateInfo probe{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  probe.pApplicationInfo = &application;
+  const VkResult probe_result = vkCreateInstance(&probe, nullptr, &resources.instance.instance);
+  if (probe_result == VK_ERROR_INCOMPATIBLE_DRIVER) {
+    std::cout << "SKIP: Vulkan 1.3 driver unavailable (VK_ERROR_INCOMPATIBLE_DRIVER)\n";
+    return 77;
+  }
+  Check(probe_result, "probe Vulkan driver");
+  DestroyInstance(resources.instance);
   if (!CreateInstanceWithValidation("lotus-synchronization-test", {},
           &resources.validation, resources.instance, detail)) {
     throw std::runtime_error(detail);

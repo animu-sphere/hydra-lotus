@@ -43,6 +43,10 @@ that moment every file is project-owned; the template is not re-applied.
 is a classic `HdRenderDelegate` ([DESIGN_POLICY.md](../design/DESIGN_POLICY.md)
 §52).
 
+The Vulkan-only `lotus-renderer-synchronization-no-driver` CTest script runs
+the synchronization executable with driver discovery restricted to a missing
+manifest in its child process and requires an explained SKIP (exit 77).
+
 ## 3. Where new code goes
 
 The design policy's components map onto this layout as follows. A row is a

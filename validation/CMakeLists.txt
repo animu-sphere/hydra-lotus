@@ -56,4 +56,9 @@ if(LOTUS_WITH_VULKAN)
     COMMAND lotus-synchronization-validation-test)
   set_tests_properties(lotus-renderer-synchronization-validation PROPERTIES
     SKIP_RETURN_CODE 77)
+  add_test(NAME lotus-renderer-synchronization-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-synchronization-validation-test>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/synchronization-no-driver"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
 endif()

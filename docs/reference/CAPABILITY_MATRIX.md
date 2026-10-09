@@ -27,6 +27,12 @@ Configurations each row was measured on are
 | Per-pass GPU timestamps | ✅ | persistent query pools, queue capability gated. The scene pass: `GpuFrameEvidence::primary_ray_gpu_ms` and `renderer.ray_query.timestamp` (measured on the barycentric output). A scene update's copies, BLAS builds and TLAS build or refit: `GpuSceneEvidence::timings` and `renderer.scene.timestamp` ([scene reference](SCENE.md#scene-update-timestamps), [measured run](../reports/2026-10-05-gpu-timestamps.md)). The camera and radiance passes are timed together |
 | Deterministic mode and golden-image tests | ✅ | [design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode): an image is a function of its first sample index, sample count, scene, camera and target. The headless runner's reference images ([scene reference](SCENE.md#reference-images)) are compared statistically, not bitwise; Hydra exposes the first sample index as `lotus:sampleIndex` ([scene reference](SCENE.md#deterministic-mode-through-hydra), [measured run](../reports/2026-10-05-hydra-deterministic-mode.md)) |
 
+The synchronization executable probes Vulkan 1.3 driver support before layer
+setup and skips an incompatible driver. CTest
+`lotus-renderer-synchronization-no-driver` verifies that exit code 77 carries
+an explanation even on a workstation with a GPU
+([CI follow-up](../reports/2026-10-09-synchronization-ci.md)).
+
 ## Light transport
 
 Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).

@@ -8,6 +8,7 @@ local run, and the report named in the row holds its detail.
 
 | OS | Compiler | Build | Runtime | GPU | Result | Report |
 | --- | --- | --- | --- | --- | --- | --- |
+| Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Synchronization hazard and simulated missing-driver checks, 27/27 tests and strict evidence validation passed | [Synchronization CI follow-up](../reports/2026-10-09-synchronization-ci.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` (no OpenUSD) | NVIDIA RTX A5000 | Synchronization validation, intentional hazard capture, 9/9 tests and strict evidence validation passed | [Synchronization validation](../reports/2026-10-08-synchronization-validation.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Synchronization validation on every usdview frame, 26/26 tests and strict evidence validation passed | [Synchronization validation](../reports/2026-10-08-synchronization-validation.md) |
 | Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained synchronization-validation SKIP | [Synchronization validation](../reports/2026-10-08-synchronization-validation.md) |
