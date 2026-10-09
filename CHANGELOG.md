@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- No-clear Hydra AOV restoration from the currently bound CPU colour/depth
+  buffers, including buffer switches, host writes and same-size reallocation.
+  Offscreen callers can supply preserved contents; persistent readback buffers
+  also stage the restoration, without additional GPU allocations.
+
 - Repository-owned documentation validation in `scripts/check_docs.py`,
   with regression fixtures and a runtime-independent CI job. Category indexes
   and ownership rules centralize phase/release status, incomplete tasks,

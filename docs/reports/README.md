@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-09-aov-restoration.md](2026-10-09-aov-restoration.md) | No-clear AOV restoration across buffer switches, host writes and reallocation; GPU staging reuse, hit/miss preservation and regression checks. |
 | [2026-10-09-synchronization-ci.md](2026-10-09-synchronization-ci.md) | Hosted Hydra CI failed on missing Vulkan driver support; explicit driver probing and a child-process no-driver regression test. |
 | [2026-10-08-synchronization-validation.md](2026-10-08-synchronization-validation.md) | Explicit synchronization validation in the shared Vulkan instance setup, clean writes and an intentionally missing barrier, per-frame Hydra enablement and explained unavailable evidence. |
 | [2026-10-08-dome-lights.md](2026-10-08-dome-lights.md) | Constant Hydra dome lighting: composed USD colour/intensity/exposure and visibility edits, additive domes and removal, analytic mirror radiance, accumulation restarts and unchanged geometry/build counters. |

@@ -526,6 +526,22 @@ public:
     }
     ApplyFraming(state, target);
 
+    // The bound CPU buffer owns its contents, including host writes and
+    // reallocation. Never use a different buffer's retained GPU attachment.
+    for (const auto& binding : bindings) {
+      if (!binding.clearValue.IsEmpty())
+        continue;
+      const auto* buffer =
+          static_cast<const HdLotusRenderBuffer*>(binding.renderBuffer);
+      if ((binding.aovName == HdAovTokens->color &&
+              !buffer->ReadColor(target.preserved_color)) ||
+          (binding.aovName == HdAovTokens->depth &&
+              !buffer->ReadDepth(target.preserved_depth))) {
+        TF_RUNTIME_ERROR("Lotus could not read AOV contents for restoration");
+        return;
+      }
+    }
+
     if (!renderer_) {
       const std::filesystem::path shaders = PluginDirectory() / "shaders";
       Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
@@ -1623,6 +1639,42 @@ bool HdLotusRenderBuffer::WriteDepth(const std::vector<float>& depth,
       reinterpret_cast<const std::uint8_t*>(depth.data()),
       depth.size() * sizeof(float), source_width, source_height,
       HdFormatFloat32);
+}
+
+bool HdLotusRenderBuffer::ReadColor(std::vector<float>& color) const {
+  std::scoped_lock lock(mutex_);
+  if (map_count_ != 0 || dimensions_[2] != 1 || data_.empty() ||
+      (format_ != HdFormatFloat32Vec4 && format_ != HdFormatUNorm8Vec4))
+    return false;
+  const std::size_t row_components =
+      static_cast<std::size_t>(dimensions_[0]) * 4;
+  color.resize(row_components * dimensions_[1]);
+  for (int y = 0; y < dimensions_[1]; ++y) {
+    const std::size_t source = (dimensions_[1] - 1 - y) * row_components;
+    const std::size_t dest = y * row_components;
+    if (format_ == HdFormatFloat32Vec4) {
+      std::memcpy(color.data() + dest, data_.data() + source * sizeof(float),
+          row_components * sizeof(float));
+    } else {
+      for (std::size_t x = 0; x < row_components; ++x)
+        color[dest + x] = data_[source + x] / 255.0F;
+    }
+  }
+  return true;
+}
+
+bool HdLotusRenderBuffer::ReadDepth(std::vector<float>& depth) const {
+  std::scoped_lock lock(mutex_);
+  if (map_count_ != 0 || dimensions_[2] != 1 || data_.empty() ||
+      format_ != HdFormatFloat32)
+    return false;
+  const std::size_t width = static_cast<std::size_t>(dimensions_[0]);
+  depth.resize(width * dimensions_[1]);
+  for (int y = 0; y < dimensions_[1]; ++y)
+    std::memcpy(depth.data() + y * width,
+        data_.data() + (dimensions_[1] - 1 - y) * width * sizeof(float),
+        width * sizeof(float));
+  return true;
 }
 
 bool HdLotusRenderBuffer::WriteRowsFlippedLocked(const std::uint8_t* source,

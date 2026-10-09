@@ -70,15 +70,24 @@ clear applies to the whole buffer, including pixels outside the framing's
 data window. ID channels write the requested sentinel across the whole
 buffer, including triangle pixels.
 
-An empty clear value preserves preceding attachment contents across frames
-at the same target size. The offscreen renderer retains one colour/depth
-attachment pair for the bootstrap and one for the scene passes; this
-foundation path assumes successive passes reuse their bound buffers. A
-radiance frame rewrites every pixel any of its samples hit. It does not restore arbitrary buffer contents after switching
-between different AOV buffer sets. Newly created or resized targets initialize
-colour to transparent black and depth to 1 when no clear is supplied; old
-pixels are not carried across a resize. ID buffers remain untouched when no
-clear is supplied.
+An empty clear value preserves the currently bound CPU buffer's contents.
+Before drawing, the adapter restores that channel's contents into the GPU
+attachment, converting UNORM colour to linear floats and flipping bottom-up
+rows. Switching buffer sets, a depth-only pass, host writes through `Map`,
+and returning after another buffer's resize therefore preserve the bound
+buffer rather than the preceding GPU image. Same-size reallocation uses the
+new CPU storage (zero-initialized by `Allocate`), without resurrecting old
+pixels. ID buffers remain untouched when no clear is supplied.
+
+A radiance frame rewrites every pixel any of its accumulated samples hit;
+pixel-centre depth hits overwrite the restored depth under the usual depth
+test. Misses and pixels outside the data window retain the restored values.
+Restoration does not restart radiance accumulation or change its background
+sample convention. Each bound colour/depth channel with no clear requires a
+CPU copy and a GPU upload, using the persistent readback buffers as staging;
+it creates no additional GPU allocation. This synchronous foundation path
+does not cache CPU contents, since the host may edit them between passes.
+See the [buffer restoration evidence](../reports/2026-10-09-aov-restoration.md).
 
 With the default descriptors' clears, hiding or removing the last mesh
 produces transparent black, depth 1 and ID -1, and still converges. An empty
@@ -89,3 +98,11 @@ Standalone/headless callers supply clear values and enable flags in
 `Lotus::OffscreenTarget`. Its defaults clear every frame to transparent black
 and depth 1. Clear changes reuse the same targets; only an extent change
 recreates them.
+
+Backend callers can supply tightly packed top-left `preserved_color` (linear
+RGBA floats) and `preserved_depth` (window-depth floats) in `OffscreenTarget`.
+Nonempty arrays must match the target extent. With the respective clear
+disabled, they restore contents before the first frame of a render call,
+including when targets are created or resized. Without arrays, a disabled
+clear retains the preceding GPU attachment; new targets initialize to the
+clear values. Enabled clears take precedence over restoration arrays.
