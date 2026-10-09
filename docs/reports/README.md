@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-10-blas-refit-compaction.md](2026-10-10-blas-refit-compaction.md) | Compatible BLAS point refits and dependent TLAS bounds updates, CPU/GPU update measurements, topology and shared-source regressions, isolated compacted-size/copy evaluation and production compaction disposition. |
 | [2026-10-10-foundation-closure.md](2026-10-10-foundation-closure.md) | Foundation scope dispositions, hosted core/Hydra success with inspected capability SKIPs, strict physical-GPU checks and all three entry points. |
 | [2026-10-10-gpu-memory-pools.md](2026-10-10-gpu-memory-pools.md) | Shared GPU scene memory, readback/churn allocation measurements, independent occupancy oracle, dedicated fallback, mapping, failure and teardown checks, deterministic references and Hydra regression. |
 | [2026-10-09-aov-restoration.md](2026-10-09-aov-restoration.md) | No-clear AOV restoration across buffer switches, host writes and reallocation; GPU staging reuse, hit/miss preservation and regression checks. |

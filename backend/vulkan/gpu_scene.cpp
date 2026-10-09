@@ -422,6 +422,14 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
       detail = "the scene update uploads geometry larger than uint32 counts";
       return false;
     }
+    if (!std::all_of(geometry->positions.begin(), geometry->positions.end(),
+            [](const auto& point) {
+              return std::all_of(point.begin(), point.end(),
+                  [](float value) { return std::isfinite(value); });
+            })) {
+      detail = "the scene update uploads non-finite positions";
+      return false;
+    }
     for (const auto& triangle : geometry->triangles) {
       for (const std::uint32_t index : triangle) {
         if (index >= geometry->positions.size()) {
@@ -455,6 +463,16 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     }
   }
   std::unordered_set<const Texture*> released_textures;
+  std::unordered_set<const MeshGeometry*> replaced_sources, replaced_targets;
+  for (const auto& replacement : update.geometry_replacements) {
+    if (!released.contains(replacement.previous) ||
+        !uploaded.contains(replacement.replacement) ||
+        !replaced_sources.insert(replacement.previous).second ||
+        !replaced_targets.insert(replacement.replacement).second) {
+      detail = "geometry replacements must pair distinct releases and uploads";
+      return false;
+    }
+  }
   for (const Texture* texture : update.texture_releases) {
     if (!texture_slot_of_.contains(texture) ||
         !released_textures.insert(texture).second) {
@@ -809,8 +827,37 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       !update.instances_changed && !write_materials) {
     return true;
   }
+  // Retain compatible geometry in its slot before applying ordinary releases.
+  // The immutable CPU sources change identity; their GPU storage and BLAS do
+  // not. Exact indices and vertex count are required by Vulkan's update rules.
+  std::unordered_map<const MeshGeometry*, std::uint32_t> retained;
+  std::unordered_set<const MeshGeometry*> retained_sources;
+  std::unordered_set<std::uint64_t> changed_blas;
+  for (const auto& replacement : update.geometry_replacements) {
+    const auto& previous = *replacement.previous;
+    const auto& next = *replacement.replacement;
+    if (previous.positions.size() != next.positions.size() ||
+        previous.triangles != next.triangles) {
+      continue;
+    }
+    const auto slot = slot_of_.at(replacement.previous);
+    retained.emplace(replacement.replacement, slot);
+    retained_sources.insert(replacement.previous);
+    if (previous.positions != next.positions) {
+      changed_blas.insert(slots_[slot].blas_id);
+    }
+    ++stats_.geometry_releases;
+  }
+  for (const auto* source : retained_sources) {
+    slot_of_.erase(source);
+  }
   for (const MeshGeometry* geometry : update.geometry_releases) {
-    Release(geometry);
+    if (!retained_sources.contains(geometry)) {
+      Release(geometry);
+    }
+  }
+  for (const auto& [source, slot] : retained) {
+    slot_of_[source] = slot;
   }
   for (const Texture* texture : update.texture_releases) {
     Release(texture);
@@ -841,6 +888,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     const auto found = slot_of_.find(instance.geometry);
     tlas_current = found != slot_of_.end() &&
                    slots_[found->second].blas_id == tlas_blas_ids_[index] &&
+                   !changed_blas.contains(slots_[found->second].blas_id) &&
                    instance.world_from_object == tlas_transforms_[index];
   }
   const bool build_tlas =
@@ -908,7 +956,21 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   offset = AlignUp(offset, kTexelAlignment);
   std::vector<std::pair<VkBuffer, VkBufferCopy>> copies;
   for (const auto& source : update.geometry_uploads) {
-    Geometry geometry;
+    const auto retained_slot = retained.find(source.get());
+    const bool reuse = retained_slot != retained.end();
+    // Keep ownership in slots_ on every failure path.
+    std::uint32_t slot = 0;
+    if (reuse) {
+      slot = retained_slot->second;
+    } else if (free_slots_.empty()) {
+      slot = static_cast<std::uint32_t>(slots_.size());
+      slots_.emplace_back();
+    } else {
+      slot = *free_slots_.begin();
+      free_slots_.erase(free_slots_.begin());
+    }
+    Geometry& geometry = slots_[slot];
+    const bool refit = reuse && changed_blas.contains(geometry.blas_id);
     geometry.source = source;
     geometry.vertex_count = static_cast<std::uint32_t>(source->positions.size());
     geometry.triangle_count =
@@ -920,8 +982,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     geometry.normal_offset = layout.normal_offset;
     geometry.texcoord_offsets = layout.texcoord_offsets;
     const VkDeviceSize size = layout.size;
-    if (!CreateDeviceBuffer(size, geometry_usage, geometry.buffer, detail)) {
-      return false;
+    stats_.geometry_bytes -= geometry.buffer.size;
+    if (geometry.buffer.size < size) {
+      DestroyBuffer(memory_, device_, geometry.buffer);
+      if (!CreateDeviceBuffer(size, geometry_usage, geometry.buffer, detail)) {
+        return false;
+      }
     }
     // Zeroed padding keeps the device contents deterministic.
     std::memset(staging + offset, 0, size);
@@ -941,7 +1007,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
     offset += size;
 
-    if (acceleration_) {
+    if (acceleration_ && (!reuse || refit)) {
       BlasBuild& build = blas_builds.emplace_back();
       build.geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
       build.geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
@@ -963,8 +1029,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       build.info.sType =
           VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
       build.info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-      build.info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-      build.info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+      build.info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                         VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+      build.info.mode = refit ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
+                              : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
       build.info.geometryCount = 1;
       // Stable: `blas_builds` never reallocates.
       build.info.pGeometries = &build.geometry;
@@ -973,31 +1041,26 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
           VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
       build_sizes_(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
           &build.info, &geometry.triangle_count, &sizes);
-      if (!CreateAccelerationStructure(
-              VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-              sizes.accelerationStructureSize, geometry.blas, detail)) {
-        DestroyBuffer(memory_, device_, geometry.buffer);
+      if (!reuse && !CreateAccelerationStructure(
+                        VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                        sizes.accelerationStructureSize, geometry.blas, detail)) {
         return false;
       }
       build.info.dstAccelerationStructure = geometry.blas.handle;
+      build.info.srcAccelerationStructure = refit ? geometry.blas.handle : VK_NULL_HANDLE;
       build.scratch_offset = blas_scratch;
-      blas_scratch += AlignUp(sizes.buildScratchSize, scratch_alignment_);
-      geometry.blas_id = next_blas_id_++;
-      stats_.acceleration_bytes += geometry.blas.buffer.size;
-      ++stats_.blas_builds;
-    }
-
-    std::uint32_t slot = 0;
-    if (free_slots_.empty()) {
-      slot = static_cast<std::uint32_t>(slots_.size());
-      slots_.push_back(std::move(geometry));
-    } else {
-      slot = *free_slots_.begin();
-      free_slots_.erase(free_slots_.begin());
-      slots_[slot] = std::move(geometry);
+      blas_scratch += AlignUp(refit ? sizes.updateScratchSize : sizes.buildScratchSize,
+          scratch_alignment_);
+      if (refit) {
+        ++stats_.blas_updates;
+      } else {
+        geometry.blas_id = next_blas_id_++;
+        stats_.acceleration_bytes += geometry.blas.buffer.size;
+        ++stats_.blas_builds;
+      }
     }
     slot_of_[source.get()] = slot;
-    stats_.geometry_bytes += size;
+    stats_.geometry_bytes += geometry.buffer.size;
     ++stats_.geometry_uploads;
   }
 
@@ -1195,9 +1258,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       }
       stats_.acceleration_bytes += tlas_.buffer.size;
     }
-    // Rewrites that keep every instance on the same BLAS change only
-    // transforms, so they refit the TLAS in place (design policy section
-    // 4.2: update and rebuild are distinct). Anything else rebuilds it.
+    // Rewrites that keep every instance on the same BLAS refit the TLAS
+    // for transform edits or changed BLAS bounds. Anything else rebuilds it.
     const bool refit = tlas_built_ && count != 0 && blas_ids == tlas_blas_ids_;
     if (refit) {
       tlas_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;

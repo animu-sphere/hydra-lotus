@@ -149,6 +149,11 @@ planned and returns a `SceneUpdate`:
 - `geometry_releases`: geometry buffers the scene no longer references, in
   the previous scene's key order;
 - `geometry_uploads`: geometry buffers that become resident, in key order;
+- `geometry_replacements`: optional one-to-one correspondence between a
+  released source and an uploaded source edited under the same mesh key.
+  A source still used by another mesh is never replaced in place; moving
+  a mesh onto already-resident geometry carries no correspondence. Reset
+  carries none. The backend validates both addresses against the plan;
 - `texture_releases` and `texture_uploads`: the same for textures. Every
   texture in the scene is resident, whether a material names it or not;
 - `instances`: when `instances_changed`, the complete replacement list,
@@ -198,11 +203,13 @@ empty plan records no GPU work.
   when the geometry has normals, at the next aligned offset, the corner
   normals as float triples, then each texture-coordinate set, in key
   order, as float pairs at the next aligned offset. Normals and texture
-  coordinates are geometry: changing them uploads a new buffer and builds a
-  new BLAS, as a point edit does.
+  coordinates are geometry: changing them replaces the CPU source and
+  uploads its contents, but a compatible replacement retains GPU storage
+  and its BLAS as described [below](#acceleration-structures).
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
-  deterministic sequence of plans.
+  deterministic sequence of plans. Compatible replacements keep their slot;
+  their buffer keeps its capacity unless the new attributes need more.
 - Each resident texture is a device-local, sampled 2D image of one level,
   `R8G8B8A8_UNORM`, `R8G8B8A8_SRGB` or `R32G32B32A32_SFLOAT`, in the
   shader-read layout, with a slot in the GPU scene's texture table. Slots
@@ -309,21 +316,31 @@ says why; `renderer.scene.acceleration` is then a SKIP.
 - Geometry buffers also carry device addresses and acceleration-structure
   build-input usage. A BLAS is built from the geometry buffer when it is
   uploaded: one non-opaque triangle geometry, built for fast trace with
-  `VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR`. The query evaluates
+  `VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR` and
+  `VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR`. The query evaluates
   coverage before confirming candidates, once per intersection. Geometry
   may be shared by different alpha materials, and coverage edits rewrite
-  the material table without rebuilding a BLAS or TLAS. It lives
-  and dies with the buffer, so a point or topology edit builds a new BLAS,
-  and hidden geometry keeps its BLAS. BLASes are neither refitted nor
-  compacted.
+  the material table without rebuilding a BLAS or TLAS. Hidden geometry
+  keeps its BLAS. A replacement with the same vertex count and exactly
+  the same triangle indices retains the BLAS: changed positions refit it
+  in place, while normal, UV or source-face-only edits leave it unchanged.
+  A changed vertex count or indices builds a new BLAS, even when the
+  primitive count is unchanged. Plans without replacement correspondence
+  use the ordinary release/build path. Uploads reject non-finite positions
+  and invalid indices before changing the scene, preserving Vulkan's
+  [update constraints](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdBuildAccelerationStructuresKHR.html).
+  Production BLAS compaction is disabled: the measured size/copy evaluation
+  did not establish a favorable end-to-end trade-off
+  ([evaluation](../reports/2026-10-10-blas-refit-compaction.md)).
 - The TLAS has one instance per instance record, in the same order, so a
   ray query's instance index is the instance record's index. Each instance
   references its geometry's BLAS with the record's transform, mask `0xFF`
   and facing culling disabled; the custom index is unused.
 - An instance rewrite in which every instance keeps its BLAS and its
-  transform, such as a material binding change, leaves the TLAS as it is. One in
-  which every instance keeps its BLAS but a transform changes updates
-  (refits) the TLAS in place. Any other rewrite, including one that
+  transform and whose BLAS bounds are unchanged, such as a material binding
+  change, leaves the TLAS as it is. One in which every instance keeps its
+  BLAS but a transform or referenced BLAS bounds change updates (refits)
+  the TLAS in place. Any other rewrite, including one that
   changes the instance count, rebuilds it. The TLAS storage grows when a
   build needs more and is otherwise reused.
 - The builds are recorded in the plan's one submission after its copies,
@@ -331,7 +348,9 @@ says why; `renderer.scene.acceleration` is then a SKIP.
   returns after they complete.
 
 `GpuSceneStats` counts the BLASes, the TLAS instances, their storage bytes,
-and lifetime BLAS builds, TLAS builds and TLAS updates. `ReadBackScene`
+and lifetime BLAS builds/updates, TLAS builds and TLAS updates. Geometry
+upload/release counters describe logical CPU-source residency changes, even
+when the corresponding GPU storage survives. `ReadBackScene`
 also returns the TLAS build input decoded
 (`GpuSceneContents::tlas_instances`), each BLAS reference resolved to its
 geometry slot. Primary-ray correctness is also checked against independently
@@ -341,7 +360,7 @@ projected CPU triangles ([ray-query report](../reports/2026-10-05-primary-rays.m
 
 Where the queue supports timestamps (`GpuSceneStats::timestamps_available`),
 the plan's submission writes one timestamp before its copies and one after
-each of its three phases: the copies, the BLAS builds and the TLAS build or
+each of its three phases: the copies, the BLAS builds/refits and the TLAS build or
 refit. The barriers between the phases keep each from starting before the
 previous one finishes, so `GpuSceneEvidence::timings` gives each phase's
 GPU duration as `upload_gpu_ms`, `blas_build_gpu_ms` and

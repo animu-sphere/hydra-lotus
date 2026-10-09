@@ -176,6 +176,8 @@ int main() try {
   Check(update.geometry_releases.size() == 1 &&
       update.geometry_releases[0] == a && update.geometry_uploads.size() == 1 &&
       update.geometry_uploads[0].get() == edited_a &&
+      update.geometry_replacements ==
+          std::vector<Lotus::SceneGeometryReplacement>{{a, edited_a}} &&
       update.instances_changed && update.instances[0].geometry == edited_a,
       "a point edit did not replace exactly one geometry buffer");
 
@@ -193,6 +195,7 @@ int main() try {
   Check(update.environment_changed &&
       update.environment == std::array<float, 3>{1.0F, 0.5F, 0.25F} &&
       update.geometry_releases.empty() &&
+      update.geometry_replacements.empty() &&
       update.geometry_uploads.size() == 1 &&
       update.geometry_uploads[0].get() == edited_a &&
       update.instances_changed && update.instances.size() == 1 &&
@@ -350,6 +353,34 @@ int main() try {
       "materials or light");
   Check(extraction.Update(Lotus::FrameSnapshot{}).Empty(),
       "a snapshot without a scene was not treated as empty");
+
+  // Shared CPU geometry must remain untouched while another mesh uses it.
+  auto shared = std::make_shared<Lotus::MeshGeometry>(triangle);
+  auto next_geometry = std::make_shared<Lotus::MeshGeometry>(edited);
+  auto scene = std::make_shared<Lotus::LotusScene>();
+  scene->meshes["/a"].geometry = shared;
+  scene->meshes["/b"].geometry = shared;
+  Lotus::FrameSnapshot shared_snapshot;
+  shared_snapshot.scene = scene;
+  extraction.Reset();
+  update = extraction.Update(shared_snapshot);
+  Check(update.geometry_uploads.size() == 1 && update.geometry_replacements.empty(),
+      "shared insertion planned more than one upload or a replacement");
+  auto next_scene = std::make_shared<Lotus::LotusScene>(*scene);
+  next_scene->meshes["/a"].geometry = next_geometry;
+  shared_snapshot.scene = next_scene;
+  update = extraction.Update(shared_snapshot);
+  Check(update.geometry_uploads.size() == 1 && update.geometry_releases.empty() &&
+            update.geometry_replacements.empty(),
+      "editing one shared mesh planned an overwrite of still-resident geometry");
+  // Moving the remaining mesh onto an already-resident source needs no hint.
+  auto merged_scene = std::make_shared<Lotus::LotusScene>(*next_scene);
+  merged_scene->meshes["/b"].geometry = next_geometry;
+  shared_snapshot.scene = merged_scene;
+  update = extraction.Update(shared_snapshot);
+  Check(update.geometry_releases.size() == 1 && update.geometry_uploads.empty() &&
+            update.geometry_replacements.empty(),
+      "merging geometries planned a replacement without an upload");
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

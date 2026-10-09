@@ -142,7 +142,8 @@ struct GpuSceneStats {
   std::uint64_t instance_bytes = 0;
   std::uint64_t material_bytes = 0;
   std::uint64_t texture_bytes = 0;
-  // Lifetime: geometry buffers and textures created and destroyed, instance
+  // Lifetime: geometry residencies added/removed (compatible replacements
+  // can retain GPU storage), textures created/destroyed, instance
   // buffer and material table rewrites, upload submissions and bytes copied
   // through staging. An empty update changes none of them.
   std::uint64_t geometry_uploads = 0;
@@ -164,9 +165,10 @@ struct GpuSceneStats {
   std::uint32_t blas_count = 0;
   std::uint32_t tlas_instance_count = 0;
   std::uint64_t acceleration_bytes = 0;
-  // Lifetime: BLAS builds, full TLAS builds, and TLAS updates (refits) for
-  // instance rewrites that change only transforms.
+  // Lifetime: BLAS builds/point refits and full TLAS builds/refits. A TLAS
+  // refit follows either changed instance transforms or changed BLAS bounds.
   std::uint64_t blas_builds = 0;
+  std::uint64_t blas_updates = 0;
   std::uint64_t tlas_builds = 0;
   std::uint64_t tlas_updates = 0;
 
@@ -184,7 +186,7 @@ struct GpuSceneTimings {
   // Copying the staged geometry, textures, instance records, material table
   // and TLAS build input; 0 when there was nothing to copy.
   double upload_gpu_ms = 0.0;
-  // Building the uploaded geometries' BLASes; 0 when there were none.
+  // Building or refitting uploaded geometries' BLASes; 0 when neither ran.
   double blas_build_gpu_ms = 0.0;
   // Building or refitting the TLAS; 0 when it was left as it was.
   double tlas_build_gpu_ms = 0.0;

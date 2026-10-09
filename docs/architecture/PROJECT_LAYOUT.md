@@ -53,6 +53,11 @@ backend target. The Vulkan-only `lotus-memory-ranges-test` and
 placement and GPU allocation lifecycle; `lotus-renderer-memory-pool-no-driver`
 checks the latter's explained SKIP using the missing-driver script.
 
+The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
+size/copy experiment, separate from production scene storage. Its
+`lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained
+missing-driver SKIP.
+
 ## 3. Where new code goes
 
 The design policy's components map onto this layout as follows. A row is a

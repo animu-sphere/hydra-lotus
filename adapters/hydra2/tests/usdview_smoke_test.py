@@ -90,12 +90,15 @@ def testUsdviewInputFunction(appController):
     assert updated["gpu_geometries"] == 2 and updated["gpu_instances"] == 4
     assert updated["geometry_uploads"] == first["geometry_uploads"] + 1
     # With acceleration structures, each geometry has one BLAS and each
-    # placement one TLAS instance, and the point edit builds exactly one
-    # more BLAS.
+    # placement one TLAS instance, and the point edit refits one BLAS and
+    # its dependent TLAS without rebuilding either.
     if first["acceleration"] == 1:
         assert first["blas"] == 2 and first["tlas_instances"] == 4
         assert updated["blas"] == 2 and updated["tlas_instances"] == 4
-        assert updated["blas_builds"] == first["blas_builds"] + 1
+        assert updated["blas_builds"] == first["blas_builds"]
+        assert updated["blas_updates"] == first["blas_updates"] + 1
+        assert updated["tlas_builds"] == first["tlas_builds"]
+        assert updated["tlas_updates"] == first["tlas_updates"] + 1
 
     # Deterministic mode: lotus:sampleIndex sets the accumulation's first
     # sample index, a change restarts the accumulation, and returning to the

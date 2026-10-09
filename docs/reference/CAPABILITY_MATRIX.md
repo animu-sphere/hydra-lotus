@@ -43,7 +43,7 @@ Technical contracts are owned by [SCENE.md](SCENE.md).
 | CPU geometry and mesh placement | ✅ | [Scene snapshots](SCENE.md#geometry-and-placement); [extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md) |
 | GPU scene upload | ✅ | [GPU scene](SCENE.md#gpu-scene); [readback evidence](../reports/2026-10-05-gpu-scene-upload.md) |
 | GPU scene memory suballocation | ✅ | [Pools, ownership, fragmentation statistics and limits](SCENE.md#gpu-scene-memory); [allocation/reuse and lifecycle evidence](../reports/2026-10-10-gpu-memory-pools.md) |
-| BLAS / TLAS | ◐ | [Acceleration structures and update limits](SCENE.md#acceleration-structures); [build/refit evidence](../reports/2026-10-05-blas-tlas.md) |
+| BLAS / TLAS | ◐ | [Acceleration structures and update limits](SCENE.md#acceleration-structures); [point refit and compaction evaluation](../reports/2026-10-10-blas-refit-compaction.md) |
 | Ray queries and primary rays | ✅ | [Primary-ray contract](SCENE.md#primary-rays); [projection and capability evidence](../reports/2026-10-05-primary-rays.md) |
 | Surface reconstruction, Lambert/GGX and multi-bounce transport | ✅ | [Path-tracing contract](SCENE.md#path-tracing); [BSDF evidence](../reports/2026-10-05-bsdf-multibounce.md), [dielectric/specular evidence](../reports/2026-10-08-dielectric-specular.md) |
 | Environment lighting | ◐ | [Light behavior and limits](SCENE.md#lights); [dome evidence](../reports/2026-10-08-dome-lights.md) |

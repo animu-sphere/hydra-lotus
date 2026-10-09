@@ -587,9 +587,9 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       renderer.ReadBackScene().instances.at(0).geometry_slot != triangle_slot) {
     return "point and normal edit: the geometry was not replaced in its slot";
   }
-  expect(before.blas_builds == 3 && before.tlas_builds == 3 &&
-             before.tlas_updates == 1,
-      "point and normal edit", "expected one BLAS build and a TLAS rebuild");
+  expect(before.blas_builds == 2 && before.blas_updates == 1 && before.tlas_builds == 2 &&
+             before.tlas_updates == 2,
+      "point and normal edit", "expected one BLAS refit and a TLAS refit");
 
   // An instancer places one resident geometry, with one BLAS, several times.
   Lotus::MeshInstance prototype;
@@ -607,8 +607,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     return "instancer expansion: expected three instances of resident "
            "geometry and no upload";
   }
-  expect(before.blas_count == 2 && before.blas_builds == 3 &&
-             before.tlas_builds == 4 && before.tlas_updates == 1,
+  expect(before.blas_count == 2 && before.blas_builds == 2 &&
+             before.tlas_builds == 3 && before.tlas_updates == 2,
       "instancer expansion", "expected a TLAS rebuild and no BLAS build");
 
   const Lotus::GpuSceneStats expanded = before;
@@ -621,8 +621,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     return "instancer transform edit: geometry was uploaded or the "
            "instances were not rewritten";
   }
-  expect(before.blas_builds == 3 && before.tlas_builds == 4 &&
-             before.tlas_updates == 2,
+  expect(before.blas_builds == 2 && before.tlas_builds == 3 &&
+             before.tlas_updates == 3,
       "instancer transform edit", "expected a TLAS update and no build");
 
   prototype.instancer_transforms->clear();
@@ -634,7 +634,7 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
     return "instancer without instances: geometry was released or an "
            "instance remained";
   }
-  expect(before.blas_count == 2 && before.tlas_builds == 5,
+  expect(before.blas_count == 2 && before.tlas_builds == 4,
       "instancer without instances", "expected an empty TLAS rebuild");
 
   world.SetMeshInstance("/triangle", Lotus::MeshInstance{});
@@ -643,8 +643,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   if (before.instance_count != 1 || before.geometry_uploads != 3) {
     return "ordinary placement: expected one instance and no upload";
   }
-  expect(before.blas_builds == 3 && before.tlas_builds == 6 &&
-             before.tlas_updates == 2,
+  expect(before.blas_builds == 2 && before.tlas_builds == 5 &&
+             before.tlas_updates == 3,
       "ordinary placement", "expected a TLAS rebuild and no BLAS build");
 
   // Textures become images in the texture table; the geometry carries two
@@ -740,8 +740,8 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       stats().upload_submissions != before.upload_submissions) {
     return "removal: the GPU scene kept geometry, textures or instances";
   }
-  expect(before.blas_builds == 4 && before.tlas_builds == 8 &&
-             before.tlas_updates == 2,
+  expect(before.blas_builds == 2 && before.blas_updates == 1 && before.tlas_builds == 6 &&
+             before.tlas_updates == 3,
       "removal", "expected an empty TLAS rebuild");
   return {};
 }
@@ -798,8 +798,11 @@ SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
   // Returns the step's failure, or an empty string.
   const auto step = [&](const char* name, Phase upload, Phase blas,
                         Phase tlas) -> std::string {
+    const auto cpu_begin = std::chrono::steady_clock::now();
     const Lotus::GpuSceneEvidence evidence =
         renderer.UpdateScene(extraction.Update(world.Commit()));
+    const double cpu_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - cpu_begin).count();
     const std::string prefix = std::string(name) + ": ";
     if (evidence.status != Lotus::FrameStatus::Pass) {
       return prefix + evidence.detail;
@@ -839,16 +842,51 @@ SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
         return failure;
       }
     }
-    if (submitted) {
-      summary << ' ' << name << " upload_gpu_ms=" << timings.upload_gpu_ms
+    {
+      summary << ' ' << name << " cpu_update_wall_ms=" << cpu_ms
+              << " upload_gpu_ms=" << timings.upload_gpu_ms
               << " blas_build_gpu_ms=" << timings.blas_build_gpu_ms
-              << " tlas_build_gpu_ms=" << timings.tlas_build_gpu_ms << ';';
+              << " tlas_build_gpu_ms=" << timings.tlas_build_gpu_ms
+              << " blas_builds=" << evidence.stats.blas_builds
+              << " blas_updates=" << evidence.stats.blas_updates
+              << " tlas_builds=" << evidence.stats.tlas_builds
+              << " tlas_updates=" << evidence.stats.tlas_updates
+              << " acceleration_bytes=" << evidence.stats.acceleration_bytes << ';';
     }
     return {};
   };
 
   world.SetMesh("/grid", std::move(grid), placements);
   verdict.failure = step("insertion", Phase::Runs, Phase::Runs, Phase::Runs);
+  if (verdict.failure.empty() && verdict.available) {
+    auto edited = *world.Commit().scene->meshes.at("/grid").geometry;
+    for (auto& point : edited.positions) {
+      point[2] = 0.1F * point[0];
+    }
+    const auto before = renderer.UpdateScene({}).stats;
+    world.SetMesh("/grid", edited, placements);
+    verdict.failure = step("point refit", Phase::Runs, Phase::Runs, Phase::Runs);
+    const auto after = renderer.UpdateScene({}).stats;
+    if (verdict.failure.empty() && after.acceleration_available &&
+        (after.blas_builds != before.blas_builds ||
+            after.blas_updates != before.blas_updates + 1 ||
+            after.tlas_updates != before.tlas_updates + 1)) {
+      verdict.failure = "point refit: expected BLAS and TLAS updates without builds";
+    }
+    // Same primitive count, different indices still requires a full rebuild.
+    std::swap(edited.triangles[0][0], edited.triangles[0][1]);
+    world.SetMesh("/grid", edited, placements);
+    if (verdict.failure.empty()) {
+      verdict.failure = step("topology rebuild", Phase::Runs, Phase::Runs, Phase::Runs);
+    }
+    const auto rebuilt = renderer.UpdateScene({}).stats;
+    if (verdict.failure.empty() && rebuilt.acceleration_available &&
+        (rebuilt.blas_builds != after.blas_builds + 1 ||
+            rebuilt.blas_updates != after.blas_updates ||
+            rebuilt.tlas_builds != after.tlas_builds + 1)) {
+      verdict.failure = "topology rebuild: expected BLAS and TLAS builds without refits";
+    }
+  }
   if (verdict.failure.empty() && verdict.available) {
     // Moving every placement refits the TLAS.
     for (Lotus::Matrix4& placement : *placements.instancer_transforms) {
@@ -1075,6 +1113,28 @@ std::string PrimaryRayFailure(Lotus::OffscreenRenderer& renderer,
   instance.world_from_object[13] = -0.15F;
   world.SetMeshInstance("triangle", instance);
   if (auto error = check("transform refit"); !error.empty())
+    return error;
+  // Expand outside the original BLAS bounds while preserving the instance
+  // list. Missing the dependent TLAS refit would miss this triangle.
+  const auto before_points = renderer.UpdateScene({}).stats;
+  for (auto& point : geometry.positions) {
+    point[1] += 0.8F;
+    point[2] = 0.4F;
+  }
+  world.SetMesh("triangle", geometry, instance);
+  if (auto error = check("visible point refit outside original bounds"); !error.empty())
+    return error;
+  const auto after_points = renderer.UpdateScene({}).stats;
+  if (after_points.blas_builds != before_points.blas_builds ||
+      after_points.blas_updates != before_points.blas_updates + 1 ||
+      after_points.tlas_updates != before_points.tlas_updates + 1)
+    return "visible point edit rebuilt or left the TLAS bounds unchanged";
+  for (auto& point : geometry.positions) {
+    point[1] -= 0.8F;
+    point[2] = -0.2F;
+  }
+  world.SetMesh("triangle", geometry, instance);
+  if (auto error = check("repeated visible point refit"); !error.empty())
     return error;
   instance.visible = false;
   world.SetMeshInstance("triangle", instance);

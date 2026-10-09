@@ -134,6 +134,9 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " blas=" << scene.blas_count
          << " tlas_instances=" << scene.tlas_instance_count
          << " blas_builds=" << scene.blas_builds
+         << " blas_updates=" << scene.blas_updates
+         << " tlas_builds=" << scene.tlas_builds
+         << " tlas_updates=" << scene.tlas_updates
          << " ray_query=" << (frame.ray_query_used ? 1 : 0)
          << " sample_index=" << sample_index
          << " samples=" << frame.samples_per_pixel

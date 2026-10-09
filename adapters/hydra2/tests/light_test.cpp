@@ -240,6 +240,7 @@ int Run(bool gpu) {
     const auto final_stats = delegate.GetGpuSceneStats();
     Check(final_stats.geometry_uploads == stats.geometry_uploads &&
               final_stats.blas_builds == stats.blas_builds &&
+              final_stats.blas_updates == stats.blas_updates &&
               final_stats.tlas_builds == stats.tlas_builds &&
               final_stats.tlas_updates == stats.tlas_updates,
         "environment edits uploaded geometry or rebuilt acceleration structures");

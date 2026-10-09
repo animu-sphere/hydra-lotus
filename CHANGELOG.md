@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- BLAS point refits for compatible geometry replacements, with dependent
+  TLAS bounds refits and GPU buffer reuse. Attribute-only changes leave
+  acceleration structures unchanged; vertex-count or index changes rebuild.
+  Build/update counters, CPU/GPU update measurements and an isolated BLAS
+  compaction size/copy experiment document the backend trade-offs.
+
 - Backend-owned GPU scene memory pools for geometry, textures, material and
   instance buffers, acceleration storage, scratch, staging and persistent
   scene readback. Released ranges coalesce and reuse their backing memory;
