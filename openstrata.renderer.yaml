@@ -26,6 +26,7 @@ validation:
     - renderer.backend.capability
     - renderer.gpu.frame
     - renderer.scene.upload
+    - renderer.scene.memory
     - renderer.scene.acceleration
     - renderer.scene.timestamp
     - renderer.ray_query.capability

@@ -16,6 +16,7 @@
 
 #include <lotus/extraction.hpp>
 #include <lotus/vulkan_backend.hpp>
+#include "gpu_memory.hpp"
 
 namespace Lotus::vulkan_internal {
 
@@ -110,7 +111,7 @@ inline constexpr std::array<const char*, 2> kAccelerationExtensions = {
 
 struct DeviceBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
-  VkDeviceMemory memory = VK_NULL_HANDLE;
+  MemorySlice allocation;
   VkDeviceSize size = 0;
   bool coherent = false;
   void* mapped = nullptr;
@@ -135,8 +136,10 @@ public:
   // are undefined.
   bool Apply(const SceneUpdate& update, std::string& detail);
   bool ReadBack(GpuSceneContents& contents, std::string& detail);
-  [[nodiscard]] const GpuSceneStats& Stats() const {
-    return stats_;
+  [[nodiscard]] GpuSceneStats Stats() const {
+    auto stats = stats_;
+    stats.memory = memory_.Stats();
+    return stats;
   }
   // The last Apply's submission; unavailable when it submitted nothing.
   [[nodiscard]] const GpuSceneTimings& Timings() const {
@@ -199,7 +202,7 @@ private:
     // Keeps the address that identifies this texture unique while resident.
     std::shared_ptr<const Texture> source;
     VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+    MemorySlice allocation;
     VkImageView view = VK_NULL_HANDLE;
     VkDeviceSize bytes = 0;
   };
@@ -226,7 +229,7 @@ private:
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;
   VkDeviceSize index_alignment_ = 4;
-  std::uint32_t max_allocations_ = 0;
+  SceneMemory memory_;
   VkCommandPool command_pool_ = VK_NULL_HANDLE;
   VkCommandBuffer command_ = VK_NULL_HANDLE;
   VkFence fence_ = VK_NULL_HANDLE;
@@ -255,6 +258,7 @@ private:
   std::uint32_t materials_used_ = 0;
   std::array<float, 3> environment_{};
   DeviceBuffer staging_;
+  DeviceBuffer readback_;
 
   // Acceleration structures, when the device supports them.
   bool acceleration_ = false;

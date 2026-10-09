@@ -1,13 +1,17 @@
 # Supported configurations
 
 Configurations a build and test run has actually passed on. A configuration
-that has only been reviewed is not listed. Each row below records a
-local run, and the report named in the row holds its detail.
+that has only been reviewed is not listed. The report named in each row
+holds its detail; hosted capability handling is identified separately from
+physical-GPU rendering.
 
 ## Measured
 
 | OS | Compiler | Build | Runtime | GPU | Result | Report |
 | --- | --- | --- | --- | --- | --- | --- |
+| Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release | `core` without OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Memory pool/readback/churn, synchronization, deterministic references; core 13/13, Hydra 30/30 and strict evidence passed | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
+| Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained scene-memory and synchronization SKIPs | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
+| GitHub-hosted Windows 2022 x86_64 | MSVC (hosted toolchain) | runtime-free `ci-core` / `hydra`, Release | none / pinned OpenUSD runtime | No usable Vulkan driver in Hydra job | Core 8/8 and Hydra 27/27 entries without failures, GPU/host/synchronization capability SKIPs explained | [Foundation closure](../reports/2026-10-10-foundation-closure.md#hosted-follow-up) |
 | Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Synchronization hazard and simulated missing-driver checks, 27/27 tests and strict evidence validation passed | [Synchronization CI follow-up](../reports/2026-10-09-synchronization-ci.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `core`, Release | OpenStrata `cy2026` `core` (no OpenUSD) | NVIDIA RTX A5000 | Synchronization validation, intentional hazard capture, 9/9 tests and strict evidence validation passed | [Synchronization validation](../reports/2026-10-08-synchronization-validation.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `hydra` intent, Release | OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Synchronization validation on every usdview frame, 26/26 tests and strict evidence validation passed | [Synchronization validation](../reports/2026-10-08-synchronization-validation.md) |
@@ -62,9 +66,34 @@ Linux, macOS, AMD and Intel GPUs are not measured.
   `openstrata.ci.yaml` and verifies runtime-free evidence directly. See the
   [measured CI behavior](../reports/2026-10-04-foundation-ci.md) and
   [CI procedure](../guides/BUILDING.md#ci-contracts).
+  This workaround is accepted for the foundation: renderer adoption does
+  not require plugin-workspace descriptors, and direct report checks retain
+  the runtime-free acceptance contract without extending OpenStrata here.
 - On the measured Japanese MSVC host, Hydra and viewport objects can record
   `#deps 0` in Ninja's dependency log, so header edits do not rebuild them.
   The [build guide](../guides/BUILDING.md#the-standalone-viewport) gives the
   clean-rebuild workaround; the
   [bootstrap report](../reports/ost/01-2026-10-04-v0.23.14-renderer-template-bootstrap.md)
   records the observation. This is a tooling constraint, not renderer behavior.
+  The clean-rebuild workaround is accepted for the foundation because it
+  makes the affected consumer builds reviewable without owning compiler or
+  OpenStrata environment detection; an incremental build with missing
+  dependency records is not sufficient evidence for a header change.
+
+## Foundation bootstrap limitations
+
+- Standalone presentation remains a bootstrap triangle, one frame in flight
+  with CPU readback in the offscreen path. This is accepted for the entry-point
+  and resource-lifetime foundation; scene presentation and throughput changes
+  belong with measured Renderer Phase 2 optimization.
+- Hydra ID channels are CPU sentinels, so picking is unavailable. The
+  [AOV contract](AOVS.md#channels) accepts these bootstrap placeholders because
+  the required products are color and depth. Additional debug channels are
+  introduced with their producing passes; temporal outputs belong to
+  Renderer Phase 4.
+- Broader light sampling and production material/scene coverage are assigned
+  to Renderer Phase 3 and Renderer Phase 8 respectively in the
+  [deferred adapter work](../roadmap/current.md#deferred-adapter-work).
+  Platform/backend expansion remains outside the measured configuration
+  set. These limitations do not weaken deterministic reference, validation
+  or dependency-boundary requirements.

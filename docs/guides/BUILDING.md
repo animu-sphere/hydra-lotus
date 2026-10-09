@@ -140,5 +140,6 @@ OpenUSD runtime, with matching Python and a checksum-verified Vulkan SDK.
 The usdview host test skips when headless evidence explicitly reports no GPU
 capability; failed or missing GPU evidence is an error.
 
-These are local checks; hosted execution remains unmeasured
-([CI report](../reports/2026-10-04-foundation-ci.md)).
+Hosted core/Hydra execution and explained capability SKIPs have been
+verified ([foundation closure](../reports/2026-10-10-foundation-closure.md#hosted-follow-up));
+strict physical-GPU rendering is measured separately in the local reports.

@@ -2,7 +2,7 @@ add_library(lotus-render-vulkan STATIC
   vulkan_backend.cpp
   vulkan_present.cpp)
 if(LOTUS_WITH_VULKAN)
-  target_sources(lotus-render-vulkan PRIVATE gpu_scene.cpp)
+  target_sources(lotus-render-vulkan PRIVATE gpu_scene.cpp gpu_memory.cpp)
 endif()
 add_library(Lotus::Vulkan ALIAS lotus-render-vulkan)
 set_target_properties(lotus-render-vulkan PROPERTIES EXPORT_NAME Vulkan)

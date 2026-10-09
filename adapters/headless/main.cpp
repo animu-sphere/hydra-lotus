@@ -303,6 +303,107 @@ bool TlasMatches(const Lotus::GpuSceneContents& contents) {
 
 // The BLAS and TLAS verdict of the scene walk below. Without acceleration
 // structures on the device it is a SKIP that says why.
+struct MemoryVerdict {
+  std::string failure;
+  std::string detail;
+};
+
+// Many independent geometry/texture resources, with alternating holes and
+// reinsertion. Readback checks contents while pool counters check ownership.
+MemoryVerdict SceneMemoryEvidence(Lotus::OffscreenRenderer& renderer) {
+  MemoryVerdict result;
+  Lotus::RenderWorld world;
+  world.SetMaterial("/pool-material", Lotus::Material{});
+  Lotus::SceneExtraction extraction;
+  constexpr unsigned count = 512;
+  constexpr unsigned texture_count = 32;
+  const Lotus::MeshGeometry triangle{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}},
+      {{0, 1, 2}}, {0}};
+  const auto add = [&](unsigned i) {
+    const std::string id = "/pool/" + std::to_string(i);
+    auto geometry = triangle;
+    geometry.positions[0][2] = static_cast<float>(i);
+    world.SetMesh(id, std::move(geometry), Lotus::MeshInstance{});
+  };
+  const auto add_texture = [&](unsigned i, unsigned cycle) {
+    Lotus::Texture texture;
+    texture.width = texture.height = 4;
+    texture.format = Lotus::TextureFormat::Rgba8Unorm;
+    texture.texels.assign(4 * 4 * 4, static_cast<std::uint8_t>(i + cycle * 32));
+    world.SetTexture("/texture/" + std::to_string(i), std::move(texture));
+  };
+  const auto apply = [&](const char* step) {
+    const auto snapshot = world.Commit();
+    const auto evidence = renderer.UpdateScene(extraction.Update(snapshot));
+    if (evidence.status != Lotus::FrameStatus::Pass || evidence.validation_message_count != 0) {
+      result.failure = std::string(step) + ": " + evidence.detail;
+      if (result.failure == std::string(step) + ": ") result.failure += "validation messages";
+      return false;
+    }
+    if (!SceneMatches(renderer.ReadBackScene(), *snapshot.scene)) {
+      result.failure = std::string(step) + ": pooled readback differs from CPU scene";
+      return false;
+    }
+    return true;
+  };
+  const auto stats = [&] { return renderer.UpdateScene({}).stats.memory; };
+  for (unsigned i = 0; i < count; ++i) add(i);
+  for (unsigned i = 0; i < texture_count; ++i) add_texture(i, 0);
+  if (!apply("pool insertion")) return result;
+  const auto inserted = stats();
+  if (inserted.live_suballocations < count + texture_count ||
+      inserted.blocks >= count / 4 || inserted.reserved_bytes != inserted.used_bytes + inserted.free_bytes ||
+      inserted.largest_free_range == 0) {
+    result.failure = "pool insertion: resources did not share backing memory or invalid statistics";
+    return result;
+  }
+  if (!apply("pool unchanged") || stats() != inserted) {
+    if (result.failure.empty()) result.failure = "pool unchanged: allocated or released memory";
+    return result;
+  }
+  for (unsigned cycle = 0; cycle < 3; ++cycle) {
+    for (unsigned i = 0; i < count; i += 2) world.RemoveMesh("/pool/" + std::to_string(i));
+    for (unsigned i = 0; i < texture_count; i += 2) world.RemoveTexture("/texture/" + std::to_string(i));
+    if (!apply("pool holes")) return result;
+    const auto holes = stats();
+    if (holes.used_bytes >= inserted.used_bytes || holes.free_bytes <= inserted.free_bytes ||
+        holes.reserved_bytes != inserted.reserved_bytes) {
+      result.failure = "pool holes: released ranges were not reusable";
+      return result;
+    }
+    for (unsigned i = 0; i < count; i += 2) add(i);
+    for (unsigned i = 0; i < texture_count; i += 2) add_texture(i, cycle + 1);
+    if (!apply("pool reuse")) return result;
+    const auto reused = stats();
+    if (reused.device_allocations != inserted.device_allocations ||
+        reused.reserved_bytes != inserted.reserved_bytes || reused.used_bytes != inserted.used_bytes ||
+        reused.reused_suballocations <= inserted.reused_suballocations) {
+      result.failure = "pool reuse: churn allocated new backing memory";
+      return result;
+    }
+  }
+  const auto warmed = stats();
+  for (unsigned i = 0; i < count; ++i) world.RemoveMesh("/pool/" + std::to_string(i));
+  for (unsigned i = 0; i < texture_count; ++i) world.RemoveTexture("/texture/" + std::to_string(i));
+  if (!apply("pool removal")) return result;
+  const auto removed = stats();
+  if (removed.live_suballocations >= warmed.live_suballocations || removed.used_bytes >= warmed.used_bytes) {
+    result.failure = "pool removal: live ownership was not released";
+    return result;
+  }
+  std::ostringstream detail;
+  detail << count << " geometries, " << texture_count << " textures, "
+         << inserted.live_suballocations << " live ranges in " << inserted.blocks
+         << " memory blocks; reserved=" << inserted.reserved_bytes
+         << " used=" << inserted.used_bytes << " free=" << inserted.free_bytes
+         << " largest_free=" << inserted.largest_free_range
+         << "; three churn cycles: no new device allocation; reused_ranges="
+         << warmed.reused_suballocations - inserted.reused_suballocations
+         << "; removal used=" << removed.used_bytes;
+  result.detail = detail.str();
+  return result;
+}
+
 struct AccelerationVerdict {
   bool available = false;
   std::string detail;
@@ -3298,15 +3399,26 @@ int main(int argc, char** argv) {
   std::string scene_failure;
   AccelerationVerdict acceleration;
   SceneTimestampVerdict scene_timestamps;
+  MemoryVerdict scene_memory;
   if (renderer) {
     scene_failure = SceneUploadFailure(*renderer, acceleration);
     if (scene_failure.empty()) {
       scene_timestamps = SceneTimestamps(*renderer);
+      if (scene_timestamps.failure.empty()) {
+        scene_memory = SceneMemoryEvidence(*renderer);
+      }
     }
   }
   Lotus::GpuFrameEvidence frame;
   if (renderer) {
+    const auto before_frames = renderer->UpdateScene({}).stats.memory;
     frame = renderer->Render(draw, target, 1000);
+    if (scene_memory.failure.empty() &&
+        renderer->UpdateScene({}).stats.memory != before_frames) {
+      scene_memory.failure = "1000 unchanged frames mutated scene memory ownership";
+    } else if (scene_memory.failure.empty()) {
+      scene_memory.detail += "; 1000 unchanged frames: no scene memory allocation";
+    }
   } else {
     frame.status = setup_status;
     frame.detail = setup_error;
@@ -3517,6 +3629,12 @@ int main(int argc, char** argv) {
   if (renderer) {
     checks.push_back({"renderer.scene.upload",
         scene_failure.empty() ? "pass" : "fail", scene_failure});
+    if (!scene_failure.empty() || !scene_timestamps.failure.empty()) {
+      checks.push_back({"renderer.scene.memory", "skip", "scene upload/timestamp checks failed"});
+    } else {
+      checks.push_back({"renderer.scene.memory", scene_memory.failure.empty() ? "pass" : "fail",
+          scene_memory.failure.empty() ? scene_memory.detail : scene_memory.failure});
+    }
     if (!scene_failure.empty()) {
       checks.push_back({"renderer.scene.acceleration", "skip",
           "renderer.scene.upload did not pass: " + scene_failure});
@@ -3542,6 +3660,7 @@ int main(int argc, char** argv) {
   } else {
     checks.push_back({"renderer.scene.upload", Status(setup_status),
         setup_error});
+    checks.push_back({"renderer.scene.memory", Status(setup_status), setup_error});
     checks.push_back({"renderer.scene.acceleration", Status(setup_status),
         setup_error});
     checks.push_back({"renderer.scene.timestamp", Status(setup_status),
