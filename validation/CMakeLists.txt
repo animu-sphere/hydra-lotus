@@ -48,6 +48,19 @@ add_test(NAME lotus-renderer-install-tree
 set_tests_properties(lotus-renderer-install-tree PROPERTIES RUN_SERIAL TRUE)
 
 if(LOTUS_WITH_VULKAN)
+  add_executable(lotus-memory-ranges-test memory-ranges-test.cpp)
+  target_link_libraries(lotus-memory-ranges-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
+  add_test(NAME lotus-renderer-memory-ranges COMMAND lotus-memory-ranges-test)
+  add_executable(lotus-memory-pool-test memory-pool-test.cpp)
+  target_link_libraries(lotus-memory-pool-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
+  add_test(NAME lotus-renderer-memory-pool COMMAND lotus-memory-pool-test)
+  set_tests_properties(lotus-renderer-memory-pool PROPERTIES SKIP_RETURN_CODE 77)
+  add_test(NAME lotus-renderer-memory-pool-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-memory-pool-test>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/memory-pool-no-driver"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
+
   add_executable(lotus-synchronization-validation-test
     synchronization-validation-test.cpp)
   target_link_libraries(lotus-synchronization-validation-test PRIVATE

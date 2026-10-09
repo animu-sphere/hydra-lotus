@@ -7,41 +7,22 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Foundation closure → backend scaling → performance baseline → foundation
-release → Renderer Phase 2 equivalence → Wavefront optimization.
+Backend scaling → performance baseline → foundation release →
+Renderer Phase 2 equivalence → Wavefront optimization.
+
+The [foundation review](../reports/2026-10-10-foundation-closure.md) records
+closure dispositions and hosted capability evidence; the
+[memory-pool report](../reports/2026-10-10-gpu-memory-pools.md) records backend
+suballocation and reuse. These do not substitute for the baseline/release
+gates below.
 
 The release target is owned by the [status table](README.md#status-at-a-glance).
 The stabilization cycle excludes ReSTIR, denoising, spectral research,
 production material coverage and broad platform/backend expansion. Their
 scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
-## Renderer Phase 0 — Foundation
-
-- [ ] **LOTUS-CI-01 — Hosted capability evidence.** Confirm the hosted core
-  and Hydra jobs after the synchronization driver-probe fix. The
-  [CI follow-up](../reports/2026-10-09-synchronization-ci.md) records the
-  hosted failure and local regression evidence, not a successful hosted
-  rerun. Require explained machine-readable GPU/synchronization SKIPs on
-  unsupported hosts, and strict validation on a physical GPU. Preserve
-  headless and usdview evidence. Renderer capability reporting and CI
-  acceptance of unavailable capability remain separate responsibilities.
-- [ ] **LOTUS-FOUNDATION-01 — Closure review.** Review the
-  [foundation scope](../design/ROADMAP_POLICY.md#renderer-phase-0--foundation)
-  against the [capability evidence](../reference/CAPABILITY_MATRIX.md).
-  Each remaining item must be implemented with evidence, explicitly deferred
-  to a named renderer phase, or accepted as a limitation with a reason in
-  reference documentation. Resolve the hosted CI item above and the
-  [build/tooling limitations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)
-  without treating ambiguous partial work as complete.
-
 ## Backend stabilization before Renderer Phase 2
 
-- [ ] **LOTUS-MEM-01 — GPU memory suballocation.** Introduce backend-owned
-  reusable pools for geometry, material/instance buffers, acceleration
-  storage where practical, and staging. Bound allocation counts, expose
-  fragmentation measurements and lifetime ownership, and avoid unnecessary
-  render-loop allocation. Keep Vulkan allocation types out of public core
-  interfaces. See the [GPU storage constraint](../reference/SCENE.md#gpu-scene).
 - [ ] **LOTUS-AS-01 — BLAS refit and compaction evaluation.** Distinguish
   topology rebuilds, point-only BLAS updates, transform-only TLAS updates
   and unchanged-scene no-ops. Measure build/update time, CPU update cost,
@@ -59,9 +40,10 @@ scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
   unchanged-scene CPU cost. Record unavailable metrics explicitly. Include
   hardware, build, scene identity, resolution, samples, seed, warmup and
   measurement procedure in a dated [report](../reports/README.md).
-- [ ] **LOTUS-RELEASE-01 — Foundation release gate.** Resolve or explicitly
-  defer foundation items, verify synchronization behavior and documentation
-  CI, pass deterministic references and Hydra discovery/smoke tests, and
+- [ ] **LOTUS-RELEASE-01 — Foundation release gate.** Preserve the
+  [foundation dispositions](../reports/2026-10-10-foundation-closure.md), verify
+  synchronization behavior and documentation CI, pass deterministic references
+  and Hydra discovery/smoke tests, and
   link the baseline report. Keep known limitations in reference documentation;
   release records describe the shipped snapshot. The release should provide
   a deterministic Vulkan reference renderer for OpenUSD Hydra with minimal

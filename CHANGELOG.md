@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Backend-owned GPU scene memory pools for geometry, textures, material and
+  instance buffers, acceleration storage, scratch, staging and persistent
+  scene readback. Released ranges coalesce and reuse their backing memory;
+  memory statistics expose allocation counts, retained bytes and free spans.
+  Dedicated-allocation fallback, pool teardown, range placement and churn
+  have CPU/GPU regressions and explained missing-driver capability handling.
+
 - No-clear Hydra AOV restoration from the currently bound CPU colour/depth
   buffers, including buffer switches, host writes and same-size reallocation.
   Offscreen callers can supply preserved contents; persistent readback buffers

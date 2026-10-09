@@ -249,9 +249,53 @@ failed frame does: create a renderer and reset the extraction.
 
 The scene pass traverses the acceleration structures built from these
 buffers and reads a hit's instance record and, through its addresses, the
-hit triangle. Source-face indices stay on the CPU. Every geometry buffer,
-every texture, and every BLAS below, is its own device allocation, so an update fails with an
-explanation once a scene would exceed the device's allocation limit.
+hit triangle. Source-face indices stay on the CPU.
+
+### GPU scene memory
+
+The scene owns a private Vulkan memory allocator for geometry, instance and
+material buffers, BLAS/TLAS storage, scratch, staging, readback and textures.
+Compatible resources share memory blocks using deterministic first-fit
+placement; released ranges coalesce and can be reused without moving live
+resources. Pools separate memory types, device-address flags, mapped host
+buffers and optimal images. Buffer/image granularity therefore never places
+a buffer beside an optimal image in one block. Required dedicated allocations
+use a separate block and are freed with their resource.
+
+Device pools grow in 16 MiB blocks and host pools in 4 MiB blocks, or the
+request size for larger resources. Host blocks stay mapped; noncoherent
+range starts and sizes respect the atom size, so flush/invalidate affects
+only the owning range. At most one empty block per compatible pool stays
+cached; excess empty blocks are freed. Staging and scene readback buffers
+keep their capacity between calls, growing when required. Rendering and
+scene updates finish their GPU use before a resource returns its range;
+scene destruction destroys bound resources before freeing the blocks.
+
+`GpuSceneStats::memory` reports `GpuMemoryStats`: current/peak block counts,
+dedicated blocks, live ranges, reserved/occupied/free bytes, the largest
+individual free range, lifetime device allocations/frees and successful
+suballocations/reuses. Occupied bytes include resource requirements and
+noncoherent atom padding; these statistics cover scene memory, excluding
+offscreen attachments, accumulation and presentation. The largest free
+range is a raw measure across pools, not a promise that a request with
+different memory requirements can use it. `renderer.scene.memory` checks
+readback, deletion/reinsertion, unchanged commits and unchanged frames;
+the [pool report](../reports/2026-10-10-gpu-memory-pools.md) holds measurements.
+
+The actual block count is bounded by `maxMemoryAllocationCount` minus 16
+slots reserved for renderer resources outside the scene. Cached empty
+blocks are retired if the bound would otherwise be reached. An exhausted
+allocation count or failed Vulkan allocation produces an explained failed
+update under the existing renderer-failure contract. This replaces the
+former per-geometry/per-BLAS allocation-count gate.
+
+Limitations: fixed block sizes can retain slack, large working buffers keep
+their high-water capacity, and live ranges are neither relocated nor
+defragmented. There is no memory-budget extension, eviction policy or sparse
+storage. Noncoherent-only hardware and driver-mandated dedicated allocations
+are not measured; explicit dedicated fallback is tested. These are accepted
+storage limitations while the fixed performance baseline evaluates actual
+scene sizes.
 
 ## Acceleration structures
 

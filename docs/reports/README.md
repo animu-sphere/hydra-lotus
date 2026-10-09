@@ -6,6 +6,8 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-10-foundation-closure.md](2026-10-10-foundation-closure.md) | Foundation scope dispositions, hosted core/Hydra success with inspected capability SKIPs, strict physical-GPU checks and all three entry points. |
+| [2026-10-10-gpu-memory-pools.md](2026-10-10-gpu-memory-pools.md) | Shared GPU scene memory, readback/churn allocation measurements, independent occupancy oracle, dedicated fallback, mapping, failure and teardown checks, deterministic references and Hydra regression. |
 | [2026-10-09-aov-restoration.md](2026-10-09-aov-restoration.md) | No-clear AOV restoration across buffer switches, host writes and reallocation; GPU staging reuse, hit/miss preservation and regression checks. |
 | [2026-10-09-synchronization-ci.md](2026-10-09-synchronization-ci.md) | Hosted Hydra CI failed on missing Vulkan driver support; explicit driver probing and a child-process no-driver regression test. |
 | [2026-10-08-synchronization-validation.md](2026-10-08-synchronization-validation.md) | Explicit synchronization validation in the shared Vulkan instance setup, clean writes and an intentionally missing barrier, per-frame Hydra enablement and explained unavailable evidence. |

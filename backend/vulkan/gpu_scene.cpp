@@ -32,9 +32,6 @@ constexpr VkDeviceSize kTlasInstanceBytes =
     sizeof(VkAccelerationStructureInstanceKHR);
 static_assert(kTlasInstanceBytes == 64);
 
-// Device allocations left for the renderer's targets and readback buffers.
-constexpr std::uint32_t kReservedAllocations = 16;
-
 constexpr std::uint32_t kNoSlot = std::numeric_limits<std::uint32_t>::max();
 
 // One timestamp before Apply's copies and one after each of its phases.
@@ -88,7 +85,7 @@ VkDeviceSize TextureBytes(const Texture& texture) {
          TexelBytes(texture.format);
 }
 
-bool CreateBuffer(VkPhysicalDevice physical_device, VkDevice device,
+bool CreateBuffer(SceneMemory& memory, VkDevice device,
     VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred,
     DeviceBuffer& buffer, std::string& detail) {
@@ -100,29 +97,23 @@ bool CreateBuffer(VkPhysicalDevice physical_device, VkDevice device,
           "vkCreateBuffer(scene)", detail)) {
     return false;
   }
-  VkMemoryRequirements requirements{};
-  vkGetBufferMemoryRequirements(device, buffer.buffer, &requirements);
-  const std::uint32_t memory_type =
-      FindMemoryType(physical_device, requirements.memoryTypeBits, required,
-          preferred, &buffer.coherent);
-  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
-    detail = "no suitable memory type for a GPU scene buffer is available";
-    return false;
-  }
-  const bool addressable =
-      (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
-  VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-  flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-  VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-  allocate.pNext = addressable ? &flags : nullptr;
-  allocate.allocationSize = requirements.size;
-  allocate.memoryTypeIndex = memory_type;
-  if (!VulkanOk(vkAllocateMemory(device, &allocate, nullptr, &buffer.memory),
-          "vkAllocateMemory(scene)", detail) ||
-      !VulkanOk(vkBindBufferMemory(device, buffer.buffer, buffer.memory, 0),
+  VkMemoryDedicatedRequirements dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+  VkMemoryRequirements2 requirements{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+  requirements.pNext = &dedicated;
+  VkBufferMemoryRequirementsInfo2 info{VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2};
+  info.buffer = buffer.buffer;
+  vkGetBufferMemoryRequirements2(device, &info, &requirements);
+  const bool addressable = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0;
+  if (!memory.Allocate(requirements.memoryRequirements, required, preferred,
+          addressable, dedicated.requiresDedicatedAllocation ? buffer.buffer : VK_NULL_HANDLE,
+          VK_NULL_HANDLE, false, buffer.allocation, detail) ||
+      !VulkanOk(vkBindBufferMemory(device, buffer.buffer, buffer.allocation.memory,
+                    buffer.allocation.offset),
           "vkBindBufferMemory(scene)", detail)) {
     return false;
   }
+  buffer.coherent = buffer.allocation.coherent;
+  buffer.mapped = buffer.allocation.mapped;
   buffer.size = size;
   if (addressable) {
     VkBufferDeviceAddressInfo address{
@@ -130,20 +121,12 @@ bool CreateBuffer(VkPhysicalDevice physical_device, VkDevice device,
     address.buffer = buffer.buffer;
     buffer.address = vkGetBufferDeviceAddress(device, &address);
   }
-  if ((required & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0) {
-    return VulkanOk(vkMapMemory(device, buffer.memory, 0, VK_WHOLE_SIZE, 0,
-                        &buffer.mapped),
-        "vkMapMemory(scene)", detail);
-  }
   return true;
 }
 
-void DestroyBuffer(VkDevice device, DeviceBuffer& buffer) {
-  if (buffer.mapped != nullptr) {
-    vkUnmapMemory(device, buffer.memory);
-  }
+void DestroyBuffer(SceneMemory& memory, VkDevice device, DeviceBuffer& buffer) {
   vkDestroyBuffer(device, buffer.buffer, nullptr);
-  vkFreeMemory(device, buffer.memory, nullptr);
+  memory.Release(buffer.allocation);
   buffer = DeviceBuffer{};
 }
 
@@ -153,8 +136,9 @@ bool InvalidateBuffer(VkDevice device, const DeviceBuffer& buffer,
     return true;
   }
   VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-  range.memory = buffer.memory;
-  range.size = VK_WHOLE_SIZE;
+  range.memory = buffer.allocation.memory;
+  range.offset = buffer.allocation.offset;
+  range.size = buffer.allocation.size;
   return VulkanOk(vkInvalidateMappedMemoryRanges(device, 1, &range),
       "vkInvalidateMappedMemoryRanges(scene)", detail);
 }
@@ -296,7 +280,7 @@ bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
   // buffer range.
   index_alignment_ = std::max<VkDeviceSize>(4,
       properties.limits.minStorageBufferOffsetAlignment);
-  max_allocations_ = properties.limits.maxMemoryAllocationCount;
+  memory_.Initialize(physical_device_, device_);
   max_texture_size_ = properties.limits.maxImageDimension2D;
   timestamp_period_ = properties.limits.timestampPeriod;
   std::uint32_t queue_count = 0;
@@ -381,7 +365,7 @@ void GpuScene::Destroy() {
   DestroyAccelerationStructure(tlas_);
   for (Geometry& geometry : slots_) {
     DestroyAccelerationStructure(geometry.blas);
-    DestroyBuffer(device_, geometry.buffer);
+    DestroyBuffer(memory_, device_, geometry.buffer);
   }
   slots_.clear();
   free_slots_.clear();
@@ -395,11 +379,13 @@ void GpuScene::Destroy() {
   tlas_blas_ids_.clear();
   tlas_transforms_.clear();
   tlas_built_ = false;
-  DestroyBuffer(device_, instances_);
-  DestroyBuffer(device_, materials_);
-  DestroyBuffer(device_, tlas_instances_);
-  DestroyBuffer(device_, scratch_);
-  DestroyBuffer(device_, staging_);
+  DestroyBuffer(memory_, device_, instances_);
+  DestroyBuffer(memory_, device_, materials_);
+  DestroyBuffer(memory_, device_, tlas_instances_);
+  DestroyBuffer(memory_, device_, scratch_);
+  DestroyBuffer(memory_, device_, staging_);
+  DestroyBuffer(memory_, device_, readback_);
+  memory_.Destroy();
   vkDestroyQueryPool(device_, timestamps_, nullptr);
   vkDestroyFence(device_, fence_, nullptr);
   vkDestroyCommandPool(device_, command_pool_, nullptr);
@@ -478,8 +464,7 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
   }
   std::unordered_set<const Texture*> uploaded_textures;
   for (const auto& texture : update.texture_uploads) {
-    if (!texture || (texture_slot_of_.contains(texture.get()) &&
-                        !released_textures.contains(texture.get())) ||
+    if (!texture || (texture_slot_of_.contains(texture.get()) && !released_textures.contains(texture.get())) ||
         !uploaded_textures.insert(texture.get()).second) {
       detail = "the scene update uploads a texture that is already resident";
       return false;
@@ -590,23 +575,6 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = message.str();
     return false;
   }
-  // One allocation per geometry, one per BLAS and one per texture, plus the
-  // instance, material and staging buffers and, with acceleration
-  // structures, the TLAS, its build input and the scratch buffer.
-  const std::uint64_t geometries = static_cast<std::uint64_t>(slot_of_.size()) -
-                                   released.size() + uploaded.size();
-  const std::uint64_t allocations = geometries * (acceleration_ ? 2 : 1) +
-                                    textures + 3 +
-                                    (acceleration_ ? 3 : 0) +
-                                    kReservedAllocations;
-  if (allocations > max_allocations_) {
-    std::ostringstream message;
-    message << "the GPU scene needs " << allocations
-            << " device allocations but the device allows "
-            << max_allocations_ << "; scenes this large need a suballocator";
-    detail = message.str();
-    return false;
-  }
   return true;
 }
 
@@ -619,7 +587,7 @@ void GpuScene::Release(const MeshGeometry* geometry) {
   // reads this buffer. A TLAS instance that referenced the BLAS is gone from
   // the plan's instances, so this plan rebuilds the TLAS before any use.
   DestroyAccelerationStructure(slots_[slot].blas);
-  DestroyBuffer(device_, slots_[slot].buffer);
+  DestroyBuffer(memory_, device_, slots_[slot].buffer);
   slots_[slot] = Geometry{};
   free_slots_.insert(slot);
   slot_of_.erase(found);
@@ -661,22 +629,18 @@ bool GpuScene::CreateTexture(const Texture& source, GpuTexture& texture,
     DestroyTexture(texture);
     return false;
   }
-  VkMemoryRequirements requirements{};
-  vkGetImageMemoryRequirements(device_, texture.image, &requirements);
-  const std::uint32_t memory_type =
-      FindMemoryType(physical_device_, requirements.memoryTypeBits,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
-  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
-    detail = "no suitable memory type for a texture is available";
-    DestroyTexture(texture);
-    return false;
-  }
-  VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-  allocate.allocationSize = requirements.size;
-  allocate.memoryTypeIndex = memory_type;
-  if (!VulkanOk(vkAllocateMemory(device_, &allocate, nullptr, &texture.memory),
-          "vkAllocateMemory(texture)", detail) ||
-      !VulkanOk(vkBindImageMemory(device_, texture.image, texture.memory, 0),
+  VkMemoryDedicatedRequirements dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+  VkMemoryRequirements2 requirements{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+  requirements.pNext = &dedicated;
+  VkImageMemoryRequirementsInfo2 info{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};
+  info.image = texture.image;
+  vkGetImageMemoryRequirements2(device_, &info, &requirements);
+  if (!memory_.Allocate(requirements.memoryRequirements,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, false, VK_NULL_HANDLE,
+          dedicated.requiresDedicatedAllocation ? texture.image : VK_NULL_HANDLE,
+          true, texture.allocation, detail) ||
+      !VulkanOk(vkBindImageMemory(device_, texture.image, texture.allocation.memory,
+                    texture.allocation.offset),
           "vkBindImageMemory(texture)", detail)) {
     DestroyTexture(texture);
     return false;
@@ -700,7 +664,7 @@ bool GpuScene::CreateTexture(const Texture& source, GpuTexture& texture,
 void GpuScene::DestroyTexture(GpuTexture& texture) {
   vkDestroyImageView(device_, texture.view, nullptr);
   vkDestroyImage(device_, texture.image, nullptr);
-  vkFreeMemory(device_, texture.memory, nullptr);
+  memory_.Release(texture.allocation);
   texture = GpuTexture{};
 }
 
@@ -715,9 +679,9 @@ std::vector<VkImageView> GpuScene::TextureViews() const {
 
 bool GpuScene::CreateDeviceBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     DeviceBuffer& buffer, std::string& detail) {
-  if (!CreateBuffer(physical_device_, device_, size, usage,
+  if (!CreateBuffer(memory_, device_, size, usage,
           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, buffer, detail)) {
-    DestroyBuffer(device_, buffer);
+    DestroyBuffer(memory_, device_, buffer);
     return false;
   }
   return true;
@@ -753,7 +717,7 @@ void GpuScene::DestroyAccelerationStructure(AccelerationStructure& structure) {
   if (structure.handle != VK_NULL_HANDLE) {
     destroy_acceleration_(device_, structure.handle, nullptr);
   }
-  DestroyBuffer(device_, structure.buffer);
+  DestroyBuffer(memory_, device_, structure.buffer);
   structure = AccelerationStructure{};
 }
 
@@ -762,11 +726,11 @@ bool GpuScene::EnsureStaging(VkDeviceSize size, std::string& detail) {
     return true;
   }
   const VkDeviceSize capacity = std::max(size, staging_.size * 2);
-  DestroyBuffer(device_, staging_);
-  if (!CreateBuffer(physical_device_, device_, capacity,
+  DestroyBuffer(memory_, device_, staging_);
+  if (!CreateBuffer(memory_, device_, capacity,
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging_, detail)) {
-    DestroyBuffer(device_, staging_);
+    DestroyBuffer(memory_, device_, staging_);
     return false;
   }
   return true;
@@ -780,7 +744,7 @@ bool GpuScene::EnsureScratch(VkDeviceSize size, std::string& detail) {
     return true;
   }
   const VkDeviceSize capacity = std::max(needed, scratch_.size * 2);
-  DestroyBuffer(device_, scratch_);
+  DestroyBuffer(memory_, device_, scratch_);
   return CreateDeviceBuffer(capacity,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -792,8 +756,9 @@ bool GpuScene::Flush(const DeviceBuffer& buffer, std::string& detail) {
     return true;
   }
   VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-  range.memory = buffer.memory;
-  range.size = VK_WHOLE_SIZE;
+  range.memory = buffer.allocation.memory;
+  range.offset = buffer.allocation.offset;
+  range.size = buffer.allocation.size;
   return VulkanOk(vkFlushMappedMemoryRanges(device_, 1, &range),
       "vkFlushMappedMemoryRanges(scene)", detail);
 }
@@ -1011,7 +976,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       if (!CreateAccelerationStructure(
               VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
               sizes.accelerationStructureSize, geometry.blas, detail)) {
-        DestroyBuffer(device_, geometry.buffer);
+        DestroyBuffer(memory_, device_, geometry.buffer);
         return false;
       }
       build.info.dstAccelerationStructure = geometry.blas.handle;
@@ -1046,7 +1011,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     if (instance_bytes > instances_.size) {
       const VkDeviceSize capacity =
           std::max(instance_bytes, instances_.size * 2);
-      DestroyBuffer(device_, instances_);
+      DestroyBuffer(memory_, device_, instances_);
       // The scene pass reads the records through their device address.
       VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -1098,7 +1063,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     if (material_bytes > materials_.size) {
       const VkDeviceSize capacity =
           std::max(material_bytes, materials_.size * 2);
-      DestroyBuffer(device_, materials_);
+      DestroyBuffer(memory_, device_, materials_);
       // The scene pass reads the table through its device address.
       VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -1167,7 +1132,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     if (input_bytes > tlas_instances_.size) {
       const VkDeviceSize capacity =
           std::max(input_bytes, tlas_instances_.size * 2);
-      DestroyBuffer(device_, tlas_instances_);
+      DestroyBuffer(memory_, device_, tlas_instances_);
       if (!CreateDeviceBuffer(capacity,
               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -1441,17 +1406,19 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     contents.status = FrameStatus::Pass;
     return true;
   }
-  DeviceBuffer readback;
-  const auto fail = [&] {
-    DestroyBuffer(device_, readback);
-    return false;
-  };
-  if (!CreateBuffer(physical_device_, device_, total,
-          VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, readback, detail) ||
-      !BeginCommands(detail)) {
-    return fail();
+  DeviceBuffer& readback = readback_;
+  if (readback.size < total) {
+    const VkDeviceSize capacity = std::max(total, readback.size * 2);
+    DestroyBuffer(memory_, device_, readback);
+    if (!CreateBuffer(memory_, device_, capacity, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            readback, detail)) {
+      DestroyBuffer(memory_, device_, readback);
+      return false;
+    }
   }
+  if (!BeginCommands(detail))
+    return false;
   VkDeviceSize offset = 0;
   for (const Geometry& geometry : slots_) {
     if (geometry.source) {
@@ -1529,7 +1496,7 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
   vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
   if (!SubmitAndWait(detail) || !InvalidateBuffer(device_, readback, detail)) {
-    return fail();
+    return false;
   }
 
   const auto* bytes = static_cast<const std::uint8_t*>(readback.mapped);
@@ -1652,7 +1619,6 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     copy.texture.texels.assign(bytes + texture_offsets[slot],
         bytes + texture_offsets[slot] + texture.bytes);
   }
-  DestroyBuffer(device_, readback);
   contents.status = FrameStatus::Pass;
   return true;
 }

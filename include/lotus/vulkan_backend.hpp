@@ -105,9 +105,31 @@ struct OffscreenTarget {
   std::vector<float> preserved_depth;
 };
 
+// Scene-owned backing memory and fragmentation. Renderer attachments and
+// accumulation/presentation memory are outside these totals.
+struct GpuMemoryStats {
+  std::uint32_t blocks = 0;
+  std::uint32_t peak_blocks = 0;
+  std::uint32_t dedicated_blocks = 0;
+  std::uint64_t live_suballocations = 0;
+  // Reserved backing memory, occupied requirements (including alignment
+  // padding), total reusable space and largest individual free range.
+  std::uint64_t reserved_bytes = 0;
+  std::uint64_t used_bytes = 0;
+  std::uint64_t free_bytes = 0;
+  std::uint64_t largest_free_range = 0;
+  // Lifetime calls, and successful allocations from existing blocks.
+  std::uint64_t device_allocations = 0;
+  std::uint64_t device_frees = 0;
+  std::uint64_t suballocations = 0;
+  std::uint64_t reused_suballocations = 0;
+  bool operator==(const GpuMemoryStats&) const = default;
+};
+
 // What the renderer's GPU scene holds. Counts after "Lifetime" accumulate
 // since the renderer was created.
 struct GpuSceneStats {
+  GpuMemoryStats memory;
   std::uint64_t source_revision = 0;
   std::uint32_t resident_geometries = 0;
   std::uint32_t instance_count = 0;

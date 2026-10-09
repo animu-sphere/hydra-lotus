@@ -65,5 +65,5 @@ run exercises the PASS path.
    of its own renderer PASS/SKIP assertions; Hydra uses strict OST validation.
 
 The first hosted run and generator adoption remain open in the
-[roadmap](../roadmap/current.md#renderer-phase-0--foundation). This report does
+[roadmap](../roadmap/README.md#status-at-a-glance). This report does
 not claim hosted CI or Renderer Phase 0 is complete.
