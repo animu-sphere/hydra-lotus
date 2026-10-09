@@ -3419,6 +3419,35 @@ int main(int argc, char** argv) {
     if (preserved.status == Lotus::FrameStatus::Pass) {
       last = preserved;
     }
+    // Restore arbitrary CPU backgrounds through the bootstrap too. Reuse
+    // staging across multiple submissions, then draw into a small data window.
+    empty_target.preserved_color.resize(64U * 64U * 4U);
+    empty_target.preserved_depth.resize(64U * 64U);
+    std::vector<std::uint8_t> expected(empty_target.preserved_color.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+      expected[i] = static_cast<std::uint8_t>((i * 7 + 31) % 256);
+      empty_target.preserved_color[i] = expected[i] / 255.0F;
+    }
+    for (std::size_t i = 0; i < empty_target.preserved_depth.size(); ++i)
+      empty_target.preserved_depth[i] = 0.75F + float(i % 16) / 128.0F;
+    const auto restored = renderer->Render(Lotus::DrawSummary{}, empty_target, 3);
+    const auto restored_draw = renderer->Render(draw, empty_target, 1);
+    clears_ok = clears_ok && restored.status == Lotus::FrameStatus::Pass &&
+        restored.frames_rendered == 3 && restored.color.payload == expected &&
+        restored.depth.payload == empty_target.preserved_depth &&
+        restored.target_creations == preserved.target_creations &&
+        restored_draw.status == Lotus::FrameStatus::Pass &&
+        std::equal(expected.begin() + center, expected.begin() + center + 4,
+            restored_draw.color.payload.begin() + center) &&
+        restored_draw.depth.payload[depth_center] ==
+            empty_target.preserved_depth[depth_center];
+    // Malformed inputs fail without making the renderer unusable.
+    empty_target.preserved_depth.pop_back();
+    const auto malformed = renderer->Render(draw, empty_target, 1);
+    clears_ok = clears_ok && malformed.status == Lotus::FrameStatus::Fail &&
+        malformed.detail == "invalid preserved attachment extent";
+    if (restored_draw.status == Lotus::FrameStatus::Pass)
+      last = restored_draw;
   }
 
   std::vector<Check> checks;

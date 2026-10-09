@@ -169,5 +169,24 @@ int main() {
     return 1;
   }
   ids.Unmap();
+  std::vector<float> restored;
+  if (!Check(hdr.ReadColor(restored) &&
+                 restored == std::vector<float>({1.0F, 0.2F, 0.0F, 1.0F,
+                     0.0F, 0.0F, 0.0F, 0.0F}),
+          "float restoration rows were not top-down") ||
+      !Check(color.ReadColor(restored) && restored[0] == 1.0F &&
+                 restored[1] == 128.0F / 255.0F && restored[4] == 64.0F / 255.0F,
+          "UNORM restoration did not widen and flip") ||
+      !Check(depth.ReadDepth(restored) &&
+                 restored == std::vector<float>({0.25F, 0.75F}),
+          "depth restoration rows were not top-down") ||
+      !Check(!ids.ReadColor(restored) && !color.ReadDepth(restored),
+          "restoration accepted the wrong format"))
+    return 1;
+  hdr.Map();
+  const bool read_mapped = hdr.ReadColor(restored);
+  hdr.Unmap();
+  if (!Check(!read_mapped, "restoration read a mapped buffer"))
+    return 1;
   return 0;
 }

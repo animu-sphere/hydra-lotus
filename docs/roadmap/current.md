@@ -25,16 +25,12 @@ scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
   unsupported hosts, and strict validation on a physical GPU. Preserve
   headless and usdview evidence. Renderer capability reporting and CI
   acceptance of unavailable capability remain separate responsibilities.
-- [ ] **LOTUS-AOV-01 — AOV buffer-set restoration.** Resolve no-clear
-  restoration when switching bound buffer sets, or record an explicit
-  closure disposition and rationale. The technical constraint belongs in
-  the [AOV reference](../reference/AOVS.md#clears-and-successive-frames).
 - [ ] **LOTUS-FOUNDATION-01 — Closure review.** Review the
   [foundation scope](../design/ROADMAP_POLICY.md#renderer-phase-0--foundation)
   against the [capability evidence](../reference/CAPABILITY_MATRIX.md).
   Each remaining item must be implemented with evidence, explicitly deferred
   to a named renderer phase, or accepted as a limitation with a reason in
-  reference documentation. Resolve the two items above and the
+  reference documentation. Resolve the hosted CI item above and the
   [build/tooling limitations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)
   without treating ambiguous partial work as complete.
 

@@ -93,10 +93,16 @@ struct OffscreenTarget {
   // linear RGBA; depth is Vulkan window depth in [0, 1].
   std::array<float, 4> clear_color{};
   float clear_depth = 1.0F;
-  // False preserves the preceding frame's attachment, until a size change.
-  // Newly created targets are initialized to the clear values either way.
+  // False preserves the preceding attachment or restores supplied contents.
+  // Fresh targets without supplied contents initialize to the clear values.
   bool clear_color_enabled = true;
   bool clear_depth_enabled = true;
+  // Optional contents restored before the first frame of a Render call when
+  // the channel's clear is disabled. Tightly packed, top-left rows, linear
+  // RGBA floats and window-depth floats respectively. Empty keeps the GPU
+  // attachment; nonempty arrays must match the target extent.
+  std::vector<float> preserved_color;
+  std::vector<float> preserved_depth;
 };
 
 // What the renderer's GPU scene holds. Counts after "Lifetime" accumulate

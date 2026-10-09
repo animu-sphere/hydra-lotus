@@ -518,8 +518,18 @@ public:
     }
 
     Targets& targets = trace ? scene_targets_ : targets_;
+    const std::size_t pixels = std::size_t{target.width} * target.height;
+    if ((!target.preserved_color.empty() &&
+            target.preserved_color.size() != pixels * 4) ||
+        (!target.preserved_depth.empty() &&
+            target.preserved_depth.size() != pixels)) {
+      return Evidence(FrameStatus::Fail, "invalid preserved attachment extent");
+    }
     std::string detail;
     if (!EnsureTargets(targets, target.width, target.height, detail)) {
+      return Evidence(FrameStatus::Fail, detail);
+    }
+    if (!StagePreservedContents(target, targets, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
     // A Radiance frame continues the accumulation when nothing it depends
@@ -547,7 +557,7 @@ public:
       UpdateSceneDescriptors(targets);
     }
     bool initializing = !targets.initialized;
-    if (!Record(draw, target, targets, pass, detail)) {
+    if (!Record(draw, target, targets, pass, true, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -577,9 +587,12 @@ public:
       targets.initialized = true;
       // The first recording gives fresh images their layouts, which would
       // discard the accumulation if it were submitted again.
-      if (initializing && frame + 1 < submissions) {
+      const bool restored = frame == 0 &&
+          ((!target.clear_color_enabled && !target.preserved_color.empty()) ||
+              (!target.clear_depth_enabled && !target.preserved_depth.empty()));
+      if ((initializing || restored) && frame + 1 < submissions) {
         initializing = false;
-        if (!Record(draw, target, targets, pass, detail)) {
+        if (!Record(draw, target, targets, pass, false, detail)) {
           return Evidence(FrameStatus::Fail, detail);
         }
       }
@@ -657,6 +670,43 @@ public:
             << device_properties_.deviceName;
     evidence.detail = success.str();
     return evidence;
+  }
+
+  // Reuse persistent readback buffers as upload staging while no frame is
+  // in flight. The restoration copy finishes before readback overwrites them.
+  bool StagePreservedContents(const OffscreenTarget& target, Targets& targets,
+      std::string& detail) {
+    auto flush = [&](VkDeviceMemory memory, bool coherent) {
+      if (coherent)
+        return true;
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = memory;
+      range.size = VK_WHOLE_SIZE;
+      return VulkanOk(vkFlushMappedMemoryRanges(device_, 1, &range),
+          "vkFlushMappedMemoryRanges(preserved contents)", detail);
+    };
+    if (!target.clear_color_enabled && !target.preserved_color.empty()) {
+      if (targets.color_format == kSceneColorFormat) {
+        std::memcpy(targets.color_mapped, target.preserved_color.data(),
+            target.preserved_color.size() * sizeof(float));
+      } else {
+        auto* bytes = static_cast<std::uint8_t*>(targets.color_mapped);
+        for (std::size_t i = 0; i < target.preserved_color.size(); ++i) {
+          const float value = target.preserved_color[i];
+          bytes[i] = std::isfinite(value) ? static_cast<std::uint8_t>(
+              std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F)) : 0;
+        }
+      }
+      if (!flush(targets.color_readback_memory, targets.color_readback_coherent))
+        return false;
+    }
+    if (!target.clear_depth_enabled && !target.preserved_depth.empty()) {
+      std::memcpy(targets.depth_mapped, target.preserved_depth.data(),
+          target.preserved_depth.size() * sizeof(float));
+      if (!flush(targets.depth_readback_memory, targets.depth_readback_coherent))
+        return false;
+    }
+    return true;
   }
 
   // Called after the preceding synchronous frame or submission has
@@ -837,10 +887,10 @@ private:
         &depth_properties);
     const VkFormatFeatureFlags color_required =
         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
-        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     const VkFormatFeatureFlags depth_required =
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
-        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     if ((color_properties.optimalTilingFeatures & color_required) !=
             color_required ||
         (depth_properties.optimalTilingFeatures & depth_required) !=
@@ -867,7 +917,7 @@ private:
       const VkFormatFeatureFlags scene_required =
           VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
           VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
-          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
+          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
       if (features.fragmentStoresAndAtomics != VK_TRUE) {
         ray_query_ = {false, "the device does not support "
                              "fragmentStoresAndAtomics, which radiance "
@@ -1051,6 +1101,7 @@ private:
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
     dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     dependencies[0].dstStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -1338,12 +1389,12 @@ private:
     if (!CreateImage(physical_device_, device_, t.width, t.height,
             t.color_format,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             t.color_image, t.color_memory, detail) ||
         !CreateImage(physical_device_, device_, t.width, t.height,
             kDepthFormat,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             t.depth_image, t.depth_memory, detail) ||
         (accumulates &&
             !CreateImage(physical_device_, device_, t.width, t.height,
@@ -1404,18 +1455,20 @@ private:
     const VkDeviceSize color_bytes = pixel_count * t.color_pixel_bytes;
     const VkDeviceSize depth_bytes = pixel_count * sizeof(float);
     if (!CreateHostBuffer(physical_device_, device_, color_bytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, t.color_readback,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            t.color_readback,
             t.color_readback_memory, t.color_readback_coherent, detail) ||
         !CreateHostBuffer(physical_device_, device_, depth_bytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, t.depth_readback,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            t.depth_readback,
             t.depth_readback_memory, t.depth_readback_coherent, detail)) {
       return false;
     }
     return VulkanOk(vkMapMemory(device_, t.color_readback_memory, 0,
-                        color_bytes, 0, &t.color_mapped),
+                        VK_WHOLE_SIZE, 0, &t.color_mapped),
                "vkMapMemory(color)", detail) &&
            VulkanOk(vkMapMemory(device_, t.depth_readback_memory, 0,
-                        depth_bytes, 0, &t.depth_mapped),
+                        VK_WHOLE_SIZE, 0, &t.depth_mapped),
                "vkMapMemory(depth)", detail);
   }
 
@@ -1449,7 +1502,7 @@ private:
   }
 
   bool Record(const DrawSummary& draw, const OffscreenTarget& target,
-      Targets& targets, FramePass pass, std::string& detail) {
+      Targets& targets, FramePass pass, bool restore, std::string& detail) {
     const bool trace = pass != FramePass::Bootstrap;
     VkCommandBufferBeginInfo command_begin{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1481,6 +1534,41 @@ private:
           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
           2, barriers);
     }
+    const bool restore_color = restore && !target.clear_color_enabled &&
+        !target.preserved_color.empty();
+    const bool restore_depth = restore && !target.clear_depth_enabled &&
+        !target.preserved_depth.empty();
+    auto restore_image = [&](VkImage image, VkBuffer buffer,
+                             VkImageAspectFlags aspect) {
+      VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.image = image;
+      barrier.subresourceRange = {aspect, 0, 1, 0, 1};
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+      VkBufferImageCopy copy{};
+      copy.imageSubresource = {aspect, 0, 0, 1};
+      copy.imageExtent = {targets.width, targets.height, 1};
+      vkCmdCopyBufferToImage(command_, buffer, image,
+          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+      barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    };
+    if (restore_color)
+      restore_image(targets.color_image, targets.color_readback,
+          VK_IMAGE_ASPECT_COLOR_BIT);
+    if (restore_depth)
+      restore_image(targets.depth_image, targets.depth_readback,
+          VK_IMAGE_ASPECT_DEPTH_BIT);
     if (trace) {
       // The radiance pass reads and writes the accumulation image; order
       // that against the preceding submission's writes. Its contents are
@@ -1513,13 +1601,13 @@ private:
     vkCmdBeginRenderPass(command_, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     VkClearAttachment clears[2]{};
     std::uint32_t clear_count = 0;
-    if (target.clear_color_enabled || !targets.initialized) {
+    if (target.clear_color_enabled || (!targets.initialized && !restore_color)) {
       auto& clear = clears[clear_count++];
       clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
       std::copy(target.clear_color.begin(), target.clear_color.end(),
           clear.clearValue.color.float32);
     }
-    if (target.clear_depth_enabled || !targets.initialized) {
+    if (target.clear_depth_enabled || (!targets.initialized && !restore_depth)) {
       auto& clear = clears[clear_count++];
       clear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
       clear.clearValue.depthStencil = {target.clear_depth, 0};
@@ -1568,6 +1656,14 @@ private:
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ray_timestamps_, 1);
 
+    if (restore_color || restore_depth) {
+      // Upload staging becomes readback storage in this submission.
+      VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
     VkBufferImageCopy color_copy{};
     color_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     color_copy.imageSubresource.layerCount = 1;

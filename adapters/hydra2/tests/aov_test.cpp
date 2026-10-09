@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -87,6 +88,91 @@ HdRenderPassAovBinding Bind(const TfToken& name, HdLotusRenderBuffer& buffer,
   binding.renderBuffer = &buffer;
   binding.clearValue = clear;
   return binding;
+}
+
+// Called with the scene empty. Distinct per-row CPU patterns detect stale
+// attachments, row inversion, format conversion and host-write loss.
+bool CheckBufferRestoration(const HdRenderPassSharedPtr& pass,
+    const HdRenderPassStateSharedPtr& state) {
+  HdLotusRenderBuffer first(SdfPath("/restoreFirst"));
+  HdLotusRenderBuffer second(SdfPath("/restoreSecond"));
+  HdLotusRenderBuffer depth(SdfPath("/restoreDepth"));
+  if (!first.Allocate(GfVec3i(16, 16, 1), HdFormatUNorm8Vec4, false) ||
+      !second.Allocate(GfVec3i(16, 16, 1), HdFormatFloat32Vec4, false) ||
+      !depth.Allocate(GfVec3i(16, 16, 1), HdFormatFloat32, false))
+    return false;
+  auto seed = [](HdLotusRenderBuffer& buffer, int salt) {
+    auto* bytes = static_cast<std::uint8_t*>(buffer.Map());
+    const std::size_t count = buffer.GetWidth() * buffer.GetHeight();
+    const bool unorm = buffer.GetFormat() == HdFormatUNorm8Vec4;
+    const int channels = buffer.GetFormat() == HdFormatFloat32 ? 1 : 4;
+    for (std::size_t i = 0; i < count * channels; ++i) {
+      if (unorm) {
+        bytes[i] = static_cast<std::uint8_t>((i * 7 + salt) % 256);
+      } else {
+        const float value = channels == 1 ? 0.5F + float(i % 16) / 64.0F
+                                          : float(int(i % 31) - salt) / 8.0F;
+        std::memcpy(bytes + i * sizeof(float), &value, sizeof(float));
+      }
+    }
+    const std::size_t size = count * HdDataSizeOfFormat(buffer.GetFormat());
+    std::vector<std::uint8_t> result(bytes, bytes + size);
+    buffer.Unmap();
+    return result;
+  };
+  auto matches = [](HdLotusRenderBuffer& buffer,
+                     const std::vector<std::uint8_t>& expected) {
+    const auto* bytes = static_cast<const std::uint8_t*>(buffer.Map());
+    const bool equal = bytes && std::equal(expected.begin(), expected.end(), bytes);
+    buffer.Unmap();
+    return equal && buffer.IsConverged();
+  };
+  auto a = seed(first, 13);
+  auto b = seed(second, 11);
+  auto d = seed(depth, 0);
+  auto render = [&](HdLotusRenderBuffer& color) {
+    state->SetAovBindings({Bind(HdAovTokens->color, color, {}),
+        Bind(HdAovTokens->depth, depth, {})});
+    pass->Execute(state, {});
+  };
+  render(first);
+  if (!Check(matches(first, a) && matches(depth, d),
+          "first no-clear binding did not restore CPU contents"))
+    return false;
+  render(second);
+  if (!Check(matches(second, b) && matches(depth, d),
+          "switch to float AOV lost HDR contents or depth"))
+    return false;
+  render(first);
+  if (!Check(matches(first, a), "A/B/A binding reused B's attachment"))
+    return false;
+  a = seed(first, 71);
+  render(first);
+  if (!Check(matches(first, a), "host write to the same AOV was lost"))
+    return false;
+  // A depth-only pass must not replace an unbound colour's contents.
+  state->SetAovBindings({Bind(HdAovTokens->depth, depth, VtValue(0.25F))});
+  pass->Execute(state, {});
+  render(first);
+  if (!Check(matches(first, a), "depth-only pass contaminated colour"))
+    return false;
+  // A different extent recreates GPU targets, then returning to A restores A.
+  second.Allocate(GfVec3i(8, 12, 1), HdFormatFloat32Vec4, false);
+  depth.Allocate(GfVec3i(8, 12, 1), HdFormatFloat32, false);
+  b = seed(second, 23);
+  d = seed(depth, 0);
+  render(second);
+  if (!Check(matches(second, b) && matches(depth, d),
+          "resized targets did not restore bound contents"))
+    return false;
+  depth.Allocate(GfVec3i(16, 16, 1), HdFormatFloat32, false);
+  render(first);
+  if (!Check(matches(first, a), "return after resize lost A's contents"))
+    return false;
+  first.Allocate(GfVec3i(16, 16, 1), HdFormatUNorm8Vec4, false);
+  render(first);
+  return Check(matches(first, std::vector<std::uint8_t>(16 * 16 * 4, 0)),
+      "same-size reallocation restored stale pixels");
 }
 
 } // namespace
@@ -264,6 +350,9 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  if (!CheckBufferRestoration(pass, state))
+    return 1;
+
   // Malformed bindings invalidate the whole pass without partial writes.
   auto rejected = [&](const HdRenderPassAovBindingVector& invalid) {
     state->SetAovBindings(invalid);
@@ -350,6 +439,33 @@ int main(int argc, char** argv) {
                           "a pass after convergence changed the image"))
       return 1;
   }
+  // Restoring CPU backgrounds must still draw hits from the converged
+  // accumulation. Misses retain each buffer's own pattern; depth does too.
+  auto* background = static_cast<float*>(hdr.Map());
+  for (int i = 0; i < 16 * 16 * 4; ++i)
+    background[i] = float(i % 19) / 8.0F;
+  const std::vector<float> before(background, background + 16 * 16 * 4);
+  hdr.Unmap();
+  auto* depth_background = static_cast<float*>(depth.Map());
+  std::fill(depth_background, depth_background + 16 * 16, 0.9F);
+  depth.Unmap();
+  bindings[0].clearValue = VtValue();
+  bindings[1].clearValue = VtValue();
+  state->SetAovBindings(bindings);
+  pass->Execute(state, {});
+  const auto* restored = static_cast<const float*>(hdr.Map());
+  const auto* restored_depth = static_cast<const float*>(depth.Map());
+  const bool hits_and_misses = restored && restored_depth &&
+      std::equal(before.begin(), before.begin() + 4, restored) &&
+      std::abs(restored[center] - 0.18F) < 1e-4F &&
+      restored[center + 3] == 1.0F && restored_depth[0] == 0.9F &&
+      restored_depth[8 * 16 + 8] < 0.9F;
+  hdr.Unmap();
+  depth.Unmap();
+  if (!Check(hits_and_misses && pass->IsConverged(),
+          "restoration lost misses, blocked hits or restarted accumulation"))
+    return 1;
+
   // A scene edit restarts the accumulation.
   scene.transform.SetTranslate(GfVec3d(0.05, 0, 0));
   dirty = HdChangeTracker::DirtyTransform;

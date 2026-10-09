@@ -45,6 +45,9 @@ public:
   bool WriteDepth(const std::vector<float>& depth,
       std::uint32_t source_width, std::uint32_t source_height);
   bool WriteIds(std::int32_t value);
+  // Copy unmapped CPU contents to a top-down backend restoration input.
+  bool ReadColor(std::vector<float>& color) const;
+  bool ReadDepth(std::vector<float>& depth) const;
   void SetConverged(bool converged);
 
 protected:
