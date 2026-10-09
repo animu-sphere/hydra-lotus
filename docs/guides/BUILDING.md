@@ -29,18 +29,11 @@ path-traced radiance against known values when ray queries are available,
 and writes `build/<target>/renderer-report.json`. `ost validate` reads
 it; the Hydra assertions are `SKIP` in this build by design.
 
-Vulkan instances enable synchronization validation when the Khronos validation
-layer advertises `VK_EXT_validation_features`. The report's
-`renderer.validation.synchronization` records zero captured messages or an
-explained `SKIP`. The Vulkan-only CTest
-`lotus-renderer-synchronization-validation` checks both synchronized writes and
-an intentionally missing barrier; the invalid commands are never submitted.
-It probes Vulkan 1.3 driver support before enabling validation and returns
-CTest SKIP 77 for `VK_ERROR_INCOMPATIBLE_DRIVER`. Other setup errors still
-fail. `lotus-renderer-synchronization-no-driver` verifies the explained SKIP
-with driver discovery restricted to a missing manifest in its child process.
-The usdview smoke test checks the same enablement in Hydra when the headless
-report says synchronization validation is available.
+Inspect `renderer.validation.synchronization` in the generated evidence.
+The [synchronization contract](../reference/CAPABILITY_MATRIX.md#renderer-foundation)
+owns enablement, unavailable-capability behavior and the CTest checks;
+[measured runs](../reports/2026-10-09-synchronization-ci.md) include strict
+physical-GPU validation and the missing-driver regression.
 
 The same run renders the reference scene at 1, 16, 64, 256 and 1024 spp
 into `build/<target>/reference-images/` and compares each image with the
@@ -105,7 +98,7 @@ validation untouched.
 > ⚠️ On a Windows host whose MSVC prints Japanese, some objects record no
 > header dependencies, and editing a header does not rebuild them. Delete
 > the affected objects before building
-> ([roadmap](../roadmap/current.md#project-infrastructure)).
+> ([tooling limitations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)).
 
 ## Plain CMake
 

@@ -6,9 +6,9 @@ owner: hydra-lotus
 # hydra-lotus — design policy
 
 > Status: **accepted** as the project's design policy, 2026-10-04. Nothing
-> below is implemented beyond the OpenStrata renderer scaffold;
-> [reference/CAPABILITY_MATRIX.md](../reference/CAPABILITY_MATRIX.md) is the
-> only document that says what is implemented.
+> below declares implementation status. Technical behavior and limitations
+> belong in [reference](../reference/README.md); phase and release status
+> belongs in the [canonical roadmap](../roadmap/README.md#status-at-a-glance).
 >
 > This is the canonical, long-form policy: what the renderer is for, how it is
 > shaped, and the order it is built in. It is distilled from the 2026-10-04
@@ -22,7 +22,7 @@ owner: hydra-lotus
 > | --- | --- |
 > | What this repository owns, and what it consumes from whom | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) |
 > | Targets, directories and dependency directions | [architecture/PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) |
-> | The Renderer Phase 0–10 sequence: goals, scope, exit criteria, milestones, testing strategy, near-term priority | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) |
+> | The Renderer Phase 0–10 sequence: goals, scope, exit criteria, milestones and testing strategy | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) |
 > | Which release carries which phase | [roadmap/README.md](../roadmap/README.md) |
 
 ---
@@ -608,23 +608,24 @@ When a decision is unclear, prefer in this order:
 
 ## 52. Where this repository departs from the implementation direction
 
-Each departure is `proposed` until the phase that first depends on it lands,
-and binding from then.
+These decisions explain the binding structural contract in
+[PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md), rather than tracking
+phase completion.
 
-| Direction | Here | Why | Status |
-| --- | --- | --- | --- |
-| §33 — `src/{hdLotus,lotus,vulkan}`, root `shaders/` | The OpenStrata renderer layout: `core/`, `backend/`, `adapters/`, `include/lotus/`, `validation/` ([PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §2–3) | The scaffold's layout is what `ost build`, `ost validate` and the renderer evidence contract are wired to, and its core-boundary check enforces §3.1 and §4.1 mechanically. The direction's separation — Hydra adapter / renderer core / Vulkan / shaders — is kept one-to-one. | proposed (Renderer Phase 0) |
-| §32, §36 — "the Hydra adapter", `src/hdLotus/` | The adapter lives at `adapters/hydra2/` and is named `hydra2` in `openstrata.renderer.yaml` | That is OpenStrata's name for the Hydra scene-input slot. The code is a classic `HdRenderDelegate` + `HdRendererPlugin`; the directory name claims nothing about the Hydra 2.0 renderer interface. | proposed (Renderer Phase 0) |
-| §4.2, §34 — `GpuScene` and the integrators are part of the renderer core | `GpuScene`, the traversal backends and the integrator implementations live in the Vulkan backend. The core owns `LotusScene`, the host-neutral update plan that tells the backend what changed, and the integrator *selection* and settings. | `GpuScene` holds BLAS / TLAS and Vulkan buffers, and the core's public headers may not carry Vulkan types (§3.1; [PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §4). The integrators are GPU passes over that scene. The direction's boundary — the core does not know Hydra, Hydra does not reach the GPU scene — is unchanged. | proposed (Renderer Phase 1) |
-| §5.2 — Slang is a strong candidate | Slang is the shader language from Renderer Phase 0, compiled offline to SPIR-V by `slangc` at build time | The scaffold already builds its shaders this way, and offline compilation keeps the core free of the Slang runtime, which is the coupling §5.2 warns against. | proposed (Renderer Phase 0) |
+| Direction | Here | Why |
+| --- | --- | --- |
+| §33 — `src/{hdLotus,lotus,vulkan}`, root `shaders/` | The OpenStrata renderer layout: `core/`, `backend/`, `adapters/`, `include/lotus/`, `validation/` ([PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §2–3) | The scaffold's layout is what `ost build`, `ost validate` and the renderer evidence contract are wired to, and its core-boundary check enforces §3.1 and §4.1 mechanically. The direction's separation — Hydra adapter / renderer core / Vulkan / shaders — is kept one-to-one. |
+| §32, §36 — "the Hydra adapter", `src/hdLotus/` | The adapter lives at `adapters/hydra2/` and is named `hydra2` in `openstrata.renderer.yaml` | That is OpenStrata's name for the Hydra scene-input slot. The code is a classic `HdRenderDelegate` + `HdRendererPlugin`; the directory name claims nothing about the Hydra 2.0 renderer interface. |
+| §4.2, §34 — `GpuScene` and the integrators are part of the renderer core | `GpuScene`, the traversal backends and the integrator implementations live in the Vulkan backend. The core owns `LotusScene`, the host-neutral update plan that tells the backend what changed, and the integrator *selection* and settings. | `GpuScene` holds BLAS / TLAS and Vulkan buffers, and the core's public headers may not carry Vulkan types (§3.1; [PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §4). The integrators are GPU passes over that scene. The direction's boundary — the core does not know Hydra, Hydra does not reach the GPU scene — is unchanged. |
+| §5.2 — Slang is a strong candidate | Slang is the shader language from Renderer Phase 0, compiled offline to SPIR-V by `slangc` at build time | The scaffold already builds its shaders this way, and offline compilation keeps the core free of the Slang runtime, which is the coupling §5.2 warns against. |
 
 ## 53. Open questions
 
 | ID | Question | Blocks |
 | --- | --- | --- |
-| DES-Q1 | ~~SVGF before or after ReSTIR DI?~~ **Resolved 2026-10-04** by the [roadmap policy](ROADMAP_POLICY.md#4-roadmap): ReSTIR DI (Renderer Phase 5) comes before denoising (Phase 6), and the §47 sketch that disagreed is superseded. | — |
+| DES-Q1 | ~~SVGF before or after ReSTIR DI?~~ **Resolved 2026-10-04** by the [roadmap policy](ROADMAP_POLICY.md#4-roadmap): ReSTIR DI (Renderer Phase 5) comes before denoising (Renderer Phase 6), and the §47 sketch that disagreed is superseded. | — |
 | DES-Q2 | ~~Is GGX in the baseline?~~ **Resolved 2026-10-04** by the [roadmap policy](ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer): a minimal GGX BSDF is part of Renderer Phase 1, before wavefront. | — |
-| DES-Q3 | ~~What keeps the RGB interface open to spectra (§8, §28)?~~ **Resolved 2026-10-05**: a `Spectrum` type in the shader library (`backend/vulkan/shaders/common/spectrum.slang`) that holds linear RGB today. `PathState`'s throughput and radiance, BSDF values and emission are `Spectrum`, and its components are private to its module, so RGB enters the transport only from material and environment inputs and leaves only at the output. Spectral rendering (Renderer Phase 10) replaces its contents and those two conversions. Host-side inputs stay linear RGB, as authored. | — |
+| DES-Q3 | **Resolved:** isolate spectrum representation in the shader library so transport does not depend on RGB components. Host-authored inputs and output conversions define the boundary; implementation details are owned by the [path-tracing reference](../reference/SCENE.md#path-tracing). | — |
 | DES-Q4 | **How are low-level Vulkan utilities shared with `hydra-merlin` (§30)?** Copy, a shared package, or not at all. Until decided, nothing is shared and there is no dependency. | nothing yet |
-| DES-Q5 | ~~What does "statistically matches the reference" mean?~~ **Resolved 2026-10-05**: the reference is a committed 1024-spp mean with each pixel's per-sample variance `s²`, estimated from 64 batches of 16 samples. An `N`-spp image matches it when, per channel, the mean difference over the whole image and over every tile is within 5 standard errors, with variance `s²(1/N + 1/M)` per pixel. A tile is 8×8 pixels, enlarged to hold at least 1024 samples. The comparison is made at 1, 16, 64, 256 and 1024 spp ([scene reference](../reference/SCENE.md#reference-images)). | — |
+| DES-Q5 | **Resolved:** deterministic reference comparisons use a statistical tolerance that accounts for Monte Carlo variance. The metric, sample counts and reference format are owned by the [reference-image contract](../reference/SCENE.md#reference-images). | — |
 | DES-Q6 | **How does a glTF PBR–compatible mapping reach Lotus?** The roadmap policy lists it as Renderer Phase 8's fourth material target; the [integration scope](INTEGRATION_SCOPE_POLICY.md#1-the-rule) allows only standard schemas on the composed stage and no source-format parsing. One reading is MaterialX's glTF PBR node definition; that is not decided. | Renderer Phase 8 |

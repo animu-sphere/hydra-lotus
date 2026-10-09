@@ -8,4 +8,4 @@ rewritten; new work goes to a new record. Active, incomplete work lives in the
 
 | Version | Record | Theme |
 | --- | --- | --- |
-| — | — | Nothing has been released. v0.1.0 is planned to carry Renderer Phase 0 ([status table](../roadmap/README.md#status-at-a-glance)). |
+| — | — | No release records. Targets are owned by the [canonical status table](../roadmap/README.md#status-at-a-glance). |

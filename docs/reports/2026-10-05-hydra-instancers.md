@@ -95,7 +95,7 @@ Four deliberate faults were each reverted before the runs below:
 
 Before the builds, objects with no recorded header dependencies were
 deleted, the known Japanese-MSVC workaround
-([roadmap](../roadmap/current.md#project-infrastructure)): 6 in the Hydra
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)): 6 in the Hydra
 tree, and those of the viewport tree.
 
 - `ost build --jobs auto`, `ost test`: **8/8 passed**. `ost validate`:
@@ -118,4 +118,4 @@ count.
 The current API and its limits are in the
 [scene reference](../reference/SCENE.md#hydra-extraction); remaining work is
 in the
-[roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap](../roadmap/README.md#status-at-a-glance).

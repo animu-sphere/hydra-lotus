@@ -8,7 +8,7 @@ and Python 3.13. All runs were local; hosted CI was not measured.
 ## Scope and model
 
 The remaining material slice of
-[Renderer Phase 1.5](../roadmap/current.md#renderer-phase-15--minimal-material-ir):
+[Renderer Phase 1.5](../roadmap/README.md#status-at-a-glance):
 constant `ior`, and `useSpecularWorkflow` with constant or RGB-textured
 `specularColor`, consumed from the
 [OpenUSD specification](https://openusd.org/release/spec_usdpreviewsurface.html).

@@ -14,6 +14,18 @@ env:
   OST_VERSION: "0.23.14"
   OST_HOME: ${{ github.workspace }}/.ost-ci-home
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Check documentation and checker regressions
+        run: |
+          python scripts/check_docs.py
+          python -m unittest discover -s scripts -p test_check_docs.py
   core:
     runs-on: windows-2022
     timeout-minutes: 20

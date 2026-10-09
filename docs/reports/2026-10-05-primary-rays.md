@@ -98,4 +98,4 @@ eight were removed from runtime-free ci-core and rebuilt.
 The Vulkan device without ray-query support and the queue without timestamp
 support were not available on this machine, so those hardware paths remain
 unmeasured. Synchronization validation was not enabled. Remaining transport
-work is in the [roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+work is in the [roadmap](../roadmap/README.md#status-at-a-glance).

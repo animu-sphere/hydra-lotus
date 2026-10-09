@@ -1,7 +1,7 @@
 # Supported configurations
 
 Configurations a build and test run has actually passed on. A configuration
-that has only been reviewed is not listed. No CI runs yet, so every row is a
+that has only been reviewed is not listed. Each row below records a
 local run, and the report named in the row holds its detail.
 
 ## Measured
@@ -53,3 +53,18 @@ report an explained SKIP. The measured runs are in the
 [HDR accumulation report](../reports/2026-10-05-hdr-accumulation.md).
 
 Linux, macOS, AMD and Intel GPUs are not measured.
+
+## Build and tooling limitations
+
+- OpenStrata 0.23.14 workflow generation expects plugin workspace descriptors
+  that this renderer does not own, and `ost validate` cannot select the
+  runtime-free target. The repository-owned workflow consumes
+  `openstrata.ci.yaml` and verifies runtime-free evidence directly. See the
+  [measured CI behavior](../reports/2026-10-04-foundation-ci.md) and
+  [CI procedure](../guides/BUILDING.md#ci-contracts).
+- On the measured Japanese MSVC host, Hydra and viewport objects can record
+  `#deps 0` in Ninja's dependency log, so header edits do not rebuild them.
+  The [build guide](../guides/BUILDING.md#the-standalone-viewport) gives the
+  clean-rebuild workaround; the
+  [bootstrap report](../reports/ost/01-2026-10-04-v0.23.14-renderer-template-bootstrap.md)
+  records the observation. This is a tooling constraint, not renderer behavior.

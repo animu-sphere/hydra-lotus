@@ -8,7 +8,7 @@ CPython 3.13. All runs were local; hosted CI was not measured.
 ## Scope
 
 This covers render-pass selection, one of the items
-[Renderer Phase 1](../roadmap/current.md#renderer-phase-1--reference-path-tracer)
+[Renderer Phase 1](../roadmap/README.md#status-at-a-glance)
 needs alongside its vertical slice: a Hydra render pass traces only the
 meshes its collection and render tags select
 ([scene reference](../reference/SCENE.md#render-pass-selection)). Collection
@@ -103,7 +103,7 @@ meshes outside a render index, passed under every fault.
 
 Before the builds, `ninja -t deps` in the Hydra tree listed no object
 without recorded header dependencies, the known Japanese-MSVC issue
-([roadmap](../roadmap/current.md#project-infrastructure)).
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)).
 
 - `ost build --profile lookdev --intent hydra --jobs auto`,
   `ost test --profile lookdev --intent hydra`: **17/17 passed**, including
@@ -120,4 +120,4 @@ itself.
 The current behaviour and its limits are in the
 [scene reference](../reference/SCENE.md#render-pass-selection); remaining
 work is in the
-[roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap](../roadmap/README.md#status-at-a-glance).

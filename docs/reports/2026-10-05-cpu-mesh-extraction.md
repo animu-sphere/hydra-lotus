@@ -59,4 +59,4 @@ compiler or project setting was changed for that workaround.
 
 The current API and its limits are in the
 [scene reference](../reference/SCENE.md); remaining work is in the
-[roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap](../roadmap/README.md#status-at-a-glance).

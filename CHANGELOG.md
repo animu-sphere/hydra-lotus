@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Repository-owned documentation validation in `scripts/check_docs.py`,
+  with regression fixtures and a runtime-independent CI job. Category indexes
+  and ownership rules centralize phase/release status, incomplete tasks,
+  technical limitations and measured evidence.
+
 - Constant Hydra dome lighting from `DomeLight` colour, intensity, exposure
   and inherited visibility. Multiple domes add into the existing environment;
   deleting the last dome restores the white fallback. CPU and GPU tests

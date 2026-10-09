@@ -10,14 +10,14 @@ CPython 3.13. All runs were local; hosted CI was not measured.
 This extends per-pass GPU timestamps
 ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling)) beyond
 the scene pass to the scene update, the last item
-[Renderer Phase 1](../roadmap/current.md#renderer-phase-1--reference-path-tracer)
+[Renderer Phase 1](../roadmap/README.md#status-at-a-glance)
 needed alongside its vertical slice. Only the backend's GPU scene, its
 public evidence types and the headless runner changed; the shaders did not,
 so the committed reference images are unaffected.
 
 The durations below are one run's, recorded to show what the check
 reports. They are not a performance record: the roadmap's
-[performance records](../roadmap/current.md#testing-infrastructure) remain
+[performance records](../roadmap/current.md#performance-baseline-and-foundation-release) remain
 separate work.
 
 ## Design
@@ -100,7 +100,7 @@ projects. Both are in the
 
 Before the builds, `ninja -t deps` listed objects without recorded header
 dependencies in the ci-core tree, the known Japanese-MSVC issue
-([roadmap](../roadmap/current.md#project-infrastructure)); they were
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)); they were
 deleted. The core and Hydra trees listed none.
 
 - `ost build --jobs auto`, `ost test`: **8/8 passed**;

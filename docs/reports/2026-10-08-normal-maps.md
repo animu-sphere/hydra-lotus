@@ -8,7 +8,7 @@ and Python 3.13. All runs were local; hosted CI was not measured.
 ## Scope
 
 The next slice of
-[Renderer Phase 1.5](../roadmap/current.md#renderer-phase-15--minimal-material-ir):
+[Renderer Phase 1.5](../roadmap/README.md#status-at-a-glance):
 `UsdPreviewSurface.normal`, as a signed tangent-space constant or an RGB
 `UsdUVTexture` lookup. The existing image decoding, texture residency,
 corner UV sets and shading-normal diagnostic serve this slice. No target,

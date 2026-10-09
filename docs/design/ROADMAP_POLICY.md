@@ -10,8 +10,9 @@ owner: hydra-lotus
 > [reference/CAPABILITY_MATRIX.md](../reference/CAPABILITY_MATRIX.md) says.
 >
 > This document owns **the Renderer Phase 0–10 sequence**: each phase's goal,
-> scope and exit criteria, the milestones, the testing strategy and the
-> near-term priority. It is distilled from the 2026-10-04 roadmap policy and
+> scope and exit criteria, the milestones and the testing strategy.
+> Execution order and incomplete work belong in [current.md](../roadmap/current.md).
+> This policy is distilled from the 2026-10-04 roadmap policy and
 > keeps its section numbers. The [design policy](DESIGN_POLICY.md) owns what
 > the renderer is and how it is shaped; its §36–§49 defer here. Which release
 > carries a phase is the [roadmap](../roadmap/README.md#status-at-a-glance).
@@ -210,22 +211,26 @@ single-material scenes, and realistic USD scenes reach validation early.
 **Goal.** Move from the megakernel-style reference integrator to a wavefront
 architecture suited to GPU scheduling.
 
-**Queue model.**
+**Initial queue model.**
 
 ```text
-Generate → RayQueue → Intersect → HitQueue → Shade ─┬─→ Shadow
-                ▲                                   └─→ Scatter ─┐
-                └────────────────────────────────────────────────┘
+active paths → intersect → shading → continuation / termination → next bounce
 ```
 
-**Scope.** `RayQueue`; `HitQueue`; `ShadowQueue`; a path state buffer; queue
-compaction; indirect dispatch; persistent GPU state; bounce scheduling.
+**Scope.** Active-path, ray/intersection, shading, terminated-path and
+next-bounce queues, with persistent path state. First reproduce reference
+transport; only then optimize compaction, indirect dispatch, scheduling,
+occupancy and path classification. Shadow work accompanies explicit direct
+lighting in Renderer Phase 3 rather than changing transport during equivalence.
 
-**Validation.** The wavefront output is compared with the Renderer Phase 1
-reference integrator.
+**Validation.** Deterministic output is compared with the Renderer Phase 1
+reference integrator using the
+[defined correctness tolerance](../reference/SCENE.md#reference-images).
+The first transition excludes ReSTIR, NEE/MIS redesign and neural components.
 
-**Exit criteria.** Images that match the reference statistically, with GPU
-scheduling optimizable on its own.
+**Exit criteria.** Reference-equivalent images and GPU scheduling that can
+be optimized independently, backed by a repeatable baseline measured before
+the architectural transition.
 
 ### Renderer Phase 3 — Direct lighting / NEE / MIS
 
@@ -362,7 +367,7 @@ Lotus tests the renderer's architecture as well as its images.
 | Structural | the public-header dependency boundary; a Hydra-independent core; a Vulkan-independent scene representation; plugin discovery; shader compilation |
 | Rendering | a deterministic camera; a deterministic RNG seed; known geometry, materials and lights; reference image comparison ([design policy §26](DESIGN_POLICY.md#26-reference--deterministic-mode)) |
 | GPU validation | Vulkan validation layers; synchronization validation; resource lifetime validation; descriptor validation |
-| Performance | recorded continuously, later: GPU frame time; samples/s; rays/s; primary rays/s; shadow rays/s; queue occupancy; VRAM usage; BLAS / TLAS build time; scene upload time |
+| Performance | repeatable baseline before Renderer Phase 2, then tracked across changes: GPU frame time; samples/s; rays/s; primary rays/s; shadow rays/s; queue occupancy; VRAM usage; BLAS / TLAS build time; scene upload time |
 
 A measurement is a [report](../reports/); the documentation guidelines say
 what a report names.
@@ -392,18 +397,16 @@ is done.
 
 ## 9. Near-term priority
 
-The priority now is not ReSTIR or denoising. It is one complete vertical
-path:
+Execution order and incomplete tasks belong in
+[current.md](../roadmap/current.md#execution-order), and phase/release status
+belongs in the [canonical table](../roadmap/README.md#status-at-a-glance).
+This stable policy defines scope and exit criteria rather than a live backlog.
 
-```text
-Hydra mesh → LotusScene → GpuScene → vertex / index buffers → BLAS → TLAS
-  → camera ray → ray query → triangle hit → BSDF → multi-bounce
-  → HDR accumulation → AOV / output
-```
-
-When it is complete, `hydra-lotus` moves from a renderer scaffold to an
-actual path tracer. After that, Lotus is made faster in the order wavefront,
-NEE / MIS, temporal, ReSTIR, with the reference image guarded throughout.
+The sequencing rule is correctness → measurement → optimization: stabilize
+the foundation, measure repeatable backend behavior, and preserve a fixed
+reference through the Wavefront transition. Queue optimization follows
+transport equivalence. Advanced features must not expand foundation closure
+into an unbounded feature cycle.
 
 ## 10. Long-term identity
 
@@ -433,12 +436,13 @@ research.**
 
 ## 11. Where this repository departs from the source policy
 
-Each departure is `proposed` until the phase that first depends on it lands,
-and binding from then.
+These decisions explain the binding structural contract in
+[PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md), rather than tracking
+phase completion.
 
-| Source policy | Here | Why | Status |
-| --- | --- | --- | --- |
-| §2.2, §3 — render extraction sits between the `hdLotus` adapter and `LotusScene` | The adapter extracts Hydra prims into `LotusScene`; `core/render-extraction` runs **after** `LotusScene` and turns its changes into GPU update work for `GpuScene` | That is the scaffold's existing order (`RenderWorld::Commit` → `ExtractDrawSummary` → backend) and the [layout's](../architecture/PROJECT_LAYOUT.md#3-where-new-code-goes) placement of the update plan. Hydra-side extraction (mesh extraction, dirty tracking) is the adapter's job ([design policy §3.1](DESIGN_POLICY.md#31-hydra-is-a-scene-integration-layer)), so the core never sees a Hydra type either way. | proposed (Renderer Phase 1) |
+| Source policy | Here | Why |
+| --- | --- | --- |
+| §2.2, §3 — render extraction sits between the `hdLotus` adapter and `LotusScene` | The adapter extracts Hydra prims into `LotusScene`; `core/render-extraction` runs **after** `LotusScene` and turns its changes into GPU update work for `GpuScene` | That is the scaffold's existing order (`RenderWorld::Commit` → `ExtractDrawSummary` → backend) and the [layout's](../architecture/PROJECT_LAYOUT.md#3-where-new-code-goes) placement of the update plan. Hydra-side extraction (mesh extraction, dirty tracking) is the adapter's job ([design policy §3.1](DESIGN_POLICY.md#31-hydra-is-a-scene-integration-layer)), so the core never sees a Hydra type either way. |
 
 ## 12. How the design policy's phases map here
 
