@@ -46,3 +46,19 @@ add_test(NAME lotus-renderer-install-tree
     "-DPREFIX=${CMAKE_BINARY_DIR}/renderer-install"
     -P "${CMAKE_CURRENT_BINARY_DIR}/run-install-smoke.cmake")
 set_tests_properties(lotus-renderer-install-tree PROPERTIES RUN_SERIAL TRUE)
+
+if(LOTUS_WITH_VULKAN)
+  add_executable(lotus-synchronization-validation-test
+    synchronization-validation-test.cpp)
+  target_link_libraries(lotus-synchronization-validation-test PRIVATE
+    Vulkan::Vulkan Lotus::RenderExtraction)
+  add_test(NAME lotus-renderer-synchronization-validation
+    COMMAND lotus-synchronization-validation-test)
+  set_tests_properties(lotus-renderer-synchronization-validation PROPERTIES
+    SKIP_RETURN_CODE 77)
+  add_test(NAME lotus-renderer-synchronization-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-synchronization-validation-test>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/synchronization-no-driver"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
+endif()

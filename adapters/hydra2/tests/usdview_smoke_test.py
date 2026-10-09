@@ -41,6 +41,15 @@ def _render(app_controller, phase):
     assert frames[-1]["converged"] == 1, f"{phase} did not converge"
     assert all(frame["validation_messages"] == 0 for frame in frames), \
         "Vulkan validation reported messages during a Hydra frame"
+    with open(os.environ["LOTUS_RENDERER_REPORT"], encoding="utf-8") as stream:
+        checks = {check["id"]: check for check in json.load(stream)["checks"]}
+    synchronization = checks["renderer.validation.synchronization"]
+    assert synchronization["status"] in ("pass", "skip"), synchronization
+    if synchronization["status"] == "pass":
+        assert all(frame["synchronization_validation"] == 1 for frame in frames), \
+            "Hydra did not enable synchronization validation available to headless"
+    else:
+        assert synchronization.get("detail"), "unexplained synchronization SKIP"
     # One device and pipeline serve every frame, and the targets are
     # recreated only when the AOV size changes.
     assert all(frame["renderer_creations"] == 1 for frame in frames), \

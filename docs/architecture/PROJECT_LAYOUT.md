@@ -37,11 +37,15 @@ that moment every file is project-owned; the template is not re-applied.
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference ([scene reference](../reference/SCENE.md#reference-images)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |
-| `validation/` | CTest only | — | core boundary, evidence and install-tree checks; `validation/reference/` holds the committed reference images |
+| `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_WITH_VULKAN` only, not installed); `validation/reference/` holds the committed reference images |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
 is a classic `HdRenderDelegate` ([DESIGN_POLICY.md](../design/DESIGN_POLICY.md)
 §52).
+
+The Vulkan-only `lotus-renderer-synchronization-no-driver` CTest script runs
+the synchronization executable with driver discovery restricted to a missing
+manifest in its child process and requires an explained SKIP (exit 77).
 
 ## 3. Where new code goes
 

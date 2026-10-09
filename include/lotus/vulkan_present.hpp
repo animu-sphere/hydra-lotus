@@ -35,6 +35,8 @@ struct PresentStatistics {
   std::uint64_t frames_presented = 0;
   std::uint32_t swapchain_recreates = 0;
   bool validation_available = false;
+  bool synchronization_validation_available = false;
+  std::string synchronization_validation_detail;
   std::uint32_t validation_message_count = 0;
   std::string validation_detail;
   std::string device_name;

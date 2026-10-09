@@ -445,6 +445,10 @@ PresentSetupStatus VulkanPresentSession::Initialize(
   vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
   statistics_.device_name = device_properties.deviceName;
   statistics_.validation_available = instance_.validation_available;
+  statistics_.synchronization_validation_available =
+      instance_.synchronization_validation_available;
+  statistics_.synchronization_validation_detail =
+      instance_.synchronization_validation_detail;
   statistics_.validation_detail = instance_.validation_detail;
   return PresentSetupStatus::Ready;
 }

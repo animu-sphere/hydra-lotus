@@ -189,9 +189,6 @@ Against the scope of
 From the [roadmap policy's testing strategy](../design/ROADMAP_POLICY.md#7-testing-strategy),
 what is not covered by a phase above:
 
-- ⬜ **Synchronization validation.** The headless runner and the usdview
-  smoke test enable the validation layers' synchronization validation, with
-  its messages treated as errors like the others.
 - ⬜ **Performance records.** GPU frame time, samples/s, rays/s, VRAM, BLAS /
   TLAS build and scene upload time, recorded as reports once there is a path
   tracer to measure.
