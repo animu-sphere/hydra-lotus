@@ -1,205 +1,95 @@
 # Current
 
-Renderer Phase 0, the Renderer Phase 1 vertical slice, Renderer Phase 1.5,
-and the work around them. Which release carries a phase is the
-[status table](README.md#status-at-a-glance).
+The only active task checklist. Phase and release status belongs in the
+[canonical status table](README.md#status-at-a-glance); completed work is
+represented by its [evidence](../reports/README.md) and
+[change history](../../CHANGELOG.md), rather than retained here.
 
-Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️ accepted workaround
+## Execution order
+
+Foundation closure → backend scaling → performance baseline → foundation
+release → Renderer Phase 2 equivalence → Wavefront optimization.
+
+The release target is owned by the [status table](README.md#status-at-a-glance).
+The stabilization cycle excludes ReSTIR, denoising, spectral research,
+production material coverage and broad platform/backend expansion. Their
+scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
 ## Renderer Phase 0 — Foundation
 
-The OpenStrata renderer scaffold was generated on 2026-10-04 and passes its
-own contract on Windows
-([report](../reports/ost/01-2026-10-04-v0.23.14-renderer-template-bootstrap.md)).
-Against the scope of
-[roadmap policy §4](../design/ROADMAP_POLICY.md#renderer-phase-0--foundation):
+- [ ] **LOTUS-CI-01 — Hosted capability evidence.** Confirm the hosted core
+  and Hydra jobs after the synchronization driver-probe fix. The
+  [CI follow-up](../reports/2026-10-09-synchronization-ci.md) records the
+  hosted failure and local regression evidence, not a successful hosted
+  rerun. Require explained machine-readable GPU/synchronization SKIPs on
+  unsupported hosts, and strict validation on a physical GPU. Preserve
+  headless and usdview evidence. Renderer capability reporting and CI
+  acceptance of unavailable capability remain separate responsibilities.
+- [ ] **LOTUS-AOV-01 — AOV buffer-set restoration.** Resolve no-clear
+  restoration when switching bound buffer sets, or record an explicit
+  closure disposition and rationale. The technical constraint belongs in
+  the [AOV reference](../reference/AOVS.md#clears-and-successive-frames).
+- [ ] **LOTUS-FOUNDATION-01 — Closure review.** Review the
+  [foundation scope](../design/ROADMAP_POLICY.md#renderer-phase-0--foundation)
+  against the [capability evidence](../reference/CAPABILITY_MATRIX.md).
+  Each remaining item must be implemented with evidence, explicitly deferred
+  to a named renderer phase, or accepted as a limitation with a reason in
+  reference documentation. Resolve the two items above and the
+  [build/tooling limitations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)
+  without treating ambiguous partial work as complete.
 
-- ✅ **Renderer-core separation, render world and render extraction.** The
-  host-neutral `core/` targets, with a header boundary check.
-- ✅ **Vulkan backend bootstrap and Vulkan validation.** Device bring-up with
-  validation layers, messages treated as errors.
-- ✅ **Slang → SPIR-V.** `slangc` compiles the shaders at build time.
-- ✅ **Hydra plugin discovery and render delegate creation.** `hdLotus` is
-  discovered, creates its delegate, and draws a first frame in
-  `testusdview`.
-- ✅ **Image output and camera.** The Hydra path renders offscreen at the
-  AOV's resolution, through the Hydra camera and the framing's display and
-  data windows, and copies the products into CPU `HdRenderBuffer`s; the
-  headless runner checks a perspective camera.
-- ✅ **A persistent offscreen renderer.** `Lotus::OffscreenRenderer` keeps
-  the Vulkan instance, device and pipeline across frames and recreates its
-  targets only when the AOV size changes
-  ([design policy §23](../design/DESIGN_POLICY.md#23-cpu-performance)). The
-  usdview smoke test checks that one renderer serves every Hydra frame and
-  that the targets are created once per AOV size; the headless runner checks
-  reuse and a resize.
-- ✅ **Standalone viewport and headless runner.** Both draw the scaffold's
-  bootstrap triangle.
-- 🚧 **CI boundary tests.** The registered renderer workflow consumes
-  `openstrata.ci.yaml`: runtime-free `ci-core` with boundary/install checks
-  and explained GPU `SKIP`s, and `hydra` against a digest-pinned runtime.
-  Local checks pass; the first GitHub-hosted run remains unmeasured. OpenStrata
-  0.23.14's generator requires plugin workspace descriptors and its `validate`
-  cannot select runtime-free targets; generator adoption awaits those upstream
-  fixes ([report](../reports/2026-10-04-foundation-ci.md)).
+## Backend stabilization before Renderer Phase 2
 
-## Renderer Phase 1 — Reference path tracer
+- [ ] **LOTUS-MEM-01 — GPU memory suballocation.** Introduce backend-owned
+  reusable pools for geometry, material/instance buffers, acceleration
+  storage where practical, and staging. Bound allocation counts, expose
+  fragmentation measurements and lifetime ownership, and avoid unnecessary
+  render-loop allocation. Keep Vulkan allocation types out of public core
+  interfaces. See the [GPU storage constraint](../reference/SCENE.md#gpu-scene).
+- [ ] **LOTUS-AS-01 — BLAS refit and compaction evaluation.** Distinguish
+  topology rebuilds, point-only BLAS updates, transform-only TLAS updates
+  and unchanged-scene no-ops. Measure build/update time, CPU update cost,
+  and compacted/uncompacted memory. Retain compaction only if the measured
+  trade-off is favorable. Existing behavior is owned by the
+  [acceleration reference](../reference/SCENE.md#acceleration-structures).
 
-The near-term priority is one complete vertical path
-([roadmap policy §9](../design/ROADMAP_POLICY.md#9-near-term-priority)); the
-phase's full scope and exit criteria are
-[§4](../design/ROADMAP_POLICY.md#renderer-phase-1--reference-path-tracer).
-CPU coarse-mesh extraction, ordinary mesh placement and Hydra instancer
-placements ([instancer evidence](../reports/2026-10-05-hydra-instancers.md)),
-selected by the render pass's collection and render tags
-([render-pass selection evidence](../reports/2026-10-05-render-pass-selection.md)),
-the incremental
-upload of geometry and instance buffers, and a BLAS per geometry with a TLAS
-over the instances are implemented
-([scene reference](../reference/SCENE.md),
-[extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md),
-[upload evidence](../reports/2026-10-05-gpu-scene-upload.md),
-[BLAS / TLAS evidence](../reports/2026-10-05-blas-tlas.md)). Primary camera
-rays now traverse the GPU scene and write diagnostic barycentrics and depth,
-including through Hydra on ray-query devices
-([ray-query evidence](../reports/2026-10-05-primary-rays.md)). Each sample
-then follows one brute-force path with Lambert and GGX metal surfaces,
-emission, a constant environment and Russian roulette
-([BSDF and multi-bounce evidence](../reports/2026-10-05-bsdf-multibounce.md)),
-through a box-filtered point of its pixel, into an unclamped RGBA32F
-accumulation that Hydra receives as a float colour AOV and converges
-progressively
-([HDR accumulation evidence](../reports/2026-10-05-hdr-accumulation.md)) —
-the *first physically correct image*. A fixed Cornell box, rendered by the
-headless runner at 1, 16, 64, 256 and 1024 spp, statistically matches a
-committed deterministic reference
-([reference images evidence](../reports/2026-10-05-reference-images.md)) —
-the *reference path tracer* milestone, which meets the phase's exit
-criteria.
+## Performance baseline and foundation release
 
-Needed alongside the slice
-([design policy §51](../design/DESIGN_POLICY.md#51-decision-principles),
-principle 8):
+- [ ] **LOTUS-PERF-01 — Fixed benchmark baseline.** Before Renderer Phase 2,
+  record a small repeatable set: Cornell/reference, medium textured,
+  highly instanced and geometry-heavy scenes. Capture GPU frame time,
+  samples/s, rays/s where measurable, average path depth, VRAM, upload time,
+  BLAS build/update time, TLAS build/refit time, CPU render-submit time and
+  unchanged-scene CPU cost. Record unavailable metrics explicitly. Include
+  hardware, build, scene identity, resolution, samples, seed, warmup and
+  measurement procedure in a dated [report](../reports/README.md).
+- [ ] **LOTUS-RELEASE-01 — Foundation release gate.** Resolve or explicitly
+  defer foundation items, verify synchronization behavior and documentation
+  CI, pass deterministic references and Hydra discovery/smoke tests, and
+  link the baseline report. Keep known limitations in reference documentation;
+  release records describe the shipped snapshot. The release should provide
+  a deterministic Vulkan reference renderer for OpenUSD Hydra with minimal
+  materials/textures, stable extraction and measured backend behavior.
 
-- ✅ **Deterministic mode through Hydra**: the `lotus:sampleIndex` render
-  setting fixes the RNG seed and `convergedSamplesPerPixel` the spp; with
-  the host's camera and AOV, the converged image is bit for bit the
-  backend's deterministic image, whatever frames came before
-  ([scene reference](../reference/SCENE.md#deterministic-mode-through-hydra),
-  [evidence](../reports/2026-10-05-hydra-deterministic-mode.md)).
-- ✅ **Per-pass GPU timestamps** beyond the scene pass: a scene update's
-  copies, BLAS builds and TLAS build or refit are timed separately and
-  reported by the headless runner's `renderer.scene.timestamp`
-  ([design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling),
-  [scene reference](../reference/SCENE.md#scene-update-timestamps),
-  [evidence](../reports/2026-10-05-gpu-timestamps.md)). The scene pass
-  still times its camera and radiance passes together.
+## Renderer Phase 2 — Wavefront path tracing
 
-## Renderer Phase 1.5 — Minimal material IR
+- [ ] **LOTUS-WAVE-01 — Reference equivalence first.** After the foundation
+  release, implement the initial queues and transport defined by the
+  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing).
+  Record deterministic equivalence evidence using the
+  [reference correctness tolerance](../reference/SCENE.md#reference-images)
+  before beginning queue/scheduling optimization.
 
-Against the scope of
-[roadmap policy §4](../design/ROADMAP_POLICY.md#renderer-phase-15--minimal-material-ir):
+## Deferred adapter work
 
-- ✅ **Lotus material IR and the GPU material.** `Lotus::Material` holds
-  constant base colour, roughness, metallic and emission; the scene keys
-  materials and meshes bind to the keys; the update plan carries a
-  material table that the path tracer reads through each instance's
-  material slot. The committed reference images are reproduced bit for bit
-  ([scene reference](../reference/SCENE.md#materials-and-environment),
-  [evidence](../reports/2026-10-05-material-ir.md)).
-- ✅ **`UsdPreviewSurface` translation through Hydra** of the constant
-  `diffuseColor`, `roughness`, `metallic` and `emissiveColor`, with mesh
-  material bindings
-  ([scene reference](../reference/SCENE.md#materials),
-  [evidence](../reports/2026-10-05-material-ir.md)).
-- ✅ **Textures.** `UsdUVTexture` lookups, with `UsdPrimvarReader_float2`
-  texture coordinates, for base colour, roughness, metallic and emission:
-  named per-corner texture-coordinate sets in the mesh geometry and the GPU
-  scene; sRGB, linear and float images resident in a bindless texture
-  table; bilinear filtering at level 0 with every wrap mode, scale, bias
-  and fallback; Hydra's float-pair primvars, and images decoded with Hio.
-  The committed reference images are reproduced bit for bit
-  ([scene reference](../reference/SCENE.md#materials-and-environment),
-  [evidence](../reports/2026-10-06-textures.md)). Mipmaps and ray cones,
-  `UsdTransform2d`, wrap metadata and UDIMs are not supported.
-- ✅ **Authored normals** as shading normals: per-corner normals in the
-  mesh geometry and the GPU scene, interpolated and transformed at each
-  hit, with the geometric surface still bounding reflection; Hydra's
-  `normals` primvar in every interpolation. The committed reference images
-  are reproduced bit for bit
-  ([scene reference](../reference/SCENE.md#path-tracing),
-  [evidence](../reports/2026-10-06-authored-normals.md)).
-- ✅ **Computed normals.** Storm's coarse smooth normals for meshes without
-  usable authored ones whose subdivision scheme is neither `none` nor
-  `bilinear`; updated on point and topology edits, with authored normals
-  taking priority ([scene reference](../reference/SCENE.md#hydra-extraction),
-  [evidence](../reports/2026-10-07-computed-normals.md)). Subdivision refinement,
-  limit normals and crease evaluation remain unsupported.
-- ✅ **Normal maps.** `UsdPreviewSurface`'s signed tangent-space `normal`
-  constant or texture input, evaluated about per-hit frames from the
-  selected texture coordinates, with mirrored UVs and transforms, smooth
-  normals and a stable fallback for missing or degenerate UVs
-  ([scene reference](../reference/SCENE.md#path-tracing),
-  [evidence](../reports/2026-10-08-normal-maps.md)). Stored vertex tangents
-  and MikkTSpace compatibility are not implemented.
-- ✅ **Opacity and an alpha policy.** Constant or scalar-textured `opacity`
-  and constant `opacityThreshold`: binary cut-outs for a positive threshold,
-  stochastic presence coverage otherwise, for primary and secondary rays
-  through non-opaque acceleration geometry. Depth uses a fixed coverage
-  realization; colour alpha estimates primary coverage
-  ([scene reference](../reference/SCENE.md#materials-and-environment),
-  [evidence](../reports/2026-10-08-opacity.md)). Glass, refraction and
-  `opacityMode` interpretation remain unsupported.
-- ✅ **A GGX dielectric specular layer** over Lambert, from constant `ior`
-  and the specular workflow's constant or RGB-textured `specularColor`.
-  Fresnel attenuates the diffuse base on entry and exit; sampling uses the
-  full BSDF and matching mixture PDF. The reference images are regenerated
-  for the changed transport
-  ([scene reference](../reference/SCENE.md#path-tracing),
-  [evidence](../reports/2026-10-08-dielectric-specular.md)). Transmission,
-  internal-reflection and multiple-scattering compensation remain outside
-  this minimal model.
+These are assignments to later phases, rather than additional foundation
+requirements:
 
-## Backend follow-up
-
-- ⬜ **GPU memory suballocation.** Each geometry buffer and each BLAS is
-  its own device allocation, so scenes are limited by the device's
-  allocation count ([scene reference](../reference/SCENE.md#gpu-scene)).
-- ⬜ **BLAS refit and compaction.** A point edit that keeps the topology
-  uploads a new buffer and builds a new BLAS instead of refitting the old
-  one, and BLASes are not compacted
-  ([design policy §20](../design/DESIGN_POLICY.md#20-acceleration-structure),
-  [scene reference](../reference/SCENE.md#acceleration-structures)).
-
-## Adapter follow-up
-
-- ⬜ **Remaining Hydra lights.** Constant dome colour, intensity, exposure
-  and visibility feed the environment
-  ([scene reference](../reference/SCENE.md#lights),
-  [evidence](../reports/2026-10-08-dome-lights.md)). Environment textures,
-  other light types, colour temperature and light/shadow linking remain
-  unsupported; direct light sampling belongs to Renderer Phase 3.
-- ⬜ **No-clear restoration when switching AOV buffer sets.** The foundation
-  renderer retains one colour/depth attachment pair at a time; preservation
-  currently assumes successive passes reuse their bound buffers
-  ([AOV reference](../reference/AOVS.md#clears-and-successive-frames)).
-
-## Testing infrastructure
-
-From the [roadmap policy's testing strategy](../design/ROADMAP_POLICY.md#7-testing-strategy),
-what is not covered by a phase above:
-
-- ⬜ **Performance records.** GPU frame time, samples/s, rays/s, VRAM, BLAS /
-  TLAS build and scene upload time, recorded as reports once there is a path
-  tracer to measure.
-
-## Project infrastructure
-
-- ⬜ **Documentation check.** A `scripts/check_docs.py` that resolves
-  relative links and checks category indexes.
-- ⚠️ **Objects without header dependencies on a Japanese MSVC host.** In the
-  `hydra` and viewport trees, objects record `#deps 0` in Ninja's log, so a
-  header edit does not rebuild them. Until OpenStrata or the template
-  resolves it, list them with `ninja -t deps` in the build tree and delete
-  every `.obj` with `#deps 0` before building
-  ([report](../reports/ost/01-2026-10-04-v0.23.14-renderer-template-bootstrap.md) §3).
+- [ ] **LOTUS-LIGHT-01 — Renderer Phase 3 light representation and sampling.**
+  Extend the light representation alongside explicit direct-light sampling.
+  Implementation limits are in the [light reference](../reference/SCENE.md#lights).
+- [ ] **LOTUS-MATERIAL-01 — Renderer Phase 8 production scene coverage.**
+  Evaluate remaining material, texture and shading-normal coverage within
+  the [production material scope](../design/ROADMAP_POLICY.md#renderer-phase-8--production-material-support),
+  using the [material reference](../reference/SCENE.md#materials-and-environment)
+  and [Hydra extraction reference](../reference/SCENE.md#hydra-extraction).

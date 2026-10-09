@@ -8,7 +8,7 @@ CPython 3.13. All runs were local; hosted CI was not measured.
 ## Scope
 
 This covers deterministic mode through Hydra, one of the items
-[Renderer Phase 1](../roadmap/current.md#renderer-phase-1--reference-path-tracer)
+[Renderer Phase 1](../roadmap/README.md#status-at-a-glance)
 needs alongside its vertical slice
 ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)):
 a fixed RNG seed, spp, camera and frame index for a Hydra render. Only the
@@ -93,7 +93,7 @@ Three deliberate faults were each reverted before the runs below:
 
 Before the builds, `ninja -t deps` in the Hydra tree listed no object
 without recorded header dependencies, the known Japanese-MSVC issue
-([roadmap](../roadmap/current.md#project-infrastructure)).
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)).
 
 - `ost build --profile lookdev --intent hydra --jobs auto`,
   `ost test --profile lookdev --intent hydra`: **18/18 passed**, including
@@ -108,4 +108,4 @@ files and were not rerun.
 The current behaviour and its limits are in the
 [scene reference](../reference/SCENE.md#deterministic-mode-through-hydra);
 remaining work is in the
-[roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap](../roadmap/README.md#status-at-a-glance).

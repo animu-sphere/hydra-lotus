@@ -8,7 +8,7 @@ CPython 3.13. All runs were local; hosted CI was not measured.
 ## Scope
 
 The first slice of
-[Renderer Phase 1.5](../roadmap/current.md#renderer-phase-15--minimal-material-ir):
+[Renderer Phase 1.5](../roadmap/README.md#status-at-a-glance):
 the minimal material IR and its path from Hydra to the GPU
 ([design policy §18](../design/DESIGN_POLICY.md#18-material-ir)),
 
@@ -147,7 +147,7 @@ material table drops materials that the instances use".
 
 Before the builds, `ninja -t deps` listed objects without recorded header
 dependencies, the known Japanese-MSVC issue
-([roadmap](../roadmap/current.md#project-infrastructure)): after the header
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)): after the header
 edits every object in the Hydra tree recorded none, and some in the core,
 viewport and ci-core trees. They were deleted before each final build.
 
@@ -170,4 +170,4 @@ viewport and ci-core trees. They were deleted before each final build.
 The current behaviour is in the
 [scene reference](../reference/SCENE.md#materials-and-environment) and its
 [Hydra materials section](../reference/SCENE.md#materials); remaining work
-is in the [roadmap](../roadmap/current.md#renderer-phase-15--minimal-material-ir).
+is in the [roadmap](../roadmap/README.md#status-at-a-glance).

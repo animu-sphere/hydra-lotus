@@ -7,7 +7,7 @@ A5000, Vulkan API 1.4.329. All runs were local; hosted CI was not measured.
 
 ## Scope
 
-The next slice of [Renderer Phase 1.5](../roadmap/current.md#renderer-phase-15--minimal-material-ir):
+The next slice of [Renderer Phase 1.5](../roadmap/README.md#status-at-a-glance):
 coarse smooth normals for Hydra meshes without usable authored normals.
 The core already accepts per-corner shading normals and the GPU already
 interpolates them, so computation stays in the Hydra adapter. No new target,
@@ -76,4 +76,4 @@ scene boundary by the UsdImaging test.
 
 Current behaviour is owned by the
 [scene reference](../reference/SCENE.md#hydra-extraction); remaining material
-work is in the [roadmap](../roadmap/current.md#renderer-phase-15--minimal-material-ir).
+work is in the [roadmap](../roadmap/README.md#status-at-a-glance).

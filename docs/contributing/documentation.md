@@ -19,7 +19,8 @@ so a reader moving between them finds the same shape.
 | `design/` | Intended contracts, their rationale, open questions | Claims that something is implemented |
 | `architecture/` | Target identities, directories, dependency edges, packaging — the binding structural contract | Rationale; plans |
 | `reference/` | Facts about the current tree: capabilities, measured configurations | Plans; another repository's status |
-| `roadmap/` | Incomplete work this repository owns, and which release carries it | Completed work; rationale; a sibling's roadmap |
+| `roadmap/README.md` | Canonical phase status and release targets, with evidence links | Duplicate task checklists; technical specifications |
+| `roadmap/current.md` | The only active task checklist, incomplete work and execution order | Completed tasks; duplicated status or limitations |
 | `guides/` | How to accomplish a task, with commands that have been run | Commands nobody has run |
 | `releases/` | One immutable record per released version | Work in progress |
 | `reports/` | Dated measurements and observations: builds, benchmarks, convergence and correctness runs, `ost` dogfooding | Current-state claims |
@@ -27,6 +28,36 @@ so a reader moving between them finds the same shape.
 | `contributing/` | How to maintain this repository | End-user tasks |
 
 The same fact is not maintained independently in two categories.
+
+Link to the owner rather than copying its paragraph. Technical limitations
+stay beside the behavior they constrain in `reference/`; the capability
+matrix is an entry point to those contracts and their evidence. Benchmark
+numbers stay in dated reports. Release notes describe a shipped snapshot,
+rather than becoming another live backlog.
+
+Stable design and architecture documents do not carry live task status,
+release targets or relative-time claims such as "soon" or "recently".
+The canonical roadmap owns that volatile information.
+
+## Status and evidence
+
+Phase status and release targets appear only in the
+[canonical status table](../roadmap/README.md#status-at-a-glance).
+The minimal material contract and a partial implementation of a larger
+capability are technical facts; neither is a second phase-status declaration.
+
+Every active task uses one stable ID in
+[current.md](../roadmap/current.md), for example:
+
+```markdown
+- [ ] **LOTUS-CI-01 — Hosted capability evidence.** Acceptance criteria and links.
+```
+
+Remove completed tasks from that checklist. A phase completion links evidence
+from the canonical table: implementation → test → measurement/evidence →
+report → status change. Landing code alone does not establish completion.
+Foundation closure gives each item one explicit disposition: implemented,
+deferred to a named phase, or accepted limitation with a reference rationale.
 
 ## Cross-repository contracts
 
@@ -63,23 +94,31 @@ A claim about image quality, convergence, bias or performance cites a report,
 and the report names the scene, the sample count, the seed and the build it
 was measured with ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
 
-The **archive** holds intent that has been done or replaced. Every archived
-document opens with a *Historical only* banner. A superseded **design**
+The **archive** holds intent that has been done or replaced. Remove obsolete
+plans from active indexes, move them under `archive/`, and open each with a
+*Historical only* banner, an `Archived on YYYY-MM-DD` date and a `Superseded by`
+link to the canonical owner. Do not continue updating historical status.
+Active documents may link the archive index for navigation, but must not use
+an archived planning file as guidance. A superseded **design**
 document is not archived; it stays at its path as a short stub — status,
 former purpose, current owner, links to the replacement.
 
 ## Metadata
 
-A design document, a superseded stub and an archived document carry YAML
-front matter:
+Design documents (excluding the category index) carry the decision metadata
+consumed by [the checker](../../scripts/check_docs.py):
 
 ```yaml
 ---
-status: accepted       # proposed | accepted | binding | superseded | rejected | historical
+status: accepted       # proposed | accepted | binding | superseded | rejected
 owner: hydra-lotus     # the repository that owns the subject
 canonical: X.md        # superseded only: the replacement, relative
 ---
 ```
+
+This is design-decision status, not renderer phase status. A superseded stub
+must identify and link its replacement. Archived plans use the dated banner
+above. Do not add metadata that no validation or tooling consumes.
 
 ## Naming
 
@@ -100,11 +139,31 @@ canonical: X.md        # superseded only: the replacement, relative
 - Repository documents are in English.
 - Relative links for everything in the repository; code spans for commands,
   paths, targets, types and attribute names.
-- Keep each category index (`docs/README.md`, `roadmap/README.md`,
-  `archive/README.md`, `releases/README.md`, `reports/README.md`,
-  `reports/ost/README.md`) in sync with its files.
+- Every category and nested documentation directory has a `README.md`.
+  Its index links immediate documents and child indexes, describing ownership
+  without copying content. Keep the [documentation index](../README.md) in sync.
 - Never commit machine-local paths, or a scene, texture or HDRI whose terms
   do not allow redistribution.
+
+## Validation
+
+Run from the repository root with Python 3.10 or newer; no extra packages or
+GPU/runtime dependencies are required:
+
+```sh
+python scripts/check_docs.py
+python -m unittest discover -s scripts -p test_check_docs.py
+```
+
+The [documentation CI job](../../.github/workflows/renderer-ci.yml) runs both.
+The checker validates relative hyperlinks and Markdown heading anchors,
+referenced files, recursive category indexes, common duplicate phase-status
+and release-target declarations, active task ownership/IDs, completed-phase
+evidence links, phase naming, design metadata and archive banners/guidance.
+It covers root `README.md`, `CHANGELOG.md` and every Markdown file under `docs/`.
+Historical reports/releases are exempt from live-status rules; their links
+are still checked. External URLs are not fetched, and paths inside command
+examples are not interpreted as hyperlinks. Semantic drift still requires review.
 
 ## Change checklist
 
@@ -112,5 +171,6 @@ canonical: X.md        # superseded only: the replacement, relative
 2. Every new page appears in its category index.
 3. Relative links resolve.
 4. Implementation changes update `architecture/` and `reference/`.
-5. Completed work leaves `roadmap/`; a completed plan moves to `archive/`.
+5. Completed tasks leave `current.md`; phase status retains evidence in the
+   canonical table, and an obsolete plan moves to `archive/`.
 6. Another project's contract is linked, not restated.

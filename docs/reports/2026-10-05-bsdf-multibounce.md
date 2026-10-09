@@ -133,4 +133,4 @@ were rebuilt.
 
 Devices without ray queries, non-NVIDIA GPUs and synchronization validation
 were not measured. HDR accumulation and the reference images remain
-[roadmap work](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap work](../roadmap/README.md#status-at-a-glance).

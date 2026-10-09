@@ -1,21 +1,22 @@
 # Capability matrix
 
-What is implemented now. This page is the only document that says so; the
-[design policy](../design/DESIGN_POLICY.md) describes intent and the
-[roadmap](../roadmap/README.md) describes what is left.
+Capability entry points and their validation evidence. Detailed technical
+behavior and limitations are owned by the linked [reference pages](README.md);
+the [design policy](../design/DESIGN_POLICY.md) describes intent. Phase and
+release status belongs in the [canonical roadmap](../roadmap/README.md#status-at-a-glance).
 
 Legend: ✅ implemented and tested · 🧪 scaffold only (works, but is the
-generated bootstrap, not the design) · ⬜ not implemented
+generated bootstrap, not the design) · ◐ partial coverage
 
 Configurations each row was measured on are
 [SUPPORTED_CONFIGURATIONS.md](SUPPORTED_CONFIGURATIONS.md).
 
 ## Renderer foundation
 
-| Capability | Status | Evidence / notes |
+| Capability | Coverage | Evidence / notes |
 | --- | --- | --- |
 | Host-neutral core with an enforced header boundary | ✅ | `renderer.core.boundary`; CTest `lotus-renderer-core-boundary` recursively discovers all public headers, including backend headers. `lotus-renderer-core-boundary-discovery` checks newly added nested headers against foreign dependencies |
-| Core and Hydra source CI definition | 🧪 | Registered external workflow and `openstrata.ci.yaml`; matrix and pinned artifact verified locally, core 6/6 and Hydra 11/11 tests pass. GitHub-hosted execution is not measured ([CI report](../reports/2026-10-04-foundation-ci.md)) |
+| Core and Hydra source CI definition | 🧪 | Registered external workflow and `openstrata.ci.yaml`; [CI definition evidence](../reports/2026-10-04-foundation-ci.md), [hosted failure and local synchronization regression](../reports/2026-10-09-synchronization-ci.md). Tooling constraints are owned by [supported configurations](SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations) |
 | Vulkan device bring-up with validation layers, messages treated as errors | ✅ | `renderer.backend.capability`, `renderer.validation.messages` |
 | Vulkan synchronization validation | ✅ | The shared instance helper enables `VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT` when the Khronos layer advertises `VK_EXT_validation_features`; offscreen and presentation statistics expose availability and an unavailable explanation. `renderer.validation.synchronization` checks zero captured messages or an explained SKIP; usdview checks enablement on every Hydra frame when headless reports it available. CTest `lotus-renderer-synchronization-validation` verifies clean synchronized writes and captures an intentionally missing barrier as a write-after-write hazard ([evidence](../reports/2026-10-08-synchronization-validation.md)) |
 | Offscreen colour and depth (D32) render products, read back | ✅ | RGBA8 bootstrap and RGBA32F path-traced and barycentric diagnostic output at the requested size, with display/data windows; `renderer.render_product.color`, `.depth`, `renderer.ray_query.triangle`, `renderer.path.bsdf`, `.accumulation` |
@@ -35,38 +36,31 @@ an explanation even on a workstation with a GPU
 
 ## Light transport
 
-Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
+Technical contracts are owned by [SCENE.md](SCENE.md).
 
-| Capability | Status | Phase |
+| Capability | Coverage | Contract / evidence |
 | --- | --- | --- |
-| CPU mesh extraction, geometry and ordinary mesh placement | ✅ | [Scene reference](SCENE.md); dirty points/topology/transform/visibility, coarse triangulation and immutable snapshots; [measured tests](../reports/2026-10-05-cpu-mesh-extraction.md) |
-| Vertex, index and instance buffers; GPU scene upload | ✅ | [Scene reference](SCENE.md#gpu-scene): an incremental plan from snapshot changes, one device buffer per geometry, an instance buffer and a material table. CTest `lotus-renderer-scene-update`; `renderer.scene.upload` compares read-back buffers with the CPU scene; [measured run](../reports/2026-10-05-gpu-scene-upload.md) |
-| BLAS / TLAS | ✅ | [Scene reference](SCENE.md#acceleration-structures): a BLAS per geometry, transform-only TLAS refits, binding-only rewrites leave the TLAS, other rewrites rebuild; capability gated. Build inputs and counters checked by `renderer.scene.acceleration`; [measured run](../reports/2026-10-05-blas-tlas.md) |
-| Ray-query capability and traversal | ✅ | [Scene reference](SCENE.md#primary-rays); `renderer.ray_query.capability`, `.triangle`, explained SKIPs without `VK_KHR_ray_query`/`rayQuery`; [measured run](../reports/2026-10-05-primary-rays.md) |
-| Primary rays and closest triangle intersection | ✅ | perspective/orthographic camera, near/far clipping, barycentric RGB and projected depth; independent CPU projection comparisons across scene edits and framing |
-| Surface hit reconstruction, multiple bounces and Russian roulette | ✅ | [Scene reference](SCENE.md#path-tracing): one brute-force path per pixel centre in a fragment pass, `PathTracingSettings::max_bounces` and `sample_index`. `renderer.path.multibounce`: exact bounce-limited radiance and the converged mean in a closed emissive box; [measured run](../reports/2026-10-05-bsdf-multibounce.md) |
-| Lambert, minimal GGX, emissive surfaces | ✅ | Evaluated from the material table: Fresnel-coated Lambert and GGX dielectric/metal reflection, two-sided emission; `renderer.path.bsdf` compares exact Lambert radiance and GGX directional albedo from independent quadrature. Dielectric and coloured specular-workflow integrals at normal and grazing views ([evidence](../reports/2026-10-08-dielectric-specular.md)) |
-| Environment light | ✅ | A constant environment radiance on `LotusScene`, uniform, not seen by camera rays; Hydra sums visible dome colour × intensity × 2^exposure, with a white fallback when no domes exist ([lights](SCENE.md#lights), [evidence](../reports/2026-10-08-dome-lights.md)). Environment maps are not read |
-| HDR accumulation, 1-pixel box filter, float colour output | ✅ | [Scene reference](SCENE.md#accumulation-and-the-pixel-filter): an RGBA32F accumulation restarted by scene, camera, framing and settings changes, capped by `max_samples`; Hydra converges progressively at `convergedSamplesPerPixel`. `renderer.path.accumulation`: box coverage against each pixel's projected-triangle area, unclamped HDR radiance, split frames and restart rules; [measured run](../reports/2026-10-05-hdr-accumulation.md) |
-| Deterministic reference images — the reference path tracer | ✅ | [Scene reference](SCENE.md#reference-images): a Cornell box at 1/16/64/256/1024 spp, compared with a committed 1024-spp mean and per-pixel variance. Statistical match (DES-Q5): image and tile mean differences within 5 standard errors. `renderer.path.reference` also checks that a 10% brighter wall is rejected; [measured run](../reports/2026-10-05-reference-images.md) |
-| Minimal material IR; basic `UsdPreviewSurface` translation | ✅ | Renderer Phase 1.5. Constant base colour, roughness, metallic and emission as `Lotus::Material`, keyed and bound to meshes, evaluated from a GPU material table ([scene reference](SCENE.md#materials-and-environment)); `HdMaterial` translates `UsdPreviewSurface`'s constant inputs ([Hydra materials](SCENE.md#materials)). CTest `lotus-renderer-scene-update`, `lotus-renderer-hydra-material` and its GPU-gated `-gpu` variant; `renderer.scene.upload` compares the read-back table; [measured run](../reports/2026-10-05-material-ir.md). Authored normals shade as interpolated shading normals ([scene reference](SCENE.md#path-tracing)): `renderer.path.normals` compares the `ShadingNormal` diagnostic with an independent oracle and checks Lambert and mirror radiance; `lotus-renderer-hydra-normals` checks every interpolation through UsdImaging; [measured run](../reports/2026-10-06-authored-normals.md). Texture lookups (`UsdUVTexture` with `UsdPrimvarReader_float2`) drive base colour, roughness, metallic and emission from a bindless table of sRGB, linear and float images, with every wrap mode, scale, bias and fallback ([scene reference](SCENE.md#materials-and-environment)): `renderer.path.textures` compares the `Albedo` and `RoughnessMetallic` diagnostics with an independent bilinear oracle and checks exact textured radiance; `lotus-renderer-hydra-texture` and its GPU-gated `-gpu` variant check the translation, decoded images, texture-coordinate primvars and texture lifetimes through UsdImaging; [measured run](../reports/2026-10-06-textures.md). Dielectric GGX from constant `ior` and constant or RGB-textured `specularColor` in the specular workflow; independent furnace integrals, specular-texture edits and Hydra coat edits ([evidence](../reports/2026-10-08-dielectric-specular.md)). Transmission and clearcoat remain outside the minimal model |
-| Tangent-space normal inputs and normal maps | ✅ | Renderer Phase 1.5. Signed constants and RGB lookups; per-hit UV frames about the mesh shading normal, mirrored UVs and transforms, and a stable frame for absent or degenerate UVs ([scene reference](SCENE.md#path-tracing)). `renderer.path.normal_maps` compares mapped normals with an independent oracle and checks exact mirror radiance; `lotus-renderer-hydra-texture` and `-gpu` check normal-image, UV and connection edits through UsdImaging ([measured run](../reports/2026-10-08-normal-maps.md)). No stored vertex tangents or MikkTSpace compatibility guarantee |
-| Opacity coverage and alpha masks | ✅ | Renderer Phase 1.5. Constant or scalar-textured opacity, constant threshold; positive thresholds select cut-outs, zero selects stochastic presence coverage. Primary and secondary ray acceptance, fixed-seed depth and coverage alpha ([scene reference](SCENE.md#materials-and-environment)). `renderer.path.opacity` checks analytic layer mixtures and masks against an independent bilinear oracle; Hydra texture CPU/GPU tests check image, threshold and connection edits ([measured run](../reports/2026-10-08-opacity.md)). Glass and `opacityMode` interpretation are not implemented |
-| Wavefront queues, compaction, indirect dispatch | ⬜ | Renderer Phase 2 |
-| NEE, MIS, environment importance sampling | ⬜ | Renderer Phase 3 |
-| Temporal infrastructure: motion vectors, history, validation, accumulation | ⬜ | Renderer Phase 4 |
-| ReSTIR DI | ⬜ | Renderer Phase 5 |
-| SVGF-class denoising | ⬜ | Renderer Phase 6 |
-| ReSTIR GI / advanced reservoir transport | ⬜ | Renderer Phase 7 |
-| Full `UsdPreviewSurface`, OpenPBR, MaterialX Standard Surface; texture mipmaps, ray cones and UDIMs | ⬜ | Renderer Phase 8 |
-| Adaptive sampling, sorting, light tree, path guiding | ⬜ | Renderer Phase 9 |
-| Spectral transport | ⬜ | Renderer Phase 10 |
-| RT pipeline or CPU reference traversal backend | ⬜ | unscheduled ([roadmap policy §6](../design/ROADMAP_POLICY.md#6-backend-strategy)) |
-| Debug AOVs beyond colour / depth / primId | ⬜ | [design policy §25](../design/DESIGN_POLICY.md#25-debug-and-validation) |
+| CPU geometry and mesh placement | ✅ | [Scene snapshots](SCENE.md#geometry-and-placement); [extraction evidence](../reports/2026-10-05-cpu-mesh-extraction.md) |
+| GPU scene upload | ✅ | [GPU scene](SCENE.md#gpu-scene); [readback evidence](../reports/2026-10-05-gpu-scene-upload.md) |
+| BLAS / TLAS | ◐ | [Acceleration structures and update limits](SCENE.md#acceleration-structures); [build/refit evidence](../reports/2026-10-05-blas-tlas.md) |
+| Ray queries and primary rays | ✅ | [Primary-ray contract](SCENE.md#primary-rays); [projection and capability evidence](../reports/2026-10-05-primary-rays.md) |
+| Surface reconstruction, Lambert/GGX and multi-bounce transport | ✅ | [Path-tracing contract](SCENE.md#path-tracing); [BSDF evidence](../reports/2026-10-05-bsdf-multibounce.md), [dielectric/specular evidence](../reports/2026-10-08-dielectric-specular.md) |
+| Environment lighting | ◐ | [Light behavior and limits](SCENE.md#lights); [dome evidence](../reports/2026-10-08-dome-lights.md) |
+| HDR accumulation and float colour | ✅ | [Accumulation contract](SCENE.md#accumulation-and-the-pixel-filter); [coverage/restart evidence](../reports/2026-10-05-hdr-accumulation.md) |
+| Deterministic reference images | ✅ | [Reference-image contract](SCENE.md#reference-images); [statistical comparison evidence](../reports/2026-10-05-reference-images.md) |
+| Minimal material IR | ✅ | [Material contract](SCENE.md#materials-and-environment); [material-table evidence](../reports/2026-10-05-material-ir.md) |
+| Texture inputs | ◐ | [Texture behavior and limits](SCENE.md#materials-and-environment); [texture evidence](../reports/2026-10-06-textures.md) |
+| Authored and computed shading normals | ◐ | [Path shading](SCENE.md#path-tracing), [Hydra extraction limits](SCENE.md#hydra-extraction); [authored evidence](../reports/2026-10-06-authored-normals.md), [computed evidence](../reports/2026-10-07-computed-normals.md) |
+| Tangent-space normal inputs | ◐ | [Shading frames and compatibility limits](SCENE.md#path-tracing); [normal-map evidence](../reports/2026-10-08-normal-maps.md) |
+| Opacity coverage and alpha masks | ◐ | [Alpha behavior and limits](SCENE.md#materials-and-environment); [opacity evidence](../reports/2026-10-08-opacity.md) |
+
+Future integrator and material scope is defined by the
+[phase policy](../design/ROADMAP_POLICY.md#4-roadmap); its status is not
+maintained in this capability index.
 
 ## Hydra adapter (`hdLotus`)
 
-| Capability | Status | Evidence / notes |
+| Capability | Coverage | Evidence / notes |
 | --- | --- | --- |
 | Plugin discovery through `plugInfo.json` | ✅ | `renderer.plugin.discovery` |
 | Render delegate creation | ✅ | `renderer.delegate.creation`; measured against OpenUSD 26.08 (`HD_API_VERSION` 98) |
@@ -75,16 +69,16 @@ Phases are the [roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 | First frame and a stable update in `testusdview` | ✅ | `renderer.host.first_frame`, `.host.stable_update`; progressive path tracing through the Hydra camera/framing to 64 spp on ray-query devices, bootstrap otherwise, with no Vulkan validation message; [measured run](../reports/2026-10-05-hdr-accumulation.md) |
 | GPU capability gate for `testusdview` | ✅ | Explicit `renderer.gpu.frame` SKIP returns before launching the viewer; CTest reports the host test as skipped. Failed, missing, malformed or unexplained evidence fails. `lotus-renderer-host-capability-gate` and [CI report](../reports/2026-10-04-foundation-ci.md) |
 | Supported prim types | ✅ | `mesh` (coarse geometry and ordinary or instanced placement extracted, uploaded and traced on ray-query devices), `material` (`UsdPreviewSurface` constants), `camera` (through render pass state), `domeLight` (constant environment radiance), `renderBuffer` |
-| Render-pass selection | ✅ | A pass traces the meshes under its collection's root paths and outside its exclude paths whose render tag it was given; the rest are hidden for that pass, their geometry resident ([scene reference](SCENE.md#render-pass-selection)). `lotus-renderer-hydra-render-pass` (and its GPU-gated `-gpu` variant) checks UsdImaging-synced purposes and collection edits; [measured run](../reports/2026-10-05-render-pass-selection.md). Material tags are ignored |
-| Render settings | 🧪 | `convergedSamplesPerPixel` and `lotus:sampleIndex`, the first sample index of deterministic mode ([scene reference](SCENE.md#deterministic-mode-through-hydra)). `lotus-renderer-hydra-deterministic` checks that a converged Hydra image is bit for bit the backend's for the same settings, camera and AOV, across setting changes, camera moves and render delegates; the usdview smoke test changes the setting in the viewer; [measured run](../reports/2026-10-05-hydra-deterministic-mode.md) |
-| Instancers | ✅ | `HdInstancer` placements: point, nested point and native instancing; translations, rotations, scales and instance transforms; one BLAS per geometry and one TLAS instance per placement ([scene reference](SCENE.md#instancers)). `lotus-renderer-hydra-instancer` compares UsdImaging-synced placements with UsdGeom's; the usdview smoke test traces a point instancer; [measured run](../reports/2026-10-05-hydra-instancers.md). Per-instance primvars are not read |
-| Materials | 🚧 | `UsdPreviewSurface` constant inputs and `UsdUVTexture` lookups with `UsdPrimvarReader_float2` texture coordinates, including signed tangent-space `normal` inputs and scalar opacity lookups with a constant mask threshold, through `HdMaterial`, images decoded with Hio, and mesh material bindings ([scene reference](SCENE.md#materials)); other shader graph nodes, such as `UsdTransform2d`, are not evaluated |
-| Mesh normals | ✅ | The authored `normals` primvar, in any interpolation and indexed, as per-corner shading normals; without usable authored normals, Storm's coarse smooth normals for subdivision schemes other than `none` and `bilinear` ([scene reference](SCENE.md#hydra-extraction)). `lotus-renderer-hydra-normals` checks an independent polygon-corner oracle, scheme changes and point/topology/normal edits; [measured run](../reports/2026-10-07-computed-normals.md). Subdivision refinement, limit normals and crease evaluation are not implemented |
-| Lights | 🚧 | Constant `DomeLight` colour, intensity, exposure and inherited visibility, summed into the environment; last-dome deletion restores the white fallback. CTest `lotus-renderer-hydra-light` and its GPU-gated `-gpu` variant check composed USD edits, analytic mirror radiance and accumulation restarts ([scene reference](SCENE.md#lights), [evidence](../reports/2026-10-08-dome-lights.md)). Other light types, environment textures, colour temperature and linking are not implemented |
+| Render-pass selection | ◐ | [Collection/tag behavior and limits](SCENE.md#render-pass-selection); [selection evidence](../reports/2026-10-05-render-pass-selection.md) |
+| Render settings | ✅ | [Deterministic Hydra settings](SCENE.md#deterministic-mode-through-hydra); [converged-image evidence](../reports/2026-10-05-hydra-deterministic-mode.md) |
+| Instancers | ✅ | [Instancer contract and limits](SCENE.md#instancers); [placement evidence](../reports/2026-10-05-hydra-instancers.md) |
+| Materials | ◐ | [Translator inputs and limits](SCENE.md#materials); [material evidence](../reports/2026-10-05-material-ir.md), [texture evidence](../reports/2026-10-06-textures.md) |
+| Mesh normals | ◐ | [Hydra extraction and refinement limits](SCENE.md#hydra-extraction); [normal evidence](../reports/2026-10-07-computed-normals.md) |
+| Lights | ◐ | [Light behavior and limits](SCENE.md#lights); [dome evidence](../reports/2026-10-08-dome-lights.md) |
 
 ## Hosts
 
-| Host | Status | How |
+| Host | Coverage | How |
 | --- | --- | --- |
 | Headless runner (`lotus-headless`) | ✅ | runs during `ost build`; writes `renderer-report.json` |
 | Standalone viewport (`lotus-viewport`) | 🧪 | `ost renderer viewport` |

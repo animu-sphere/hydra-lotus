@@ -31,7 +31,7 @@ that moment every file is project-owned; the template is not re-applied.
 
 | Directory | Target | Alias | Role |
 | --- | --- | --- | --- |
-| `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU mesh scene with keyed materials, dielectric ior and specular workflow, signed tangent normal inputs and opacity coverage (the material IR in `include/lotus/material.hpp`), mesh material bindings and a constant environment; immutable snapshots and shared geometry ([scene reference](../reference/SCENE.md)) |
+| `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU scene state, keyed geometry/material resources, immutable snapshots and shared geometry; technical behavior is owned by the [scene reference](../reference/SCENE.md) |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance and material table rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
 | `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments and clear control, GPU scene buffers and BLAS/TLAS, the reference path-tracing pass and GPU timestamps, swapchain presentation, Slang shaders |
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference ([scene reference](../reference/SCENE.md#reference-images)) |

@@ -56,7 +56,7 @@ buffer.
 
 Before the builds, objects with no recorded header dependencies were
 deleted, the known Japanese-MSVC workaround
-([roadmap](../roadmap/current.md#project-infrastructure)); the Hydra build
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)); the Hydra build
 recompiled every object.
 
 - `ost build --jobs auto`, `ost test`: **8/8 passed**. `ost validate`:
@@ -76,4 +76,4 @@ recompiled every object.
 
 The current API and its limits are in the
 [scene reference](../reference/SCENE.md#gpu-scene); remaining work is in the
-[roadmap](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap](../roadmap/README.md#status-at-a-glance).

@@ -8,7 +8,7 @@ CPython 3.13. All runs were local; hosted CI was not measured.
 ## Scope
 
 The second slice of
-[Renderer Phase 1.5](../roadmap/current.md#renderer-phase-15--minimal-material-ir):
+[Renderer Phase 1.5](../roadmap/README.md#status-at-a-glance):
 the *normal* of the
 [initial material model](../design/ROADMAP_POLICY.md#renderer-phase-15--minimal-material-ir),
 as authored mesh normals that the path tracer shades with. Normal maps
@@ -163,7 +163,7 @@ Each was reverted before the runs below.
 
 Before the builds, `ninja -t deps` listed objects without recorded header
 dependencies, the known Japanese-MSVC issue
-([roadmap](../roadmap/current.md#project-infrastructure)), in every tree;
+([roadmap](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations)), in every tree;
 they were deleted before the final builds. Restoring the fault-injected
 sources with their earlier modification times first left a faulty object
 in place; the sources were touched and everything rebuilt.
@@ -188,4 +188,4 @@ The current behaviour is in the
 [scene reference](../reference/SCENE.md#path-tracing) and its
 [Hydra extraction section](../reference/SCENE.md#hydra-extraction); remaining
 work is in the
-[roadmap](../roadmap/current.md#renderer-phase-15--minimal-material-ir).
+[roadmap](../roadmap/README.md#status-at-a-glance).

@@ -187,4 +187,4 @@ These were not measured:
 - synchronization validation.
 
 The reference images at 1–1024 spp remain
-[roadmap work](../roadmap/current.md#renderer-phase-1--reference-path-tracer).
+[roadmap work](../roadmap/README.md#status-at-a-glance).
