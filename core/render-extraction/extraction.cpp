@@ -4,6 +4,7 @@
 #include <iterator>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Lotus {
@@ -19,6 +20,7 @@ DrawSummary ExtractDrawSummary(const FrameSnapshot& snapshot) {
 
 bool SceneUpdate::Empty() const {
   return geometry_releases.empty() && geometry_uploads.empty() &&
+         geometry_replacements.empty() &&
          texture_releases.empty() && texture_uploads.empty() &&
          !instances_changed && !materials_changed && !environment_changed;
 }
@@ -93,12 +95,26 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
     }
   }
   if (scene_) {
+    std::unordered_set<const MeshGeometry*> replaced;
+    std::unordered_set<const MeshGeometry*> uploaded;
+    for (const auto& geometry : update.geometry_uploads) {
+      uploaded.insert(geometry.get());
+    }
     for (const auto& [id, mesh] : scene_->meshes) {
-      (void)id;
       const MeshGeometry* geometry = mesh.geometry.get();
       // Erasing from resident_ skips a buffer shared by several meshes.
       if (!resident.contains(geometry) && resident_.erase(geometry) != 0) {
         update.geometry_releases.push_back(geometry);
+        if (snapshot.scene) {
+          const auto next = snapshot.scene->meshes.find(id);
+          if (next != snapshot.scene->meshes.end()) {
+            const auto* replacement = next->second.geometry.get();
+            if (uploaded.contains(replacement) &&
+                replaced.insert(replacement).second) {
+              update.geometry_replacements.push_back({geometry, replacement});
+            }
+          }
+        }
       }
     }
     for (const auto& [id, texture] : scene_->textures) {

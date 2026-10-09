@@ -7,7 +7,7 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Backend scaling → performance baseline → foundation release →
+Performance baseline → foundation release →
 Renderer Phase 2 equivalence → Wavefront optimization.
 
 The [foundation review](../reports/2026-10-10-foundation-closure.md) records
@@ -16,19 +16,13 @@ closure dispositions and hosted capability evidence; the
 suballocation and reuse. These do not substitute for the baseline/release
 gates below.
 
+Backend update classification and the compaction disposition are measured in
+the [BLAS refit/compaction report](../reports/2026-10-10-blas-refit-compaction.md).
+
 The release target is owned by the [status table](README.md#status-at-a-glance).
 The stabilization cycle excludes ReSTIR, denoising, spectral research,
 production material coverage and broad platform/backend expansion. Their
 scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
-
-## Backend stabilization before Renderer Phase 2
-
-- [ ] **LOTUS-AS-01 — BLAS refit and compaction evaluation.** Distinguish
-  topology rebuilds, point-only BLAS updates, transform-only TLAS updates
-  and unchanged-scene no-ops. Measure build/update time, CPU update cost,
-  and compacted/uncompacted memory. Retain compaction only if the measured
-  trade-off is favorable. Existing behavior is owned by the
-  [acceleration reference](../reference/SCENE.md#acceleration-structures).
 
 ## Performance baseline and foundation release
 

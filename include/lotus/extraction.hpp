@@ -55,6 +55,15 @@ struct SceneMaterial {
   bool operator==(const SceneMaterial&) const = default;
 };
 
+// Optional correspondence for a mesh edited under the same stable key.
+// Both addresses also occur in this plan's releases and uploads. The backend
+// may retain storage and refit a BLAS when the topology is compatible.
+struct SceneGeometryReplacement {
+  const MeshGeometry* previous = nullptr;
+  const MeshGeometry* replacement = nullptr;
+  bool operator==(const SceneGeometryReplacement&) const = default;
+};
+
 // What a GPU scene changes to match one snapshot's LotusScene (design policy
 // section 4.2). A geometry buffer or a texture is identified by its address:
 // SceneExtraction keeps every resident one alive, so an address is not
@@ -68,6 +77,7 @@ struct SceneUpdate {
   // Buffers that become resident, in scene key order. A hidden mesh's
   // geometry is resident too, so a visibility change uploads nothing.
   std::vector<std::shared_ptr<const MeshGeometry>> geometry_uploads;
+  std::vector<SceneGeometryReplacement> geometry_replacements;
   // Textures the scene no longer holds, in the previous scene's key order,
   // and textures that become resident, in key order. Releases are applied
   // before uploads.
