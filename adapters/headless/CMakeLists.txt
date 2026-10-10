@@ -1,9 +1,13 @@
-add_executable(lotus-headless main.cpp reference.cpp)
+add_executable(lotus-headless main.cpp reference.cpp benchmark.cpp)
 target_link_libraries(lotus-headless PRIVATE
   Lotus::RenderWorld
   Lotus::RenderExtraction
   Lotus::Vulkan)
 target_compile_features(lotus-headless PRIVATE cxx_std_20)
+target_compile_definitions(lotus-headless PRIVATE
+  LOTUS_BENCHMARK_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}"
+  LOTUS_BENCHMARK_CONFIG="$<CONFIG>"
+  LOTUS_BENCHMARK_SYSTEM="${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}")
 
 # The committed reference images, beside the executable as the shaders are.
 set(LOTUS_REFERENCE_FILES

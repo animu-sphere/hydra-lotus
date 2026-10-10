@@ -47,7 +47,20 @@ add_test(NAME lotus-renderer-install-tree
     -P "${CMAKE_CURRENT_BINARY_DIR}/run-install-smoke.cmake")
 set_tests_properties(lotus-renderer-install-tree PROPERTIES RUN_SERIAL TRUE)
 
+add_test(NAME lotus-renderer-benchmark
+  COMMAND "${CMAKE_COMMAND}"
+    "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
+set_tests_properties(lotus-renderer-benchmark PROPERTIES RUN_SERIAL TRUE)
+
 if(LOTUS_WITH_VULKAN)
+  add_test(NAME lotus-renderer-benchmark-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark-no-driver"
+      -DNO_DRIVER=ON
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
   add_executable(lotus-acceleration-compaction-test acceleration-compaction-test.cpp)
   target_link_libraries(lotus-acceleration-compaction-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
   add_test(NAME lotus-renderer-acceleration-compaction COMMAND lotus-acceleration-compaction-test)

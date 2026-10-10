@@ -4,6 +4,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include "reference.hpp"
+#include "benchmark.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3382,6 +3383,8 @@ std::string Status(Lotus::FrameStatus status) {
 } // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark")
+    return LotusHeadless::BenchmarkMain(argc, argv);
   Session session;
   session.started = static_cast<long long>(std::time(nullptr));
   session.target = "lotus-headless";
@@ -3412,7 +3415,9 @@ int main(int argc, char** argv) {
     } else {
       std::cerr << "usage: lotus-headless [--report <path>] [--install-tree]\n"
                    "           [--reference <directory>] [--images <directory>]\n"
-                   "       lotus-headless --write-reference <directory>\n";
+                   "       lotus-headless --write-reference <directory>\n"
+                   "       lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
+                   "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n";
       return 2;
     }
   }

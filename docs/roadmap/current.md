@@ -7,10 +7,12 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Performance baseline → foundation release →
+Foundation release →
 Renderer Phase 2 equivalence → Wavefront optimization.
 
-The [foundation review](../reports/2026-10-10-foundation-closure.md) records
+The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
+records four repeatable workloads and metric availability. The
+[foundation review](../reports/2026-10-10-foundation-closure.md) records
 closure dispositions and hosted capability evidence; the
 [memory-pool report](../reports/2026-10-10-gpu-memory-pools.md) records backend
 suballocation and reuse. These do not substitute for the baseline/release
@@ -26,19 +28,12 @@ scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
 ## Performance baseline and foundation release
 
-- [ ] **LOTUS-PERF-01 — Fixed benchmark baseline.** Before Renderer Phase 2,
-  record a small repeatable set: Cornell/reference, medium textured,
-  highly instanced and geometry-heavy scenes. Capture GPU frame time,
-  samples/s, rays/s where measurable, average path depth, VRAM, upload time,
-  BLAS build/update time, TLAS build/refit time, CPU render-submit time and
-  unchanged-scene CPU cost. Record unavailable metrics explicitly. Include
-  hardware, build, scene identity, resolution, samples, seed, warmup and
-  measurement procedure in a dated [report](../reports/README.md).
 - [ ] **LOTUS-RELEASE-01 — Foundation release gate.** Preserve the
   [foundation dispositions](../reports/2026-10-10-foundation-closure.md), verify
   synchronization behavior and documentation CI, pass deterministic references
   and Hydra discovery/smoke tests, and
-  link the baseline report. Keep known limitations in reference documentation;
+  link the [baseline report](../reports/2026-10-10-performance-baseline.md).
+  Keep known limitations in reference documentation;
   release records describe the shipped snapshot. The release should provide
   a deterministic Vulkan reference renderer for OpenUSD Hydra with minimal
   materials/textures, stable extraction and measured backend behavior.
