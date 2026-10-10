@@ -659,34 +659,39 @@ specialized per kernel) that run before the scene render pass.
   hit its ray found between kernels, 80 bytes in five sections of 16-byte
   entries (ray origin, ray direction, throughput, radiance with the
   random-number state, hit), each an array over the slots, so a kernel
-  reads and writes only the sections it uses. A slot's pixel is the slot
-  itself and a queued path's depth is its bounce, so neither is stored;
-  nor are the path flags, which no transport step sets yet, or the hit
-  distance, which shading does not read. Two ray queues, the hit queue and
-  the terminated-path queue each hold up to one slot index per pixel. Each
-  bounce has a ray-queue and a hit-queue descriptor, and the terminated
-  queue has one: the queue's length and its indirect dispatch, which every
-  append keeps current with atomics. The buffers are created by the first
-  wavefront frame at a target size, kept until the targets are replaced,
-  and are outside the [scene memory](#gpu-scene-memory) statistics.
-- **Kernels.** *Generate* starts the frame's camera path at every pixel of
-  the data window (restarting the pixel's accumulation when the frame is
-  the first sample) and queues it for intersection. Then, in each round,
-  *intersect* traces the bounce's ray queue: a hit is queued for shading, a
-  camera ray that misses adds no sample, and a continuation ray that misses
-  ends its path with the environment. *Shade* runs one scattering event of
-  every queued hit and queues the continuation ray for the next bounce, or
-  the ended path as terminated. After the rounds, *tail* follows every path
-  still queued to its end in one invocation, as the reference integrator
-  does, and queues it as terminated. Last, *accumulate* adds each
-  terminated path's radiance with weight 1 to its pixel. Every kernel
-  dispatches indirectly from its queue's descriptor; no kernel only does
-  bookkeeping. The render pass's camera pass writes depth as before, and a
-  resolve pass writes the accumulated mean.
-- **Rounds.** A call records each round's intersect and shade dispatches
-  for the bounces its previous sample's queues held at least 1/16 of the
-  camera rays (`kWavefrontTailDivisor`), at least one; the first wavefront
-  call records a round for every bounce, `max_bounces + 1`. Fewer recorded
+  reads and writes only the sections it uses
+  (`backend/vulkan/shaders/common/path_state.slang`). A slot's pixel is
+  the slot itself and a queued path's depth is its bounce, so neither is
+  stored; nor are the path flags, which no transport step sets yet, or the
+  hit distance, which shading does not read. A camera path's throughput
+  and last density are not stored either: shading at bounce 0 takes them
+  from the path's start. When a path ends, its radiance entry becomes its
+  sample in the accumulation's form, the radiance and a weight of 1; a
+  camera ray that misses leaves zero. Two ray queues and the hit queue
+  each hold up to one slot index per pixel. Each bounce has a ray-queue
+  and a hit-queue descriptor: the queue's length and its indirect
+  dispatch, which every append keeps current with atomics. The buffers are
+  created by the first wavefront frame at a target size, kept until the
+  targets are replaced, and are outside the
+  [scene memory](#gpu-scene-memory) statistics.
+- **Kernels.** *Camera* starts the frame's camera path at every pixel of
+  the data window and traces its camera ray: a hit is queued for shading,
+  and a miss adds no sample. Then, in each round, *shade* runs one
+  scattering event of every queued hit and queues the continuation ray for
+  the next bounce, or ends the path; from the second round on, *intersect*
+  first traces the bounce's ray queue, queuing a hit for shading and
+  ending the path of a ray that misses with the environment. After the
+  rounds, *tail* follows every path still queued to its end in one
+  invocation, as the reference integrator does. Every kernel after the
+  camera kernel dispatches indirectly from its queue's descriptor; no
+  kernel only does bookkeeping. The render pass's camera pass writes depth
+  as before, and a resolve pass adds each pixel's sample from its slot to
+  the accumulation (restarting it when the frame is the first sample) and
+  writes the accumulated mean.
+- **Rounds.** A call records a round for the bounces its previous
+  sample's queues held at least 1/16 of the camera rays
+  (`kWavefrontTailDivisor`), at least the camera rays' round; the first
+  wavefront call records a round for every bounce, `max_bounces + 1`. Fewer recorded
   rounds move work from the rounds to the tail without changing a path's
   transport; a round whose queue is empty dispatches no groups.
   `max_bounces` above `kMaxWavefrontBounces` (1024) fails the frame without
@@ -703,9 +708,9 @@ specialized per kernel) that run before the scene render pass.
   traced one; the tail counts its rays at the bounce they leave from.
   `GpuFrameEvidence::wavefront_rounds` is how many of those bounces ran as
   rounds. `GpuFrameEvidence::wavefront_timings` sums that sample's
-  generate, intersect, shade, tail and accumulate GPU durations between
-  timestamps; `primary_ray_gpu_ms` still times the whole scene pass,
-  kernels included.
+  camera, intersect, shade and tail GPU durations between timestamps;
+  `primary_ray_gpu_ms` still times the whole scene pass, kernels and
+  resolve pass included.
 - **Requirements.** The scene passes' queue family must also support
   compute, and the renderer needs the wavefront kernels' SPIR-V
   (`RayQueryShaders::wavefront`); without it, a wavefront frame fails.
@@ -720,13 +725,14 @@ integrator's within 5 standard errors. The reference-image comparison
 follows, with the wavefront integrator. It then
 renders the same 64 samples of the reference scene with both integrators
 and records how many values differ, checks one more sample's queue
-occupancy (every camera ray queued, no bounce queuing more paths than the
+occupancy (every camera ray counted, no bounce queuing more paths than the
 one before, the tail tracing the bounces after the rounds) and kernel
 timings, and checks that switching integrators restarts the accumulation
 and that the bounce limit fails cleanly
 ([equivalence report](../reports/2026-10-10-wavefront-equivalence.md),
 [scheduling report](../reports/2026-10-10-wavefront-scheduling.md),
-[path-state report](../reports/2026-10-10-wavefront-path-state.md)).
+[path-state report](../reports/2026-10-10-wavefront-path-state.md),
+[camera and resolve report](../reports/2026-10-11-wavefront-camera-resolve.md)).
 
 ### Fixed benchmarks
 

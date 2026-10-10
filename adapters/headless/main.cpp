@@ -3406,14 +3406,12 @@ std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
   const Lotus::WavefrontTimings& timings = frame.wavefront_timings;
   if (timings.available != frame.primary_ray_timestamp_available)
     return "wavefront timings are available without scene-pass timings, or the reverse";
-  const double kernels = timings.generate_gpu_ms + timings.intersect_gpu_ms +
-                         timings.shade_gpu_ms + timings.tail_gpu_ms +
-                         timings.accumulate_gpu_ms;
+  const double kernels = timings.camera_gpu_ms + timings.intersect_gpu_ms +
+                         timings.shade_gpu_ms + timings.tail_gpu_ms;
   if (timings.available &&
-      (!std::isfinite(kernels) || timings.generate_gpu_ms < 0 ||
-          timings.intersect_gpu_ms <= 0 || timings.shade_gpu_ms <= 0 ||
-          timings.tail_gpu_ms < 0 || timings.accumulate_gpu_ms < 0 ||
-          kernels > frame.primary_ray_gpu_ms))
+      (!std::isfinite(kernels) || timings.camera_gpu_ms <= 0 ||
+          timings.intersect_gpu_ms < 0 || timings.shade_gpu_ms <= 0 ||
+          timings.tail_gpu_ms < 0 || kernels > frame.primary_ray_gpu_ms))
     return "wavefront kernel timings are outside the scene pass's " +
            std::to_string(frame.primary_ray_gpu_ms) + " ms";
   std::ostringstream text;
@@ -3421,10 +3419,9 @@ std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
        << counts.size() << " bounces (mean path " << double(rays) / kPixels
        << " rays), " << frame.wavefront_rounds << " of them as rounds";
   if (timings.available)
-    text << ", generate/intersect/shade/tail/accumulate "
-         << timings.generate_gpu_ms << '/' << timings.intersect_gpu_ms << '/'
-         << timings.shade_gpu_ms << '/' << timings.tail_gpu_ms << '/'
-         << timings.accumulate_gpu_ms << " ms of "
+    text << ", camera/intersect/shade/tail "
+         << timings.camera_gpu_ms << '/' << timings.intersect_gpu_ms << '/'
+         << timings.shade_gpu_ms << '/' << timings.tail_gpu_ms << " ms of "
          << frame.primary_ray_gpu_ms << " ms";
   line = text.str();
   return {};

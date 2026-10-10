@@ -7,8 +7,9 @@
 // box-filtered point of the pixel, to a floating-point accumulation image
 // and writes the accumulated mean: the reference integrator, which follows
 // each path to its end in one loop (common/transport.slang). The resolve
-// pass writes the mean of an accumulation the wavefront integrator added
-// to.
+// pass does the same with the sample the wavefront integrator's path left
+// in the pixel's slot (common/path_state.slang).
+import common.path_state;
 import common.scene;
 import sampling.sampling;
 import common.spectrum;
@@ -92,19 +93,21 @@ FragmentOutput CameraPass(VertexOutput input) {
 // The radiance pass: adds one sample to the pixel's accumulation and writes
 // the mean of its samples, a missed sample counting as the background. A
 // pixel no sample has hit keeps the colour attachment. Depth is the camera
-// pass's; this pipeline neither tests nor writes it. The resolve pass
-// writes the mean alone, of an accumulation that already holds this
-// frame's sample.
+// pass's; this pipeline neither tests nor writes it. The resolve pass adds
+// the sample the wavefront kernels left instead of tracing one.
 FragmentOutput RadiancePass(VertexOutput input) {
   const uint2 pixel = uint2(input.position.xy);
-  float4 sum = kPass == kResolvePass || path_constants.accumulated != 0
-                   ? accumulation[pixel]
-                   : float4(0.0);
-  if (kPass == kRadiancePass && path_constants.add_sample != 0) {
-    PathState path = StartPath(pixel);
-    Hit hit;
-    if (Trace(path.ray, path.rngState, hit)) {
-      sum += float4(SpectrumToRgb(TracePath(path, hit)), 1.0);
+  float4 sum = path_constants.accumulated != 0 ? accumulation[pixel]
+                                               : float4(0.0);
+  if (path_constants.add_sample != 0) {
+    if (kPass == kResolvePass) {
+      sum += LoadSample(pixel.y * path_constants.width + pixel.x);
+    } else {
+      PathState path = StartPath(pixel);
+      Hit hit;
+      if (Trace(path.ray, path.rngState, hit)) {
+        sum += float4(SpectrumToRgb(TracePath(path, hit)), 1.0);
+      }
     }
     accumulation[pixel] = sum;
   }

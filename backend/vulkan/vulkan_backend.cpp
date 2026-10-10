@@ -112,25 +112,25 @@ constexpr std::uint32_t kResolvePass = 3;
 // The wavefront kernels' kKernel specialization constant, in
 // shaders/wavefront/wavefront.slang.
 enum WavefrontKernel : std::uint32_t {
-  kGenerateKernel,
+  kCameraKernel,
   kIntersectKernel,
   kShadeKernel,
   kTailKernel,
-  kAccumulateKernel,
   kWavefrontKernels,
 };
-// Generate covers its invocations in groups of kWavefrontGroupSize, in rows
-// of at most kWavefrontMaxGroupsX groups; a queue's dispatch is one row.
+// The camera kernel covers its invocations in groups of kWavefrontGroupSize,
+// in rows of at most kWavefrontMaxGroupsX groups; a queue's dispatch is one
+// row.
 constexpr std::uint32_t kWavefrontGroupSize = 64;
 constexpr std::uint32_t kWavefrontMaxGroupsX = 65535;
-// The words of wavefront.slang's queue_state: the terminated queue's
-// descriptor (a VkDispatchIndirectCommand and the queue's length), the two
-// kernels' bounces, then per bounce the ray and hit queues' descriptors.
-// Bounce kMaxWavefrontBounces + 1 holds the rays no path continues with.
+// The words of wavefront.slang's queue_state: the two kernels' bounces,
+// then per bounce the ray and hit queues' descriptors (each a
+// VkDispatchIndirectCommand and the queue's length). Bounce 0's ray count
+// is the camera rays; bounce kMaxWavefrontBounces + 1 holds the rays no
+// path continues with.
 constexpr std::uint32_t kQueueDescriptorWords = 4;
 constexpr std::uint32_t kQueueCountWord = 3;
-constexpr std::uint32_t kTerminatedWord = 0;
-constexpr std::uint32_t kBouncesWord = 8;
+constexpr std::uint32_t kBouncesWord = 4;
 constexpr std::uint32_t kBounceWords = 2 * kQueueDescriptorWords;
 constexpr std::uint32_t RayQueueWord(std::uint32_t bounce) {
   return kBouncesWord + bounce * kBounceWords;
@@ -142,17 +142,18 @@ constexpr std::uint32_t kQueueStateWords =
     RayQueueWord(kMaxWavefrontBounces + 2);
 // A frame's queue state is written with vkCmdUpdateBuffer.
 static_assert(kQueueStateWords * sizeof(std::uint32_t) <= 65536);
-// Two ray queues, the hit queue and the terminated-path queue.
-constexpr VkDeviceSize kWavefrontQueues = 4;
-// A path slot's state in wavefront.slang: five sections of one 16-byte entry
-// per slot.
+// Two ray queues and the hit queue.
+constexpr VkDeviceSize kWavefrontQueues = 3;
+// A path slot's state in common/path_state.slang: five sections of one
+// 16-byte entry per slot.
 constexpr VkDeviceSize kPathStateBytes = 5 * 16;
 // Timestamps: the scene pass's first and last (kSceneTimestamps), then the
-// wavefront kernels': before generate, after it, after each round's
-// intersect and shade, after the tail and after accumulate.
+// wavefront kernels': before the camera kernel, after it, after the first
+// round's shade, after each later round's intersect and shade, and after
+// the tail.
 constexpr std::uint32_t kSceneTimestamps = 2;
 constexpr std::uint32_t WavefrontTimestamps(std::uint32_t rounds) {
-  return 4 + 2 * rounds;
+  return 2 + 2 * rounds;
 }
 constexpr std::uint32_t kRayTimestampQueries =
     kSceneTimestamps + WavefrontTimestamps(kMaxWavefrontBounces + 1);
@@ -1099,13 +1100,13 @@ public:
     };
     timings = {};
     timings.available = true;
-    timings.generate_gpu_ms = ms(0);
-    for (std::uint32_t round = 0; round < rounds; ++round) {
-      timings.intersect_gpu_ms += ms(1 + 2 * round);
-      timings.shade_gpu_ms += ms(2 + 2 * round);
+    timings.camera_gpu_ms = ms(0);
+    timings.shade_gpu_ms = ms(1);
+    for (std::uint32_t round = 1; round < rounds; ++round) {
+      timings.intersect_gpu_ms += ms(2 * round);
+      timings.shade_gpu_ms += ms(1 + 2 * round);
     }
-    timings.tail_gpu_ms = ms(queries - 3);
-    timings.accumulate_gpu_ms = ms(queries - 2);
+    timings.tail_gpu_ms = ms(queries - 2);
     return true;
   }
 
@@ -1483,15 +1484,19 @@ private:
     bindings[4].descriptorCount = kTextureSamplers;
     bindings[4].stageFlags = kRayStages;
     bindings[4].pImmutableSamplers = samplers_.data();
-    // The wavefront kernels' queue state, queues and paths.
+    // The wavefront kernels' queue state, queues and paths; the resolve
+    // pass reads the paths. They exist only after the first wavefront
+    // frame, and no other pass reads them.
     for (std::uint32_t index = 5; index < 8; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       bindings[index].descriptorCount = 1;
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
     const VkDescriptorBindingFlags binding_flags[8] = {0, 0, 0,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0, 0};
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     flags.bindingCount = 8;
@@ -2052,11 +2057,12 @@ private:
         detail);
   }
 
-  // The wavefront integrator's sample: camera paths for the data window,
-  // the schedule's rounds of intersect and shade, the tail for paths still
-  // queued after them, then the terminated paths added to the
-  // accumulation. A round after the queues empty dispatches no groups. The
-  // queue state is copied back for the path counts.
+  // The wavefront integrator's sample: camera paths for the data window
+  // and their camera rays, the schedule's rounds of shade and (after the
+  // first) intersect, and the tail for paths still queued after them. Each
+  // path leaves its sample in its slot for the resolve pass. A round after
+  // the queues empty dispatches no groups. The queue state is copied back
+  // for the path counts.
   void RecordWavefront(const VkRect2D& scissor, Targets& targets,
       const WavefrontSchedule& schedule) {
     const auto timestamp = [&](std::uint32_t query) {
@@ -2094,9 +2100,10 @@ private:
           VkDeviceSize{word} * sizeof(std::uint32_t));
     };
 
-    // The preceding submission's kernels and copy have finished with the
-    // counters and paths this one resets and rewrites.
-    barrier(kKernels | VK_PIPELINE_STAGE_TRANSFER_BIT,
+    // The preceding submission's kernels, resolve pass and copy have
+    // finished with the counters and paths this one resets and rewrites.
+    barrier(kKernels | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_ACCESS_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
@@ -2107,7 +2114,6 @@ private:
     const auto empty = [&](std::uint32_t descriptor) {
       state[descriptor + 1] = state[descriptor + 2] = 1;
     };
-    empty(kTerminatedWord);
     for (std::uint32_t word = kBouncesWord; word < state.size();
         word += kQueueDescriptorWords)
       empty(word);
@@ -2126,7 +2132,7 @@ private:
     const std::uint64_t groups =
         (pixels + kWavefrontGroupSize - 1) / kWavefrontGroupSize;
     vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE,
-        wavefront_pipelines_[kGenerateKernel]);
+        wavefront_pipelines_[kCameraKernel]);
     vkCmdDispatch(command_,
         static_cast<std::uint32_t>(std::min<std::uint64_t>(groups,
             kWavefrontMaxGroupsX)),
@@ -2136,22 +2142,22 @@ private:
     kernel_barrier();
     timestamp(1);
     for (std::uint32_t round = 0; round < schedule.rounds; ++round) {
-      dispatch_indirect(kIntersectKernel, RayQueueWord(round));
-      kernel_barrier();
-      timestamp(2 + 2 * round);
+      // The camera kernel traced the first round's rays.
+      if (round != 0) {
+        dispatch_indirect(kIntersectKernel, RayQueueWord(round));
+        kernel_barrier();
+        timestamp(1 + 2 * round);
+      }
       dispatch_indirect(kShadeKernel, HitQueueWord(round));
       kernel_barrier();
-      timestamp(3 + 2 * round);
+      timestamp(2 + 2 * round);
     }
     // No path continues past the last bounce.
-    if (schedule.rounds < schedule.bounces) {
+    if (schedule.rounds < schedule.bounces)
       dispatch_indirect(kTailKernel, RayQueueWord(schedule.rounds));
-      kernel_barrier();
-    }
-    timestamp(2 + 2 * schedule.rounds);
-    dispatch_indirect(kAccumulateKernel, kTerminatedWord);
-    timestamp(3 + 2 * schedule.rounds);
-    // The resolve pass reads the accumulation; the host reads the counters.
+    timestamp(1 + 2 * schedule.rounds);
+    // The resolve pass reads the paths' samples; the host reads the
+    // counters.
     barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);

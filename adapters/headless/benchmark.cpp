@@ -253,7 +253,7 @@ Result Measure(const std::string& id, const Options& options,
     Check(before);
     std::vector<double> gpu, wall;
     // The wavefront integrator's rays and kernel durations per frame.
-    std::vector<double> rays, rounds, generate, intersect, shade, tail, accumulate;
+    std::vector<double> rays, rounds, camera, intersect, shade, tail;
     Lotus::GpuFrameEvidence frame;
     settings.sample_index = 0;
     for (std::uint32_t i = 0; i < options.frames; ++i) {
@@ -276,11 +276,10 @@ Result Measure(const std::string& id, const Options& options,
         Require(timings.available == frame.primary_ray_timestamp_available,
             "inconsistent wavefront timestamp availability");
         if (timings.available) {
-          generate.push_back(timings.generate_gpu_ms);
+          camera.push_back(timings.camera_gpu_ms);
           intersect.push_back(timings.intersect_gpu_ms);
           shade.push_back(timings.shade_gpu_ms);
           tail.push_back(timings.tail_gpu_ms);
-          accumulate.push_back(timings.accumulate_gpu_ms);
         }
       }
     }
@@ -412,11 +411,10 @@ Result Measure(const std::string& id, const Options& options,
       if (gpu.empty()) out << "null";
       else out << total_rays * 1000 / std::accumulate(gpu.begin(), gpu.end(), 0.0);
       out << ",\"rounds\":"; Series(out, rounds);
-      out << ",\"generate_gpu_ms\":"; Series(out, generate);
+      out << ",\"camera_gpu_ms\":"; Series(out, camera);
       out << ",\"intersect_gpu_ms\":"; Series(out, intersect);
       out << ",\"shade_gpu_ms\":"; Series(out, shade);
       out << ",\"tail_gpu_ms\":"; Series(out, tail);
-      out << ",\"accumulate_gpu_ms\":"; Series(out, accumulate);
       out << '}';
     }
     out << ",\"scene_pool_reserved_bytes\":" << after.stats.memory.reserved_bytes
