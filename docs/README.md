@@ -16,7 +16,7 @@ and the document is a bug. When a summary disagrees with
 | [architecture/](architecture/README.md) | Which targets exist, where code goes, and how they depend on each other. | [PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | [reference/](reference/README.md) | What is implemented now, and on what. | [CAPABILITY_MATRIX.md](reference/CAPABILITY_MATRIX.md) · [SUPPORTED_CONFIGURATIONS.md](reference/SUPPORTED_CONFIGURATIONS.md) · [AOVS.md](reference/AOVS.md) |
 | [roadmap/](roadmap/README.md) | Phase/release status and incomplete work. | [README.md](roadmap/README.md) · [current.md](roadmap/current.md) |
-| [guides/](guides/README.md) | How to perform a task. | [BUILDING.md](guides/BUILDING.md) |
+| [guides/](guides/README.md) | How to perform a task. | [BUILDING.md](guides/BUILDING.md) · [RELEASING.md](guides/RELEASING.md) |
 | [releases/](releases/README.md) | What shipped in a released version. | [README.md](releases/README.md) |
 | [reports/](reports/README.md) | What was measured or observed. | [README.md](reports/README.md) |
 | [archive/](archive/README.md) | What used to be planned or authoritative and is now superseded. | [README.md](archive/README.md) |

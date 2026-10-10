@@ -7,6 +7,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Tag-driven GitHub Actions releases, reusing renderer CI and the pinned
+  Windows Hydra runtime. The lane checks version/changelog agreement,
+  reproducible packaging and required products, assembles manifest/SBOM,
+  source and checksums, and publishes as `hydra-lotus vX.Y.Z`. Manual
+  dispatch builds a dry-run bundle without publishing.
+
 ## [0.1.0] - 2026-10-10
 
 The first foundation release includes the deterministic reference path tracer,
