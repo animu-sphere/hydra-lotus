@@ -25,13 +25,16 @@ if(LOTUS_WITH_VULKAN)
   set(LOTUS_FRAGMENT_SPV "${_shader_dir}/triangle.frag.spv")
   set(LOTUS_RAY_VERTEX_SPV "${_shader_dir}/path_trace.vert.spv")
   set(LOTUS_RAY_FRAGMENT_SPV "${_shader_dir}/path_trace.frag.spv")
+  set(LOTUS_WAVEFRONT_SPV "${_shader_dir}/wavefront.comp.spv")
   # The path tracer's entry points import these modules, by their path
-  # below shaders/.
-  set(_path_trace_sources
-    shaders/path_trace.slang
+  # below shaders/; so do the wavefront kernels.
+  set(_scene_modules
     shaders/bsdf/bsdf.slang
+    shaders/common/scene.slang
     shaders/common/spectrum.slang
+    shaders/common/transport.slang
     shaders/sampling/sampling.slang)
+  set(_path_trace_sources shaders/path_trace.slang ${_scene_modules})
   # Texture sampling needs Slang's sm_5_0 capability set and the texture
   # table's non-uniform indexing spvShaderNonUniformEXT; declaring them keeps
   # slangc from upgrading the profile implicitly, which it warns about. The
@@ -56,6 +59,20 @@ if(LOTUS_WITH_VULKAN)
       DEPENDS ${_path_trace_sources}
       VERBATIM)
   endforeach()
+  # The wavefront kernels: one compute entry point, specialized per kernel.
+  add_custom_command(
+    OUTPUT "${LOTUS_WAVEFRONT_SPV}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_shader_dir}"
+    COMMAND "${LOTUS_SLANGC_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/wavefront/wavefront.slang"
+      -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+      -entry wavefront_main -stage compute -target spirv
+      -profile spirv_1_4 -capability spvRayQueryKHR
+      -capability spvShaderNonUniformEXT -capability sm_5_0
+      -matrix-layout-column-major -warnings-as-errors all
+      -o "${LOTUS_WAVEFRONT_SPV}"
+    DEPENDS shaders/wavefront/wavefront.slang ${_scene_modules}
+    VERBATIM)
   add_custom_command(
     OUTPUT "${LOTUS_VERTEX_SPV}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_shader_dir}"
@@ -76,9 +93,11 @@ if(LOTUS_WITH_VULKAN)
     VERBATIM)
   add_custom_target(lotus-renderer-shaders
     DEPENDS "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
-      "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}")
+      "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
+      "${LOTUS_WAVEFRONT_SPV}")
   set(LOTUS_VERTEX_SPV "${LOTUS_VERTEX_SPV}" PARENT_SCOPE)
   set(LOTUS_FRAGMENT_SPV "${LOTUS_FRAGMENT_SPV}" PARENT_SCOPE)
   set(LOTUS_RAY_VERTEX_SPV "${LOTUS_RAY_VERTEX_SPV}" PARENT_SCOPE)
   set(LOTUS_RAY_FRAGMENT_SPV "${LOTUS_RAY_FRAGMENT_SPV}" PARENT_SCOPE)
+  set(LOTUS_WAVEFRONT_SPV "${LOTUS_WAVEFRONT_SPV}" PARENT_SCOPE)
 endif()

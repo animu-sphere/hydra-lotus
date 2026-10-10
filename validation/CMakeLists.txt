@@ -53,6 +53,13 @@ add_test(NAME lotus-renderer-benchmark
     "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
 set_tests_properties(lotus-renderer-benchmark PROPERTIES RUN_SERIAL TRUE)
+add_test(NAME lotus-renderer-benchmark-wavefront
+  COMMAND "${CMAKE_COMMAND}"
+    "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark-wavefront"
+    -DINTEGRATOR=wavefront
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
+set_tests_properties(lotus-renderer-benchmark-wavefront PROPERTIES RUN_SERIAL TRUE)
 
 if(LOTUS_WITH_VULKAN)
   add_test(NAME lotus-renderer-benchmark-no-driver

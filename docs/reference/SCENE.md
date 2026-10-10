@@ -447,9 +447,14 @@ explained SKIPs.
 ## Path tracing
 
 The `Radiance` output is the reference path tracer of
-[design policy section 9](../design/DESIGN_POLICY.md#9-baseline-path-tracer)
-in a fullscreen fragment pass (`backend/vulkan/shaders/path_trace.slang`):
+[design policy section 9](../design/DESIGN_POLICY.md#9-baseline-path-tracer):
 one brute-force camera path per pixel per sample, with no light sampling.
+`PathTracingSettings::integrator` selects how the paths are scheduled: the
+reference integrator follows each path to its end in a fullscreen fragment
+pass (`backend/vulkan/shaders/path_trace.slang`), and the
+[wavefront integrator](#wavefront-integrator) passes them between queues
+of compute kernels. Both call the same transport steps
+(`shaders/common/transport.slang`), so everything below holds for either.
 
 - **Alpha acceptance.** Every triangle candidate evaluates only its opacity
   input before confirmation. Rejection keeps the ray interval, without an
@@ -555,8 +560,9 @@ the scene, and their count.
   clamped or tone mapped. A pixel none of whose samples hit keeps the colour
   attachment, cleared or preserved.
 - **Continuing and restarting.** A frame continues the accumulation when its
-  camera, target size, display and data windows, `sample_index` and
-  `max_bounces` match the previous `Radiance` frame's and no nonempty
+  camera, target size, display and data windows, `integrator`,
+  `sample_index` and `max_bounces` match the previous `Radiance` frame's
+  and no nonempty
   `UpdateScene` came between; otherwise it restarts it. Recreating the
   targets restarts it too. The clear colour and `max_samples` do not, and a
   `Barycentrics` frame leaves it as it is. `frame_count` samples split over
@@ -640,6 +646,65 @@ The reference path tracer's images are of one fixed scene, rendered by
   the device and build that wrote the reference, so it does not decide the
   check.
 
+### Wavefront integrator
+
+`Integrator::Wavefront` is the Renderer Phase 2 integrator
+([design policy section 7](../design/DESIGN_POLICY.md#7-wavefront-path-tracing)):
+the transport above split into compute kernels
+(`backend/vulkan/shaders/wavefront/wavefront.slang`, one entry point
+specialized per kernel) that run before the scene render pass.
+
+- **Path state.** One slot per target pixel holds the path's ray,
+  throughput, radiance, depth, random-number state and the hit its ray
+  found, 112 bytes each, between kernels. Two ray queues, the hit queue and
+  the terminated-path queue each hold up to one slot index per pixel, with
+  atomic counters. The buffers are created by the first wavefront frame at a
+  target size, kept until the targets are replaced, and are outside the
+  [scene memory](#gpu-scene-memory) statistics.
+- **Kernels.** *Generate* starts the frame's camera path at every pixel of
+  the data window (restarting the pixel's accumulation when the frame is
+  the first sample) and queues it for intersection. Then, once per bounce,
+  *intersect* traces the ray queue: a hit is queued for shading, a camera
+  ray that misses adds no sample, and a continuation ray that misses ends
+  its path with the environment. *Shade* runs one scattering event of every
+  queued hit and queues the continuation ray in the other ray queue, or
+  the ended path as terminated. Last, *accumulate* adds each terminated
+  path's radiance with weight 1 to its pixel. Single-invocation kernels turn
+  the counters into the next kernel's indirect dispatch and swap the ray
+  queues. The render pass's camera pass writes depth as before, and a
+  resolve pass writes the accumulated mean.
+- **Bounces.** Every frame records `max_bounces + 1` intersect/shade rounds;
+  a round whose queue is empty dispatches no groups. `max_bounces` above
+  `kMaxWavefrontBounces` (1024) fails the frame without failing the
+  renderer.
+- **Equivalence.** Each path draws its random numbers in the reference
+  integrator's order, so a sample index selects the same paths. The
+  device's floating-point results may still differ between the fragment and
+  compute pipelines; equivalence is judged by the
+  [reference tolerance](#reference-images), and bitwise agreement is
+  recorded, not required.
+- **Evidence.** `GpuFrameEvidence::wavefront_path_counts` holds, for the
+  last sample a call added, how many paths entered the ray queue at each
+  bounce (element 0 being the camera rays), up to the last bounce that
+  traced one. `GpuFrameEvidence::wavefront_timings` sums that sample's
+  generate, intersect, shade and accumulate GPU durations, with each
+  kernel's queue bookkeeping, between timestamps; `primary_ray_gpu_ms`
+  still times the whole scene pass, kernels included.
+- **Requirements.** The scene passes' queue family must also support
+  compute, and the renderer needs the wavefront kernels' SPIR-V
+  (`RayQueryShaders::wavefront`); without it, a wavefront frame fails.
+  The Hydra adapter always uses the reference integrator.
+
+`renderer.path.wavefront` runs the `bsdf`, `normals`, `textures`,
+`normal_maps`, `opacity`, `multibounce` and `accumulation` scenarios and
+the reference-image comparison with the wavefront integrator. It then
+renders the same 64 samples of the reference scene with both integrators
+and records how many values differ, checks one more sample's queue
+occupancy (every camera ray queued, no bounce queuing more paths than the
+one before) and kernel timings, and checks that switching integrators
+restarts the accumulation and that the bounce limit fails cleanly
+([report](../reports/2026-10-10-wavefront-equivalence.md)).
+
 ### Fixed benchmarks
 
 `lotus-headless --benchmark <json-path>` runs four procedural workloads from
@@ -654,8 +719,11 @@ Each workload uses a fresh renderer, a square 128-pixel target and the
 reference camera. Defaults are 8 warmup frames from sample index 1, followed
 by a reset to sample index 0 and 64 measured frames, one pixel sample per
 frame, with 64 maximum bounces. `--benchmark-frames` and
-`--benchmark-warmup` accept 1–4096. The non-Cornell workloads use a white
-environment, coated diffuse surfaces and deterministic grid heights.
+`--benchmark-warmup` accept 1–4096. `--benchmark-integrator reference`
+(the default) or `wavefront` selects the
+[integrator](#wavefront-integrator), recorded as `procedure.integrator`.
+The non-Cornell workloads use a white environment, coated diffuse surfaces
+and deterministic grid heights.
 
 | Identity | Workload |
 | --- | --- |
@@ -682,9 +750,13 @@ transform edit refits only TLAS. Each update kind is a single observation per
 invocation, not a distribution.
 
 Scene-pool reserved/occupied bytes include device-local and host-visible
-resources and exclude renderer targets/constants. Total VRAM, rays/s,
-average path depth and CPU-only render-submit time are explicitly unavailable
-(`null` with reasons). The blocking render wall duration includes GPU waits,
+resources and exclude renderer targets/constants. Total VRAM and CPU-only
+render-submit time are explicitly unavailable (`null` with reasons), and so
+are rays/s and average path depth for the reference integrator. With the
+wavefront integrator, each scene's `wavefront` measurements hold the rays
+traced per frame from its queue counts, rays per camera path, rays per GPU
+second and per-kernel GPU durations; they are `null` for the reference
+integrator. The blocking render wall duration includes GPU waits,
 readback and product copies. A queue without timestamp support retains wall
 measurements and emits null GPU durations/rates.
 

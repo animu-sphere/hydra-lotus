@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Validate the benchmark consumer contract, including capability SKIPs and
 # rejected CLI arguments. No timing threshold is used as a correctness gate.
+# INTEGRATOR selects --benchmark-integrator; reference by default.
 if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "EXECUTABLE and TEST_ROOT are required")
+endif()
+if(NOT DEFINED INTEGRATOR)
+  set(INTEGRATOR reference)
 endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 if(NO_DRIVER)
@@ -17,6 +21,7 @@ set(report "${TEST_ROOT}/benchmark.json")
 execute_process(COMMAND "${EXECUTABLE}" --benchmark "${report}"
   --benchmark-frames 16 --benchmark-warmup 2
   --benchmark-label "CTest quoted \"label\""
+  --benchmark-integrator "${INTEGRATOR}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "Benchmark failed (${result}):\n${output}\n${error}")
@@ -27,12 +32,26 @@ string(JSON count LENGTH "${json}" scenes)
 string(JSON frames GET "${json}" procedure measured_frames)
 string(JSON warmup GET "${json}" procedure warmup_frames)
 string(JSON label GET "${json}" build label)
+string(JSON integrator GET "${json}" procedure integrator)
 if(NOT schema STREQUAL "lotus-benchmark-v1" OR NOT count EQUAL 4 OR
    NOT frames EQUAL 16 OR NOT warmup EQUAL 2 OR
-   NOT label STREQUAL "CTest quoted \"label\"")
+   NOT label STREQUAL "CTest quoted \"label\"" OR
+   NOT integrator STREQUAL INTEGRATOR)
   message(FATAL_ERROR "Wrong benchmark schema, workload count or procedure")
 endif()
-foreach(metric rays_per_second average_path_depth total_vram_bytes cpu_render_submit_ms)
+# The wavefront integrator counts its rays; the reference shader does not.
+set(unavailable total_vram_bytes cpu_render_submit_ms)
+if(INTEGRATOR STREQUAL "reference")
+  list(APPEND unavailable rays_per_second average_path_depth)
+else()
+  foreach(metric rays_per_second average_path_depth)
+    string(JSON type ERROR_VARIABLE missing TYPE "${json}" unavailable "${metric}")
+    if(NOT missing)
+      message(FATAL_ERROR "The wavefront benchmark reports ${metric} as unavailable")
+    endif()
+  endforeach()
+endif()
+foreach(metric ${unavailable})
   string(JSON type TYPE "${json}" unavailable "${metric}")
   string(JSON reason GET "${json}" unavailable_reasons "${metric}")
   if(NOT type STREQUAL "NULL" OR reason STREQUAL "")
@@ -70,6 +89,18 @@ foreach(i RANGE 0 3)
     string(JSON unchanged LENGTH "${json}" scenes ${i} measurements unchanged_cpu_ms raw)
     string(JSON image GET "${json}" scenes ${i} measurements image)
     string(JSON messages GET "${json}" scenes ${i} measurements validation messages)
+    string(JSON wavefront TYPE "${json}" scenes ${i} measurements wavefront)
+    if(INTEGRATOR STREQUAL "reference")
+      if(NOT wavefront STREQUAL "NULL")
+        message(FATAL_ERROR "The reference benchmark has wavefront measurements for ${id}")
+      endif()
+    else()
+      string(JSON rays LENGTH "${json}" scenes ${i} measurements wavefront rays raw)
+      string(JSON rays_per_path GET "${json}" scenes ${i} measurements wavefront rays_per_path)
+      if(NOT rays EQUAL 16 OR rays_per_path LESS 1)
+        message(FATAL_ERROR "Wrong wavefront ray counts for ${id}")
+      endif()
+    endif()
     if(NOT actual_triangles EQUAL expected_triangles OR
        NOT actual_instances EQUAL expected_instances OR
        NOT actual_textures EQUAL expected_textures OR NOT samples EQUAL 16 OR
@@ -92,10 +123,15 @@ foreach(value 0 -1 4097 1junk)
   endif()
 endforeach()
 execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
+  --benchmark-integrator megakernel RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+if(NOT invalid STREQUAL "2")
+  message(FATAL_ERROR "An unknown integrator was accepted")
+endif()
+execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
   --report "${TEST_ROOT}/renderer-report.json" RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
 file(READ "${TEST_ROOT}/sentinel.json" sentinel)
 if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve" OR
    EXISTS "${TEST_ROOT}/renderer-report.json")
   message(FATAL_ERROR "Benchmark accepted correctness options or overwrote rejected output")
 endif()
-message(STATUS "Benchmark schema/workloads/CLI passed; capability exit ${result}")
+message(STATUS "Benchmark schema/workloads/CLI passed for the ${INTEGRATOR} integrator; capability exit ${result}")

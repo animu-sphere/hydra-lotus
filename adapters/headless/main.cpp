@@ -1314,6 +1314,12 @@ public:
     return target_;
   }
 
+  // The integrator every Render uses, whatever its settings say, so that a
+  // scenario checks either integrator unchanged.
+  void SetIntegrator(Lotus::Integrator integrator) {
+    integrator_ = integrator;
+  }
+
   // Applies the world's update plan and renders it, adding `frames`
   // samples to a Radiance accumulation.
   std::string Render(const Lotus::PathTracingSettings& settings,
@@ -1322,8 +1328,10 @@ public:
     const auto upload = renderer_.UpdateScene(extraction_.Update(snapshot));
     if (upload.status != Lotus::FrameStatus::Pass)
       return upload.detail;
+    Lotus::PathTracingSettings effective = settings;
+    effective.integrator = integrator_;
     frame = renderer_.RenderScene(Lotus::ExtractDrawSummary(snapshot), target_,
-        frames, settings);
+        frames, effective);
     if (frame.status != Lotus::FrameStatus::Pass)
       return frame.detail;
     if (frame.validation_message_count != 0)
@@ -1475,6 +1483,7 @@ private:
   Lotus::RenderWorld world_;
   Lotus::SceneExtraction extraction_;
   Lotus::OffscreenTarget target_;
+  Lotus::Integrator integrator_ = Lotus::Integrator::Reference;
   std::string summary_;
 };
 
@@ -3368,6 +3377,151 @@ std::string ReferenceFailure(PathScenes& scenes,
   return {};
 }
 
+// The wavefront integrator's queue occupancy and kernel timings for one
+// sample of the reference scene: every camera ray hits the box, no bounce
+// queues more paths than the one before, and the kernels fit in the scene
+// pass's duration.
+std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
+    std::uint32_t max_bounces, std::string& line) {
+  const std::vector<std::uint32_t>& counts = frame.wavefront_path_counts;
+  constexpr std::uint32_t kPixels =
+      LotusHeadless::kReferenceSize * LotusHeadless::kReferenceSize;
+  if (counts.empty() || counts.front() != kPixels)
+    return "the first bounce queued " +
+           std::to_string(counts.empty() ? 0 : counts.front()) +
+           " camera rays instead of " + std::to_string(kPixels);
+  if (counts.size() > max_bounces + 1)
+    return "the ray queue held paths after the last bounce";
+  std::uint64_t rays = 0;
+  for (std::size_t bounce = 0; bounce < counts.size(); ++bounce) {
+    if (bounce != 0 && counts[bounce] > counts[bounce - 1])
+      return "bounce " + std::to_string(bounce) + " queued more paths than the one before";
+    rays += counts[bounce];
+  }
+  const Lotus::WavefrontTimings& timings = frame.wavefront_timings;
+  if (timings.available != frame.primary_ray_timestamp_available)
+    return "wavefront timings are available without scene-pass timings, or the reverse";
+  const double kernels = timings.generate_gpu_ms + timings.intersect_gpu_ms +
+                         timings.shade_gpu_ms + timings.accumulate_gpu_ms;
+  if (timings.available &&
+      (!std::isfinite(kernels) || timings.generate_gpu_ms < 0 ||
+          timings.intersect_gpu_ms <= 0 || timings.shade_gpu_ms <= 0 ||
+          timings.accumulate_gpu_ms < 0 || kernels > frame.primary_ray_gpu_ms))
+    return "wavefront kernel timings are outside the scene pass's " +
+           std::to_string(frame.primary_ray_gpu_ms) + " ms";
+  std::ostringstream text;
+  text << std::fixed << std::setprecision(3) << rays << " rays in "
+       << counts.size() << " bounces (mean path " << double(rays) / kPixels
+       << " rays)";
+  if (timings.available)
+    text << ", generate/intersect/shade/accumulate " << timings.generate_gpu_ms
+         << '/' << timings.intersect_gpu_ms << '/' << timings.shade_gpu_ms
+         << '/' << timings.accumulate_gpu_ms << " ms of "
+         << frame.primary_ray_gpu_ms << " ms";
+  line = text.str();
+  return {};
+}
+
+// Renderer Phase 2 equivalence: the wavefront integrator passes every
+// transport scenario the reference integrator does, and its reference images
+// match the committed reference by the DES-Q5 metric. Then both integrators
+// render the same samples of the reference scene, and how far they differ
+// is recorded; the queue occupancy and kernel timings are checked; a change
+// of integrator restarts the accumulation; and the bounce limit fails
+// without failing the renderer.
+std::string WavefrontFailure(PathScenes& scenes,
+    const std::filesystem::path& reference_directory) {
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  const std::pair<const char*, std::string (*)(PathScenes&)> scenarios[] = {
+      {"bsdf", BsdfFailure}, {"normals", NormalsFailure},
+      {"textures", TexturesFailure}, {"normal maps", NormalMapsFailure},
+      {"opacity", OpacityFailure}, {"multibounce", MultibounceFailure},
+      {"accumulation", AccumulationFailure}};
+  for (const auto& [name, scenario] : scenarios) {
+    std::string failure = scenario(scenes);
+    scenes.TakeSummary();
+    if (auto cleared = scenes.Clear(); failure.empty())
+      failure = std::move(cleared);
+    if (!failure.empty())
+      return std::string(name) + ": " + failure;
+  }
+  scenes.Summarize("the bsdf, normals, textures, normal maps, opacity, "
+                   "multibounce and accumulation scenarios pass");
+  if (auto failure = ReferenceFailure(scenes, reference_directory, {});
+      !failure.empty())
+    return "reference images: " + failure;
+
+  // The same samples through both integrators.
+  constexpr std::uint32_t kSamples = 64;
+  LotusHeadless::RgbImage reference;
+  LotusHeadless::RgbImage wavefront;
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (auto failure = RenderReferenceImage(
+          scenes, kComparedSampleIndex, kSamples, reference);
+      !failure.empty())
+    return "reference integrator: " + failure;
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  if (auto failure = RenderReferenceImage(
+          scenes, kComparedSampleIndex, kSamples, wavefront);
+      !failure.empty())
+    return failure;
+  std::size_t differing = 0;
+  double max_difference = 0.0;
+  for (std::size_t i = 0; i < wavefront.values.size(); ++i) {
+    const float a = reference.values[i];
+    const float b = wavefront.values[i];
+    if (std::memcmp(&a, &b, sizeof(float)) == 0)
+      continue;
+    ++differing;
+    max_difference = std::max(max_difference, std::abs(double{a} - b));
+  }
+  std::ostringstream line;
+  line << "the same " << kSamples << " spp from both integrators: ";
+  if (differing == 0)
+    line << "bit for bit";
+  else
+    line << differing << " of " << wavefront.values.size()
+         << " values differ, by at most " << max_difference;
+  scenes.Summarize(line.str());
+
+  // One more sample, for its occupancy and timings.
+  Lotus::PathTracingSettings settings;
+  settings.sample_index = kComparedSampleIndex;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (frame.samples_per_pixel != kSamples + 1)
+    return "the wavefront accumulation holds " +
+           std::to_string(frame.samples_per_pixel) + " samples instead of " +
+           std::to_string(kSamples + 1);
+  std::string occupancy;
+  if (auto failure =
+          WavefrontEvidenceFailure(frame, settings.max_bounces, occupancy);
+      !failure.empty())
+    return failure;
+  scenes.Summarize(occupancy);
+
+  // Switching integrators restarts the accumulation.
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (frame.samples_per_pixel != 1 || !frame.wavefront_path_counts.empty())
+    return "switching to the reference integrator continued the accumulation";
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  settings.max_bounces = Lotus::kMaxWavefrontBounces + 1;
+  const std::string expected = "the wavefront integrator traces at most " +
+                               std::to_string(Lotus::kMaxWavefrontBounces) +
+                               " bounces";
+  if (auto failure = scenes.Render(settings, frame); failure != expected)
+    return "a bounce limit above the wavefront maximum returned \"" + failure + '"';
+  settings.max_bounces = Lotus::kMaxWavefrontBounces;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return "the maximum bounce limit: " + failure;
+  if (frame.samples_per_pixel != 1)
+    return "switching to the wavefront integrator continued the accumulation";
+  return {};
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -3442,7 +3596,9 @@ int main(int argc, char** argv) {
       Lotus::CreateOffscreenRenderer(
           (shader_directory / "triangle.vert.spv").string(),
           (shader_directory / "triangle.frag.spv").string(), setup_status,
-          setup_error, {(shader_directory / "path_trace.vert.spv").string(), (shader_directory / "path_trace.frag.spv").string()});
+          setup_error, {(shader_directory / "path_trace.vert.spv").string(),
+                           (shader_directory / "path_trace.frag.spv").string(),
+                           (shader_directory / "wavefront.comp.spv").string()});
   if (!write_reference.empty()) {
     if (!renderer) {
       std::cerr << "cannot create the renderer: " << setup_error << '\n';
@@ -3661,6 +3817,12 @@ int main(int argc, char** argv) {
       run("renderer.path.reference", [&](PathScenes& reference_scenes) {
         return ReferenceFailure(reference_scenes, reference_directory, images);
       });
+      run("renderer.path.wavefront", [&](PathScenes& wavefront_scenes) {
+        std::string failure =
+            WavefrontFailure(wavefront_scenes, reference_directory);
+        wavefront_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -3672,6 +3834,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.multibounce", "skip", ray_query.detail});
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.wavefront", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -3685,6 +3848,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.multibounce", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.wavefront", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

@@ -43,6 +43,24 @@ struct DepthProduct {
   std::vector<float> payload;
 };
 
+// GPU durations of the wavefront integrator's kernels in the last sample a
+// RenderScene call added, from timestamps between them. Each kernel's
+// queue bookkeeping counts with it.
+struct WavefrontTimings {
+  // False for the reference integrator, when the call added no sample, or
+  // when the queue has no timestamp support; the durations are then 0.
+  bool available = false;
+  // Camera paths for every pixel of the data window.
+  double generate_gpu_ms = 0.0;
+  // Ray queries of the ray queues, every bounce together.
+  double intersect_gpu_ms = 0.0;
+  // Hit reconstruction, emission, roulette and BSDF sampling of the hit
+  // queues, every bounce together.
+  double shade_gpu_ms = 0.0;
+  // Adding the terminated paths to the accumulation.
+  double accumulate_gpu_ms = 0.0;
+};
+
 struct GpuFrameEvidence {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
@@ -76,6 +94,12 @@ struct GpuFrameEvidence {
   // GPU duration of the RenderScene pass, including clears, excluding readback.
   bool primary_ray_timestamp_available = false;
   double primary_ray_gpu_ms = 0.0;
+  // The wavefront integrator's queue occupancy in the last sample the call
+  // added: per bounce, how many paths entered the ray queue, element 0
+  // being the camera rays. It ends at the last bounce that traced a ray;
+  // empty for the reference integrator or when no sample was added.
+  std::vector<std::uint32_t> wavefront_path_counts;
+  WavefrontTimings wavefront_timings;
 };
 
 // The image an offscreen frame renders into. Rectangles are {x, y, width,
@@ -292,9 +316,28 @@ enum class SceneOutput {
   RoughnessMetallic,
 };
 
-// The reference path tracer's settings.
+// How Radiance traces its paths. Both integrators run the same transport
+// and draw each path's random numbers in the same order, so they render the
+// same image up to floating-point evaluation differences.
+enum class Integrator {
+  // The reference path tracer: each pixel's path followed to its end in
+  // one fragment-shader invocation (design policy section 9).
+  Reference,
+  // Wavefront path tracing (design policy section 7): compute kernels pass
+  // persistent path state between ray, hit and terminated-path queues, one
+  // bounce at a time. Traces at most kMaxWavefrontBounces bounces.
+  Wavefront,
+};
+
+// The bounces the wavefront integrator records per sample; a larger
+// `max_bounces` fails.
+inline constexpr std::uint32_t kMaxWavefrontBounces = 1024;
+
+// The path tracer's settings.
 struct PathTracingSettings {
   SceneOutput output = SceneOutput::Radiance;
+  // Changing it restarts the accumulation.
+  Integrator integrator = Integrator::Reference;
   // The random sequence of an accumulation's first sample; its k-th sample
   // uses sample_index + k. With the pixel's coordinates it selects each
   // sample's random numbers: the same index, scene, camera and target give
@@ -349,12 +392,15 @@ public:
   // point of the pixel (a 1-pixel box filter), a hit adds its radiance with
   // alpha 1, and a miss adds the target's clear colour. Pixels no sample
   // has hit retain the colour attachment. The accumulation restarts when
-  // the camera, the target's size or windows, `sample_index`,
-  // `max_bounces` or the scene (any nonempty UpdateScene) changes.
+  // the camera, the target's size or windows, `integrator`,
+  // `sample_index`, `max_bounces` or the scene (any nonempty UpdateScene)
+  // changes.
   // The other outputs write the pixel centre's hit with alpha 1
   // and leave the accumulation as it is.
   //
-  // Missing ray-query support returns Skip. A singular camera returns Fail.
+  // Missing ray-query support returns Skip. A singular camera returns Fail,
+  // as does a Wavefront Radiance frame without the wavefront kernels or
+  // with `max_bounces` above kMaxWavefrontBounces.
   [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count,
       const PathTracingSettings& settings = {}) = 0;
@@ -374,6 +420,9 @@ public:
 struct RayQueryShaders {
   std::string vertex;
   std::string fragment;
+  // The wavefront integrator's compute kernels; without them, Wavefront
+  // frames fail.
+  std::string wavefront;
 };
 
 // Creates the device and pipeline, enabling Vulkan and synchronization

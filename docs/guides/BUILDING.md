@@ -57,6 +57,13 @@ build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchm
 
 This invocation was measured three times, changing the output suffix to `2`
 and `3` ([baseline evidence](../reports/2026-10-10-performance-baseline.md)).
+To measure the wavefront integrator, add `--benchmark-integrator wavefront`:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/wavefront-baseline-1.json --benchmark-label "d6a6368 + LOTUS-WAVE-01; ost core Release" --benchmark-integrator wavefront
+```
+
+([wavefront measurements](../reports/2026-10-10-wavefront-equivalence.md#performance)).
 For a new revision, put its identity in the label. JSON and final PFM images
 are written under `build/`; preserve them when comparing changes. The
 [benchmark reference](../reference/SCENE.md#fixed-benchmarks) owns workload
