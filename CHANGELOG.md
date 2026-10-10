@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-10
+
+The first foundation release includes the deterministic reference path tracer,
+minimal material inputs, Hydra integration and a measured Vulkan backend.
+See the [release record](docs/releases/v0.1.0.md) for scope, validation and
+compatibility notes.
+
 ### Added
 
 - A separate headless benchmark mode for fixed Cornell, textured, highly

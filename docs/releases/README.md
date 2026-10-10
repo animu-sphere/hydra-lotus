@@ -8,4 +8,4 @@ rewritten; new work goes to a new record. Active, incomplete work lives in the
 
 | Version | Record | Theme |
 | --- | --- | --- |
-| — | — | No release records. Targets are owned by the [canonical status table](../roadmap/README.md#status-at-a-glance). |
+| [v0.1.0](v0.1.0.md) | [Foundation release](v0.1.0.md) | Deterministic Vulkan reference rendering for OpenUSD Hydra, minimal materials and measured backend behavior. |
