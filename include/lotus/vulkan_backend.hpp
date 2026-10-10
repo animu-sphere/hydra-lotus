@@ -50,17 +50,18 @@ struct WavefrontTimings {
   // False for the reference integrator, when the call added no sample, or
   // when the queue has no timestamp support; the durations are then 0.
   bool available = false;
-  // Camera paths for every pixel of the data window.
-  double generate_gpu_ms = 0.0;
-  // Ray queries of the ray queues, every round together.
+  // Camera paths for every pixel of the data window and the ray queries of
+  // their camera rays: the first round's intersection.
+  double camera_gpu_ms = 0.0;
+  // Ray queries of the ray queues, every round after the first together.
   double intersect_gpu_ms = 0.0;
   // Hit reconstruction, emission, roulette and BSDF sampling of the hit
   // queues, every round together.
   double shade_gpu_ms = 0.0;
   // The paths still queued after the rounds, each followed to its end.
+  // The resolve pass, which adds each ended path's sample to its pixel,
+  // counts with the scene pass.
   double tail_gpu_ms = 0.0;
-  // Adding the terminated paths to the accumulation.
-  double accumulate_gpu_ms = 0.0;
 };
 
 struct GpuFrameEvidence {
@@ -331,8 +332,9 @@ enum class Integrator {
   // one fragment-shader invocation (design policy section 9).
   Reference,
   // Wavefront path tracing (design policy section 7): compute kernels pass
-  // persistent path state between ray, hit and terminated-path queues, one
-  // bounce at a time. Traces at most kMaxWavefrontBounces bounces.
+  // persistent path state between ray and hit queues, one bounce at a
+  // time, and each ended path leaves its sample in its slot for the
+  // resolve pass. Traces at most kMaxWavefrontBounces bounces.
   Wavefront,
 };
 

@@ -7,14 +7,17 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Wavefront optimization → integrator selection through Hydra.
+Integrator selection through Hydra.
 
 The wavefront integrator reproduces the reference transport
 ([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
-the [scheduling](../reports/2026-10-10-wavefront-scheduling.md) and
-[path-state](../reports/2026-10-10-wavefront-path-state.md) reports record
-its cost against the reference integrator after queue bookkeeping, round
-scheduling and per-path state traffic.
+the [scheduling](../reports/2026-10-10-wavefront-scheduling.md),
+[path-state](../reports/2026-10-10-wavefront-path-state.md) and
+[camera and resolve](../reports/2026-10-11-wavefront-camera-resolve.md)
+reports record its cost against the reference integrator after queue
+bookkeeping, round scheduling, per-path state traffic and the generate
+and accumulate kernels. Path classification is assigned to Renderer
+Phase 8 (LOTUS-MATERIAL-01).
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
 records four repeatable workloads and metric availability. The
@@ -44,20 +47,6 @@ in the reference documentation.
 
 ## Renderer Phase 2 — Wavefront path tracing
 
-- [ ] **LOTUS-WAVE-02 — Queue and scheduling optimization.** Optimize
-  the wavefront kernels' work per path and path classification within the
-  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing).
-  Queue bookkeeping and round scheduling are
-  [measured](../reports/2026-10-10-wavefront-scheduling.md), and path state
-  is [stored by section](../reports/2026-10-10-wavefront-path-state.md); at
-  1024×1024 the [wavefront integrator](../reference/SCENE.md#wavefront-integrator)
-  is 1.7 times slower than the reference integrator on `cornell-v1`, with
-  a ray and its shading costing about the same in both. Path
-  classification remains. Each change keeps `renderer.path.wavefront`
-  passing and is measured with `--benchmark-integrator wavefront`, at the
-  default size and with `--benchmark-size 1024` on `cornell-v1` (other
-  scenes only in the same [power state](../reports/2026-10-10-wavefront-path-state.md#power-states)),
-  against the [path-state measurements](../reports/2026-10-10-wavefront-path-state.md#performance).
 - [ ] **LOTUS-WAVE-03 — Integrator selection through Hydra.** Expose
   `PathTracingSettings::integrator` as a render setting, install the
   wavefront kernels with the Hydra plugin, and check converged Hydra images
@@ -76,3 +65,7 @@ requirements:
   the [production material scope](../design/ROADMAP_POLICY.md#renderer-phase-8--production-material-support),
   using the [material reference](../reference/SCENE.md#materials-and-environment)
   and [Hydra extraction reference](../reference/SCENE.md#hydra-extraction).
+  Once materials differ in how they shade, measure wavefront path
+  classification (hits queued per shading class) against its
+  [upper bound on the fixed workloads](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification),
+  1–2% of the shade kernel where every material is of one kind.

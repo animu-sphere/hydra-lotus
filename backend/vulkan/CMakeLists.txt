@@ -30,6 +30,7 @@ if(LOTUS_WITH_VULKAN)
   # below shaders/; so do the wavefront kernels.
   set(_scene_modules
     shaders/bsdf/bsdf.slang
+    shaders/common/path_state.slang
     shaders/common/scene.slang
     shaders/common/spectrum.slang
     shaders/common/transport.slang

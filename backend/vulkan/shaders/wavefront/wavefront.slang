@@ -4,29 +4,33 @@
 // into compute kernels that pass paths between queues instead of following
 // each path to its end in one invocation.
 //
-//   generate → ray queue → intersect → hit queue → shade → next ray queue
-//                              │                     │
-//                              └──→ terminated ←─────┘ → accumulate
+//   camera → hit queue → shade → ray queue → intersect → hit queue → …
+//                          │                     │
+//                          └──→ ended: sample ←──┘ → resolve pass
 //
-// After the recorded rounds, the tail kernel follows any path still in the
-// ray queue to its end. Path state persists in one slot per target pixel
-// between kernels. Queues hold slot indices; an append keeps the queue's
-// count and indirect dispatch current, so no kernel only does bookkeeping.
+// The camera kernel starts each pixel's path and traces its camera ray, so
+// the first round needs no ray queue. After the recorded rounds, the tail
+// kernel follows any path still in the ray queue to its end. Path state
+// persists in one slot per target pixel (common/path_state.slang); an
+// ended path leaves its sample in its slot, where the resolve pass adds it
+// to the pixel's accumulation. Queues hold slot indices; an append keeps the
+// queue's count and indirect dispatch current, so no kernel only does
+// bookkeeping.
+import common.path_state;
 import common.scene;
 import common.spectrum;
 import common.transport;
 
 // Which kernel a pipeline runs.
 [vk::constant_id(0)] const uint kKernel = 0;
-static const uint kGenerateKernel = 0;
+static const uint kCameraKernel = 0;
 static const uint kIntersectKernel = 1;
 static const uint kShadeKernel = 2;
 static const uint kTailKernel = 3;
-static const uint kAccumulateKernel = 4;
 
 // Mirrors kWavefrontGroupSize and kWavefrontMaxGroupsX in
-// vulkan_backend.cpp. Generate covers its invocations with groups in rows
-// of at most kMaxGroupsX; a queue's dispatch is one row of at most
+// vulkan_backend.cpp. The camera kernel covers its invocations with groups
+// in rows of at most kMaxGroupsX; a queue's dispatch is one row of at most
 // kMaxGroupsX groups.
 static const uint kGroupSize = 64;
 static const uint kMaxGroupsX = 65535;
@@ -35,17 +39,16 @@ static const uint kMaxGroupsX = 65535;
 // vulkan_backend.cpp. A queue's descriptor is a VkDispatchIndirectCommand
 // for its entries followed by their count.
 static const uint kCountWord = 3;
-// The terminated paths' descriptor.
-static const uint kTerminated = 0;
 // The bounces the next intersect and shade kernels run. Each kernel's first
 // invocation hands its bounce on to the other kernel, so no kernel writes a
 // word it reads. A round whose queue is empty runs no invocation, and
 // neither do the rounds after it.
-static const uint kIntersectBounce = 4;
-static const uint kShadeBounce = 5;
+static const uint kIntersectBounce = 0;
+static const uint kShadeBounce = 1;
 // Per bounce, the ray queue's descriptor and then the hit queue's. The ray
-// counts are the queue occupancy the host reads back.
-static const uint kBounces = 8;
+// counts are the queue occupancy the host reads back; bounce 0 has no ray
+// queue, and its count is the camera rays.
+static const uint kBounces = 4;
 static const uint kBounceWords = 8;
 
 uint RayDescriptor(uint bounce) {
@@ -56,43 +59,21 @@ uint HitDescriptor(uint bounce) {
   return kBounces + bounce * kBounceWords + 4;
 }
 
-// queue_items holds four queues of path_capacity slots each; bounces
-// alternate between the two ray queues.
+// queue_items holds three queues of path_capacity slots each; bounces
+// alternate between the two ray queues, bounce 0 using neither.
 static const uint kRayQueue = 0;
 static const uint kHitQueue = 2;
-static const uint kTerminatedQueue = 3;
-
-// Path state is stored by section: each section is an array of
-// path_capacity 16-byte entries, one per slot, so a kernel loads and stores
-// only the parts of PathState it uses rather than the whole state. A
-// slot's pixel index is the slot itself, and the depth of a path in bounce
-// b's queues is b, so neither is stored. No transport step sets flags yet,
-// so they are not stored either.
-static const uint kOriginSection = 0;     // ray origin, TMin
-static const uint kDirectionSection = 1;  // ray direction, TMax
-static const uint kThroughputSection = 2; // throughput, last pdf
-static const uint kRadianceSection = 3;   // radiance, random-number state
-static const uint kHitSection = 4;        // instance, primitive, barycentrics
 
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> queue_state;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> queue_items;
-[[vk::binding(7, 0)]] RWStructuredBuffer<uint4> paths;
-
-uint4 Load(uint section, uint slot) {
-  return paths[section * path_constants.path_capacity + slot];
-}
-
-void Store(uint section, uint slot, uint4 value) {
-  paths[section * path_constants.path_capacity + slot] = value;
-}
 
 uint4 Pack(float3 xyz, float w) {
   return uint4(asuint(xyz), asuint(w));
 }
 
 void LoadRay(uint slot, inout PathState path) {
-  const float4 origin = asfloat(Load(kOriginSection, slot));
-  const float4 direction = asfloat(Load(kDirectionSection, slot));
+  const float4 origin = asfloat(LoadSection(kOriginSection, slot));
+  const float4 direction = asfloat(LoadSection(kDirectionSection, slot));
   path.ray.Origin = origin.xyz;
   path.ray.TMin = origin.w;
   path.ray.Direction = direction.xyz;
@@ -103,10 +84,37 @@ void LoadRay(uint slot, inout PathState path) {
 PathState LoadPath(uint slot, uint depth) {
   PathState path;
   LoadRay(slot, path);
-  const uint4 throughput = Load(kThroughputSection, slot);
+  const uint4 throughput = LoadSection(kThroughputSection, slot);
   path.throughput = UnpackSpectrum(throughput);
   path.lastPdf = asfloat(throughput.w);
-  const uint4 radiance = Load(kRadianceSection, slot);
+  const uint4 radiance = LoadSection(kRadianceSection, slot);
+  path.radiance = UnpackSpectrum(radiance);
+  path.rngState = radiance.w;
+  path.flags = 0;
+  path.pixelIndex = slot;
+  path.depth = depth;
+  return path;
+}
+
+// What shading reads of a path: everything but its ray's origin and
+// interval, which a scattering event replaces. A camera path's throughput
+// and last density are the ones StartPath gives it, so neither is stored
+// for it.
+PathState LoadShadedPath(uint slot, uint depth) {
+  PathState path;
+  path.ray.Origin = float3(0.0);
+  path.ray.TMin = 0.0;
+  path.ray.Direction = asfloat(LoadSection(kDirectionSection, slot)).xyz;
+  path.ray.TMax = 0.0;
+  if (depth == 0) {
+    path.throughput = SpectrumConstant(1.0);
+    path.lastPdf = 0.0;
+  } else {
+    const uint4 throughput = LoadSection(kThroughputSection, slot);
+    path.throughput = UnpackSpectrum(throughput);
+    path.lastPdf = asfloat(throughput.w);
+  }
+  const uint4 radiance = LoadSection(kRadianceSection, slot);
   path.radiance = UnpackSpectrum(radiance);
   path.rngState = radiance.w;
   path.flags = 0;
@@ -118,25 +126,27 @@ PathState LoadPath(uint slot, uint depth) {
 // What a path continues with: its ray, throughput, radiance and
 // random-number state.
 void StorePath(uint slot, PathState path) {
-  Store(kOriginSection, slot, Pack(path.ray.Origin, path.ray.TMin));
-  Store(kDirectionSection, slot, Pack(path.ray.Direction, path.ray.TMax));
-  Store(kThroughputSection, slot,
+  StoreSection(kOriginSection, slot, Pack(path.ray.Origin, path.ray.TMin));
+  StoreSection(kDirectionSection, slot,
+      Pack(path.ray.Direction, path.ray.TMax));
+  StoreSection(kThroughputSection, slot,
       PackSpectrum(path.throughput, asuint(path.lastPdf)));
   StoreRadiance(slot, path);
 }
 
 void StoreRadiance(uint slot, PathState path) {
-  Store(kRadianceSection, slot, PackSpectrum(path.radiance, path.rngState));
+  StoreSection(kRadianceSection, slot,
+      PackSpectrum(path.radiance, path.rngState));
 }
 
 void StoreHit(uint slot, Hit hit) {
-  Store(kHitSection, slot,
+  StoreSection(kHitSection, slot,
       uint4(hit.instance, hit.primitive, asuint(hit.barycentrics)));
 }
 
 // Shading reads no hit distance, so none is stored.
 Hit LoadHit(uint slot) {
-  const uint4 stored = Load(kHitSection, slot);
+  const uint4 stored = LoadSection(kHitSection, slot);
   Hit hit;
   hit.instance = stored.x;
   hit.primitive = stored.y;
@@ -176,26 +186,33 @@ uint QueueStride(uint descriptor) {
   return queue_state[descriptor] * kGroupSize;
 }
 
-// A camera path per pixel of the data window, queued for intersection. A new
-// accumulation starts from zero here, at every pixel the resolve pass reads.
-void Generate(uint index) {
+// A camera path per pixel of the data window, its camera ray traced at
+// once: a hit is queued for shading with what shading reads of the path,
+// and a miss leaves no sample.
+void Camera(uint index) {
   const uint4 rect = path_constants.data_rect;
   if (path_constants.add_sample == 0 || index >= rect.z * rect.w) {
     return;
   }
   const uint2 pixel = rect.xy + uint2(index % rect.z, index / rect.z);
-  if (path_constants.accumulated == 0) {
-    accumulation[pixel] = float4(0.0);
+  PathState path = StartPath(pixel);
+  const uint slot = path.pixelIndex;
+  InterlockedAdd(queue_state[RayDescriptor(0) + kCountWord], 1);
+  Hit hit;
+  if (Trace(path.ray, path.rngState, hit)) {
+    StoreSection(kDirectionSection, slot,
+        Pack(path.ray.Direction, path.ray.TMax));
+    StoreRadiance(slot, path);
+    StoreHit(slot, hit);
+    Push(HitDescriptor(0), kHitQueue, slot);
+  } else {
+    StoreNoSample(slot);
   }
-  const PathState path = StartPath(pixel);
-  StorePath(path.pixelIndex, path);
-  Push(RayDescriptor(0), kRayQueue, path.pixelIndex);
 }
 
-// A camera ray that misses adds no sample; a continuation ray that misses
-// ends its path with the environment. Tracing draws random numbers only at
-// fractionally opaque candidates, so the random state is stored back only
-// when it changed or the path ended.
+// A continuation ray that misses ends its path with the environment.
+// Tracing draws random numbers only at fractionally opaque candidates, so
+// the random state is stored back only when it changed.
 void Intersect(uint index) {
   const uint bounce = queue_state[kIntersectBounce];
   if (index == 0) {
@@ -208,7 +225,7 @@ void Intersect(uint index) {
     const uint slot = QueueItem(kRayQueue + (bounce & 1), position);
     PathState path;
     LoadRay(slot, path);
-    const uint4 radiance = Load(kRadianceSection, slot);
+    const uint4 radiance = LoadSection(kRadianceSection, slot);
     path.radiance = UnpackSpectrum(radiance);
     path.rngState = radiance.w;
     Hit hit;
@@ -218,11 +235,11 @@ void Intersect(uint index) {
       if (path.rngState != radiance.w) {
         StoreRadiance(slot, path);
       }
-    } else if (bounce != 0) {
-      path.throughput = UnpackSpectrum(Load(kThroughputSection, slot));
+    } else {
+      path.throughput =
+          UnpackSpectrum(LoadSection(kThroughputSection, slot));
       MissPath(path);
-      StoreRadiance(slot, path);
-      Push(kTerminated, kTerminatedQueue, slot);
+      StoreSample(slot, path.radiance);
     }
   }
 }
@@ -237,14 +254,12 @@ void Shade(uint index) {
   const uint stride = QueueStride(hits);
   for (uint position = index; position < count; position += stride) {
     const uint slot = QueueItem(kHitQueue, position);
-    PathState path = LoadPath(slot, bounce);
+    PathState path = LoadShadedPath(slot, bounce);
     if (ScatterPath(path, LoadHit(slot))) {
       StorePath(slot, path);
       Push(RayDescriptor(bounce + 1), kRayQueue + ((bounce + 1) & 1), slot);
     } else {
-      // Accumulate reads only an ended path's radiance.
-      StoreRadiance(slot, path);
-      Push(kTerminated, kTerminatedQueue, slot);
+      StoreSample(slot, path.radiance);
     }
   }
 }
@@ -272,22 +287,7 @@ void Tail(uint index) {
       }
       InterlockedAdd(queue_state[RayDescriptor(path.depth) + kCountWord], 1);
     }
-    StoreRadiance(slot, path);
-    Push(kTerminated, kTerminatedQueue, slot);
-  }
-}
-
-// Each pixel has at most one path per frame, so no two invocations add to
-// the same pixel.
-void Accumulate(uint index) {
-  const uint count = QueueCount(kTerminated);
-  const uint stride = QueueStride(kTerminated);
-  for (uint position = index; position < count; position += stride) {
-    const uint slot = QueueItem(kTerminatedQueue, position);
-    const uint2 pixel =
-        uint2(slot % path_constants.width, slot / path_constants.width);
-    accumulation[pixel] +=
-        float4(SpectrumToRgb(UnpackSpectrum(Load(kRadianceSection, slot))), 1.0);
+    StoreSample(slot, path.radiance);
   }
 }
 
@@ -295,15 +295,13 @@ void Accumulate(uint index) {
 [numthreads(64, 1, 1)]
 void wavefront_main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
   const uint index = (group.y * kMaxGroupsX + group.x) * kGroupSize + lane;
-  if (kKernel == kGenerateKernel) {
-    Generate(index);
+  if (kKernel == kCameraKernel) {
+    Camera(index);
   } else if (kKernel == kIntersectKernel) {
     Intersect(index);
   } else if (kKernel == kShadeKernel) {
     Shade(index);
-  } else if (kKernel == kTailKernel) {
-    Tail(index);
   } else {
-    Accumulate(index);
+    Tail(index);
   }
 }

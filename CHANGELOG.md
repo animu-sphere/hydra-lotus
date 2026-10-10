@@ -9,6 +9,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- The wavefront integrator's camera kernel traces the camera rays it
+  starts, and the resolve pass adds each ended path's sample from its slot,
+  replacing the generate and accumulate kernels and the terminated-path
+  queue. The fixed benchmarks' wavefront GPU time fell 1.08–1.14 times,
+  and 1.18 times for `cornell-v1` at 1024×1024, with identical images.
+  `WavefrontTimings::camera_gpu_ms` replaces `generate_gpu_ms`,
+  `accumulate_gpu_ms` is removed, and the benchmark report's wavefront
+  keys follow.
+
 - Wavefront path state is stored in five 16-byte sections per slot rather
   than a 112-byte record, and each kernel reads and writes only the
   sections it uses. The fixed benchmarks' wavefront GPU time fell
