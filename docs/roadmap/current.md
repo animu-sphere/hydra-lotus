@@ -11,8 +11,9 @@ Wavefront optimization → integrator selection through Hydra.
 
 The wavefront integrator reproduces the reference transport
 ([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
-that report also records its unoptimized cost against the reference
-integrator on the fixed benchmarks.
+the [scheduling report](../reports/2026-10-10-wavefront-scheduling.md)
+records its cost against the reference integrator after queue bookkeeping
+and round scheduling.
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
 records four repeatable workloads and metric availability. The
@@ -43,15 +44,17 @@ in the reference documentation.
 ## Renderer Phase 2 — Wavefront path tracing
 
 - [ ] **LOTUS-WAVE-02 — Queue and scheduling optimization.** Optimize
-  compaction, indirect dispatch, scheduling, occupancy and path
-  classification within the
-  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing),
-  starting with the per-bounce rounds the
-  [wavefront integrator](../reference/SCENE.md#wavefront-integrator)
-  records whether or not its queues are empty. Each change keeps
-  `renderer.path.wavefront` passing and is measured with
-  `--benchmark-integrator wavefront` against the
-  [equivalence measurements](../reports/2026-10-10-wavefront-equivalence.md#performance).
+  the wavefront kernels' work per path and path classification within the
+  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing).
+  Queue bookkeeping and round scheduling are
+  [measured](../reports/2026-10-10-wavefront-scheduling.md); at
+  1024×1024 the [wavefront integrator](../reference/SCENE.md#wavefront-integrator)
+  is still 3.4 times slower than the reference integrator on `cornell-v1`,
+  and its rounds' intersect and shade kernels each take longer than the
+  reference's whole frame. Each change keeps `renderer.path.wavefront`
+  passing and is measured with `--benchmark-integrator wavefront`, at the
+  default size and with `--benchmark-size 1024`, against the
+  [scheduling measurements](../reports/2026-10-10-wavefront-scheduling.md#performance).
 - [ ] **LOTUS-WAVE-03 — Integrator selection through Hydra.** Expose
   `PathTracingSettings::integrator` as a render setting, install the
   wavefront kernels with the Hydra plugin, and check converged Hydra images

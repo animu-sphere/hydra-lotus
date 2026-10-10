@@ -32,6 +32,8 @@ struct Options {
   std::string label;
   std::uint32_t frames = 64;
   std::uint32_t warmup = 8;
+  // The square target's side in pixels.
+  std::uint32_t size = kReferenceSize;
   Lotus::Integrator integrator = Lotus::Integrator::Reference;
 };
 
@@ -241,7 +243,7 @@ Result Measure(const std::string& id, const Options& options,
     const double initial_wall = Milliseconds(start);
     Check(initial);
     Lotus::OffscreenTarget target;
-    target.width = target.height = kReferenceSize;
+    target.width = target.height = options.size;
     Lotus::PathTracingSettings settings;
     settings.integrator = options.integrator;
     settings.sample_index = 1; // Warmup has its own sequence, then reset to seed 0.
@@ -251,7 +253,7 @@ Result Measure(const std::string& id, const Options& options,
     Check(before);
     std::vector<double> gpu, wall;
     // The wavefront integrator's rays and kernel durations per frame.
-    std::vector<double> rays, generate, intersect, shade, accumulate;
+    std::vector<double> rays, rounds, generate, intersect, shade, tail, accumulate;
     Lotus::GpuFrameEvidence frame;
     settings.sample_index = 0;
     for (std::uint32_t i = 0; i < options.frames; ++i) {
@@ -269,6 +271,7 @@ Result Measure(const std::string& id, const Options& options,
         Require(!frame.wavefront_path_counts.empty(), "the wavefront frame queued no rays");
         rays.push_back(std::accumulate(frame.wavefront_path_counts.begin(),
             frame.wavefront_path_counts.end(), 0.0));
+        rounds.push_back(frame.wavefront_rounds);
         const auto& timings = frame.wavefront_timings;
         Require(timings.available == frame.primary_ray_timestamp_available,
             "inconsistent wavefront timestamp availability");
@@ -276,6 +279,7 @@ Result Measure(const std::string& id, const Options& options,
           generate.push_back(timings.generate_gpu_ms);
           intersect.push_back(timings.intersect_gpu_ms);
           shade.push_back(timings.shade_gpu_ms);
+          tail.push_back(timings.tail_gpu_ms);
           accumulate.push_back(timings.accumulate_gpu_ms);
         }
       }
@@ -291,9 +295,10 @@ Result Measure(const std::string& id, const Options& options,
         after.stats.tlas_updates == before.stats.tlas_updates,
         "steady rendering changed scene allocation/upload/acceleration counters");
 
-    RgbImage image{kReferenceSize, kReferenceSize, {}};
+    const std::size_t pixels = std::size_t{options.size} * options.size;
+    RgbImage image{options.size, options.size, {}};
     Require(frame.color.pixel_format == "rgba32-sfloat" &&
-        frame.color.payload.size() == std::size_t{kReferenceSize} * kReferenceSize * 16,
+        frame.color.payload.size() == pixels * 16,
         "unexpected benchmark image format or size");
     double radiance_sum = 0;
     std::uint64_t hits = 0;
@@ -311,7 +316,8 @@ Result Measure(const std::string& id, const Options& options,
     Require(WritePfm(image_path, image).empty(), "cannot write benchmark image");
     // This also verifies camera/transport compatibility with the established
     // reference, rather than treating a fast but incorrect image as a baseline.
-    if (id == "cornell-v1") {
+    // The reference exists only at its own size.
+    if (id == "cornell-v1" && options.size == kReferenceSize) {
       Reference reference;
       reference.samples = 1024;
       Require(ReadPfm(executable / "reference/cornell-box-mean.pfm", reference.mean).empty(),
@@ -386,10 +392,10 @@ Result Measure(const std::string& id, const Options& options,
     out << ",\"render_wall_ms\":"; Series(out, wall);
     out << ",\"pixel_samples_per_second_gpu\":";
     if (gpu.empty()) out << "null";
-    else out << double{kReferenceSize * kReferenceSize} * options.frames * 1000 /
+    else out << double(pixels) * options.frames * 1000 /
         std::accumulate(gpu.begin(), gpu.end(), 0.0);
     out << ",\"pixel_samples_per_second_wall\":"
-        << double{kReferenceSize * kReferenceSize} * options.frames * 1000 /
+        << double(pixels) * options.frames * 1000 /
            std::accumulate(wall.begin(), wall.end(), 0.0)
         << ",\"unchanged_cpu_ms\":";
     Series(out, unchanged);
@@ -401,13 +407,15 @@ Result Measure(const std::string& id, const Options& options,
       out << "{\"rays\":";
       Series(out, rays);
       out << ",\"rays_per_path\":"
-          << total_rays / (double{kReferenceSize * kReferenceSize} * options.frames)
+          << total_rays / (double(pixels) * options.frames)
           << ",\"rays_per_second_gpu\":";
       if (gpu.empty()) out << "null";
       else out << total_rays * 1000 / std::accumulate(gpu.begin(), gpu.end(), 0.0);
+      out << ",\"rounds\":"; Series(out, rounds);
       out << ",\"generate_gpu_ms\":"; Series(out, generate);
       out << ",\"intersect_gpu_ms\":"; Series(out, intersect);
       out << ",\"shade_gpu_ms\":"; Series(out, shade);
+      out << ",\"tail_gpu_ms\":"; Series(out, tail);
       out << ",\"accumulate_gpu_ms\":"; Series(out, accumulate);
       out << '}';
     }
@@ -418,7 +426,7 @@ Result Measure(const std::string& id, const Options& options,
     out << ",\"point_refit\":"; UpdateJson(out, point, point_wall);
     out << ",\"transform_refit\":"; UpdateJson(out, transform, transform_wall);
     out << ",\"image\":" << Quote(image_path.filename().string())
-        << ",\"mean_rgb\":" << radiance_sum / (kReferenceSize * kReferenceSize * 3)
+        << ",\"mean_rgb\":" << radiance_sum / (double(pixels) * 3)
         << ",\"hit_pixels\":" << hits << '}';
     result.measurements = out.str();
     result.status = FrameStatus::Pass;
@@ -435,7 +443,7 @@ int BenchmarkMain(int argc, char** argv) {
   if (argc < 3 || std::string_view(argv[2]).starts_with("--")) {
     std::cerr << "usage: lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                  "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n"
-                 "       [--benchmark-integrator <reference|wavefront>]\n";
+                 "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -448,6 +456,13 @@ int BenchmarkMain(int argc, char** argv) {
       if (value == "reference") options.integrator = Lotus::Integrator::Reference;
       else if (value == "wavefront") options.integrator = Lotus::Integrator::Wavefront;
       else { std::cerr << "invalid integrator: " << value << '\n'; return 2; }
+    }
+    else if (option == "--benchmark-size") {
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.size);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+          options.size < 16 || options.size > 4096) {
+        std::cerr << "invalid size: " << value << '\n'; return 2;
+      }
     }
     else if (option == "--benchmark-frames" || option == "--benchmark-warmup") {
       std::uint32_t count = 0;
@@ -485,7 +500,10 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"cpu_logical_processors\":" << std::thread::hardware_concurrency()
         << "},\"procedure\":{\"integrator\":"
         << Quote(Wavefront(options) ? "wavefront" : "reference")
-        << ",\"width\":128,\"height\":128,\"sample_index\":0,\"max_bounces\":64,"
+        << ",\"width\":" << options.size << ",\"height\":" << options.size
+        << ",\"cornell_reference_compared\":"
+        << (options.size == kReferenceSize ? "true" : "false")
+        << ",\"sample_index\":0,\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
         << ",\"warmup_frames\":" << options.warmup
         << ",\"warmup_sample_index\":1,\"unchanged_batches\":16,\"unchanged_iterations\":1000,"
@@ -499,7 +517,7 @@ int BenchmarkMain(int argc, char** argv) {
            "\"update_ms\":\"One initial upload/build, one point refit and one transform refit; CPU wall covers blocking UpdateScene only. Counters are cumulative.\","
            "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\","
            "\"wavefront\":\"Wavefront integrator only: rays traced per frame from its queue counts, "
-           "rays per camera path, rays per GPU second and per-kernel GPU durations; null for the reference integrator.\"},"
+           "rays per camera path, rays per GPU second, bounces run as rounds and per-kernel GPU durations; null for the reference integrator.\"},"
            "\"unavailable\":{";
     // The wavefront integrator counts its rays; the reference shader does not.
     if (!Wavefront(options))

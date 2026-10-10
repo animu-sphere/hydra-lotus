@@ -52,11 +52,13 @@ struct WavefrontTimings {
   bool available = false;
   // Camera paths for every pixel of the data window.
   double generate_gpu_ms = 0.0;
-  // Ray queries of the ray queues, every bounce together.
+  // Ray queries of the ray queues, every round together.
   double intersect_gpu_ms = 0.0;
   // Hit reconstruction, emission, roulette and BSDF sampling of the hit
-  // queues, every bounce together.
+  // queues, every round together.
   double shade_gpu_ms = 0.0;
+  // The paths still queued after the rounds, each followed to its end.
+  double tail_gpu_ms = 0.0;
   // Adding the terminated paths to the accumulation.
   double accumulate_gpu_ms = 0.0;
 };
@@ -97,8 +99,13 @@ struct GpuFrameEvidence {
   // The wavefront integrator's queue occupancy in the last sample the call
   // added: per bounce, how many paths entered the ray queue, element 0
   // being the camera rays. It ends at the last bounce that traced a ray;
-  // empty for the reference integrator or when no sample was added.
+  // empty for the reference integrator or when no sample was added. The
+  // tail's rays count at the bounce they leave from.
   std::vector<std::uint32_t> wavefront_path_counts;
+  // The bounces that sample ran as intersect and shade rounds; the tail
+  // kernel followed the paths still queued after them. 0 when
+  // wavefront_path_counts is empty.
+  std::uint32_t wavefront_rounds = 0;
   WavefrontTimings wavefront_timings;
 };
 

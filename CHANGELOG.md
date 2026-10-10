@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Wavefront queue appends maintain each queue's indirect dispatch, so the
+  bookkeeping kernels and half of each round's barriers are gone. A call
+  records rounds only for the bounces its previous sample's queues held at
+  least 1/16 of the camera rays, and a new tail kernel follows the
+  remaining paths to their ends. The fixed benchmarks' wavefront GPU time
+  fell 4.0–7.2 times with identical images. Frames report the rounds run
+  (`GpuFrameEvidence::wavefront_rounds`) and the tail's GPU duration, and
+  `--benchmark-size` measures other square targets.
+
 ### Added
 
 - Renderer Phase 2 wavefront path tracing, selected with

@@ -657,26 +657,34 @@ specialized per kernel) that run before the scene render pass.
 - **Path state.** One slot per target pixel holds the path's ray,
   throughput, radiance, depth, random-number state and the hit its ray
   found, 112 bytes each, between kernels. Two ray queues, the hit queue and
-  the terminated-path queue each hold up to one slot index per pixel, with
-  atomic counters. The buffers are created by the first wavefront frame at a
-  target size, kept until the targets are replaced, and are outside the
-  [scene memory](#gpu-scene-memory) statistics.
+  the terminated-path queue each hold up to one slot index per pixel. Each
+  bounce has a ray-queue and a hit-queue descriptor, and the terminated
+  queue has one: the queue's length and its indirect dispatch, which every
+  append keeps current with atomics. The buffers are created by the first
+  wavefront frame at a target size, kept until the targets are replaced,
+  and are outside the [scene memory](#gpu-scene-memory) statistics.
 - **Kernels.** *Generate* starts the frame's camera path at every pixel of
   the data window (restarting the pixel's accumulation when the frame is
-  the first sample) and queues it for intersection. Then, once per bounce,
-  *intersect* traces the ray queue: a hit is queued for shading, a camera
-  ray that misses adds no sample, and a continuation ray that misses ends
-  its path with the environment. *Shade* runs one scattering event of every
-  queued hit and queues the continuation ray in the other ray queue, or
-  the ended path as terminated. Last, *accumulate* adds each terminated
-  path's radiance with weight 1 to its pixel. Single-invocation kernels turn
-  the counters into the next kernel's indirect dispatch and swap the ray
-  queues. The render pass's camera pass writes depth as before, and a
+  the first sample) and queues it for intersection. Then, in each round,
+  *intersect* traces the bounce's ray queue: a hit is queued for shading, a
+  camera ray that misses adds no sample, and a continuation ray that misses
+  ends its path with the environment. *Shade* runs one scattering event of
+  every queued hit and queues the continuation ray for the next bounce, or
+  the ended path as terminated. After the rounds, *tail* follows every path
+  still queued to its end in one invocation, as the reference integrator
+  does, and queues it as terminated. Last, *accumulate* adds each
+  terminated path's radiance with weight 1 to its pixel. Every kernel
+  dispatches indirectly from its queue's descriptor; no kernel only does
+  bookkeeping. The render pass's camera pass writes depth as before, and a
   resolve pass writes the accumulated mean.
-- **Bounces.** Every frame records `max_bounces + 1` intersect/shade rounds;
-  a round whose queue is empty dispatches no groups. `max_bounces` above
-  `kMaxWavefrontBounces` (1024) fails the frame without failing the
-  renderer.
+- **Rounds.** A call records each round's intersect and shade dispatches
+  for the bounces its previous sample's queues held at least 1/16 of the
+  camera rays (`kWavefrontTailDivisor`), at least one; the first wavefront
+  call records a round for every bounce, `max_bounces + 1`. Fewer recorded
+  rounds move work from the rounds to the tail without changing a path's
+  transport; a round whose queue is empty dispatches no groups.
+  `max_bounces` above `kMaxWavefrontBounces` (1024) fails the frame without
+  failing the renderer.
 - **Equivalence.** Each path draws its random numbers in the reference
   integrator's order, so a sample index selects the same paths. The
   device's floating-point results may still differ between the fragment and
@@ -686,10 +694,12 @@ specialized per kernel) that run before the scene render pass.
 - **Evidence.** `GpuFrameEvidence::wavefront_path_counts` holds, for the
   last sample a call added, how many paths entered the ray queue at each
   bounce (element 0 being the camera rays), up to the last bounce that
-  traced one. `GpuFrameEvidence::wavefront_timings` sums that sample's
-  generate, intersect, shade and accumulate GPU durations, with each
-  kernel's queue bookkeeping, between timestamps; `primary_ray_gpu_ms`
-  still times the whole scene pass, kernels included.
+  traced one; the tail counts its rays at the bounce they leave from.
+  `GpuFrameEvidence::wavefront_rounds` is how many of those bounces ran as
+  rounds. `GpuFrameEvidence::wavefront_timings` sums that sample's
+  generate, intersect, shade, tail and accumulate GPU durations between
+  timestamps; `primary_ray_gpu_ms` still times the whole scene pass,
+  kernels included.
 - **Requirements.** The scene passes' queue family must also support
   compute, and the renderer needs the wavefront kernels' SPIR-V
   (`RayQueryShaders::wavefront`); without it, a wavefront frame fails.
@@ -701,9 +711,11 @@ the reference-image comparison with the wavefront integrator. It then
 renders the same 64 samples of the reference scene with both integrators
 and records how many values differ, checks one more sample's queue
 occupancy (every camera ray queued, no bounce queuing more paths than the
-one before) and kernel timings, and checks that switching integrators
-restarts the accumulation and that the bounce limit fails cleanly
-([report](../reports/2026-10-10-wavefront-equivalence.md)).
+one before, the tail tracing the bounces after the rounds) and kernel
+timings, and checks that switching integrators restarts the accumulation
+and that the bounce limit fails cleanly
+([equivalence report](../reports/2026-10-10-wavefront-equivalence.md),
+[scheduling report](../reports/2026-10-10-wavefront-scheduling.md)).
 
 ### Fixed benchmarks
 
@@ -716,7 +728,10 @@ the JSON also captures compiler, configuration, OS/architecture, CPU logical
 processor count, GPU identity, driver and validation state.
 
 Each workload uses a fresh renderer, a square 128-pixel target and the
-reference camera. Defaults are 8 warmup frames from sample index 1, followed
+reference camera. `--benchmark-size` (16–4096) changes the target's side
+for exploratory measurements, recorded as `procedure.width` and `height`;
+the Cornell image is compared with the reference only at 128, which
+`procedure.cornell_reference_compared` records. Defaults are 8 warmup frames from sample index 1, followed
 by a reset to sample index 0 and 64 measured frames, one pixel sample per
 frame, with 64 maximum bounces. `--benchmark-frames` and
 `--benchmark-warmup` accept 1–4096. `--benchmark-integrator reference`
@@ -755,7 +770,8 @@ render-submit time are explicitly unavailable (`null` with reasons), and so
 are rays/s and average path depth for the reference integrator. With the
 wavefront integrator, each scene's `wavefront` measurements hold the rays
 traced per frame from its queue counts, rays per camera path, rays per GPU
-second and per-kernel GPU durations; they are `null` for the reference
+second, the bounces run as rounds and per-kernel GPU durations, the tail's
+included; they are `null` for the reference
 integrator. The blocking render wall duration includes GPU waits,
 readback and product copies. A queue without timestamp support retains wall
 measurements and emits null GPU durations/rates.

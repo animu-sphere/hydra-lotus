@@ -63,7 +63,9 @@ To measure the wavefront integrator, add `--benchmark-integrator wavefront`:
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/wavefront-baseline-1.json --benchmark-label "d6a6368 + LOTUS-WAVE-01; ost core Release" --benchmark-integrator wavefront
 ```
 
-([wavefront measurements](../reports/2026-10-10-wavefront-equivalence.md#performance)).
+([equivalence](../reports/2026-10-10-wavefront-equivalence.md#performance)
+and [scheduling](../reports/2026-10-10-wavefront-scheduling.md#performance)
+measurements). `--benchmark-size <pixels>` measures another square target.
 For a new revision, put its identity in the label. JSON and final PFM images
 are written under `build/`; preserve them when comparing changes. The
 [benchmark reference](../reference/SCENE.md#fixed-benchmarks) owns workload
