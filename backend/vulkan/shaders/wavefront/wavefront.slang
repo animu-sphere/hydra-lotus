@@ -8,9 +8,10 @@
 //                              │                     │
 //                              └──→ terminated ←─────┘ → accumulate
 //
-// Path state persists in one slot per target pixel between kernels. Queues
-// hold slot indices and are appended to with atomic counters; single-lane
-// kernels turn the counters into the next kernel's indirect dispatch.
+// After the recorded rounds, the tail kernel follows any path still in the
+// ray queue to its end. Path state persists in one slot per target pixel
+// between kernels. Queues hold slot indices; an append keeps the queue's
+// count and indirect dispatch current, so no kernel only does bookkeeping.
 import common.scene;
 import common.spectrum;
 import common.transport;
@@ -20,33 +21,43 @@ import common.transport;
 static const uint kGenerateKernel = 0;
 static const uint kIntersectKernel = 1;
 static const uint kShadeKernel = 2;
-static const uint kAccumulateKernel = 3;
-static const uint kPrepareKernel = 4;
-static const uint kAdvanceKernel = 5;
+static const uint kTailKernel = 3;
+static const uint kAccumulateKernel = 4;
 
 // Mirrors kWavefrontGroupSize and kWavefrontMaxGroupsX in
-// vulkan_backend.cpp: a dispatch covers its invocations with groups in rows
-// of at most kMaxGroupsX.
+// vulkan_backend.cpp. Generate covers its invocations with groups in rows
+// of at most kMaxGroupsX; a queue's dispatch is one row of at most
+// kMaxGroupsX groups.
 static const uint kGroupSize = 64;
 static const uint kMaxGroupsX = 65535;
 
 // Words of queue_state; mirrors kQueueStateWords and its neighbours in
-// vulkan_backend.cpp.
-// The two ray queues' lengths; kCurrentRayQueue says which one is read.
-static const uint kRayCount = 0;
-static const uint kHitCount = 2;
-static const uint kTerminatedCount = 3;
-static const uint kCurrentRayQueue = 4;
-// The bounce the ray queue holds rays of.
-static const uint kIteration = 5;
-// VkDispatchIndirectCommand, 16-byte aligned.
-static const uint kRayArgs = 8;
-static const uint kHitArgs = 12;
-static const uint kTerminatedArgs = 16;
-// Per bounce, how many paths entered the ray queue: queue occupancy.
-static const uint kPathCounts = 20;
+// vulkan_backend.cpp. A queue's descriptor is a VkDispatchIndirectCommand
+// for its entries followed by their count.
+static const uint kCountWord = 3;
+// The terminated paths' descriptor.
+static const uint kTerminated = 0;
+// The bounces the next intersect and shade kernels run. Each kernel's first
+// invocation hands its bounce on to the other kernel, so no kernel writes a
+// word it reads. A round whose queue is empty runs no invocation, and
+// neither do the rounds after it.
+static const uint kIntersectBounce = 4;
+static const uint kShadeBounce = 5;
+// Per bounce, the ray queue's descriptor and then the hit queue's. The ray
+// counts are the queue occupancy the host reads back.
+static const uint kBounces = 8;
+static const uint kBounceWords = 8;
 
-// queue_items holds four queues of path_capacity slots each.
+uint RayDescriptor(uint bounce) {
+  return kBounces + bounce * kBounceWords;
+}
+
+uint HitDescriptor(uint bounce) {
+  return kBounces + bounce * kBounceWords + 4;
+}
+
+// queue_items holds four queues of path_capacity slots each; bounces
+// alternate between the two ray queues.
 static const uint kRayQueue = 0;
 static const uint kHitQueue = 2;
 static const uint kTerminatedQueue = 3;
@@ -102,9 +113,19 @@ void StorePath(uint slot, PathState path, Hit hit) {
   paths[slot] = record;
 }
 
-void Push(uint queue, uint count_word, uint slot) {
+uint Groups(uint count) {
+  return min((count + kGroupSize - 1) / kGroupSize, kMaxGroupsX);
+}
+
+// Appends the slot to a queue, growing its dispatch by a group whenever
+// the entry begins one.
+void Push(uint descriptor, uint queue, uint slot) {
   uint index;
-  InterlockedAdd(queue_state[count_word], 1, index);
+  InterlockedAdd(queue_state[descriptor + kCountWord], 1, index);
+  const uint added = Groups(index + 1) - Groups(index);
+  if (added != 0) {
+    InterlockedAdd(queue_state[descriptor], added);
+  }
   queue_items[queue * path_constants.path_capacity + index] = slot;
 }
 
@@ -112,21 +133,15 @@ uint QueueItem(uint queue, uint index) {
   return queue_items[queue * path_constants.path_capacity + index];
 }
 
-void WriteArgs(uint word, uint count) {
-  const uint groups = (count + kGroupSize - 1) / kGroupSize;
-  queue_state[word] = min(groups, kMaxGroupsX);
-  queue_state[word + 1] = (groups + kMaxGroupsX - 1) / kMaxGroupsX;
-  queue_state[word + 2] = 1;
+// An invocation visits the queue's entry at its own index and, once the
+// queue has outgrown kMaxGroupsX groups, every dispatch width after it. A
+// queue is read only by kernels after the ones that append to it.
+uint QueueCount(uint descriptor) {
+  return queue_state[descriptor + kCountWord];
 }
 
-// The dispatches that follow read the counts this writes.
-void Prepare() {
-  const uint current = queue_state[kCurrentRayQueue];
-  const uint rays = queue_state[kRayCount + current];
-  queue_state[kPathCounts + queue_state[kIteration]] = rays;
-  WriteArgs(kRayArgs, rays);
-  WriteArgs(kHitArgs, queue_state[kHitCount]);
-  WriteArgs(kTerminatedArgs, queue_state[kTerminatedCount]);
+uint QueueStride(uint descriptor) {
+  return queue_state[descriptor] * kGroupSize;
 }
 
 // A camera path per pixel of the data window, queued for intersection. A new
@@ -142,68 +157,96 @@ void Generate(uint index) {
   }
   const PathState path = StartPath(pixel);
   StorePath(path.pixelIndex, path, (Hit)0);
-  Push(kRayQueue, kRayCount, path.pixelIndex);
+  Push(RayDescriptor(0), kRayQueue, path.pixelIndex);
 }
 
 // A camera ray that misses adds no sample; a continuation ray that misses
 // ends its path with the environment.
 void Intersect(uint index) {
-  const uint current = queue_state[kCurrentRayQueue];
-  if (index >= queue_state[kRayCount + current]) {
-    return;
+  const uint bounce = queue_state[kIntersectBounce];
+  if (index == 0) {
+    queue_state[kShadeBounce] = bounce;
   }
-  const uint slot = QueueItem(kRayQueue + current, index);
-  PathState path = LoadPath(slot);
-  Hit hit;
-  if (Trace(path.ray, path.rngState, hit)) {
-    StorePath(slot, path, hit);
-    Push(kHitQueue, kHitCount, slot);
-  } else if (path.depth != 0) {
-    MissPath(path);
-    StorePath(slot, path, hit);
-    Push(kTerminatedQueue, kTerminatedCount, slot);
+  const uint rays = RayDescriptor(bounce);
+  const uint count = QueueCount(rays);
+  const uint stride = QueueStride(rays);
+  for (uint position = index; position < count; position += stride) {
+    const uint slot = QueueItem(kRayQueue + (bounce & 1), position);
+    PathState path = LoadPath(slot);
+    Hit hit;
+    if (Trace(path.ray, path.rngState, hit)) {
+      StorePath(slot, path, hit);
+      Push(HitDescriptor(bounce), kHitQueue, slot);
+    } else if (path.depth != 0) {
+      MissPath(path);
+      StorePath(slot, path, hit);
+      Push(kTerminated, kTerminatedQueue, slot);
+    }
   }
 }
 
 void Shade(uint index) {
-  if (index >= queue_state[kHitCount]) {
-    return;
+  const uint bounce = queue_state[kShadeBounce];
+  if (index == 0) {
+    queue_state[kIntersectBounce] = bounce + 1;
   }
-  const uint slot = QueueItem(kHitQueue, index);
-  PathState path = LoadPath(slot);
-  const Hit hit = paths[slot].hit;
-  const bool continues = ScatterPath(path, hit);
-  StorePath(slot, path, hit);
-  if (continues) {
-    const uint next = queue_state[kCurrentRayQueue] ^ 1;
-    Push(kRayQueue + next, kRayCount + next, slot);
-  } else {
-    Push(kTerminatedQueue, kTerminatedCount, slot);
+  const uint hits = HitDescriptor(bounce);
+  const uint count = QueueCount(hits);
+  const uint stride = QueueStride(hits);
+  for (uint position = index; position < count; position += stride) {
+    const uint slot = QueueItem(kHitQueue, position);
+    PathState path = LoadPath(slot);
+    const Hit hit = paths[slot].hit;
+    const bool continues = ScatterPath(path, hit);
+    StorePath(slot, path, hit);
+    if (continues) {
+      Push(RayDescriptor(bounce + 1), kRayQueue + ((bounce + 1) & 1), slot);
+    } else {
+      Push(kTerminated, kTerminatedQueue, slot);
+    }
+  }
+}
+
+// The paths still in the ray queue after the recorded rounds, each followed
+// to its end in one invocation, as the reference integrator does. The ray
+// counts of the rounds it replaces still count the rays it traces.
+void Tail(uint index) {
+  const uint bounce = queue_state[kIntersectBounce];
+  const uint rays = RayDescriptor(bounce);
+  const uint count = QueueCount(rays);
+  const uint stride = QueueStride(rays);
+  for (uint position = index; position < count; position += stride) {
+    const uint slot = QueueItem(kRayQueue + (bounce & 1), position);
+    PathState path = LoadPath(slot);
+    Hit hit;
+    // At least one round ran, so every ray here continues a path.
+    while (true) {
+      if (!Trace(path.ray, path.rngState, hit)) {
+        MissPath(path);
+        break;
+      }
+      if (!ScatterPath(path, hit)) {
+        break;
+      }
+      InterlockedAdd(queue_state[RayDescriptor(path.depth) + kCountWord], 1);
+    }
+    StorePath(slot, path, hit);
+    Push(kTerminated, kTerminatedQueue, slot);
   }
 }
 
 // Each pixel has at most one path per frame, so no two invocations add to
 // the same pixel.
 void Accumulate(uint index) {
-  if (index >= queue_state[kTerminatedCount]) {
-    return;
+  const uint count = QueueCount(kTerminated);
+  const uint stride = QueueStride(kTerminated);
+  for (uint position = index; position < count; position += stride) {
+    const uint slot = QueueItem(kTerminatedQueue, position);
+    const uint2 pixel =
+        uint2(slot % path_constants.width, slot / path_constants.width);
+    accumulation[pixel] +=
+        float4(SpectrumToRgb(LoadSpectrum(paths[slot].radiance)), 1.0);
   }
-  const uint slot = QueueItem(kTerminatedQueue, index);
-  const uint2 pixel =
-      uint2(slot % path_constants.width, slot / path_constants.width);
-  accumulation[pixel] +=
-      float4(SpectrumToRgb(LoadSpectrum(paths[slot].radiance)), 1.0);
-}
-
-// The next bounce reads the queue the shade kernel filled; the drained ray
-// queue and the hit queue start empty again.
-void Advance() {
-  const uint current = queue_state[kCurrentRayQueue];
-  queue_state[kRayCount + current] = 0;
-  queue_state[kHitCount] = 0;
-  queue_state[kCurrentRayQueue] = current ^ 1;
-  queue_state[kIteration] = queue_state[kIteration] + 1;
-  Prepare();
 }
 
 [shader("compute")]
@@ -216,13 +259,9 @@ void wavefront_main(uint3 group : SV_GroupID, uint lane : SV_GroupIndex) {
     Intersect(index);
   } else if (kKernel == kShadeKernel) {
     Shade(index);
-  } else if (kKernel == kAccumulateKernel) {
+  } else if (kKernel == kTailKernel) {
+    Tail(index);
+  } else {
     Accumulate(index);
-  } else if (index == 0) {
-    if (kKernel == kPrepareKernel) {
-      Prepare();
-    } else {
-      Advance();
-    }
   }
 }

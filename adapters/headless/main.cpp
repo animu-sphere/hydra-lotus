@@ -3379,7 +3379,8 @@ std::string ReferenceFailure(PathScenes& scenes,
 
 // The wavefront integrator's queue occupancy and kernel timings for one
 // sample of the reference scene: every camera ray hits the box, no bounce
-// queues more paths than the one before, and the kernels fit in the scene
+// queues more paths than the one before, the tail traced the bounces after
+// the rounds the previous samples chose, and the kernels fit in the scene
 // pass's duration.
 std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
     std::uint32_t max_bounces, std::string& line) {
@@ -3392,6 +3393,10 @@ std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
            " camera rays instead of " + std::to_string(kPixels);
   if (counts.size() > max_bounces + 1)
     return "the ray queue held paths after the last bounce";
+  if (frame.wavefront_rounds == 0 || frame.wavefront_rounds >= counts.size())
+    return "the sample ran " + std::to_string(frame.wavefront_rounds) +
+           " rounds of " + std::to_string(counts.size()) +
+           " bounces, so the tail traced nothing";
   std::uint64_t rays = 0;
   for (std::size_t bounce = 0; bounce < counts.size(); ++bounce) {
     if (bounce != 0 && counts[bounce] > counts[bounce - 1])
@@ -3402,21 +3407,24 @@ std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
   if (timings.available != frame.primary_ray_timestamp_available)
     return "wavefront timings are available without scene-pass timings, or the reverse";
   const double kernels = timings.generate_gpu_ms + timings.intersect_gpu_ms +
-                         timings.shade_gpu_ms + timings.accumulate_gpu_ms;
+                         timings.shade_gpu_ms + timings.tail_gpu_ms +
+                         timings.accumulate_gpu_ms;
   if (timings.available &&
       (!std::isfinite(kernels) || timings.generate_gpu_ms < 0 ||
           timings.intersect_gpu_ms <= 0 || timings.shade_gpu_ms <= 0 ||
-          timings.accumulate_gpu_ms < 0 || kernels > frame.primary_ray_gpu_ms))
+          timings.tail_gpu_ms < 0 || timings.accumulate_gpu_ms < 0 ||
+          kernels > frame.primary_ray_gpu_ms))
     return "wavefront kernel timings are outside the scene pass's " +
            std::to_string(frame.primary_ray_gpu_ms) + " ms";
   std::ostringstream text;
   text << std::fixed << std::setprecision(3) << rays << " rays in "
        << counts.size() << " bounces (mean path " << double(rays) / kPixels
-       << " rays)";
+       << " rays), " << frame.wavefront_rounds << " of them as rounds";
   if (timings.available)
-    text << ", generate/intersect/shade/accumulate " << timings.generate_gpu_ms
-         << '/' << timings.intersect_gpu_ms << '/' << timings.shade_gpu_ms
-         << '/' << timings.accumulate_gpu_ms << " ms of "
+    text << ", generate/intersect/shade/tail/accumulate "
+         << timings.generate_gpu_ms << '/' << timings.intersect_gpu_ms << '/'
+         << timings.shade_gpu_ms << '/' << timings.tail_gpu_ms << '/'
+         << timings.accumulate_gpu_ms << " ms of "
          << frame.primary_ray_gpu_ms << " ms";
   line = text.str();
   return {};

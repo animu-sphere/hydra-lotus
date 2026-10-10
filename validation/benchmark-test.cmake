@@ -33,10 +33,13 @@ string(JSON frames GET "${json}" procedure measured_frames)
 string(JSON warmup GET "${json}" procedure warmup_frames)
 string(JSON label GET "${json}" build label)
 string(JSON integrator GET "${json}" procedure integrator)
+string(JSON width GET "${json}" procedure width)
+string(JSON compared GET "${json}" procedure cornell_reference_compared)
 if(NOT schema STREQUAL "lotus-benchmark-v1" OR NOT count EQUAL 4 OR
    NOT frames EQUAL 16 OR NOT warmup EQUAL 2 OR
    NOT label STREQUAL "CTest quoted \"label\"" OR
-   NOT integrator STREQUAL INTEGRATOR)
+   NOT integrator STREQUAL INTEGRATOR OR NOT width EQUAL 128 OR
+   NOT compared STREQUAL "ON")
   message(FATAL_ERROR "Wrong benchmark schema, workload count or procedure")
 endif()
 # The wavefront integrator counts its rays; the reference shader does not.
@@ -97,7 +100,10 @@ foreach(i RANGE 0 3)
     else()
       string(JSON rays LENGTH "${json}" scenes ${i} measurements wavefront rays raw)
       string(JSON rays_per_path GET "${json}" scenes ${i} measurements wavefront rays_per_path)
-      if(NOT rays EQUAL 16 OR rays_per_path LESS 1)
+      string(JSON rounds LENGTH "${json}" scenes ${i} measurements wavefront rounds raw)
+      string(JSON first_round GET "${json}" scenes ${i} measurements wavefront rounds min)
+      if(NOT rays EQUAL 16 OR rays_per_path LESS 1 OR NOT rounds EQUAL 16 OR
+         first_round LESS 1)
         message(FATAL_ERROR "Wrong wavefront ray counts for ${id}")
       endif()
     endif()
@@ -120,6 +126,13 @@ foreach(value 0 -1 4097 1junk)
     --benchmark-frames "${value}" RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
   if(NOT invalid STREQUAL "2")
     message(FATAL_ERROR "Invalid frame count ${value} was accepted")
+  endif()
+endforeach()
+foreach(value 15 4097 1junk)
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
+    --benchmark-size "${value}" RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+  if(NOT invalid STREQUAL "2")
+    message(FATAL_ERROR "Invalid target size ${value} was accepted")
   endif()
 endforeach()
 execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
