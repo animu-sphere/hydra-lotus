@@ -7,7 +7,12 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Renderer Phase 2 equivalence → Wavefront optimization.
+Wavefront optimization → integrator selection through Hydra.
+
+The wavefront integrator reproduces the reference transport
+([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
+that report also records its unoptimized cost against the reference
+integrator on the fixed benchmarks.
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
 records four repeatable workloads and metric availability. The
@@ -22,7 +27,7 @@ Backend update classification and the compaction disposition are measured in
 the [BLAS refit/compaction report](../reports/2026-10-10-blas-refit-compaction.md).
 
 The release target is owned by the [status table](README.md#status-at-a-glance).
-The Wavefront equivalence cycle excludes ReSTIR, denoising, spectral research,
+The Wavefront cycle excludes ReSTIR, denoising, spectral research,
 production material coverage and broad platform/backend expansion. Their
 scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
@@ -37,12 +42,20 @@ in the reference documentation.
 
 ## Renderer Phase 2 — Wavefront path tracing
 
-- [ ] **LOTUS-WAVE-01 — Reference equivalence first.** After the foundation
-  release, implement the initial queues and transport defined by the
-  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing).
-  Record deterministic equivalence evidence using the
-  [reference correctness tolerance](../reference/SCENE.md#reference-images)
-  before beginning queue/scheduling optimization.
+- [ ] **LOTUS-WAVE-02 — Queue and scheduling optimization.** Optimize
+  compaction, indirect dispatch, scheduling, occupancy and path
+  classification within the
+  [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing),
+  starting with the per-bounce rounds the
+  [wavefront integrator](../reference/SCENE.md#wavefront-integrator)
+  records whether or not its queues are empty. Each change keeps
+  `renderer.path.wavefront` passing and is measured with
+  `--benchmark-integrator wavefront` against the
+  [equivalence measurements](../reports/2026-10-10-wavefront-equivalence.md#performance).
+- [ ] **LOTUS-WAVE-03 — Integrator selection through Hydra.** Expose
+  `PathTracingSettings::integrator` as a render setting, install the
+  wavefront kernels with the Hydra plugin, and check converged Hydra images
+  under both integrators.
 
 ## Deferred adapter work
 

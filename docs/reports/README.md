@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-10-wavefront-equivalence.md](2026-10-10-wavefront-equivalence.md) | Renderer Phase 2 wavefront queues and kernels: transport scenarios and reference images under the wavefront integrator, the committed reference and the fixed benchmarks reproduced bit for bit, queue occupancy and kernel timings, a `slangc` pointer-stride finding, two fault injections, and the unoptimized cost against the reference integrator. |
 | [2026-10-10-release-workflow.md](2026-10-10-release-workflow.md) | Tag-driven Actions, release naming, repeatable Hydra packaging, required asset checks, checksum/notes assembly and release regressions. |
 | [2026-10-10-release-gate.md](2026-10-10-release-gate.md) | Foundation release verification: physical-GPU core/Hydra, deterministic references, synchronization, runtime-free tests, documentation and hosted CI. |
 | [2026-10-10-performance-baseline.md](2026-10-10-performance-baseline.md) | Fixed four-scene timing baseline, three independent invocations with identical output images, raw measurements, build/refit and unchanged-scene costs, explicit unavailable metrics and benchmark regressions. |

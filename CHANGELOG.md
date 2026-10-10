@@ -9,6 +9,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Renderer Phase 2 wavefront path tracing, selected with
+  `PathTracingSettings::integrator`: compute kernels pass persistent path
+  state between ray, hit and terminated-path queues with indirect
+  dispatches, and share the reference transport through new `common/scene`
+  and `common/transport` Slang modules. It reproduces the committed
+  reference and the fixed benchmarks' images bit for bit on the measured
+  device; `renderer.path.wavefront` runs the transport scenarios and the
+  reference comparison with it. Frames report per-bounce queue occupancy
+  and per-kernel GPU timings, and `--benchmark-integrator wavefront`
+  measures it. Queues and scheduling are not yet optimized.
+
 - Tag-driven GitHub Actions releases, reusing renderer CI and the pinned
   Windows Hydra runtime. The lane checks version/changelog agreement,
   reproducible packaging and required products, assembles manifest/SBOM,

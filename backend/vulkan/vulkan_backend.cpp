@@ -90,22 +90,68 @@ struct PathConstants {
   std::uint32_t width;
   // What the surface pass writes: a SurfaceOutput.
   std::uint32_t surface_output;
-  std::uint32_t reserved[2];
+  // The wavefront integrator's path slots: one per target pixel.
+  std::uint32_t path_capacity;
+  std::uint32_t reserved;
+  // DataScissor: {x, y, width, height}.
+  std::uint32_t data_rect[4];
 };
-static_assert(sizeof(PathConstants) == 96 &&
+static_assert(sizeof(PathConstants) == 112 &&
               offsetof(PathConstants, instances) == 48 &&
               offsetof(PathConstants, materials) == 56 &&
-              offsetof(PathConstants, width) == 80);
+              offsetof(PathConstants, width) == 80 &&
+              offsetof(PathConstants, data_rect) == 96);
 
-// The path tracer's kPass specialization constant.
+// The path tracer's kPass specialization constant. The resolve pass writes
+// the mean of an accumulation the wavefront kernels added to.
 constexpr std::uint32_t kCameraPass = 0;
 constexpr std::uint32_t kRadiancePass = 1;
 constexpr std::uint32_t kSurfacePass = 2;
+constexpr std::uint32_t kResolvePass = 3;
+
+// The wavefront kernels' kKernel specialization constant, in
+// shaders/wavefront/wavefront.slang.
+enum WavefrontKernel : std::uint32_t {
+  kGenerateKernel,
+  kIntersectKernel,
+  kShadeKernel,
+  kAccumulateKernel,
+  kPrepareKernel,
+  kAdvanceKernel,
+  kWavefrontKernels,
+};
+// A dispatch covers its invocations in groups of kWavefrontGroupSize, in
+// rows of at most kWavefrontMaxGroupsX groups.
+constexpr std::uint32_t kWavefrontGroupSize = 64;
+constexpr std::uint32_t kWavefrontMaxGroupsX = 65535;
+// The words of wavefront.slang's queue_state: counters, then three
+// VkDispatchIndirectCommand, then a path count per bounce.
+constexpr std::uint32_t kRayArgsWord = 8;
+constexpr std::uint32_t kHitArgsWord = 12;
+constexpr std::uint32_t kTerminatedArgsWord = 16;
+constexpr std::uint32_t kPathCountsWord = 20;
+constexpr std::uint32_t kQueueStateWords =
+    kPathCountsWord + kMaxWavefrontBounces + 2;
+// Two ray queues, the hit queue and the terminated-path queue.
+constexpr VkDeviceSize kWavefrontQueues = 4;
+// PathRecord's std430 stride in wavefront.slang.
+constexpr VkDeviceSize kPathRecordBytes = 112;
+// Timestamps: the scene pass's first and last (kSceneTimestamps), then the
+// wavefront kernels': before generate, after it, after each bounce's
+// intersect and shade, and after accumulate.
+constexpr std::uint32_t kSceneTimestamps = 2;
+constexpr std::uint32_t kRayTimestampQueries =
+    kSceneTimestamps + 3 + 2 * (kMaxWavefrontBounces + 1);
 
 // PathConstants::surface_output: the surface pass's diagnostics.
 constexpr std::uint32_t kShadingNormalOutput = 0;
 constexpr std::uint32_t kAlbedoOutput = 1;
 constexpr std::uint32_t kRoughnessMetallicOutput = 2;
+
+// The scene passes' push constants and descriptors reach the fragment
+// passes and the wavefront kernels.
+constexpr VkShaderStageFlags kRayStages =
+    VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
 // What one frame draws: the bootstrap triangle into the RGBA8 targets, or
 // the scene into the RGBA32F targets, either the camera pass alone
@@ -135,6 +181,7 @@ struct AccumulationKey {
   std::uint32_t height = 0;
   std::array<float, 4> display_window{};
   std::array<std::int32_t, 4> data_window{};
+  Integrator integrator = Integrator::Reference;
   std::uint32_t sample_index = 0;
   std::uint32_t max_bounces = 0;
   std::uint64_t scene_generation = 0;
@@ -190,9 +237,11 @@ std::optional<std::uint32_t> FindGraphicsQueue(VkPhysicalDevice device) {
   vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
   std::vector<VkQueueFamilyProperties> properties(count);
   vkGetPhysicalDeviceQueueFamilyProperties(device, &count, properties.data());
+  // The wavefront kernels dispatch on the scene passes' queue.
+  constexpr VkQueueFlags required = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
   for (std::uint32_t index = 0; index < count; ++index) {
     if (properties[index].queueCount > 0 &&
-        (properties[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+        (properties[index].queueFlags & required) == required) {
       return index;
     }
   }
@@ -242,6 +291,41 @@ bool CreateImage(VkPhysicalDevice physical_device,
     return false;
   }
   return true;
+}
+
+// A device-local buffer of its own allocation, for renderer state outside
+// the scene's memory pools.
+bool CreateDeviceBuffer(VkPhysicalDevice physical_device,
+    VkDevice device,
+    VkDeviceSize size,
+    VkBufferUsageFlags usage,
+    VkBuffer& buffer,
+    VkDeviceMemory& memory,
+    std::string& detail) {
+  VkBufferCreateInfo create{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  create.size = size;
+  create.usage = usage;
+  create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if (!VulkanOk(vkCreateBuffer(device, &create, nullptr, &buffer),
+          "vkCreateBuffer(device)", detail)) {
+    return false;
+  }
+  VkMemoryRequirements requirements{};
+  vkGetBufferMemoryRequirements(device, buffer, &requirements);
+  const std::uint32_t memory_type =
+      FindMemoryType(physical_device, requirements.memoryTypeBits,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
+    detail = "no device-local buffer memory type is available";
+    return false;
+  }
+  VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  allocate.allocationSize = requirements.size;
+  allocate.memoryTypeIndex = memory_type;
+  return VulkanOk(vkAllocateMemory(device, &allocate, nullptr, &memory),
+             "vkAllocateMemory(device buffer)", detail) &&
+         VulkanOk(vkBindBufferMemory(device, buffer, memory, 0),
+             "vkBindBufferMemory(device)", detail);
 }
 
 bool CreateHostBuffer(VkPhysicalDevice physical_device,
@@ -351,6 +435,19 @@ struct Targets {
   VkDeviceMemory depth_readback_memory = VK_NULL_HANDLE;
   bool depth_readback_coherent = false;
   void* depth_mapped = nullptr;
+  // The wavefront integrator's state, created by its first frame at this
+  // size: queue counters and indirect dispatches, the queues' path slots,
+  // the paths, and a host copy of the counters.
+  VkBuffer queue_state = VK_NULL_HANDLE;
+  VkDeviceMemory queue_state_memory = VK_NULL_HANDLE;
+  VkBuffer queue_items = VK_NULL_HANDLE;
+  VkDeviceMemory queue_items_memory = VK_NULL_HANDLE;
+  VkBuffer paths = VK_NULL_HANDLE;
+  VkDeviceMemory paths_memory = VK_NULL_HANDLE;
+  VkBuffer queue_readback = VK_NULL_HANDLE;
+  VkDeviceMemory queue_readback_memory = VK_NULL_HANDLE;
+  bool queue_readback_coherent = false;
+  void* queue_mapped = nullptr;
   bool initialized = false;
 };
 
@@ -369,6 +466,9 @@ public:
       vkDestroyPipeline(device_, depth_pipeline_, nullptr);
       vkDestroyPipeline(device_, surface_pipeline_, nullptr);
       vkDestroyPipeline(device_, radiance_pipeline_, nullptr);
+      vkDestroyPipeline(device_, resolve_pipeline_, nullptr);
+      for (VkPipeline pipeline : wavefront_pipelines_)
+        vkDestroyPipeline(device_, pipeline, nullptr);
       vkDestroyPipelineLayout(device_, ray_layout_, nullptr);
       vkDestroyDescriptorPool(device_, ray_descriptor_pool_, nullptr);
       vkDestroyDescriptorSetLayout(device_, ray_descriptor_layout_, nullptr);
@@ -418,9 +518,9 @@ public:
     scene_targets_.color_pixel_bytes = 16;
     if (ray_query_.available && !ray_shaders.vertex.empty() &&
         !ray_shaders.fragment.empty()) {
-      // One shader module serves four pipelines: the camera pass with
-      // and without colour writes, the surface pass, and the radiance pass,
-      // which leaves depth to the camera pass.
+      // One shader module serves five pipelines: the camera pass with
+      // and without colour writes, the surface pass, and the radiance and
+      // resolve passes, which leave depth to the camera pass.
       if (!CreateRayResources(detail) ||
           !CreateRenderPass(kSceneColorFormat, scene_render_pass_, detail) ||
           !CreatePipelineLayout(true, ray_layout_, detail) ||
@@ -435,8 +535,21 @@ public:
               {scene_render_pass_, kSurfacePass}, surface_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRadiancePass, true, false},
-              radiance_pipeline_, detail))
+              radiance_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kResolvePass, true, false},
+              resolve_pipeline_, detail))
         return false;
+      if (!ray_shaders.wavefront.empty()) {
+        std::vector<std::uint32_t> compute_words;
+        if (!LoadSpirv(ray_shaders.wavefront, compute_words, detail))
+          return false;
+        for (std::uint32_t kernel = 0; kernel < kWavefrontKernels; ++kernel) {
+          if (!CreateComputePipeline(compute_words, kernel,
+                  wavefront_pipelines_[kernel], detail))
+            return false;
+        }
+      }
     }
     status = FrameStatus::Pass;
     return true;
@@ -463,6 +576,17 @@ public:
     FramePass pass = FramePass::Radiance;
     switch (settings.output) {
     case SceneOutput::Radiance:
+      if (settings.integrator == Integrator::Wavefront) {
+        if (wavefront_pipelines_[0] == VK_NULL_HANDLE)
+          return Evidence(FrameStatus::Fail,
+              "the wavefront shader path was not supplied");
+        if (settings.max_bounces > kMaxWavefrontBounces)
+          return Evidence(FrameStatus::Fail,
+              "the wavefront integrator traces at most " +
+                  std::to_string(kMaxWavefrontBounces) + " bounces");
+      } else if (settings.integrator != Integrator::Reference) {
+        return Evidence(FrameStatus::Fail, "unknown integrator");
+      }
       break;
     case SceneOutput::Barycentrics:
       pass = FramePass::Barycentrics;
@@ -540,7 +664,8 @@ public:
     if (pass == FramePass::Radiance) {
       const AccumulationKey key{ray_constants_.world_to_clip, target.width,
           target.height, target.display_window, target.data_window,
-          settings.sample_index, settings.max_bounces, scene_generation_};
+          settings.integrator, settings.sample_index, settings.max_bounces,
+          scene_generation_};
       if (accumulation_key_ != key) {
         accumulation_key_ = key;
         accumulated_samples_ = 0;
@@ -553,11 +678,22 @@ public:
       samples_to_add = std::min(frame_count, room);
       submissions = std::max(samples_to_add, 1U);
     }
+    // Bounces the wavefront kernels are recorded for: a path's last
+    // scattering event is at depth max_bounces.
+    const std::uint32_t wavefront_iterations =
+        pass == FramePass::Radiance &&
+                settings.integrator == Integrator::Wavefront
+            ? settings.max_bounces + 1
+            : 0;
+    if (wavefront_iterations != 0 && !EnsureWavefront(targets, detail)) {
+      return Evidence(FrameStatus::Fail, detail);
+    }
     if (trace) {
       UpdateSceneDescriptors(targets);
     }
     bool initializing = !targets.initialized;
-    if (!Record(draw, target, targets, pass, true, detail)) {
+    if (!Record(draw, target, targets, pass, wavefront_iterations, true,
+            detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -592,7 +728,8 @@ public:
               (!target.clear_depth_enabled && !target.preserved_depth.empty()));
       if ((initializing || restored) && frame + 1 < submissions) {
         initializing = false;
-        if (!Record(draw, target, targets, pass, false, detail)) {
+        if (!Record(draw, target, targets, pass, wavefront_iterations, false,
+                detail)) {
           return Evidence(FrameStatus::Fail, detail);
         }
       }
@@ -654,6 +791,25 @@ public:
                                                        : (std::uint64_t{1} << timestamp_bits_) - 1;
       evidence.primary_ray_timestamp_available = true;
       evidence.primary_ray_gpu_ms = static_cast<double>((ticks[1] - ticks[0]) & mask) * device_properties_.limits.timestampPeriod / 1'000'000.0;
+    }
+    // The kernels ran only when the frame traced something; they add
+    // nothing when the accumulation was full.
+    if (recorded_wavefront_iterations_ != 0 && samples_to_add != 0) {
+      if (!InvalidateIfNeeded(device_, targets.queue_readback_memory,
+              targets.queue_readback_coherent, detail)) {
+        return Evidence(FrameStatus::Fail, detail);
+      }
+      const auto* words = static_cast<const std::uint32_t*>(targets.queue_mapped);
+      std::vector<std::uint32_t>& counts = evidence.wavefront_path_counts;
+      counts.assign(words + kPathCountsWord,
+          words + kPathCountsWord + recorded_wavefront_iterations_);
+      while (!counts.empty() && counts.back() == 0)
+        counts.pop_back();
+      if (ray_timestamps_ != VK_NULL_HANDLE &&
+          !ReadWavefrontTimings(evidence.wavefront_timings, detail)) {
+        failure_ = detail;
+        return Evidence(FrameStatus::Fail, detail);
+      }
     }
 
     evidence.device_name = device_properties_.deviceName;
@@ -731,6 +887,12 @@ public:
     constants.add_sample = add_sample ? 1U : 0U;
     constants.max_bounces = settings.max_bounces;
     constants.width = target.width;
+    constants.path_capacity = target.width * target.height;
+    const VkRect2D scissor = DataScissor(target);
+    constants.data_rect[0] = static_cast<std::uint32_t>(scissor.offset.x);
+    constants.data_rect[1] = static_cast<std::uint32_t>(scissor.offset.y);
+    constants.data_rect[2] = scissor.extent.width;
+    constants.data_rect[3] = scissor.extent.height;
     constants.surface_output =
         settings.output == SceneOutput::Albedo ? kAlbedoOutput
         : settings.output == SceneOutput::RoughnessMetallic
@@ -777,7 +939,7 @@ public:
           texture_writes.data(), 0, nullptr);
       texture_generation_ = scene_.TextureGeneration();
     }
-    VkWriteDescriptorSet writes[2]{};
+    VkWriteDescriptorSet writes[5]{};
     std::uint32_t count = 0;
     const VkAccelerationStructureKHR tlas = scene_.Tlas();
     VkWriteDescriptorSetAccelerationStructureKHR acceleration_write{
@@ -802,7 +964,103 @@ public:
     write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     write.pImageInfo = &accumulation;
+    // Only the wavefront kernels use the queues, and only after their
+    // first frame at this size has created them.
+    const VkDescriptorBufferInfo queues[3] = {
+        {targets.queue_state, 0, VK_WHOLE_SIZE},
+        {targets.queue_items, 0, VK_WHOLE_SIZE},
+        {targets.paths, 0, VK_WHOLE_SIZE}};
+    if (targets.queue_state != VK_NULL_HANDLE) {
+      for (std::uint32_t index = 0; index < 3; ++index) {
+        VkWriteDescriptorSet& queue = writes[count++];
+        queue.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        queue.dstSet = ray_descriptor_;
+        queue.dstBinding = 5 + index;
+        queue.descriptorCount = 1;
+        queue.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        queue.pBufferInfo = &queues[index];
+      }
+    }
     vkUpdateDescriptorSets(device_, count, writes, 0, nullptr);
+  }
+
+  // The wavefront kernels' buffers for the scene targets' size: one path
+  // slot per pixel. Kept until the targets are replaced.
+  bool EnsureWavefront(Targets& targets, std::string& detail) {
+    if (targets.queue_state != VK_NULL_HANDLE)
+      return true;
+    const VkDeviceSize slots = VkDeviceSize{targets.width} * targets.height;
+    const VkDeviceSize state_bytes = kQueueStateWords * sizeof(std::uint32_t);
+    if (CreateDeviceBuffer(physical_device_, device_, state_bytes,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            targets.queue_state, targets.queue_state_memory, detail) &&
+        CreateDeviceBuffer(physical_device_, device_,
+            kWavefrontQueues * slots * sizeof(std::uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, targets.queue_items,
+            targets.queue_items_memory, detail) &&
+        CreateDeviceBuffer(physical_device_, device_, slots * kPathRecordBytes,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, targets.paths,
+            targets.paths_memory, detail) &&
+        CreateHostBuffer(physical_device_, device_, state_bytes,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, targets.queue_readback,
+            targets.queue_readback_memory, targets.queue_readback_coherent,
+            detail) &&
+        VulkanOk(vkMapMemory(device_, targets.queue_readback_memory, 0,
+                     VK_WHOLE_SIZE, 0, &targets.queue_mapped),
+            "vkMapMemory(queue state)", detail))
+      return true;
+    DestroyWavefront(targets);
+    return false;
+  }
+
+  void DestroyWavefront(Targets& t) {
+    if (t.queue_mapped != nullptr)
+      vkUnmapMemory(device_, t.queue_readback_memory);
+    vkDestroyBuffer(device_, t.queue_readback, nullptr);
+    vkFreeMemory(device_, t.queue_readback_memory, nullptr);
+    vkDestroyBuffer(device_, t.paths, nullptr);
+    vkFreeMemory(device_, t.paths_memory, nullptr);
+    vkDestroyBuffer(device_, t.queue_items, nullptr);
+    vkFreeMemory(device_, t.queue_items_memory, nullptr);
+    vkDestroyBuffer(device_, t.queue_state, nullptr);
+    vkFreeMemory(device_, t.queue_state_memory, nullptr);
+    t.queue_mapped = nullptr;
+    t.queue_readback = t.paths = t.queue_items = t.queue_state = VK_NULL_HANDLE;
+    t.queue_readback_memory = t.paths_memory = t.queue_items_memory =
+        t.queue_state_memory = VK_NULL_HANDLE;
+  }
+
+  // Sums the last submission's wavefront timestamps by kernel.
+  bool ReadWavefrontTimings(WavefrontTimings& timings, std::string& detail) {
+    const std::uint32_t queries = 3 + 2 * recorded_wavefront_iterations_;
+    std::vector<std::uint64_t> ticks(queries);
+    if (!VulkanOk(vkGetQueryPoolResults(device_, ray_timestamps_,
+                      kSceneTimestamps, queries,
+                      ticks.size() * sizeof(std::uint64_t), ticks.data(),
+                      sizeof(std::uint64_t),
+                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+            "vkGetQueryPoolResults(wavefront)", detail))
+      return false;
+    const std::uint64_t mask = timestamp_bits_ == 64
+                                   ? ~std::uint64_t{0}
+                                   : (std::uint64_t{1} << timestamp_bits_) - 1;
+    const auto ms = [&](std::uint32_t from) {
+      return static_cast<double>((ticks[from + 1] - ticks[from]) & mask) *
+             device_properties_.limits.timestampPeriod / 1'000'000.0;
+    };
+    timings = {};
+    timings.available = true;
+    timings.generate_gpu_ms = ms(0);
+    for (std::uint32_t bounce = 0; bounce < recorded_wavefront_iterations_;
+        ++bounce) {
+      timings.intersect_gpu_ms += ms(1 + 2 * bounce);
+      timings.shade_gpu_ms += ms(2 + 2 * bounce);
+    }
+    timings.accumulate_gpu_ms = ms(queries - 2);
+    return true;
   }
 
   GpuSceneEvidence UpdateScene(const SceneUpdate& update) override {
@@ -964,7 +1222,7 @@ private:
         limits.maxDescriptorSetSampledImages < kMaxTextures ||
         limits.maxPerStageDescriptorSamplers < kTextureSamplers ||
         limits.maxDescriptorSetSamplers < kTextureSamplers ||
-        limits.maxPerStageResources < kMaxTextures + kTextureSamplers + 3) {
+        limits.maxPerStageResources < kMaxTextures + kTextureSamplers + 6) {
       std::ostringstream message;
       message << "the device's descriptor limits do not allow a table of "
               << kMaxTextures << " sampled textures";
@@ -1155,39 +1413,46 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    VkDescriptorSetLayoutBinding bindings[8]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].stageFlags = kRayStages;
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].stageFlags = kRayStages;
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].stageFlags = kRayStages;
     // The texture table, written as textures become resident, and its
     // samplers.
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     bindings[3].descriptorCount = kMaxTextures;
-    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].stageFlags = kRayStages;
     bindings[4].binding = 4;
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     bindings[4].descriptorCount = kTextureSamplers;
-    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].stageFlags = kRayStages;
     bindings[4].pImmutableSamplers = samplers_.data();
-    const VkDescriptorBindingFlags binding_flags[5] = {0, 0, 0,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0};
+    // The wavefront kernels' queue state, queues and paths.
+    for (std::uint32_t index = 5; index < 8; ++index) {
+      bindings[index].binding = index;
+      bindings[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      bindings[index].descriptorCount = 1;
+      bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    const VkDescriptorBindingFlags binding_flags[8] = {0, 0, 0,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0, 0};
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 5;
+    flags.bindingCount = 8;
     flags.pBindingFlags = binding_flags;
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 5;
+    layout.bindingCount = 8;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -1198,10 +1463,11 @@ private:
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers}};
+        {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
-    pool.poolSizeCount = 5;
+    pool.poolSizeCount = 6;
     pool.pPoolSizes = sizes;
     if (!VulkanOk(vkCreateDescriptorPool(device_, &pool, nullptr,
                       &ray_descriptor_pool_),
@@ -1234,7 +1500,7 @@ private:
     if (timestamp_bits_ != 0) {
       VkQueryPoolCreateInfo query{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
       query.queryType = VK_QUERY_TYPE_TIMESTAMP;
-      query.queryCount = 2;
+      query.queryCount = kRayTimestampQueries;
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &ray_timestamps_),
               "vkCreateQueryPool(primary ray)", detail))
         return false;
@@ -1244,11 +1510,11 @@ private:
 
   // The bootstrap layout takes world-to-clip in the vertex stage; the scene
   // layout takes RayConstants and the scene descriptor set in the fragment
-  // stage.
+  // and compute stages.
   bool CreatePipelineLayout(bool trace, VkPipelineLayout& layout,
       std::string& detail) {
     const VkPushConstantRange push_range{
-        static_cast<VkShaderStageFlags>(trace ? VK_SHADER_STAGE_FRAGMENT_BIT
+        static_cast<VkShaderStageFlags>(trace ? kRayStages
                                               : VK_SHADER_STAGE_VERTEX_BIT),
         0,
         trace ? static_cast<std::uint32_t>(sizeof(RayConstants)) : kFrameConstantsSize};
@@ -1356,6 +1622,32 @@ private:
     vkDestroyShaderModule(device_, vertex_module, nullptr);
     vkDestroyShaderModule(device_, fragment_module, nullptr);
     return VulkanOk(pipeline_result, "vkCreateGraphicsPipelines", detail);
+  }
+
+  // One wavefront kernel, selected by the kKernel specialization constant.
+  bool CreateComputePipeline(const std::vector<std::uint32_t>& words,
+      std::uint32_t kernel, VkPipeline& pipeline, std::string& detail) {
+    VkShaderModule module = CreateShader(device_, words, detail);
+    if (module == VK_NULL_HANDLE)
+      return false;
+    const VkSpecializationMapEntry kernel_entry{0, 0, sizeof(std::uint32_t)};
+    VkSpecializationInfo specialization{};
+    specialization.mapEntryCount = 1;
+    specialization.pMapEntries = &kernel_entry;
+    specialization.dataSize = sizeof(kernel);
+    specialization.pData = &kernel;
+    VkComputePipelineCreateInfo create{
+        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    create.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    create.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    create.stage.module = module;
+    create.stage.pName = "main";
+    create.stage.pSpecializationInfo = &specialization;
+    create.layout = ray_layout_;
+    const VkResult result = vkCreateComputePipelines(device_, VK_NULL_HANDLE,
+        1, &create, nullptr, &pipeline);
+    vkDestroyShaderModule(device_, module, nullptr);
+    return VulkanOk(result, "vkCreateComputePipelines(wavefront)", detail);
   }
 
   // Keep the targets when the size is unchanged; otherwise replace them. A
@@ -1475,6 +1767,7 @@ private:
   // Only called while no frame is in flight: Render waits for every
   // submission before it returns. Keeps the colour format.
   void DestroyTargets(Targets& t) {
+    DestroyWavefront(t);
     if (t.color_mapped != nullptr) {
       vkUnmapMemory(device_, t.color_readback_memory);
     }
@@ -1502,7 +1795,8 @@ private:
   }
 
   bool Record(const DrawSummary& draw, const OffscreenTarget& target,
-      Targets& targets, FramePass pass, bool restore, std::string& detail) {
+      Targets& targets, FramePass pass, std::uint32_t wavefront_iterations,
+      bool restore, std::string& detail) {
     const bool trace = pass != FramePass::Bootstrap;
     VkCommandBufferBeginInfo command_begin{
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1511,7 +1805,10 @@ private:
       return false;
     }
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
-      vkCmdResetQueryPool(command_, ray_timestamps_, 0, 2);
+      vkCmdResetQueryPool(command_, ray_timestamps_, 0,
+          wavefront_iterations == 0
+              ? kSceneTimestamps
+              : kSceneTimestamps + 3 + 2 * wavefront_iterations);
     if (!targets.initialized) {
       // LOAD preserves previous frames. Fresh images first need a defined
       // layout, then initialization inside the render pass below.
@@ -1570,9 +1867,10 @@ private:
       restore_image(targets.depth_image, targets.depth_readback,
           VK_IMAGE_ASPECT_DEPTH_BIT);
     if (trace) {
-      // The radiance pass reads and writes the accumulation image; order
-      // that against the preceding submission's writes. Its contents are
-      // undefined until the first sample of an accumulation writes them.
+      // The radiance pass and the wavefront kernels read and write the
+      // accumulation image; order that against the preceding submission's
+      // accesses. Its contents are undefined until the first sample of an
+      // accumulation writes them.
       VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
       barrier.oldLayout = targets.initialized ? VK_IMAGE_LAYOUT_GENERAL
                                               : VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1586,9 +1884,11 @@ private:
       barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
       barrier.subresourceRange.levelCount = 1;
       barrier.subresourceRange.layerCount = 1;
-      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-          1, &barrier);
+      constexpr VkPipelineStageFlags kStages =
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      vkCmdPipelineBarrier(command_, kStages, kStages, 0, 0, nullptr, 0,
+          nullptr, 1, &barrier);
     }
     VkRenderPassBeginInfo render_begin{
         VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -1598,6 +1898,18 @@ private:
     render_begin.renderArea.extent = {targets.width, targets.height};
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ray_timestamps_, 0);
+    const VkViewport viewport = DisplayViewport(target);
+    const VkRect2D scissor = DataScissor(target);
+    const bool has_draw = trace ? scene_.Tlas() != VK_NULL_HANDLE : draw.triangle_count != 0;
+    const bool drawn = has_draw && scissor.extent.width != 0 &&
+                       scissor.extent.height != 0;
+    // The wavefront kernels add the frame's sample before the render pass,
+    // whose resolve pass writes the mean.
+    recorded_wavefront_iterations_ = 0;
+    if (drawn && wavefront_iterations != 0) {
+      RecordWavefront(scissor, targets, wavefront_iterations);
+      recorded_wavefront_iterations_ = wavefront_iterations;
+    }
     vkCmdBeginRenderPass(command_, &render_begin, VK_SUBPASS_CONTENTS_INLINE);
     VkClearAttachment clears[2]{};
     std::uint32_t clear_count = 0;
@@ -1618,11 +1930,7 @@ private:
       rect.layerCount = 1;
       vkCmdClearAttachments(command_, clear_count, clears, 1, &rect);
     }
-    const VkViewport viewport = DisplayViewport(target);
-    const VkRect2D scissor = DataScissor(target);
-    const bool has_draw = trace ? scene_.Tlas() != VK_NULL_HANDLE : draw.triangle_count != 0;
-    if (has_draw && scissor.extent.width != 0 &&
-        scissor.extent.height != 0) {
+    if (drawn) {
       const Matrix4 world_to_clip = VulkanWorldToClip(draw.world_to_clip);
       if (trace) {
         // The camera pass first: in Radiance output, for depth alone.
@@ -1634,12 +1942,13 @@ private:
         vkCmdSetScissor(command_, 0, 1, &scissor);
         vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
-        vkCmdPushConstants(command_, ray_layout_, VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(RayConstants), &ray_constants_);
+        vkCmdPushConstants(command_, ray_layout_, kRayStages, 0,
+            sizeof(RayConstants), &ray_constants_);
         vkCmdDraw(command_, 3U, 1, 0, 0);
         if (pass == FramePass::Radiance) {
           vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-              radiance_pipeline_);
+              recorded_wavefront_iterations_ != 0 ? resolve_pipeline_
+                                                  : radiance_pipeline_);
           vkCmdDraw(command_, 3U, 1, 0, 0);
         }
       } else {
@@ -1697,6 +2006,118 @@ private:
         detail);
   }
 
+  // The wavefront integrator's sample: camera paths for the data window,
+  // `iterations` bounces of intersect and shade, then the terminated paths
+  // added to the accumulation. Every bounce is recorded; once the queues
+  // are empty, its indirect dispatches have no groups. The queue state is
+  // copied back for the path counts.
+  void RecordWavefront(const VkRect2D& scissor, Targets& targets,
+      std::uint32_t iterations) {
+    const auto timestamp = [&](std::uint32_t query) {
+      if (ray_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            ray_timestamps_, kSceneTimestamps + query);
+    };
+    const auto barrier = [&](VkPipelineStageFlags source,
+                             VkAccessFlags source_access,
+                             VkPipelineStageFlags destination,
+                             VkAccessFlags destination_access) {
+      VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      memory.srcAccessMask = source_access;
+      memory.dstAccessMask = destination_access;
+      vkCmdPipelineBarrier(command_, source, destination, 0, 1, &memory, 0,
+          nullptr, 0, nullptr);
+    };
+    constexpr VkPipelineStageFlags kKernels =
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+    constexpr VkAccessFlags kKernelAccess = VK_ACCESS_SHADER_READ_BIT |
+                                            VK_ACCESS_SHADER_WRITE_BIT |
+                                            VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    // Each kernel reads what the previous one wrote, its indirect dispatch
+    // included.
+    const auto kernel_barrier = [&] {
+      barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+          kKernels, kKernelAccess);
+    };
+    const auto bind = [&](WavefrontKernel kernel) {
+      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE,
+          wavefront_pipelines_[kernel]);
+    };
+    const auto dispatch_indirect = [&](WavefrontKernel kernel,
+                                       std::uint32_t word) {
+      bind(kernel);
+      vkCmdDispatchIndirect(command_, targets.queue_state,
+          VkDeviceSize{word} * sizeof(std::uint32_t));
+    };
+    const auto single = [&](WavefrontKernel kernel) {
+      bind(kernel);
+      vkCmdDispatch(command_, 1, 1, 1);
+    };
+
+    // The preceding submission's kernels and copy have finished with the
+    // counters and paths this one resets and rewrites.
+    barrier(kKernels | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT);
+    vkCmdFillBuffer(command_, targets.queue_state, 0, VK_WHOLE_SIZE, 0);
+    barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+        kKernels, kKernelAccess);
+    vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_COMPUTE,
+        ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+    vkCmdPushConstants(command_, ray_layout_, kRayStages, 0,
+        sizeof(RayConstants), &ray_constants_);
+
+    timestamp(0);
+    const std::uint64_t pixels =
+        std::uint64_t{scissor.extent.width} * scissor.extent.height;
+    const std::uint64_t groups =
+        (pixels + kWavefrontGroupSize - 1) / kWavefrontGroupSize;
+    bind(kGenerateKernel);
+    vkCmdDispatch(command_,
+        static_cast<std::uint32_t>(std::min<std::uint64_t>(groups,
+            kWavefrontMaxGroupsX)),
+        static_cast<std::uint32_t>(
+            (groups + kWavefrontMaxGroupsX - 1) / kWavefrontMaxGroupsX),
+        1);
+    kernel_barrier();
+    single(kPrepareKernel);
+    kernel_barrier();
+    timestamp(1);
+    for (std::uint32_t bounce = 0; bounce < iterations; ++bounce) {
+      dispatch_indirect(kIntersectKernel, kRayArgsWord);
+      kernel_barrier();
+      timestamp(2 + 2 * bounce);
+      single(kPrepareKernel);
+      kernel_barrier();
+      dispatch_indirect(kShadeKernel, kHitArgsWord);
+      kernel_barrier();
+      single(kAdvanceKernel);
+      kernel_barrier();
+      timestamp(3 + 2 * bounce);
+    }
+    dispatch_indirect(kAccumulateKernel, kTerminatedArgsWord);
+    timestamp(2 + 2 * iterations);
+    // The resolve pass reads the accumulation; the host reads the counters.
+    barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
+    const VkBufferCopy copy{0, 0, kQueueStateWords * sizeof(std::uint32_t)};
+    vkCmdCopyBuffer(command_, targets.queue_state, targets.queue_readback, 1,
+        &copy);
+    VkBufferMemoryBarrier host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    host.buffer = targets.queue_readback;
+    host.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+  }
+
   // The messenger writes into `validation_`, so the renderer is never moved.
   InstanceState instance_state_;
   ValidationState validation_;
@@ -1722,6 +2143,12 @@ private:
   // The GpuScene texture generation the descriptor set holds.
   std::uint64_t texture_generation_ = 0;
   VkPipeline radiance_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline resolve_pipeline_ = VK_NULL_HANDLE;
+  // One per WavefrontKernel; null without the wavefront shader.
+  std::array<VkPipeline, kWavefrontKernels> wavefront_pipelines_{};
+  // The bounces the command buffer's wavefront kernels were recorded for;
+  // 0 when it has none.
+  std::uint32_t recorded_wavefront_iterations_ = 0;
   VkPipelineLayout ray_layout_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout ray_descriptor_layout_ = VK_NULL_HANDLE;
   VkDescriptorPool ray_descriptor_pool_ = VK_NULL_HANDLE;

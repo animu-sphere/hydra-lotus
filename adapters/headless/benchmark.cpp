@@ -32,7 +32,12 @@ struct Options {
   std::string label;
   std::uint32_t frames = 64;
   std::uint32_t warmup = 8;
+  Lotus::Integrator integrator = Lotus::Integrator::Reference;
 };
+
+bool Wavefront(const Options& options) {
+  return options.integrator == Lotus::Integrator::Wavefront;
+}
 
 double Milliseconds(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -214,7 +219,8 @@ Result Measure(const std::string& id, const Options& options,
     auto renderer = Lotus::CreateOffscreenRenderer(
         (shaders / "triangle.vert.spv").string(), (shaders / "triangle.frag.spv").string(),
         setup, why, {(shaders / "path_trace.vert.spv").string(),
-                       (shaders / "path_trace.frag.spv").string()});
+                       (shaders / "path_trace.frag.spv").string(),
+                       (shaders / "wavefront.comp.spv").string()});
     if (!renderer) { result.status = setup; result.detail = why; return result; }
     const auto capability = renderer->RayQueryCapability();
     if (!capability.available) {
@@ -237,12 +243,15 @@ Result Measure(const std::string& id, const Options& options,
     Lotus::OffscreenTarget target;
     target.width = target.height = kReferenceSize;
     Lotus::PathTracingSettings settings;
+    settings.integrator = options.integrator;
     settings.sample_index = 1; // Warmup has its own sequence, then reset to seed 0.
     for (std::uint32_t i = 0; i < options.warmup; ++i)
       Check(renderer->RenderScene(draw, target, 1, settings));
     const auto before = renderer->UpdateScene({});
     Check(before);
     std::vector<double> gpu, wall;
+    // The wavefront integrator's rays and kernel durations per frame.
+    std::vector<double> rays, generate, intersect, shade, accumulate;
     Lotus::GpuFrameEvidence frame;
     settings.sample_index = 0;
     for (std::uint32_t i = 0; i < options.frames; ++i) {
@@ -255,6 +264,20 @@ Result Measure(const std::string& id, const Options& options,
         Require(std::isfinite(frame.primary_ray_gpu_ms) && frame.primary_ray_gpu_ms > 0,
             "invalid GPU timestamp duration");
         gpu.push_back(frame.primary_ray_gpu_ms);
+      }
+      if (Wavefront(options)) {
+        Require(!frame.wavefront_path_counts.empty(), "the wavefront frame queued no rays");
+        rays.push_back(std::accumulate(frame.wavefront_path_counts.begin(),
+            frame.wavefront_path_counts.end(), 0.0));
+        const auto& timings = frame.wavefront_timings;
+        Require(timings.available == frame.primary_ray_timestamp_available,
+            "inconsistent wavefront timestamp availability");
+        if (timings.available) {
+          generate.push_back(timings.generate_gpu_ms);
+          intersect.push_back(timings.intersect_gpu_ms);
+          shade.push_back(timings.shade_gpu_ms);
+          accumulate.push_back(timings.accumulate_gpu_ms);
+        }
       }
     }
     Require(gpu.empty() || gpu.size() == options.frames, "inconsistent timestamp availability");
@@ -370,6 +393,24 @@ Result Measure(const std::string& id, const Options& options,
            std::accumulate(wall.begin(), wall.end(), 0.0)
         << ",\"unchanged_cpu_ms\":";
     Series(out, unchanged);
+    out << ",\"wavefront\":";
+    if (!Wavefront(options)) {
+      out << "null";
+    } else {
+      const double total_rays = std::accumulate(rays.begin(), rays.end(), 0.0);
+      out << "{\"rays\":";
+      Series(out, rays);
+      out << ",\"rays_per_path\":"
+          << total_rays / (double{kReferenceSize * kReferenceSize} * options.frames)
+          << ",\"rays_per_second_gpu\":";
+      if (gpu.empty()) out << "null";
+      else out << total_rays * 1000 / std::accumulate(gpu.begin(), gpu.end(), 0.0);
+      out << ",\"generate_gpu_ms\":"; Series(out, generate);
+      out << ",\"intersect_gpu_ms\":"; Series(out, intersect);
+      out << ",\"shade_gpu_ms\":"; Series(out, shade);
+      out << ",\"accumulate_gpu_ms\":"; Series(out, accumulate);
+      out << '}';
+    }
     out << ",\"scene_pool_reserved_bytes\":" << after.stats.memory.reserved_bytes
         << ",\"scene_pool_used_bytes\":" << after.stats.memory.used_bytes
         << ",\"initial_update\":";
@@ -393,7 +434,8 @@ int BenchmarkMain(int argc, char** argv) {
   Options options;
   if (argc < 3 || std::string_view(argv[2]).starts_with("--")) {
     std::cerr << "usage: lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
-                 "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n";
+                 "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n"
+                 "       [--benchmark-integrator <reference|wavefront>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -402,6 +444,11 @@ int BenchmarkMain(int argc, char** argv) {
     if (i + 1 == argc) { std::cerr << "missing value for " << option << '\n'; return 2; }
     const std::string_view value = argv[++i];
     if (option == "--benchmark-label") options.label = value;
+    else if (option == "--benchmark-integrator") {
+      if (value == "reference") options.integrator = Lotus::Integrator::Reference;
+      else if (value == "wavefront") options.integrator = Lotus::Integrator::Wavefront;
+      else { std::cerr << "invalid integrator: " << value << '\n'; return 2; }
+    }
     else if (option == "--benchmark-frames" || option == "--benchmark-warmup") {
       std::uint32_t count = 0;
       const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
@@ -436,7 +483,9 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"configuration\":" << Quote(LOTUS_BENCHMARK_CONFIG)
         << ",\"system\":" << Quote(LOTUS_BENCHMARK_SYSTEM)
         << ",\"cpu_logical_processors\":" << std::thread::hardware_concurrency()
-        << "},\"procedure\":{\"width\":128,\"height\":128,\"sample_index\":0,\"max_bounces\":64,"
+        << "},\"procedure\":{\"integrator\":"
+        << Quote(Wavefront(options) ? "wavefront" : "reference")
+        << ",\"width\":128,\"height\":128,\"sample_index\":0,\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
         << ",\"warmup_frames\":" << options.warmup
         << ",\"warmup_sample_index\":1,\"unchanged_batches\":16,\"unchanged_iterations\":1000,"
@@ -448,13 +497,19 @@ int BenchmarkMain(int argc, char** argv) {
            "\"unchanged_cpu_ms\":\"Commit, extraction and empty UpdateScene plus invariant checks; batch wall time / 1000.\","
            "\"scene_pool_bytes\":\"Scene pools include device-local and host-visible memory; exclude renderer targets and constants.\","
            "\"update_ms\":\"One initial upload/build, one point refit and one transform refit; CPU wall covers blocking UpdateScene only. Counters are cumulative.\","
-           "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\"},"
-           "\"unavailable\":{\"rays_per_second\":null,\"average_path_depth\":null,"
-           "\"total_vram_bytes\":null,\"cpu_render_submit_ms\":null},"
-           "\"unavailable_reasons\":{"
-           "\"rays_per_second\":\"Reference shader has no ray counter; pixel samples are not ray counts.\","
-           "\"average_path_depth\":\"Reference shader has no path-depth counter.\","
-           "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM.\","
+           "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\","
+           "\"wavefront\":\"Wavefront integrator only: rays traced per frame from its queue counts, "
+           "rays per camera path, rays per GPU second and per-kernel GPU durations; null for the reference integrator.\"},"
+           "\"unavailable\":{";
+    // The wavefront integrator counts its rays; the reference shader does not.
+    if (!Wavefront(options))
+      out << "\"rays_per_second\":null,\"average_path_depth\":null,";
+    out << "\"total_vram_bytes\":null,\"cpu_render_submit_ms\":null},"
+           "\"unavailable_reasons\":{";
+    if (!Wavefront(options))
+      out << "\"rays_per_second\":\"Reference shader has no ray counter; pixel samples are not ray counts.\","
+             "\"average_path_depth\":\"Reference shader has no path-depth counter.\",";
+    out << "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM.\","
            "\"cpu_render_submit_ms\":\"Blocking API does not separate CPU submission from GPU wait/readback.\"},\"scenes\":[";
     for (std::size_t i = 0; i < results.size(); ++i) {
       const auto& result = results[i];

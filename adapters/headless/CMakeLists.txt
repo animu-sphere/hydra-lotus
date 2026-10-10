@@ -28,13 +28,13 @@ if(LOTUS_WITH_VULKAN)
   # A shader change relinks, so the copies below and the report follow it.
   set_property(TARGET lotus-headless APPEND PROPERTY LINK_DEPENDS
     "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-    "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
+    "${LOTUS_WAVEFRONT_SPV}" "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
   add_custom_command(TARGET lotus-headless POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory
       "$<TARGET_FILE_DIR:lotus-headless>/shaders"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-      "$<TARGET_FILE_DIR:lotus-headless>/shaders"
+      "${LOTUS_WAVEFRONT_SPV}" "$<TARGET_FILE_DIR:lotus-headless>/shaders"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${LOTUS_VERTEX_SPV}"
       "$<TARGET_FILE_DIR:lotus-headless>/shaders/triangle.vert.spv"
