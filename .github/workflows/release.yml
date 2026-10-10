@@ -1,0 +1,117 @@
+# Tag-driven publication follows hydra-merlin; packaging and dry runs follow
+# hydra-toon. Only the measured Windows lookdev/Hydra configuration is packaged.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/renderer-ci.yml
+      - scripts/release.py
+      - scripts/test_release.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Verify project versions and finalized changelog
+        id: version
+        env:
+          IS_TAG_PUSH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          args=()
+          if [ "$IS_TAG_PUSH" = true ]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          else
+            args+=(--allow-unreleased)
+          fi
+          version=$(python scripts/release.py version "${args[@]}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: preflight
+    uses: ./.github/workflows/renderer-ci.yml
+    with:
+      release_version: ${{ needs.preflight.outputs.version }}
+
+  bundle:
+    needs: [preflight, checks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-lookdev-windows
+          path: dist-release
+      - name: Assemble source, checksums and release notes
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          IS_TAG_PUSH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          args=()
+          if [ "$IS_TAG_PUSH" != true ]; then
+            args+=(--allow-unreleased)
+          fi
+          python scripts/release.py bundle --version "$RELEASE_VERSION" --out dist-release "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-bundle
+          if-no-files-found: error
+          path: |
+            dist-release/
+            release-notes.md
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [preflight, bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-bundle
+          path: bundle
+      - name: Publish the release from the existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Stage assets on a draft; only publish after every upload succeeds.
+          # On retries reuse a draft, but never overwrite a published release.
+          if gh release list --limit 1000 --json tagName,isDraft > releases.json; then
+            state=$(jq -r --arg tag "$RELEASE_TAG" '.[] | select(.tagName == $tag) | .isDraft' releases.json)
+          else
+            exit 1
+          fi
+          if [ "$state" = false ]; then
+            echo "::error::Release $RELEASE_TAG is already published"
+            exit 1
+          fi
+          if [ -z "$state" ]; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag \
+              --title "hydra-lotus $RELEASE_TAG" --notes-file bundle/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" bundle/dist-release/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false \
+            --title "hydra-lotus $RELEASE_TAG" --notes-file bundle/release-notes.md

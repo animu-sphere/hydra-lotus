@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-10-release-workflow.md](2026-10-10-release-workflow.md) | Tag-driven Actions, release naming, repeatable Hydra packaging, required asset checks, checksum/notes assembly and release regressions. |
 | [2026-10-10-release-gate.md](2026-10-10-release-gate.md) | Foundation release verification: physical-GPU core/Hydra, deterministic references, synchronization, runtime-free tests, documentation and hosted CI. |
 | [2026-10-10-performance-baseline.md](2026-10-10-performance-baseline.md) | Fixed four-scene timing baseline, three independent invocations with identical output images, raw measurements, build/refit and unchanged-scene costs, explicit unavailable metrics and benchmark regressions. |
 | [2026-10-10-blas-refit-compaction.md](2026-10-10-blas-refit-compaction.md) | Compatible BLAS point refits and dependent TLAS bounds updates, CPU/GPU update measurements, topology and shared-source regressions, isolated compacted-size/copy evaluation and production compaction disposition. |

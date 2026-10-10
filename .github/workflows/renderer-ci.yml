@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_version:
+        description: Package the validated Hydra build for this release version
+        type: string
+        default: ""
 permissions:
   contents: read
 concurrency:
@@ -25,7 +31,7 @@ jobs:
       - name: Check documentation and checker regressions
         run: |
           python scripts/check_docs.py
-          python -m unittest discover -s scripts -p test_check_docs.py
+          python -m unittest discover -s scripts -p 'test_*.py'
   core:
     runs-on: windows-2022
     timeout-minutes: 20
@@ -158,6 +164,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ost validate --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --strict-renderer-evidence
           exit $LASTEXITCODE
+      - name: Package the release twice and verify its contents
+        if: inputs.release_version != ''
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          CI_PLATFORM: ${{ steps.cell.outputs.platform }}
+          CI_PROFILE: ${{ steps.cell.outputs.profile }}
+          CI_INTENT: ${{ steps.cell.outputs.intent }}
+        run: |
+          ost package --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --json > .ost-ci/package-first.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ost package --target $env:CI_PLATFORM --profile $env:CI_PROFILE --intent $env:CI_INTENT --json > .ost-ci/package-second.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/release.py stage --version $env:RELEASE_VERSION --first .ost-ci/package-first.log --second .ost-ci/package-second.log --out release-stage
+          exit $LASTEXITCODE
+      - name: Upload the validated release package
+        if: inputs.release_version != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-lookdev-windows
+          path: release-stage/
+          if-no-files-found: error
       - name: Upload reports, images and logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
