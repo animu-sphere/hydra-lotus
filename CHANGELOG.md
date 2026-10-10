@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- A separate headless benchmark mode for fixed Cornell, textured, highly
+  instanced and geometry-heavy workloads. Timing JSON retains raw samples,
+  build/device identity, GPU and blocking wall times, samples/s, scene-pool
+  bytes, build/refit timings and unchanged-scene CPU cost, with explicit
+  unavailable metrics. Three repeated runs establish the baseline; CTest
+  checks report/workload/CLI contracts and missing-driver handling.
+
 - BLAS point refits for compatible geometry replacements, with dependent
   TLAS bounds refits and GPU buffer reuse. Attribute-only changes leave
   acceleration structures unchanged; vertex-count or index changes rebuild.

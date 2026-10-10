@@ -640,6 +640,64 @@ The reference path tracer's images are of one fixed scene, rendered by
   the device and build that wrote the reference, so it does not decide the
   check.
 
+### Fixed benchmarks
+
+`lotus-headless --benchmark <json-path>` runs four procedural workloads from
+`adapters/headless/benchmark.cpp`, sharing the reference path tracer and
+Cornell scene definition. Workload identities are versioned; changes to
+their geometry, textures, materials or camera require a new identity before
+comparing measurements. Build identity is supplied with `--benchmark-label`;
+the JSON also captures compiler, configuration, OS/architecture, CPU logical
+processor count, GPU identity, driver and validation state.
+
+Each workload uses a fresh renderer, a square 128-pixel target and the
+reference camera. Defaults are 8 warmup frames from sample index 1, followed
+by a reset to sample index 0 and 64 measured frames, one pixel sample per
+frame, with 64 maximum bounces. `--benchmark-frames` and
+`--benchmark-warmup` accept 1–4096. The non-Cornell workloads use a white
+environment, coated diffuse surfaces and deterministic grid heights.
+
+| Identity | Workload |
+| --- | --- |
+| `cornell-v1` | The committed reference's scene: 36 triangles in 8 geometries/placements. Its final image must satisfy the [reference tolerance](#reference-images). |
+| `textured-v1` | 16 independent 32×32-quad patches, 32,768 unique triangles, 16 materials and 16 procedural 256×256 RGBA8 sRGB textures, with per-corner UVs. |
+| `instanced-v1` | One two-triangle prototype in a 64×64 placement grid (4,096 instances). |
+| `geometry-v1` | One indexed 512×512-quad grid, 524,288 triangles and 263,169 vertices. |
+
+The report schema is `lotus-benchmark-v1`, separate from OpenStrata's
+renderer-evidence schema. It retains raw GPU-pass and blocking render wall
+durations plus mean, median, min, max and nearest-rank p95. Pixel samples/s
+divide full-frame pixel samples (including misses) by total GPU or wall
+time. Only one sample is rendered per call: the backend's final-submission
+timestamp cannot be mistaken for the total of a multi-frame call.
+
+Unchanged-scene CPU cost covers `Commit`, extraction and empty `UpdateScene`,
+including invariant checks, in 16 batches of 1,000 calls. Rendering and these
+updates must leave scene memory, upload and acceleration counters unchanged.
+Initial upload/BLAS/TLAS build, one compatible point edit and one transform
+edit record blocking backend-update wall time and per-phase GPU timestamps;
+CPU scene construction/extraction is outside these update timings. Build and
+update counters check that the point edit refits BLAS and TLAS, and the
+transform edit refits only TLAS. Each update kind is a single observation per
+invocation, not a distribution.
+
+Scene-pool reserved/occupied bytes include device-local and host-visible
+resources and exclude renderer targets/constants. Total VRAM, rays/s,
+average path depth and CPU-only render-submit time are explicitly unavailable
+(`null` with reasons). The blocking render wall duration includes GPU waits,
+readback and product copies. A queue without timestamp support retains wall
+measurements and emits null GPU durations/rates.
+
+Each successful scene writes a final RGB PFM beside the JSON, named
+`<report-stem>-<scene-id>.pfm`, and checks finite, visible, nonblack output.
+Validation messages fail the invocation. Exit codes are 0 for success, 77
+for explained unavailable capability, 1 for failures and 2 for CLI errors;
+skipped/failed scenes have null measurements. Benchmark options cannot be
+mixed with correctness-report options. CTest checks the report contract and
+invalid arguments, with an isolated missing-driver variant on Vulkan builds.
+Measured numbers and repeatability evidence are in the
+[fixed baseline report](../reports/2026-10-10-performance-baseline.md).
+
 ## Hydra extraction
 
 The adapter keys each mesh by its `SdfPath` string and reads points,

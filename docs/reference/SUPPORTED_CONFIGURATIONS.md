@@ -9,6 +9,7 @@ physical-GPU rendering.
 
 | OS | Compiler | Build | Runtime | GPU | Result | Report |
 | --- | --- | --- | --- | --- | --- | --- |
+| Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release; runtime-free `ci-core` | no OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 / none | NVIDIA RTX A5000; Vulkan disabled in `ci-core` | Fixed benchmark baseline, deterministic images, schema/CLI and capability regression; core 17/17, Hydra 34/34, runtime-free 9/9 and strict GPU evidence passed | [Performance baseline](../reports/2026-10-10-performance-baseline.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release | `core` without OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Memory pool/readback/churn, synchronization, deterministic references; core 13/13, Hydra 30/30 and strict evidence passed | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
 | Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained scene-memory and synchronization SKIPs | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
 | GitHub-hosted Windows 2022 x86_64 | MSVC (hosted toolchain) | runtime-free `ci-core` / `hydra`, Release | none / pinned OpenUSD runtime | No usable Vulkan driver in Hydra job | Core 8/8 and Hydra 27/27 entries without failures, GPU/host/synchronization capability SKIPs explained | [Foundation closure](../reports/2026-10-10-foundation-closure.md#hosted-follow-up) |

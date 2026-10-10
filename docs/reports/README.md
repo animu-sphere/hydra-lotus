@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-10-performance-baseline.md](2026-10-10-performance-baseline.md) | Fixed four-scene timing baseline, three independent invocations with identical output images, raw measurements, build/refit and unchanged-scene costs, explicit unavailable metrics and benchmark regressions. |
 | [2026-10-10-blas-refit-compaction.md](2026-10-10-blas-refit-compaction.md) | Compatible BLAS point refits and dependent TLAS bounds updates, CPU/GPU update measurements, topology and shared-source regressions, isolated compacted-size/copy evaluation and production compaction disposition. |
 | [2026-10-10-foundation-closure.md](2026-10-10-foundation-closure.md) | Foundation scope dispositions, hosted core/Hydra success with inspected capability SKIPs, strict physical-GPU checks and all three entry points. |
 | [2026-10-10-gpu-memory-pools.md](2026-10-10-gpu-memory-pools.md) | Shared GPU scene memory, readback/churn allocation measurements, independent occupancy oracle, dedicated fallback, mapping, failure and teardown checks, deterministic references and Hydra regression. |

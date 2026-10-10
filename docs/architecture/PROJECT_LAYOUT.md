@@ -34,7 +34,7 @@ that moment every file is project-owned; the template is not re-applied.
 | `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU scene state, keyed geometry/material resources, immutable snapshots and shared geometry; technical behavior is owned by the [scene reference](../reference/SCENE.md) |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance and material table rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
 | `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments, clear control and CPU-content restoration using persistent staging, GPU scene buffers and BLAS/TLAS with private memory pools, the reference path-tracing pass and GPU timestamps, swapchain presentation, Slang shaders |
-| `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference ([scene reference](../reference/SCENE.md#reference-images)) |
+| `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference; its separate benchmark mode writes timing JSON and PFM images ([scene reference](../reference/SCENE.md#fixed-benchmarks)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |
 | `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_WITH_VULKAN` only, not installed); `validation/reference/` holds the committed reference images |
@@ -57,6 +57,12 @@ The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its
 `lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained
 missing-driver SKIP.
+
+`lotus-renderer-benchmark` checks the headless benchmark's workload counts,
+report schema, images, unavailable metrics and CLI rejection in every build.
+The Vulkan-only `lotus-renderer-benchmark-no-driver` checks explained SKIPs in
+an isolated child process. Both use `validation/benchmark-test.cmake` and
+keep benchmark data separate from renderer correctness evidence.
 
 ## 3. Where new code goes
 

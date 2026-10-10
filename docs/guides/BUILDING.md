@@ -47,6 +47,23 @@ files:
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-reference validation/reference
 ```
 
+## Fixed performance baseline
+
+After the default build, run the independent benchmark mode:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/performance-baseline-1.json --benchmark-label "ae72568 + LOTUS-PERF-01; ost core Release"
+```
+
+This invocation was measured three times, changing the output suffix to `2`
+and `3` ([baseline evidence](../reports/2026-10-10-performance-baseline.md)).
+For a new revision, put its identity in the label. JSON and final PFM images
+are written under `build/`; preserve them when comparing changes. The
+[benchmark reference](../reference/SCENE.md#fixed-benchmarks) owns workload
+identities, defaults, metric scopes, capability handling and exit codes.
+CTest uses 16 measured/2 warmup frames for the report regression; the
+performance baseline uses the default 64/8.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured
