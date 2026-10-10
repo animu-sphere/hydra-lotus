@@ -3430,9 +3430,69 @@ std::string WavefrontEvidenceFailure(const Lotus::GpuFrameEvidence& frame,
   return {};
 }
 
+// A fractional coverage test draws a random number while the wavefront
+// integrator intersects, and the path's next draws happen when it shades.
+// Paths that pass a 25% layer scatter towards a light behind the camera's
+// near plane, which reaches them in proportion to its cosine-weighted solid
+// angle; a shade that reused the coverage draw would confine them to
+// directions near the normal and brighten the image several times over.
+// Both integrators render the same samples, and their means must agree.
+std::string CoverageScatteringFailure(PathScenes& scenes) {
+  constexpr std::uint32_t kSamples = 32;
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  Lotus::Material layer;
+  layer.ior = 1;
+  layer.base_color = {1, 1, 1};
+  layer.opacity = 0.25F;
+  layer.opacity_threshold = 0;
+  world.SetMesh("/layer", Square(), Lotus::MeshInstance{});
+  Paint(world, "/layer", layer);
+  Lotus::Material black;
+  black.ior = 1;
+  black.base_color = {0, 0, 0};
+  Lotus::MeshInstance behind;
+  behind.world_from_object = Translation(0, 0, -2);
+  world.SetMesh("/back", Square(), behind);
+  Paint(world, "/back", black);
+  // Camera rays start at world z = 2.
+  Lotus::MeshInstance above;
+  above.world_from_object = Translation(0, 0, 2.5F);
+  above.world_from_object[0] = above.world_from_object[5] = 1.5F;
+  world.SetMesh("/light", Square(), above);
+  Lotus::Material light = black;
+  light.emission = {1, 1, 1};
+  Paint(world, "/light", light);
+
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence frame;
+  std::string failure = scenes.Render(settings, frame, kSamples);
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  if (!failure.empty())
+    return "reference integrator: " + failure;
+  const std::vector<float> values = ColorValues(frame.color);
+  Rgb expected{};
+  double pixels = 0;
+  for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
+    if (values[pixel * 4 + 3] != 1.0F)
+      continue;
+    pixels += 1;
+    for (int c = 0; c < 3; ++c)
+      expected[c] += values[pixel * 4 + c];
+  }
+  if (pixels == 0)
+    return "no reference pixel's samples all hit";
+  for (double& channel : expected)
+    channel /= pixels;
+  return scenes.ExpectMean("coverage before scattering, against the "
+                           "reference integrator", kSamples, expected);
+}
+
 // Renderer Phase 2 equivalence: the wavefront integrator passes every
-// transport scenario the reference integrator does, and its reference images
-// match the committed reference by the DES-Q5 metric. Then both integrators
+// transport scenario the reference integrator does, matches its mean where
+// a coverage draw precedes scattering, and its reference images match the
+// committed reference by the DES-Q5 metric. Then both integrators
 // render the same samples of the reference scene, and how far they differ
 // is recorded; the queue occupancy and kernel timings are checked; a change
 // of integrator restarts the accumulation; and the bounce limit fails
@@ -3455,6 +3515,11 @@ std::string WavefrontFailure(PathScenes& scenes,
   }
   scenes.Summarize("the bsdf, normals, textures, normal maps, opacity, "
                    "multibounce and accumulation scenarios pass");
+  std::string coverage = CoverageScatteringFailure(scenes);
+  if (auto cleared = scenes.Clear(); coverage.empty())
+    coverage = std::move(cleared);
+  if (!coverage.empty())
+    return coverage;
   if (auto failure = ReferenceFailure(scenes, reference_directory, {});
       !failure.empty())
     return "reference images: " + failure;

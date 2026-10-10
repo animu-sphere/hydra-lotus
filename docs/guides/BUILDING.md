@@ -64,7 +64,8 @@ build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchm
 ```
 
 ([equivalence](../reports/2026-10-10-wavefront-equivalence.md#performance)
-and [scheduling](../reports/2026-10-10-wavefront-scheduling.md#performance)
+[scheduling](../reports/2026-10-10-wavefront-scheduling.md#performance)
+and [path-state](../reports/2026-10-10-wavefront-path-state.md#performance)
 measurements). `--benchmark-size <pixels>` measures another square target.
 For a new revision, put its identity in the label. JSON and final PFM images
 are written under `build/`; preserve them when comparing changes. The

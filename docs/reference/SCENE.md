@@ -655,8 +655,14 @@ the transport above split into compute kernels
 specialized per kernel) that run before the scene render pass.
 
 - **Path state.** One slot per target pixel holds the path's ray,
-  throughput, radiance, depth, random-number state and the hit its ray
-  found, 112 bytes each, between kernels. Two ray queues, the hit queue and
+  throughput, last sampling density, radiance, random-number state and the
+  hit its ray found between kernels, 80 bytes in five sections of 16-byte
+  entries (ray origin, ray direction, throughput, radiance with the
+  random-number state, hit), each an array over the slots, so a kernel
+  reads and writes only the sections it uses. A slot's pixel is the slot
+  itself and a queued path's depth is its bounce, so neither is stored;
+  nor are the path flags, which no transport step sets yet, or the hit
+  distance, which shading does not read. Two ray queues, the hit queue and
   the terminated-path queue each hold up to one slot index per pixel. Each
   bounce has a ray-queue and a hit-queue descriptor, and the terminated
   queue has one: the queue's length and its indirect dispatch, which every
@@ -706,8 +712,12 @@ specialized per kernel) that run before the scene render pass.
   The Hydra adapter always uses the reference integrator.
 
 `renderer.path.wavefront` runs the `bsdf`, `normals`, `textures`,
-`normal_maps`, `opacity`, `multibounce` and `accumulation` scenarios and
-the reference-image comparison with the wavefront integrator. It then
+`normal_maps`, `opacity`, `multibounce` and `accumulation` scenarios with
+the wavefront integrator. Where a fractional coverage draw precedes
+scattering (a 25% white layer lit by a light behind the camera's near
+plane), the wavefront integrator's 32-spp mean must match the reference
+integrator's within 5 standard errors. The reference-image comparison
+follows, with the wavefront integrator. It then
 renders the same 64 samples of the reference scene with both integrators
 and records how many values differ, checks one more sample's queue
 occupancy (every camera ray queued, no bounce queuing more paths than the
@@ -715,7 +725,8 @@ one before, the tail tracing the bounces after the rounds) and kernel
 timings, and checks that switching integrators restarts the accumulation
 and that the bounce limit fails cleanly
 ([equivalence report](../reports/2026-10-10-wavefront-equivalence.md),
-[scheduling report](../reports/2026-10-10-wavefront-scheduling.md)).
+[scheduling report](../reports/2026-10-10-wavefront-scheduling.md),
+[path-state report](../reports/2026-10-10-wavefront-path-state.md)).
 
 ### Fixed benchmarks
 
@@ -752,7 +763,11 @@ renderer-evidence schema. It retains raw GPU-pass and blocking render wall
 durations plus mean, median, min, max and nearest-rank p95. Pixel samples/s
 divide full-frame pixel samples (including misses) by total GPU or wall
 time. Only one sample is rendered per call: the backend's final-submission
-timestamp cannot be mistaken for the total of a multi-frame call.
+timestamp cannot be mistaken for the total of a multi-frame call. The
+report does not record the GPU's power state, which the driver may lower
+between the measured frames; GPU durations are comparable only between
+runs made in the same state
+([path-state report](../reports/2026-10-10-wavefront-path-state.md#power-states)).
 
 Unchanged-scene CPU cost covers `Commit`, extraction and empty `UpdateScene`,
 including invariant checks, in 16 batches of 1,000 calls. Rendering and these
