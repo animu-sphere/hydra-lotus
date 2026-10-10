@@ -1,5 +1,7 @@
 # Wavefront queue bookkeeping and round scheduling
 
+> Later: the bimodal 1024×1024 timings below are GPU power states, not desktop interference ([path-state report](2026-10-10-wavefront-path-state.md#power-states)).
+
 Measured on 2026-10-10 for LOTUS-WAVE-02, in the working tree based on
 `ec643a2`, on the machine and toolchain of the
 [equivalence report](2026-10-10-wavefront-equivalence.md): Windows 11

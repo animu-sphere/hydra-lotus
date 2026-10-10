@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Wavefront path state is stored in five 16-byte sections per slot rather
+  than a 112-byte record, and each kernel reads and writes only the
+  sections it uses. The fixed benchmarks' wavefront GPU time fell
+  1.19–1.30 times, and 2.0 times for `cornell-v1` at 1024×1024, with
+  identical images. `renderer.path.wavefront` also compares both
+  integrators' means where a coverage draw precedes scattering.
+
 - Wavefront queue appends maintain each queue's indirect dispatch, so the
   bookkeeping kernels and half of each round's barriers are gone. A call
   records rounds only for the bounces its previous sample's queues held at

@@ -11,9 +11,10 @@ Wavefront optimization → integrator selection through Hydra.
 
 The wavefront integrator reproduces the reference transport
 ([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
-the [scheduling report](../reports/2026-10-10-wavefront-scheduling.md)
-records its cost against the reference integrator after queue bookkeeping
-and round scheduling.
+the [scheduling](../reports/2026-10-10-wavefront-scheduling.md) and
+[path-state](../reports/2026-10-10-wavefront-path-state.md) reports record
+its cost against the reference integrator after queue bookkeeping, round
+scheduling and per-path state traffic.
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
 records four repeatable workloads and metric availability. The
@@ -47,14 +48,16 @@ in the reference documentation.
   the wavefront kernels' work per path and path classification within the
   [phase contract](../design/ROADMAP_POLICY.md#renderer-phase-2--wavefront-path-tracing).
   Queue bookkeeping and round scheduling are
-  [measured](../reports/2026-10-10-wavefront-scheduling.md); at
+  [measured](../reports/2026-10-10-wavefront-scheduling.md), and path state
+  is [stored by section](../reports/2026-10-10-wavefront-path-state.md); at
   1024×1024 the [wavefront integrator](../reference/SCENE.md#wavefront-integrator)
-  is still 3.4 times slower than the reference integrator on `cornell-v1`,
-  and its rounds' intersect and shade kernels each take longer than the
-  reference's whole frame. Each change keeps `renderer.path.wavefront`
+  is 1.7 times slower than the reference integrator on `cornell-v1`, with
+  a ray and its shading costing about the same in both. Path
+  classification remains. Each change keeps `renderer.path.wavefront`
   passing and is measured with `--benchmark-integrator wavefront`, at the
-  default size and with `--benchmark-size 1024`, against the
-  [scheduling measurements](../reports/2026-10-10-wavefront-scheduling.md#performance).
+  default size and with `--benchmark-size 1024` on `cornell-v1` (other
+  scenes only in the same [power state](../reports/2026-10-10-wavefront-path-state.md#power-states)),
+  against the [path-state measurements](../reports/2026-10-10-wavefront-path-state.md#performance).
 - [ ] **LOTUS-WAVE-03 — Integrator selection through Hydra.** Expose
   `PathTracingSettings::integrator` as a render setting, install the
   wavefront kernels with the Hydra plugin, and check converged Hydra images

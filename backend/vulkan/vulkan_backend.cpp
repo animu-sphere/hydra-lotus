@@ -144,8 +144,9 @@ constexpr std::uint32_t kQueueStateWords =
 static_assert(kQueueStateWords * sizeof(std::uint32_t) <= 65536);
 // Two ray queues, the hit queue and the terminated-path queue.
 constexpr VkDeviceSize kWavefrontQueues = 4;
-// PathRecord's std430 stride in wavefront.slang.
-constexpr VkDeviceSize kPathRecordBytes = 112;
+// A path slot's state in wavefront.slang: five sections of one 16-byte entry
+// per slot.
+constexpr VkDeviceSize kPathStateBytes = 5 * 16;
 // Timestamps: the scene pass's first and last (kSceneTimestamps), then the
 // wavefront kernels': before generate, after it, after each round's
 // intersect and shade, after the tail and after accumulate.
@@ -1045,7 +1046,7 @@ public:
             kWavefrontQueues * slots * sizeof(std::uint32_t),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, targets.queue_items,
             targets.queue_items_memory, detail) &&
-        CreateDeviceBuffer(physical_device_, device_, slots * kPathRecordBytes,
+        CreateDeviceBuffer(physical_device_, device_, slots * kPathStateBytes,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, targets.paths,
             targets.paths_memory, detail) &&
         CreateHostBuffer(physical_device_, device_, state_bytes,

@@ -62,55 +62,87 @@ static const uint kRayQueue = 0;
 static const uint kHitQueue = 2;
 static const uint kTerminatedQueue = 3;
 
-// One path slot: PathState and the hit its ray found. No member is a
-// float3 (see StoredSpectrum).
-struct PathRecord {
-  float4 origin_tmin;
-  float4 direction_tmax;
-  StoredSpectrum throughput;
-  StoredSpectrum radiance;
-  uint pixel_index;
-  uint depth;
-  uint rng;
-  float last_pdf;
-  uint flags;
-  Hit hit;
-};
+// Path state is stored by section: each section is an array of
+// path_capacity 16-byte entries, one per slot, so a kernel loads and stores
+// only the parts of PathState it uses rather than the whole state. A
+// slot's pixel index is the slot itself, and the depth of a path in bounce
+// b's queues is b, so neither is stored. No transport step sets flags yet,
+// so they are not stored either.
+static const uint kOriginSection = 0;     // ray origin, TMin
+static const uint kDirectionSection = 1;  // ray direction, TMax
+static const uint kThroughputSection = 2; // throughput, last pdf
+static const uint kRadianceSection = 3;   // radiance, random-number state
+static const uint kHitSection = 4;        // instance, primitive, barycentrics
 
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> queue_state;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> queue_items;
-[[vk::binding(7, 0)]] RWStructuredBuffer<PathRecord> paths;
+[[vk::binding(7, 0)]] RWStructuredBuffer<uint4> paths;
 
-PathState LoadPath(uint slot) {
-  const PathRecord record = paths[slot];
+uint4 Load(uint section, uint slot) {
+  return paths[section * path_constants.path_capacity + slot];
+}
+
+void Store(uint section, uint slot, uint4 value) {
+  paths[section * path_constants.path_capacity + slot] = value;
+}
+
+uint4 Pack(float3 xyz, float w) {
+  return uint4(asuint(xyz), asuint(w));
+}
+
+void LoadRay(uint slot, inout PathState path) {
+  const float4 origin = asfloat(Load(kOriginSection, slot));
+  const float4 direction = asfloat(Load(kDirectionSection, slot));
+  path.ray.Origin = origin.xyz;
+  path.ray.TMin = origin.w;
+  path.ray.Direction = direction.xyz;
+  path.ray.TMax = direction.w;
+}
+
+// The state a path carries between bounces, everything but its hit.
+PathState LoadPath(uint slot, uint depth) {
   PathState path;
-  path.ray.Origin = record.origin_tmin.xyz;
-  path.ray.TMin = record.origin_tmin.w;
-  path.ray.Direction = record.direction_tmax.xyz;
-  path.ray.TMax = record.direction_tmax.w;
-  path.throughput = LoadSpectrum(record.throughput);
-  path.radiance = LoadSpectrum(record.radiance);
-  path.pixelIndex = record.pixel_index;
-  path.depth = record.depth;
-  path.rngState = record.rng;
-  path.lastPdf = record.last_pdf;
-  path.flags = record.flags;
+  LoadRay(slot, path);
+  const uint4 throughput = Load(kThroughputSection, slot);
+  path.throughput = UnpackSpectrum(throughput);
+  path.lastPdf = asfloat(throughput.w);
+  const uint4 radiance = Load(kRadianceSection, slot);
+  path.radiance = UnpackSpectrum(radiance);
+  path.rngState = radiance.w;
+  path.flags = 0;
+  path.pixelIndex = slot;
+  path.depth = depth;
   return path;
 }
 
-void StorePath(uint slot, PathState path, Hit hit) {
-  PathRecord record;
-  record.origin_tmin = float4(path.ray.Origin, path.ray.TMin);
-  record.direction_tmax = float4(path.ray.Direction, path.ray.TMax);
-  record.throughput = StoreSpectrum(path.throughput);
-  record.radiance = StoreSpectrum(path.radiance);
-  record.pixel_index = path.pixelIndex;
-  record.depth = path.depth;
-  record.rng = path.rngState;
-  record.last_pdf = path.lastPdf;
-  record.flags = path.flags;
-  record.hit = hit;
-  paths[slot] = record;
+// What a path continues with: its ray, throughput, radiance and
+// random-number state.
+void StorePath(uint slot, PathState path) {
+  Store(kOriginSection, slot, Pack(path.ray.Origin, path.ray.TMin));
+  Store(kDirectionSection, slot, Pack(path.ray.Direction, path.ray.TMax));
+  Store(kThroughputSection, slot,
+      PackSpectrum(path.throughput, asuint(path.lastPdf)));
+  StoreRadiance(slot, path);
+}
+
+void StoreRadiance(uint slot, PathState path) {
+  Store(kRadianceSection, slot, PackSpectrum(path.radiance, path.rngState));
+}
+
+void StoreHit(uint slot, Hit hit) {
+  Store(kHitSection, slot,
+      uint4(hit.instance, hit.primitive, asuint(hit.barycentrics)));
+}
+
+// Shading reads no hit distance, so none is stored.
+Hit LoadHit(uint slot) {
+  const uint4 stored = Load(kHitSection, slot);
+  Hit hit;
+  hit.instance = stored.x;
+  hit.primitive = stored.y;
+  hit.barycentrics = asfloat(stored.zw);
+  hit.t = 0.0;
+  return hit;
 }
 
 uint Groups(uint count) {
@@ -156,12 +188,14 @@ void Generate(uint index) {
     accumulation[pixel] = float4(0.0);
   }
   const PathState path = StartPath(pixel);
-  StorePath(path.pixelIndex, path, (Hit)0);
+  StorePath(path.pixelIndex, path);
   Push(RayDescriptor(0), kRayQueue, path.pixelIndex);
 }
 
 // A camera ray that misses adds no sample; a continuation ray that misses
-// ends its path with the environment.
+// ends its path with the environment. Tracing draws random numbers only at
+// fractionally opaque candidates, so the random state is stored back only
+// when it changed or the path ended.
 void Intersect(uint index) {
   const uint bounce = queue_state[kIntersectBounce];
   if (index == 0) {
@@ -172,14 +206,22 @@ void Intersect(uint index) {
   const uint stride = QueueStride(rays);
   for (uint position = index; position < count; position += stride) {
     const uint slot = QueueItem(kRayQueue + (bounce & 1), position);
-    PathState path = LoadPath(slot);
+    PathState path;
+    LoadRay(slot, path);
+    const uint4 radiance = Load(kRadianceSection, slot);
+    path.radiance = UnpackSpectrum(radiance);
+    path.rngState = radiance.w;
     Hit hit;
     if (Trace(path.ray, path.rngState, hit)) {
-      StorePath(slot, path, hit);
+      StoreHit(slot, hit);
       Push(HitDescriptor(bounce), kHitQueue, slot);
-    } else if (path.depth != 0) {
+      if (path.rngState != radiance.w) {
+        StoreRadiance(slot, path);
+      }
+    } else if (bounce != 0) {
+      path.throughput = UnpackSpectrum(Load(kThroughputSection, slot));
       MissPath(path);
-      StorePath(slot, path, hit);
+      StoreRadiance(slot, path);
       Push(kTerminated, kTerminatedQueue, slot);
     }
   }
@@ -195,13 +237,13 @@ void Shade(uint index) {
   const uint stride = QueueStride(hits);
   for (uint position = index; position < count; position += stride) {
     const uint slot = QueueItem(kHitQueue, position);
-    PathState path = LoadPath(slot);
-    const Hit hit = paths[slot].hit;
-    const bool continues = ScatterPath(path, hit);
-    StorePath(slot, path, hit);
-    if (continues) {
+    PathState path = LoadPath(slot, bounce);
+    if (ScatterPath(path, LoadHit(slot))) {
+      StorePath(slot, path);
       Push(RayDescriptor(bounce + 1), kRayQueue + ((bounce + 1) & 1), slot);
     } else {
+      // Accumulate reads only an ended path's radiance.
+      StoreRadiance(slot, path);
       Push(kTerminated, kTerminatedQueue, slot);
     }
   }
@@ -217,7 +259,7 @@ void Tail(uint index) {
   const uint stride = QueueStride(rays);
   for (uint position = index; position < count; position += stride) {
     const uint slot = QueueItem(kRayQueue + (bounce & 1), position);
-    PathState path = LoadPath(slot);
+    PathState path = LoadPath(slot, bounce);
     Hit hit;
     // At least one round ran, so every ray here continues a path.
     while (true) {
@@ -230,7 +272,7 @@ void Tail(uint index) {
       }
       InterlockedAdd(queue_state[RayDescriptor(path.depth) + kCountWord], 1);
     }
-    StorePath(slot, path, hit);
+    StoreRadiance(slot, path);
     Push(kTerminated, kTerminatedQueue, slot);
   }
 }
@@ -245,7 +287,7 @@ void Accumulate(uint index) {
     const uint2 pixel =
         uint2(slot % path_constants.width, slot / path_constants.width);
     accumulation[pixel] +=
-        float4(SpectrumToRgb(LoadSpectrum(paths[slot].radiance)), 1.0);
+        float4(SpectrumToRgb(UnpackSpectrum(Load(kRadianceSection, slot))), 1.0);
   }
 }
 

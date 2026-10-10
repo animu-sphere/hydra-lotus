@@ -28,22 +28,18 @@ public float3 SpectrumToRgb(Spectrum spectrum) {
   return spectrum.rgb;
 }
 
-// A Spectrum as storage buffers hold it, such as the wavefront integrator's
-// path state. It has no float3: slangc 1.4.350 gives every float3 pointer of
-// a module the 16-byte array stride of a float3 in a std430 buffer, which
-// misreads the scene's tightly packed positions.
-public struct StoredSpectrum {
-  internal float4 value;
-};
-
-public StoredSpectrum StoreSpectrum(Spectrum spectrum) {
-  StoredSpectrum stored;
-  stored.value = float4(spectrum.rgb, 0.0);
-  return stored;
+// A Spectrum as storage buffers hold it, such as a section of the wavefront
+// integrator's path state: one 16-byte entry whose last word is the
+// caller's. Entries are words rather than a struct with a float3: slangc
+// 1.4.350 gives every float3 pointer of a module the 16-byte array stride
+// of a float3 in a std430 buffer, which misreads the scene's tightly packed
+// positions.
+public uint4 PackSpectrum(Spectrum spectrum, uint extra) {
+  return uint4(asuint(spectrum.rgb), extra);
 }
 
-public Spectrum LoadSpectrum(StoredSpectrum stored) {
-  return SpectrumFromRgb(stored.value.xyz);
+public Spectrum UnpackSpectrum(uint4 packed) {
+  return SpectrumFromRgb(asfloat(packed.xyz));
 }
 
 public Spectrum operator+(Spectrum left, Spectrum right) {
