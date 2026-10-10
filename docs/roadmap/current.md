@@ -7,7 +7,6 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Foundation release →
 Renderer Phase 2 equivalence → Wavefront optimization.
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
@@ -15,28 +14,26 @@ records four repeatable workloads and metric availability. The
 [foundation review](../reports/2026-10-10-foundation-closure.md) records
 closure dispositions and hosted capability evidence; the
 [memory-pool report](../reports/2026-10-10-gpu-memory-pools.md) records backend
-suballocation and reuse. These do not substitute for the baseline/release
-gates below.
+suballocation and reuse. The
+[release-gate evidence](../reports/2026-10-10-release-gate.md) records the
+foundation verification that precedes the Wavefront transition.
 
 Backend update classification and the compaction disposition are measured in
 the [BLAS refit/compaction report](../reports/2026-10-10-blas-refit-compaction.md).
 
 The release target is owned by the [status table](README.md#status-at-a-glance).
-The stabilization cycle excludes ReSTIR, denoising, spectral research,
+The Wavefront equivalence cycle excludes ReSTIR, denoising, spectral research,
 production material coverage and broad platform/backend expansion. Their
 scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
 ## Performance baseline and foundation release
 
-- [ ] **LOTUS-RELEASE-01 — Foundation release gate.** Preserve the
-  [foundation dispositions](../reports/2026-10-10-foundation-closure.md), verify
-  synchronization behavior and documentation CI, pass deterministic references
-  and Hydra discovery/smoke tests, and
-  link the [baseline report](../reports/2026-10-10-performance-baseline.md).
-  Keep known limitations in reference documentation;
-  release records describe the shipped snapshot. The release should provide
-  a deterministic Vulkan reference renderer for OpenUSD Hydra with minimal
-  materials/textures, stable extraction and measured backend behavior.
+The [fixed baseline](../reports/2026-10-10-performance-baseline.md),
+[scope dispositions](../reports/2026-10-10-foundation-closure.md) and
+[release-gate evidence](../reports/2026-10-10-release-gate.md) are retained
+as the reference for subsequent transport changes. Shipped scope belongs
+in the [release records](../releases/README.md); known limitations remain
+in the reference documentation.
 
 ## Renderer Phase 2 — Wavefront path tracing
 
