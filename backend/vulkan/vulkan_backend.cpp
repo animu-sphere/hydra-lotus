@@ -92,15 +92,25 @@ struct PathConstants {
   std::uint32_t surface_output;
   // The wavefront integrator's path slots: one per target pixel.
   std::uint32_t path_capacity;
-  std::uint32_t reserved;
+  // kBsdfSampling or kMisLightSampling.
+  std::uint32_t light_sampling;
   // DataScissor: {x, y, width, height}.
   std::uint32_t data_rect[4];
+  // The GPU scene's light table: per-instance offsets and entries.
+  std::uint64_t light_offsets;
+  std::uint64_t lights;
+  std::uint32_t light_count;
+  std::uint32_t reserved[3];
 };
-static_assert(sizeof(PathConstants) == 112 &&
+static_assert(sizeof(PathConstants) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
               offsetof(PathConstants, materials) == 56 &&
               offsetof(PathConstants, width) == 80 &&
-              offsetof(PathConstants, data_rect) == 96);
+              offsetof(PathConstants, data_rect) == 96 &&
+              offsetof(PathConstants, light_offsets) == 112 &&
+              offsetof(PathConstants, light_count) == 128);
+constexpr std::uint32_t kBsdfSampling = 0;
+constexpr std::uint32_t kMisLightSampling = 1;
 
 // The path tracer's kPass specialization constant. The resolve pass writes
 // the mean of an accumulation the wavefront kernels added to.
@@ -223,6 +233,7 @@ struct AccumulationKey {
   std::array<float, 4> display_window{};
   std::array<std::int32_t, 4> data_window{};
   Integrator integrator = Integrator::Reference;
+  LightSampling light_sampling = LightSampling::Mis;
   std::uint32_t sample_index = 0;
   std::uint32_t max_bounces = 0;
   std::uint64_t scene_generation = 0;
@@ -628,6 +639,9 @@ public:
       } else if (settings.integrator != Integrator::Reference) {
         return Evidence(FrameStatus::Fail, "unknown integrator");
       }
+      if (settings.light_sampling != LightSampling::Bsdf &&
+          settings.light_sampling != LightSampling::Mis)
+        return Evidence(FrameStatus::Fail, "unknown light sampling");
       break;
     case SceneOutput::Barycentrics:
       pass = FramePass::Barycentrics;
@@ -705,8 +719,8 @@ public:
     if (pass == FramePass::Radiance) {
       const AccumulationKey key{ray_constants_.world_to_clip, target.width,
           target.height, target.display_window, target.data_window,
-          settings.integrator, settings.sample_index, settings.max_bounces,
-          scene_generation_};
+          settings.integrator, settings.light_sampling, settings.sample_index,
+          settings.max_bounces, scene_generation_};
       if (accumulation_key_ != key) {
         accumulation_key_ = key;
         accumulated_samples_ = 0;
@@ -928,6 +942,12 @@ public:
     constants.ndc_from_pixel[3] = -2.0F * viewport.y / viewport.height - 1.0F;
     constants.instances = scene_.InstanceAddress();
     constants.materials = scene_.MaterialAddress();
+    constants.light_sampling = settings.light_sampling == LightSampling::Mis
+                                   ? kMisLightSampling
+                                   : kBsdfSampling;
+    constants.light_offsets = scene_.LightOffsetAddress();
+    constants.lights = scene_.LightAddress();
+    constants.light_count = scene_.LightCount();
     constants.sample_index = settings.sample_index + accumulated_samples_;
     constants.accumulated = accumulated_samples_;
     constants.add_sample = add_sample ? 1U : 0U;

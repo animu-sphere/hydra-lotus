@@ -60,6 +60,21 @@ public float2 SampleBoxFilter(float2 u) {
   return u - 0.5;
 }
 
+// The power heuristic with exponent 2 (Veach, "Robust Monte Carlo Methods
+// for Light Transport Simulation", 1997, section 9.2.4): the weight of the
+// strategy whose density is `chosen` against one of density `other`. The
+// ratio form neither overflows nor divides zero by zero.
+public float PowerHeuristic(float chosen, float other) {
+  if (!(chosen > 0.0)) {
+    return 0.0;
+  }
+  if (isinf(chosen)) {
+    return isinf(other) ? 0.5 : 1.0;
+  }
+  const float ratio = other / chosen;
+  return 1.0 / (1.0 + ratio * ratio);
+}
+
 // A direction about +z with density cos(theta) / pi.
 public float3 SampleCosineHemisphere(float2 u) {
   const float radius = sqrt(u.x);

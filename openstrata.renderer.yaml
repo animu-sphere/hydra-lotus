@@ -41,6 +41,7 @@ validation:
     - renderer.path.accumulation
     - renderer.path.reference
     - renderer.path.wavefront
+    - renderer.path.light_sampling
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

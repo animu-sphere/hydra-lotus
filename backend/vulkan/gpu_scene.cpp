@@ -33,6 +33,9 @@ constexpr VkDeviceSize kTlasInstanceBytes =
 static_assert(kTlasInstanceBytes == 64);
 
 constexpr std::uint32_t kNoSlot = std::numeric_limits<std::uint32_t>::max();
+constexpr VkDeviceSize kLightBytes = sizeof(GpuLightRecord);
+constexpr std::size_t kEmissionInput = 3;
+static_assert(kEmissionInput < kMaterialTextureInputs);
 
 // One timestamp before Apply's copies and one after each of its phases.
 constexpr std::uint32_t kTimestampCount = 4;
@@ -66,6 +69,123 @@ GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
     layout.size = layout.texcoord_offsets.back() + texcoords.size() * kVec2Bytes;
   }
   return layout;
+}
+
+// The light table's estimate of a material's emitted radiance per unit
+// area: the mean of its RGB emission. A texture lookup is estimated by its
+// bound for texels in [0, 1], a missing texture by its fallback. The
+// estimate only steers which triangles next event estimation samples;
+// emission it misses is still found by BSDF sampling.
+double EmissionEstimate(const SceneMaterial& entry) {
+  const Material& material = entry.material;
+  std::array<double, 3> emission{};
+  if (!material.emission_texture) {
+    for (std::size_t c = 0; c < 3; ++c)
+      emission[c] = material.emission[c];
+  } else if (entry.textures[kEmissionInput] == nullptr) {
+    for (std::size_t c = 0; c < 3; ++c)
+      emission[c] = std::max(0.0F, material.emission_texture->fallback[c]);
+  } else {
+    for (std::size_t c = 0; c < 3; ++c)
+      emission[c] = std::max(0.0F, material.emission_texture->scale[c]) +
+                    std::max(0.0F, material.emission_texture->bias[c]);
+  }
+  const double mean = (emission[0] + emission[1] + emission[2]) / 3.0;
+  return std::isfinite(mean) && mean > 0.0 ? mean : 0.0;
+}
+
+double WorldTriangleArea(const MeshGeometry& geometry,
+    const std::array<std::uint32_t, 3>& triangle, const Matrix4& transform) {
+  std::array<std::array<double, 3>, 3> corners{};
+  for (std::size_t corner = 0; corner < 3; ++corner) {
+    const auto& p = geometry.positions[triangle[corner]];
+    for (std::size_t row = 0; row < 3; ++row)
+      corners[corner][row] = double{transform[row]} * p[0] +
+                             double{transform[4 + row]} * p[1] +
+                             double{transform[8 + row]} * p[2] +
+                             transform[12 + row];
+  }
+  std::array<double, 3> a{};
+  std::array<double, 3> b{};
+  for (std::size_t row = 0; row < 3; ++row) {
+    a[row] = corners[1][row] - corners[0][row];
+    b[row] = corners[2][row] - corners[0][row];
+  }
+  const double x = a[1] * b[2] - a[2] * b[1];
+  const double y = a[2] * b[0] - a[0] * b[2];
+  const double z = a[0] * b[1] - a[1] * b[0];
+  const double area = 0.5 * std::sqrt(x * x + y * y + z * z);
+  return std::isfinite(area) ? area : 0.0;
+}
+
+// The light table: per instance its first entry, and one entry per
+// triangle of every instance whose material emits, chosen in proportion
+// to its world-space area times its material's emission estimate.
+struct LightTable {
+  std::vector<std::uint32_t> offsets;
+  std::vector<GpuLightRecord> lights;
+};
+
+LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
+    const std::vector<SceneMaterial>& materials) {
+  LightTable table;
+  table.offsets.assign(instances.size(), kNoLights);
+  std::vector<double> weights;
+  for (std::size_t index = 0; index < instances.size(); ++index) {
+    const SceneInstance& instance = instances[index];
+    const double emission = EmissionEstimate(materials[instance.material]);
+    if (emission <= 0.0 || instance.geometry->triangles.empty())
+      continue;
+    table.offsets[index] = static_cast<std::uint32_t>(table.lights.size());
+    for (const auto& triangle : instance.geometry->triangles) {
+      weights.push_back(emission *
+                        WorldTriangleArea(*instance.geometry, triangle,
+                            instance.world_from_object));
+      table.lights.push_back({0.0F, 1.0F, 0, static_cast<std::uint32_t>(index)});
+    }
+  }
+  double total = 0.0;
+  for (const double weight : weights)
+    total += weight;
+  if (!(total > 0.0) || !std::isfinite(total)) {
+    table.offsets.assign(instances.size(), kNoLights);
+    table.lights.clear();
+    return table;
+  }
+  // Vose's alias method: columns of mean probability, each split between
+  // its own entry and at most one alias.
+  const std::size_t count = table.lights.size();
+  std::vector<double> scaled(count);
+  std::vector<std::uint32_t> small;
+  std::vector<std::uint32_t> large;
+  for (std::size_t index = 0; index < count; ++index) {
+    table.lights[index].pdf = static_cast<float>(weights[index] / total);
+    scaled[index] = weights[index] / total * static_cast<double>(count);
+    (scaled[index] < 1.0 ? small : large)
+        .push_back(static_cast<std::uint32_t>(index));
+  }
+  while (!small.empty() && !large.empty()) {
+    const std::uint32_t less = small.back();
+    small.pop_back();
+    const std::uint32_t more = large.back();
+    table.lights[less].threshold = static_cast<float>(scaled[less]);
+    table.lights[less].alias = more;
+    scaled[more] -= 1.0 - scaled[less];
+    if (scaled[more] < 1.0) {
+      large.pop_back();
+      small.push_back(more);
+    }
+  }
+  // What remains is full up to rounding.
+  for (const std::uint32_t index : small) {
+    table.lights[index].threshold = 1.0F;
+    table.lights[index].alias = index;
+  }
+  for (const std::uint32_t index : large) {
+    table.lights[index].threshold = 1.0F;
+    table.lights[index].alias = index;
+  }
+  return table;
 }
 
 VkFormat TextureVkFormat(TextureFormat format) {
@@ -381,6 +501,9 @@ void GpuScene::Destroy() {
   tlas_built_ = false;
   DestroyBuffer(memory_, device_, instances_);
   DestroyBuffer(memory_, device_, materials_);
+  DestroyBuffer(memory_, device_, lights_);
+  scene_instances_.clear();
+  light_count_ = 0;
   DestroyBuffer(memory_, device_, tlas_instances_);
   DestroyBuffer(memory_, device_, scratch_);
   DestroyBuffer(memory_, device_, staging_);
@@ -817,6 +940,9 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     material_table_ = update.materials;
     materials_current_ = false;
   }
+  if (update.instances_changed) {
+    scene_instances_ = update.instances;
+  }
   // Only instances read the table, so it waits for the first of them.
   const bool has_instances = update.instances_changed
                                  ? !update.instances.empty()
@@ -895,7 +1021,19 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       acceleration_ && update.instances_changed && !tlas_current;
   const VkDeviceSize tlas_input_bytes =
       build_tlas ? update.instances.size() * kTlasInstanceBytes : 0;
-  staging_bytes += instance_bytes + material_bytes + tlas_input_bytes;
+  // Emission depends on the instances' geometry, transforms and materials.
+  const bool write_lights = update.instances_changed || write_materials;
+  LightTable light_table;
+  VkDeviceSize light_entries_offset = 0;
+  VkDeviceSize light_bytes = 0;
+  if (write_lights) {
+    light_table = BuildLightTable(scene_instances_, material_table_);
+    light_entries_offset =
+        AlignUp(light_table.offsets.size() * sizeof(std::uint32_t), kLightBytes);
+    light_bytes = light_entries_offset + light_table.lights.size() * kLightBytes;
+  }
+  staging_bytes += instance_bytes + material_bytes + tlas_input_bytes +
+                   light_bytes;
   if (staging_bytes != 0 && !EnsureStaging(staging_bytes, detail)) {
     return false;
   }
@@ -1188,6 +1326,39 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     ++stats_.material_writes;
   }
 
+  if (write_lights) {
+    // At least one entry's room, so the table has an address with no
+    // instances.
+    const VkDeviceSize capacity_needed = std::max(light_bytes, kLightBytes);
+    if (capacity_needed > lights_.size) {
+      const VkDeviceSize capacity =
+          std::max(capacity_needed, lights_.size * 2);
+      DestroyBuffer(memory_, device_, lights_);
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      if (acceleration_) {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      }
+      if (!CreateDeviceBuffer(capacity, usage, lights_, detail)) {
+        return false;
+      }
+    }
+    if (light_bytes != 0) {
+      std::memset(staging + offset, 0, light_entries_offset);
+      std::memcpy(staging + offset, light_table.offsets.data(),
+          light_table.offsets.size() * sizeof(std::uint32_t));
+      std::memcpy(staging + offset + light_entries_offset,
+          light_table.lights.data(), light_table.lights.size() * kLightBytes);
+      copies.push_back({lights_.buffer, VkBufferCopy{offset, 0, light_bytes}});
+    }
+    offset += light_bytes;
+    light_entries_offset_ = light_entries_offset;
+    light_count_ = static_cast<std::uint32_t>(light_table.lights.size());
+    stats_.light_bytes = light_bytes;
+    ++stats_.light_writes;
+  }
+
   if (build_tlas) {
     // At least one record, so an empty TLAS still has a valid input address.
     const VkDeviceSize input_bytes =
@@ -1437,6 +1608,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.instance_bytes = instance_count_ * kInstanceBytes;
   stats_.material_count = material_count_;
   stats_.material_bytes = material_count_ * kMaterialBytes;
+  stats_.emissive_triangles = light_count_;
   stats_.resident_textures =
       static_cast<std::uint32_t>(texture_slot_of_.size());
   if (acceleration_) {

@@ -96,13 +96,15 @@ PathState LoadPath(uint slot, uint depth) {
   return path;
 }
 
-// What shading reads of a path: everything but its ray's origin and
-// interval, which a scattering event replaces. A camera path's throughput
-// and last density are the ones StartPath gives it, so neither is stored
-// for it.
+// What shading reads of a path: everything but its ray's interval, which a
+// scattering event replaces, and its origin, which only weighing emission
+// against light sampling reads. A camera path's throughput and last density
+// are the ones StartPath gives it, so neither is stored for it.
 PathState LoadShadedPath(uint slot, uint depth) {
   PathState path;
-  path.ray.Origin = float3(0.0);
+  path.ray.Origin = depth != 0 && SampleLights()
+      ? asfloat(LoadSection(kOriginSection, slot)).xyz
+      : float3(0.0);
   path.ray.TMin = 0.0;
   path.ray.Direction = asfloat(LoadSection(kDirectionSection, slot)).xyz;
   path.ray.TMax = 0.0;
@@ -236,8 +238,9 @@ void Intersect(uint index) {
         StoreRadiance(slot, path);
       }
     } else {
-      path.throughput =
-          UnpackSpectrum(LoadSection(kThroughputSection, slot));
+      const uint4 throughput = LoadSection(kThroughputSection, slot);
+      path.throughput = UnpackSpectrum(throughput);
+      path.lastPdf = asfloat(throughput.w);
       MissPath(path);
       StoreSample(slot, path.radiance);
     }

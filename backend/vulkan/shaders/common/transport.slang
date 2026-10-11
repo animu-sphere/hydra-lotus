@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // The reference light transport (design policy section 9), as the steps of
 // one camera path: start it, scatter it at each hit, and end it on a miss.
-// Brute-force BSDF sampling, emissive surfaces, a constant environment and
-// Russian roulette. The reference integrator runs the steps in one loop per
-// pixel; the wavefront integrator runs each as a kernel over a queue of
-// paths. Both consume a path's random numbers in the same order, so a pixel
-// and sample index select the same path in either.
+// BSDF sampling, emissive surfaces, a constant environment and Russian
+// roulette, with emissive surfaces found either by BSDF sampling alone (the
+// brute-force reference estimator) or also by next event estimation,
+// combined by multiple importance sampling (Renderer Phase 3). The
+// reference integrator runs the steps in one loop per pixel; the wavefront
+// integrator runs each as a kernel over a queue of paths. Both consume a
+// path's random numbers in the same order, so a pixel and sample index
+// select the same path in either.
 module transport;
 
 import bsdf.bsdf;
@@ -26,7 +29,8 @@ public struct PathState {
   // Scattering events so far.
   public uint depth;
   public uint rngState;
-  // Solid-angle density of the last sampled direction, for MIS later.
+  // Solid-angle density of the last sampled direction, which weighs the
+  // emission it finds against next event estimation's.
   public float lastPdf;
   public uint flags;
 };
@@ -52,12 +56,88 @@ public PathState StartPath(uint2 pixel) {
   return path;
 }
 
-// One scattering event at the path's hit: adds the surface's emission, then
-// either ends the path (false) or samples the BSDF and leaves the
-// continuation ray in path.ray (true).
+public bool SampleLights() {
+  return path_constants.light_sampling == kMisLightSampling;
+}
+
+// Next event estimation at a surface: one point on an emissive triangle,
+// chosen from the light table, its radiance carried through a shadow ray
+// and weighed against BSDF sampling's density by the power heuristic.
+// Draws four random numbers when the table has entries. The constant
+// environment is left to BSDF sampling, whose cosine-weighted directions
+// sample it better than uniform directions would.
+Spectrum DirectLight(SurfaceHit surface, ShadingFrame basis, float3 wo,
+    inout uint rng) {
+  if (path_constants.light_count == 0) {
+    return SpectrumConstant(0.0);
+  }
+  float4 u;
+  u.x = NextRandom(rng);
+  u.y = NextRandom(rng);
+  u.z = NextRandom(rng);
+  u.w = NextRandom(rng);
+  const EmitterPoint point = SampleEmitter(u);
+  const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
+  const float3 toward = point.position - origin;
+  const float distance2 = dot(toward, toward);
+  if (!(point.pdf > 0.0) || !(distance2 > 0.0) ||
+      MaxComponent(point.radiance) <= 0.0) {
+    return SpectrumConstant(0.0);
+  }
+  RayDesc shadow;
+  shadow.Origin = origin;
+  shadow.TMin = 0.0;
+  shadow.Direction = toward * rsqrt(distance2);
+  const float cosine = abs(dot(point.normal, shadow.Direction));
+  // As for a sampled direction, light below the geometric surface does not
+  // reach it.
+  if (!(cosine > 0.0) || dot(shadow.Direction, surface.normal) <= 0.0) {
+    return SpectrumConstant(0.0);
+  }
+  // End the shadow ray off the light's surface, on the receiver's side.
+  const float3 end = OffsetRayOrigin(point.position,
+      dot(point.normal, shadow.Direction) > 0.0 ? -point.normal : point.normal);
+  shadow.TMax = max(0.0, dot(end - origin, shadow.Direction));
+  // The density of the direction, per unit solid angle.
+  const float pdf = point.pdf * distance2 / cosine;
+  const float3 wi = basis.ToLocal(shadow.Direction);
+  const Spectrum f = BsdfEvalCos(surface.bsdf, wo, wi);
+  if (MaxComponent(f) <= 0.0) {
+    return SpectrumConstant(0.0);
+  }
+  const float transmittance = ShadowTransmittance(shadow);
+  if (transmittance <= 0.0) {
+    return SpectrumConstant(0.0);
+  }
+  const float weight = PowerHeuristic(pdf, BsdfPdf(surface.bsdf, wo, wi));
+  const Spectrum contribution =
+      f * point.radiance * (transmittance * weight / pdf);
+  return IsFinite(contribution) ? contribution : SpectrumConstant(0.0);
+}
+
+// The weight of emission a sampled direction found at a surface, against
+// next event estimation's density for the same point.
+float EmissionWeight(PathState path, Hit hit, SurfaceHit surface) {
+  const float area_pdf = EmitterPdf(hit, surface.area);
+  if (!(area_pdf > 0.0)) {
+    return 1.0;
+  }
+  const float3 toward = surface.position - path.ray.Origin;
+  const float cosine = abs(dot(surface.normal, path.ray.Direction));
+  return PowerHeuristic(path.lastPdf, area_pdf * dot(toward, toward) / cosine);
+}
+
+// One scattering event at the path's hit: adds the surface's emission and,
+// with light sampling, the direct light at it, then either ends the path
+// (false) or samples the BSDF and leaves the continuation ray in path.ray
+// (true).
 public bool ScatterPath(inout PathState path, Hit hit) {
   const SurfaceHit surface = ReconstructHit(hit, path.ray.Direction);
-  path.radiance = path.radiance + path.throughput * surface.emission;
+  Spectrum emission = surface.emission;
+  if (SampleLights() && path.depth != 0 && MaxComponent(emission) > 0.0) {
+    emission = emission * EmissionWeight(path, hit, surface);
+  }
+  path.radiance = path.radiance + path.throughput * emission;
   if (path.depth >= path_constants.max_bounces) {
     return false;
   }
@@ -69,13 +149,17 @@ public bool ScatterPath(inout PathState path, Hit hit) {
     path.throughput = path.throughput / survival;
   }
   const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
+  const float3 wo = basis.ToLocal(-path.ray.Direction);
+  if (SampleLights()) {
+    path.radiance = path.radiance +
+        path.throughput * DirectLight(surface, basis, wo, path.rngState);
+  }
   float3 u;
   u.x = NextRandom(path.rngState);
   u.y = NextRandom(path.rngState);
   u.z = NextRandom(path.rngState);
   BsdfSample sample;
-  if (!SampleBsdf(surface.bsdf, basis.ToLocal(-path.ray.Direction), u,
-          sample)) {
+  if (!SampleBsdf(surface.bsdf, wo, u, sample)) {
     return false;
   }
   const float3 wi = normalize(basis.ToWorld(sample.wi));

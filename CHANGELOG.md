@@ -7,6 +7,40 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Renderer Phase 3 next event estimation with multiple importance
+  sampling, selected with `PathTracingSettings::light_sampling` (`Mis` by
+  default; `Bsdf` keeps brute-force BSDF sampling, the committed
+  reference's estimator). The GPU scene builds a light table of emissive
+  triangles, chosen by the alias method in proportion to area times
+  emission; each scattering event traces a shadow ray to one point on
+  them, with partial coverage as transmittance, and both light samples and
+  BSDF-found emission are weighed by the power heuristic. Both integrators
+  run it and agree bit for bit; BSDF sampling still reproduces the
+  committed reference bit for bit. The constant environment is left to
+  BSDF sampling, which sampled it better than uniform directions did.
+  `GpuSceneStats` gains `emissive_triangles`, `light_bytes` and
+  `light_writes`. The new check `renderer.path.light_sampling` compares
+  the Cornell box with the committed reference under both integrators and
+  open scenes with BSDF sampling's estimate, and records the variance and
+  time to equal quality (2.61× shorter in the Cornell box). The benchmark
+  gains `--benchmark-light-sampling` (default `bsdf`) and CTest
+  `lotus-renderer-benchmark-mis`
+  ([evidence](docs/reports/2026-10-11-emissive-nee-mis.md)).
+- The `lotus:lightSampling` Hydra render setting, a flag that usdview lists
+  as the checked *Light sampling (NEE + MIS)* item of its Hydra Settings
+  menu; clearing it selects BSDF sampling. The host evidence log records
+  `light_sampling` and `emissive_triangles`. CTest
+  `lotus-renderer-hydra-light-sampling` compares converged Hydra images
+  under both estimators with the backend's, and the usdview smoke test
+  toggles the menu item.
+
+### Changed
+
+- `lotus-renderer-hydra-texture-gpu` sets `lotus:lightSampling` to false:
+  its exact radiance is BSDF sampling's, sample for sample.
+
 ## [0.2.0] - 2026-10-11
 
 The wavefront release adds Renderer Phase 2: a wavefront integrator that

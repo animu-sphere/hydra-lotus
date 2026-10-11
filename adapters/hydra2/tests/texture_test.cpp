@@ -558,6 +558,9 @@ int main(int argc, char** argv) try {
 
   HdRenderSettingsMap settings;
   settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(1);
+  // The exact radiance below is BSDF sampling's, sample for sample; light
+  // sampling has the same mean but not the same samples.
+  settings[TfToken("lotus:lightSampling")] = VtValue(false);
   HdLotusRenderDelegate delegate(settings);
   std::unique_ptr<HdRenderIndex> index(HdRenderIndex::New(&delegate, {}));
   Check(index != nullptr, "could not create the render index");

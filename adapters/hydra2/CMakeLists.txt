@@ -169,6 +169,14 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-integrator-test hdLotus)
 
+  add_executable(lotus-hydra2-light-sampling-test tests/light_sampling_test.cpp)
+  target_link_libraries(lotus-hydra2-light-sampling-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
+      usdImaging usd sdf)
+  target_compile_definitions(lotus-hydra2-light-sampling-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-light-sampling-test hdLotus)
+
   add_executable(lotus-hydra2-light-test tests/light_test.cpp)
   target_link_libraries(lotus-hydra2-light-test
     PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
@@ -210,6 +218,8 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-deterministic-test)
   add_test(NAME lotus-renderer-hydra-integrator
     COMMAND lotus-hydra2-integrator-test)
+  add_test(NAME lotus-renderer-hydra-light-sampling
+    COMMAND lotus-hydra2-light-sampling-test)
   add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
   add_test(NAME lotus-renderer-hydra-light-gpu
     COMMAND lotus-hydra2-light-test --gpu)
@@ -228,6 +238,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
     lotus-renderer-hydra-integrator
+    lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-light-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-texture-gpu
@@ -243,6 +254,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
     lotus-renderer-hydra-integrator
+    lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-material
     lotus-renderer-hydra-light
     lotus-renderer-hydra-light-gpu

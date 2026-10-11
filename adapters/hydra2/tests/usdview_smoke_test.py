@@ -15,7 +15,8 @@ def _frames():
             fields = {}
             for field in line.split():
                 key, value = field.split("=", 1)
-                fields[key] = value if key == "integrator" else int(value)
+                fields[key] = (value if key in ("integrator", "light_sampling")
+                               else int(value))
             result.append(fields)
     return result
 
@@ -148,3 +149,29 @@ def testUsdviewInputFunction(appController):
     assert reference["wavefront_rounds"] == 0
     assert _image("integrator-restored") == _image("stable-update"), \
         "returning to the reference integrator did not reproduce the image"
+
+    # Light sampling: lotus:lightSampling is a checkable item too, checked
+    # by default. Unchecking it restarts the accumulation with BSDF sampling
+    # alone, and checking it again renders the same image as before.
+    assert reference["light_sampling"] == "mis"
+    actions = [action for action in appController._ui.settingsFlagActions
+               if action.key == "lotus:lightSampling"]
+    assert len(actions) == 1, "the Hydra Settings menu has no light sampling item"
+    action = actions[0]
+    assert action.isCheckable() and action.isChecked()
+    before = len(_frames())
+    action.trigger()
+    assert not action.isChecked()
+    brute_force = _render(appController, "bsdf-sampling")
+    assert brute_force["light_sampling"] == "bsdf"
+    if brute_force["ray_query"] == 1:
+        assert brute_force["samples"] == reference["samples"]
+        assert any(frame["samples"] < brute_force["samples"]
+                   for frame in _frames()[before:]), \
+            "unchecking the light sampling item did not restart the accumulation"
+    action.trigger()
+    assert action.isChecked()
+    sampled = _render(appController, "light-sampling-restored")
+    assert sampled["light_sampling"] == "mis"
+    assert _image("light-sampling-restored") == _image("stable-update"), \
+        "returning to light sampling did not reproduce the image"
