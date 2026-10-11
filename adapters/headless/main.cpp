@@ -1465,8 +1465,8 @@ public:
     return std::exchange(summary_, {});
   }
 
-  // Removes every mesh, material and texture and the environment from the
-  // world and the GPU scene, and restores the target.
+  // Removes every mesh, material, texture and light and the environment
+  // from the world and the GPU scene, and restores the target.
   std::string Clear() {
     const auto snapshot = world_.Commit();
     for (const auto& [key, mesh] : snapshot.scene->meshes) {
@@ -1480,6 +1480,10 @@ public:
     for (const auto& [key, texture] : snapshot.scene->textures) {
       (void)texture;
       world_.RemoveTexture(key);
+    }
+    for (const auto& [key, light] : snapshot.scene->lights) {
+      (void)light;
+      world_.RemoveLight(key);
     }
     world_.SetEnvironment({});
     target_ = DefaultTarget();
@@ -3913,6 +3917,488 @@ std::string LightSamplingFailure(PathScenes& scenes,
   return {};
 }
 
+// The irradiance at `x`, on a surface of unit normal `n`, from a polygon of
+// radiance 1 wholly above the surface's horizon, seen from either side:
+// Lambert's formula, half the sum over the edges of the angle each
+// subtends times the normal's component along its plane's normal.
+double PolygonIrradiance(const std::vector<Vec3>& corners, const Vec3& x,
+    const Vec3& n) {
+  double sum = 0;
+  for (std::size_t index = 0; index < corners.size(); ++index) {
+    const Vec3 a = Normalize(Subtract(corners[index], x));
+    const Vec3 b = Normalize(Subtract(corners[(index + 1) % corners.size()], x));
+    const Vec3 c = Cross(a, b);
+    const double length = std::sqrt(Dot(c, c));
+    if (length > 0)
+      sum += std::atan2(length, Dot(a, b)) * Dot(n, c) / length;
+  }
+  return std::abs(sum) / 2;
+}
+
+// An analytic light's irradiance at `x` on the upward-facing floor, in
+// double precision and independently of the backend's records: Lambert's
+// formula for a rect and for a disk as a 1024-gon, the projected solid
+// angle of a sphere's or a distant cone's cap, and a parallel light's
+// cosine. The light must lie wholly above the floor's horizon.
+Rgb LightIrradiance(const Lotus::Light& light, const Vec3& x) {
+  constexpr double kPi = 3.14159265358979323846;
+  const Vec3 up{0, 0, 1};
+  const Lotus::Matrix4& m = light.world_from_light;
+  const Vec3 axis_x = TransformVec3(m, {1, 0, 0}, 0);
+  const Vec3 axis_y = TransformVec3(m, {0, 1, 0}, 0);
+  const Vec3 axis_z = TransformVec3(m, {0, 0, 1}, 0);
+  const Vec3 origin = TransformVec3(m, {0, 0, 0}, 1);
+  const double determinant = Dot(axis_x, Cross(axis_y, axis_z));
+  // Irradiance per unit radiance, and what normalize divides by.
+  double factor = 0;
+  double size = 1;
+  switch (light.shape) {
+  case Lotus::LightShape::Sphere: {
+    const double radius = light.radius * std::cbrt(std::abs(determinant));
+    const Vec3 d = Subtract(origin, x);
+    const double distance2 = Dot(d, d);
+    factor = kPi * radius * radius / distance2 * d[2] / std::sqrt(distance2);
+    size = 4 * kPi * radius * radius;
+    break;
+  }
+  case Lotus::LightShape::Rect:
+  case Lotus::LightShape::Disk: {
+    const bool rect = light.shape == Lotus::LightShape::Rect;
+    const Vec3 normal = Cross(axis_x, axis_y);
+    std::vector<Vec3> corners;
+    if (rect) {
+      const double w = 0.5 * light.width;
+      const double h = 0.5 * light.height;
+      for (const auto& [a, b] : {std::pair{-w, -h}, std::pair{w, -h},
+               std::pair{w, h}, std::pair{-w, h}})
+        corners.push_back({origin[0] + a * axis_x[0] + b * axis_y[0],
+            origin[1] + a * axis_x[1] + b * axis_y[1],
+            origin[2] + a * axis_x[2] + b * axis_y[2]});
+      size = light.width * light.height * std::sqrt(Dot(normal, normal));
+    } else {
+      for (int index = 0; index < 1024; ++index) {
+        const double phi = 2 * kPi * index / 1024;
+        const double a = light.radius * std::cos(phi);
+        const double b = light.radius * std::sin(phi);
+        corners.push_back({origin[0] + a * axis_x[0] + b * axis_y[0],
+            origin[1] + a * axis_x[1] + b * axis_y[1],
+            origin[2] + a * axis_x[2] + b * axis_y[2]});
+      }
+      size = kPi * light.radius * light.radius * std::sqrt(Dot(normal, normal));
+    }
+    // Only the light's -Z side emits.
+    const double side = (determinant < 0 ? 1 : -1) * Dot(normal, Subtract(x, origin));
+    factor = side > 0 ? PolygonIrradiance(corners, x, up) : 0;
+    break;
+  }
+  case Lotus::LightShape::Distant: {
+    const Vec3 toward = Normalize(axis_z);
+    const double theta = std::min(light.angle * kPi / 360, kPi);
+    const double sin2 = std::sin(theta) * std::sin(theta);
+    factor = theta == 0 ? toward[2] : kPi * sin2 * toward[2];
+    if (theta > 0)
+      size = theta <= kPi / 2 ? kPi * sin2 : (2 - sin2) * kPi;
+    break;
+  }
+  }
+  const double scale = factor / (light.normalize ? size : 1);
+  return {light.radiance[0] * scale, light.radiance[1] * scale,
+      light.radiance[2] * scale};
+}
+
+// The analytic-light scenes' floor: Lambert, without a coat, under a black
+// sky, filling OrthographicCamera's view.
+const Rgb kFloorAlbedo{0.8, 0.7, 0.6};
+
+void SetLightFloor(PathScenes& scenes) {
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  world.SetEnvironment({0, 0, 0});
+  Lotus::MeshInstance floor;
+  floor.world_from_object = Scaling(1.5F, 1.5F, 1);
+  world.SetMesh("/floor", Square(), floor);
+  Lotus::Material lambert;
+  lambert.base_color = {0.8F, 0.7F, 0.6F};
+  lambert.ior = 1;
+  Paint(world, "/floor", lambert);
+}
+
+// One light of each kind above the floor, each wholly above its horizon,
+// raised by `height`: a sphere scaled to radius 0.3 and a smaller
+// normalized one in the camera's view (a normalized sphere's irradiance
+// does not depend on its radius), a rect tilted so that the floor's far
+// side lies behind it,
+// a normalized disk stretched into an ellipse, a normalized 20-degree
+// distant light and a parallel light.
+std::vector<std::pair<std::string, Lotus::Light>> AnalyticLights(float height) {
+  const Lotus::Matrix4 raise = Translation(0, 0, height);
+  Lotus::Light sphere;
+  sphere.world_from_light = Lotus::Multiply(raise,
+      Lotus::Multiply(Translation(0.3F, -0.2F, 0.8F), Scaling(0.5F, 0.5F, 0.5F)));
+  sphere.radius = 0.6F;
+  sphere.radiance = {2.5F, 1.7F, 0.9F};
+  Lotus::Light ball;
+  ball.world_from_light =
+      Lotus::Multiply(raise, Translation(-0.5F, -0.5F, 0.45F));
+  ball.radius = 0.15F;
+  ball.radiance = {1, 2, 3};
+  ball.normalize = true;
+  Lotus::Light rect;
+  rect.shape = Lotus::LightShape::Rect;
+  rect.world_from_light = Lotus::Multiply(raise,
+      Lotus::Multiply(Translation(-0.3F, 0.35F, 0.6F),
+          Lotus::Multiply(RotationX(35), Scaling(1.2F, 0.8F, 1))));
+  rect.width = 0.5F;
+  rect.height = 0.4F;
+  rect.radiance = {1.5F, 2.5F, 2};
+  Lotus::Light disk;
+  disk.shape = Lotus::LightShape::Disk;
+  disk.world_from_light = Lotus::Multiply(raise,
+      Lotus::Multiply(Translation(0.45F, 0.45F, 0.5F),
+          Lotus::Multiply(RotationY(-25), Scaling(1.6F, 0.7F, 1))));
+  disk.radius = 0.2F;
+  disk.radiance = {2, 2, 3};
+  disk.normalize = true;
+  Lotus::Light cone;
+  cone.shape = Lotus::LightShape::Distant;
+  cone.world_from_light = RotationY(30);
+  cone.angle = 20;
+  cone.radiance = {1, 0.9F, 0.8F};
+  cone.normalize = true;
+  Lotus::Light parallel;
+  parallel.shape = Lotus::LightShape::Distant;
+  parallel.world_from_light = RotationX(-40);
+  parallel.angle = 0;
+  parallel.radiance = {0.6F, 0.5F, 0.7F};
+  return {{"/sphere", sphere}, {"/ball", ball}, {"/rect", rect},
+      {"/disk", disk}, {"/cone", cone}, {"/parallel", parallel}};
+}
+
+// A two-sided emissive square outside the camera's view, which no path
+// from the floor to the analytic lights passes. Like the roofs below, it
+// reflects nothing.
+void SetSidePanel(PathScenes& scenes) {
+  auto& world = scenes.World();
+  Lotus::MeshInstance placed;
+  placed.world_from_object = Lotus::Multiply(Translation(-1.9F, 0, 1.4F),
+      Lotus::Multiply(RotationY(-60), Scaling(0.5F, 0.5F, 1)));
+  world.SetMesh("/panel", Square(), placed);
+  Lotus::Material glow;
+  glow.base_color = {0, 0, 0};
+  glow.ior = 1;
+  glow.emission = {8, 6, 4};
+  Paint(world, "/panel", glow);
+}
+
+// The floor's radiance under the world's lights and emissive meshes besides
+// the floor, times `transmittance`: its albedo over pi times their
+// irradiance, averaged over 4x4 points of each pixel of the target. Without
+// `distant`, distant lights are left out.
+LotusHeadless::RgbImage FloorOracle(PathScenes& scenes, double transmittance,
+    bool distant) {
+  constexpr double kPi = 3.14159265358979323846;
+  const auto snapshot = scenes.World().Commit();
+  const auto& target = scenes.Target();
+  std::vector<std::vector<Vec3>> emitters;
+  std::vector<Rgb> emissions;
+  for (const auto& [key, mesh] : snapshot.scene->meshes) {
+    const auto material = snapshot.scene->materials.find(mesh.material);
+    if (key == "/floor" || material == snapshot.scene->materials.end() ||
+        material->second.emission == std::array<float, 3>{})
+      continue;
+    for (const auto& triangle : mesh.geometry->triangles) {
+      std::vector<Vec3> corners;
+      for (const std::uint32_t index : triangle) {
+        const auto& p = mesh.geometry->positions[index];
+        corners.push_back(TransformVec3(
+            mesh.instance.world_from_object, {p[0], p[1], p[2]}, 1));
+      }
+      emitters.push_back(corners);
+      const auto& e = material->second.emission;
+      emissions.push_back({e[0], e[1], e[2]});
+    }
+  }
+  LotusHeadless::RgbImage image;
+  image.width = target.width;
+  image.height = target.height;
+  image.values.assign(std::size_t{target.width} * target.height * 3, 0.0F);
+  constexpr int kPoints = 4;
+  for (std::uint32_t y = 0; y < target.height; ++y) {
+    for (std::uint32_t x = 0; x < target.width; ++x) {
+      Rgb sum{};
+      for (int j = 0; j < kPoints; ++j) {
+        for (int i = 0; i < kPoints; ++i) {
+          const Vec3 point{2.0 * (x + (i + 0.5) / kPoints) / target.width - 1.0,
+              1.0 - 2.0 * (y + (j + 0.5) / kPoints) / target.height, 0.0};
+          for (const auto& [key, light] : snapshot.scene->lights) {
+            (void)key;
+            if (!distant && light.shape == Lotus::LightShape::Distant)
+              continue;
+            const Rgb irradiance = LightIrradiance(light, point);
+            for (int c = 0; c < 3; ++c)
+              sum[c] += irradiance[c];
+          }
+          for (std::size_t e = 0; e < emitters.size(); ++e) {
+            const double factor = PolygonIrradiance(emitters[e], point, {0, 0, 1});
+            for (int c = 0; c < 3; ++c)
+              sum[c] += emissions[e][c] * factor;
+          }
+        }
+      }
+      for (int c = 0; c < 3; ++c)
+        image.values[(std::size_t{y} * target.width + x) * 3 + c] =
+            static_cast<float>(sum[c] / (kPoints * kPoints) * kFloorAlbedo[c] /
+                               kPi * transmittance);
+    }
+  }
+  return image;
+}
+
+// Compares the scene's 1024-spp image under the scenes' estimator with the
+// floor oracle by the DES-Q5 metric, the per-sample variance measured from
+// the same 16 batches; `variance` receives its mean.
+std::string OracleFailure(PathScenes& scenes, const std::string& name,
+    double transmittance, double& variance, bool distant = true) {
+  constexpr std::uint32_t kBatches = 16;
+  constexpr std::uint32_t kBatch = 64;
+  LotusHeadless::Reference measured;
+  if (auto failure = BatchStatistics(
+          scenes, kComparedSampleIndex, kBatches, kBatch, measured);
+      !failure.empty())
+    return name + ": " + failure;
+  LotusHeadless::Reference oracle;
+  oracle.mean = FloorOracle(scenes, transmittance, distant);
+  oracle.variance = measured.variance;
+  oracle.samples = 1U << 30;
+  const LotusHeadless::Comparison comparison =
+      LotusHeadless::Compare(measured.mean, kBatches * kBatch, oracle);
+  if (!comparison.failure.empty())
+    return name + ": " + comparison.failure;
+  variance = MeanVariance(measured);
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(2) << name << " image z "
+       << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+       << comparison.image_z[2] << " max tile |z| " << comparison.max_tile_z;
+  scenes.Summarize(line.str());
+  return {};
+}
+
+// Renderer Phase 3 analytic lights. A Lambert floor lit by each kind of
+// analytic light alone, then by all of them and an emissive square, must
+// match an independent irradiance oracle under BSDF sampling and under
+// light sampling, the combined scene through both integrators, which render
+// it the same; light sampling must lower each area light's variance. Camera
+// rays pass a sphere light in view; lights reach the floor neither through
+// an opaque roof nor fully through a half-covering one; under an opaque
+// ceiling the lights below it still do, found before the ceiling's hits,
+// and the distant lights do not; and a light edit rewrites the light table
+// and restarts the accumulation without touching geometry, while black and
+// zero-size lights are dropped.
+std::string AnalyticLightsFailure(PathScenes& scenes) {
+  SetLightFloor(scenes);
+  const auto lights = AnalyticLights(0);
+  const std::array<Lotus::LightSampling, 2> estimators{
+      Lotus::LightSampling::Bsdf, Lotus::LightSampling::Mis};
+  for (const auto& [key, light] : lights) {
+    scenes.World().SetLight(key, light);
+    std::array<double, 2> variance{};
+    for (std::size_t index = 0; index < estimators.size(); ++index) {
+      scenes.SetLightSampling(estimators[index]);
+      const std::string name = key.substr(1) +
+          (index == 0 ? " under bsdf" : " under mis");
+      if (auto failure = OracleFailure(scenes, name, 1, variance[index]);
+          !failure.empty())
+        return failure;
+    }
+    if (scenes.LastUpload().stats.analytic_lights != 1)
+      return key + ": the GPU scene holds " +
+             std::to_string(scenes.LastUpload().stats.analytic_lights) +
+             " analytic lights instead of 1";
+    if (light.angle != 0 || light.shape != Lotus::LightShape::Distant) {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(2) << key.substr(1)
+           << " per-sample variance " << variance[0] / variance[1] << "x lower";
+      scenes.Summarize(line.str());
+      if (!(variance[1] < variance[0]))
+        return key + ": light sampling did not lower the variance";
+    }
+    scenes.World().RemoveLight(key);
+  }
+
+  // Everything at once, with an emissive square, through both integrators.
+  for (const auto& [key, light] : lights)
+    scenes.World().SetLight(key, light);
+  SetSidePanel(scenes);
+  std::array<double, 2> variance{};
+  std::array<double, 2> milliseconds{};
+  for (const Lotus::Integrator integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    scenes.SetIntegrator(integrator);
+    for (std::size_t index = 0; index < estimators.size(); ++index) {
+      scenes.SetLightSampling(estimators[index]);
+      const std::string name = std::string("all lights, ") +
+          (integrator == Lotus::Integrator::Reference ? "reference" : "wavefront") +
+          (index == 0 ? ", bsdf" : ", mis");
+      if (auto failure = OracleFailure(scenes, name, 1, variance[index]);
+          !failure.empty())
+        return failure;
+      if (integrator == Lotus::Integrator::Reference) {
+        if (auto failure =
+                MedianSampleMilliseconds(scenes, 16, milliseconds[index]);
+            !failure.empty())
+          return failure;
+      }
+    }
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  {
+    const Lotus::GpuSceneStats& stats = scenes.LastUpload().stats;
+    if (stats.analytic_lights != lights.size() || stats.emissive_triangles != 2)
+      return "the combined scene's light table holds " +
+             std::to_string(stats.analytic_lights) + " analytic lights and " +
+             std::to_string(stats.emissive_triangles) + " triangles";
+  }
+  std::ostringstream line;
+  line << std::setprecision(4) << "all lights per-sample variance bsdf "
+       << variance[0] << " mis " << variance[1] << " (" << std::fixed
+       << std::setprecision(2) << variance[0] / variance[1] << "x lower)";
+  if (milliseconds[0] > 0 && milliseconds[1] > 0)
+    line << std::setprecision(3) << ", GPU ms per sample bsdf "
+         << milliseconds[0] << " mis " << milliseconds[1]
+         << ", time to equal quality " << std::setprecision(2)
+         << variance[0] / variance[1] * milliseconds[0] / milliseconds[1]
+         << "x shorter";
+  scenes.Summarize(line.str());
+
+  // The same samples through both integrators.
+  constexpr std::uint32_t kSamples = 64;
+  LotusHeadless::RgbImage reference;
+  LotusHeadless::RgbImage wavefront;
+  if (auto failure =
+          RenderReferenceImage(scenes, kComparedSampleIndex, kSamples, reference);
+      !failure.empty())
+    return failure;
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  auto wavefront_failure =
+      RenderReferenceImage(scenes, kComparedSampleIndex, kSamples, wavefront);
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (!wavefront_failure.empty())
+    return "wavefront integrator: " + wavefront_failure;
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < wavefront.values.size(); ++i)
+    differing += std::memcmp(&reference.values[i], &wavefront.values[i],
+                     sizeof(float)) != 0;
+  scenes.Summarize("the same " + std::to_string(kSamples) +
+                   " spp from both integrators: " +
+                   (differing == 0 ? std::string("bit for bit")
+                                   : std::to_string(differing) + " of " +
+                                         std::to_string(wavefront.values.size()) +
+                                         " values differ"));
+
+  // A light edit rewrites the light table and restarts the accumulation;
+  // geometry, instances and acceleration structures stay.
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  const Lotus::GpuSceneStats before = scenes.LastUpload().stats;
+  auto edited = lights[0].second;
+  edited.radiance = {1, 1, 1};
+  scenes.World().SetLight(lights[0].first, edited);
+  // Black and zero-size lights emit nothing and are not uploaded.
+  Lotus::Light black;
+  black.radiance = {0, 0, 0};
+  scenes.World().SetLight("/black", black);
+  Lotus::Light flat;
+  flat.shape = Lotus::LightShape::Rect;
+  flat.width = 0;
+  scenes.World().SetLight("/flat", flat);
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  const Lotus::GpuSceneStats& after = scenes.LastUpload().stats;
+  if (frame.samples_per_pixel != 1)
+    return "a light edit continued the accumulation";
+  if (after.light_writes != before.light_writes + 1 ||
+      after.geometry_uploads != before.geometry_uploads ||
+      after.instance_writes != before.instance_writes ||
+      after.material_writes != before.material_writes ||
+      after.blas_builds != before.blas_builds ||
+      after.tlas_builds != before.tlas_builds ||
+      after.tlas_updates != before.tlas_updates)
+    return "a light edit did more than rewrite the light table";
+  if (after.analytic_lights != lights.size())
+    return "black or zero-size lights reached the GPU scene: " +
+           std::to_string(after.analytic_lights) + " analytic lights";
+  for (const auto& [key, light] : lights)
+    scenes.World().RemoveLight(key);
+  scenes.World().RemoveLight("/black");
+  scenes.World().RemoveLight("/flat");
+  scenes.World().RemoveMesh("/panel");
+
+  // Above an opaque black roof, beyond the camera's near plane, no light
+  // reaches the floor under either estimator or integrator: neither shadow
+  // rays nor sampled directions pass it.
+  for (const auto& [key, light] : AnalyticLights(2.6F))
+    scenes.World().SetLight(key, light);
+  Lotus::MeshInstance roof;
+  roof.world_from_object =
+      Lotus::Multiply(Translation(0, 0, 2.5F), Scaling(50, 50, 1));
+  scenes.World().SetMesh("/roof", Square(), roof);
+  Lotus::Material black_roof;
+  black_roof.base_color = {0, 0, 0};
+  black_roof.ior = 1;
+  Paint(scenes.World(), "/roof", black_roof);
+  for (const Lotus::Integrator integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    scenes.SetIntegrator(integrator);
+    for (const Lotus::LightSampling estimator : estimators) {
+      scenes.SetLightSampling(estimator);
+      if (auto failure = scenes.ExpectExact(64, {0, 0, 0}); !failure.empty())
+        return "under an opaque roof: " + failure;
+    }
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  // A roof of 50% coverage passes half of each light's light.
+  Lotus::Material veil = black_roof;
+  veil.opacity = 0.5F;
+  Paint(scenes.World(), "/roof", veil);
+  for (std::size_t index = 0; index < estimators.size(); ++index) {
+    scenes.SetLightSampling(estimators[index]);
+    double unused = 0;
+    if (auto failure = OracleFailure(scenes,
+            std::string("under a half-covering roof, ") +
+                (index == 0 ? "bsdf" : "mis"),
+            0.5, unused);
+        !failure.empty())
+      return failure;
+  }
+  // Under the opaque roof as a ceiling, every sampled direction from the
+  // floor ends on it: the lights between them are found before its hits,
+  // and the distant lights above it are blocked.
+  for (const auto& [key, light] : lights)
+    scenes.World().SetLight(key, light);
+  Paint(scenes.World(), "/roof", black_roof);
+  for (const Lotus::Integrator integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    scenes.SetIntegrator(integrator);
+    for (std::size_t index = 0; index < estimators.size(); ++index) {
+      scenes.SetLightSampling(estimators[index]);
+      double unused = 0;
+      if (auto failure = OracleFailure(scenes,
+              std::string("under a ceiling, ") +
+                  (integrator == Lotus::Integrator::Reference ? "reference"
+                                                              : "wavefront") +
+                  (index == 0 ? ", bsdf" : ", mis"),
+              1, unused, false);
+          !failure.empty())
+        return failure;
+    }
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  return {};
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -4221,6 +4707,12 @@ int main(int argc, char** argv) {
         light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
         return failure;
       });
+      run("renderer.path.analytic_lights", [&](PathScenes& light_scenes) {
+        std::string failure = AnalyticLightsFailure(light_scenes);
+        light_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -4234,6 +4726,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
       checks.push_back({"renderer.path.wavefront", "skip", ray_query.detail});
       checks.push_back({"renderer.path.light_sampling", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.analytic_lights", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -4249,6 +4742,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.wavefront", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.light_sampling", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

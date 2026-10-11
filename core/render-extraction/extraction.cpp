@@ -22,7 +22,8 @@ bool SceneUpdate::Empty() const {
   return geometry_releases.empty() && geometry_uploads.empty() &&
          geometry_replacements.empty() &&
          texture_releases.empty() && texture_uploads.empty() &&
-         !instances_changed && !materials_changed && !environment_changed;
+         !instances_changed && !materials_changed && !environment_changed &&
+         !lights_changed;
 }
 
 SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
@@ -144,6 +145,18 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
     update.environment = environment;
     environment_ = environment;
   }
+  std::vector<Light> lights;
+  if (snapshot.scene) {
+    for (const auto& [id, light] : snapshot.scene->lights) {
+      (void)id;
+      lights.push_back(light);
+    }
+  }
+  if (lights != lights_) {
+    update.lights_changed = true;
+    update.lights = lights;
+    lights_ = std::move(lights);
+  }
   resident_ = std::move(resident);
   resident_textures_ = std::move(resident_textures);
   scene_ = snapshot.scene;
@@ -158,6 +171,7 @@ void SceneExtraction::Reset() {
   instances_.clear();
   materials_ = {SceneMaterial{}};
   environment_ = {};
+  lights_.clear();
   reset_ = true;
 }
 

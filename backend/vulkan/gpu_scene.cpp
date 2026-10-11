@@ -34,6 +34,8 @@ static_assert(kTlasInstanceBytes == 64);
 
 constexpr std::uint32_t kNoSlot = std::numeric_limits<std::uint32_t>::max();
 constexpr VkDeviceSize kLightBytes = sizeof(GpuLightRecord);
+constexpr VkDeviceSize kAnalyticLightBytes = sizeof(GpuAnalyticLightRecord);
+static_assert(kAnalyticLightBytes % kLightBytes == 0);
 constexpr std::size_t kEmissionInput = 3;
 static_assert(kEmissionInput < kMaterialTextureInputs);
 
@@ -118,16 +120,187 @@ double WorldTriangleArea(const MeshGeometry& geometry,
   return std::isfinite(area) ? area : 0.0;
 }
 
-// The light table: per instance its first entry, and one entry per
-// triangle of every instance whose material emits, chosen in proportion
-// to its world-space area times its material's emission estimate.
+using Vec3d = std::array<double, 3>;
+
+Vec3d Column(const Matrix4& matrix, std::size_t column) {
+  return {matrix[column * 4], matrix[column * 4 + 1], matrix[column * 4 + 2]};
+}
+
+Vec3d Scale(const Vec3d& value, double scale) {
+  return {value[0] * scale, value[1] * scale, value[2] * scale};
+}
+
+double Dot(const Vec3d& a, const Vec3d& b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+Vec3d Cross(const Vec3d& a, const Vec3d& b) {
+  return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+      a[0] * b[1] - a[1] * b[0]};
+}
+
+void Store(float* target, const Vec3d& value, double w) {
+  for (std::size_t c = 0; c < 3; ++c)
+    target[c] = static_cast<float>(value[c]);
+  target[3] = static_cast<float>(w);
+}
+
+// The radius of a sphere about the centre of the instances' world-space
+// bounding box that holds it, or 0 without instances: the extent of the
+// scene a distant light reaches.
+double SceneRadius(const std::vector<SceneInstance>& instances) {
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  constexpr std::array<double, 6> kEmpty{
+      kInfinity, kInfinity, kInfinity, -kInfinity, -kInfinity, -kInfinity};
+  std::unordered_map<const MeshGeometry*, std::array<double, 6>> object_bounds;
+  std::array<double, 6> world = kEmpty;
+  for (const SceneInstance& instance : instances) {
+    auto [found, inserted] = object_bounds.try_emplace(instance.geometry, kEmpty);
+    std::array<double, 6>& bounds = found->second;
+    if (inserted) {
+      for (const auto& position : instance.geometry->positions) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+          bounds[axis] = std::min(bounds[axis], double{position[axis]});
+          bounds[3 + axis] = std::max(bounds[3 + axis], double{position[axis]});
+        }
+      }
+    }
+    if (!(bounds[0] <= bounds[3]))
+      continue;
+    const Matrix4& m = instance.world_from_object;
+    for (std::size_t corner = 0; corner < 8; ++corner) {
+      const Vec3d p{bounds[(corner & 1) != 0 ? 3 : 0],
+          bounds[(corner & 2) != 0 ? 4 : 1], bounds[(corner & 4) != 0 ? 5 : 2]};
+      for (std::size_t row = 0; row < 3; ++row) {
+        const double value = m[row] * p[0] + m[4 + row] * p[1] +
+                             m[8 + row] * p[2] + m[12 + row];
+        world[row] = std::min(world[row], value);
+        world[3 + row] = std::max(world[3 + row], value);
+      }
+    }
+  }
+  if (!(world[0] <= world[3]))
+    return 0.0;
+  const Vec3d diagonal{world[3] - world[0], world[4] - world[1],
+      world[5] - world[2]};
+  const double radius = 0.5 * std::sqrt(Dot(diagonal, diagonal));
+  return std::isfinite(radius) ? radius : 0.0;
+}
+
+// An analytic light as a GPU record, and its light-table weight: its
+// estimated power over 2 pi, the scale of an emissive triangle's weight
+// (which emits from both sides). A distant light's power is the flux of its
+// irradiance at normal incidence through a disk of the scene's radius.
+// Nothing for a light that emits nothing: black, of zero size, or whose
+// normalized radiance is not a finite float.
+std::optional<GpuAnalyticLightRecord> MakeAnalyticLight(const Light& light,
+    double scene_radius, double& weight) {
+  constexpr double kPi = 3.14159265358979323846;
+  const Matrix4& m = light.world_from_light;
+  const Vec3d x = Column(m, 0);
+  const Vec3d y = Column(m, 1);
+  const Vec3d z = Column(m, 2);
+  const Vec3d origin = Column(m, 3);
+  const double determinant = Dot(x, Cross(y, z));
+  GpuAnalyticLightRecord record{};
+  // The light's world-space area, or for a distant light the projected
+  // solid angle it subtends at normal incidence (1 for parallel light), and
+  // the factor its radiance is multiplied by.
+  double extent = 0.0;
+  double scale = 1.0;
+  switch (light.shape) {
+  case LightShape::Sphere: {
+    const double radius = light.radius * std::cbrt(std::abs(determinant));
+    extent = 4.0 * kPi * radius * radius;
+    record.shape = kSphereLight;
+    Store(record.position, origin, radius);
+    Store(record.normal, {}, extent);
+    break;
+  }
+  case LightShape::Rect:
+  case LightShape::Disk: {
+    const bool rect = light.shape == LightShape::Rect;
+    const Vec3d u = Scale(x, rect ? 0.5 * light.width : light.radius);
+    const Vec3d v = Scale(y, rect ? 0.5 * light.height : light.radius);
+    const Vec3d normal = Cross(u, v);
+    const double length = std::sqrt(Dot(normal, normal));
+    extent = (rect ? 4.0 : kPi) * length;
+    record.shape = rect ? kRectLight : kDiskLight;
+    Store(record.position, origin, 0.0);
+    Store(record.axis_u, u, 0.0);
+    Store(record.axis_v, v, 0.0);
+    // The light's -Z side, where the frame's inverse transpose takes the
+    // normal.
+    if (length > 0.0)
+      Store(record.normal,
+          Scale(normal, (determinant < 0.0 ? 1.0 : -1.0) / length), extent);
+    break;
+  }
+  case LightShape::Distant: {
+    const double length = std::sqrt(Dot(z, z));
+    if (!(length > 0.0))
+      return std::nullopt;
+    const double theta =
+        std::min(static_cast<double>(light.angle) * kPi / 360.0, kPi);
+    // 1 - cos(theta) without cancellation at small angles.
+    const double half = std::sin(0.5 * theta);
+    const double one_minus_cos = 2.0 * half * half;
+    const double sin2 = std::sin(theta) * std::sin(theta);
+    Store(record.axis_u, Scale(z, 1.0 / length), one_minus_cos);
+    record.shape = kParallelLight;
+    extent = 1.0;
+    if (theta > 0.0) {
+      extent = theta <= 0.5 * kPi ? kPi * sin2 : kPi;
+      if (light.normalize)
+        scale = 1.0 / (theta <= 0.5 * kPi ? kPi * sin2 : (2.0 - sin2) * kPi);
+      if (static_cast<float>(one_minus_cos) >=
+          std::numeric_limits<float>::min()) {
+        record.shape = kDistantLight;
+      } else {
+        // Too narrow a cone for float densities: its irradiance, from one
+        // direction.
+        scale *= extent;
+        extent = 1.0;
+      }
+    }
+    break;
+  }
+  }
+  if (light.normalize && light.shape != LightShape::Distant)
+    scale = 1.0 / extent;
+  Vec3d radiance{};
+  for (std::size_t c = 0; c < 3; ++c)
+    radiance[c] = light.radiance[c] * scale;
+  const double mean = (radiance[0] + radiance[1] + radiance[2]) / 3.0;
+  if (!(extent > 0.0) || !std::isfinite(extent) || !(mean > 0.0) ||
+      !std::all_of(radiance.begin(), radiance.end(), [](double value) {
+        return value <= std::numeric_limits<float>::max();
+      }))
+    return std::nullopt;
+  Store(record.radiance, radiance, 0.0);
+  weight = mean * extent / 2.0;
+  if (light.shape == LightShape::Distant)
+    weight *= scene_radius * scene_radius;
+  if (!std::isfinite(weight))
+    weight = std::numeric_limits<double>::max();
+  return record;
+}
+
+// The light table: per instance its first entry, one entry per triangle of
+// every instance whose material emits and one per analytic light, chosen in
+// proportion to its weight: a triangle's world-space area times its
+// material's emission estimate, an analytic light's as MakeAnalyticLight
+// estimates it. The analytic records follow, in the lights' order.
 struct LightTable {
   std::vector<std::uint32_t> offsets;
   std::vector<GpuLightRecord> lights;
+  std::vector<GpuAnalyticLightRecord> analytic;
+  std::uint32_t emissive_triangles = 0;
 };
 
 LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
-    const std::vector<SceneMaterial>& materials) {
+    const std::vector<SceneMaterial>& materials,
+    const std::vector<Light>& lights) {
   LightTable table;
   table.offsets.assign(instances.size(), kNoLights);
   std::vector<double> weights;
@@ -144,12 +317,31 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
       table.lights.push_back({0.0F, 1.0F, 0, static_cast<std::uint32_t>(index)});
     }
   }
+  table.emissive_triangles = static_cast<std::uint32_t>(table.lights.size());
+  const bool distant = std::any_of(lights.begin(), lights.end(),
+      [](const Light& light) { return light.shape == LightShape::Distant; });
+  const double scene_radius = distant ? SceneRadius(instances) : 0.0;
+  std::vector<std::uint32_t> analytic_entries;
+  for (const Light& light : lights) {
+    double weight = 0.0;
+    const auto record = MakeAnalyticLight(light, scene_radius, weight);
+    if (!record)
+      continue;
+    if (weight > 0.0) {
+      analytic_entries.push_back(static_cast<std::uint32_t>(table.lights.size()));
+      weights.push_back(weight);
+      table.lights.push_back({0.0F, 1.0F, 0,
+          kAnalyticLight | static_cast<std::uint32_t>(table.analytic.size())});
+    }
+    table.analytic.push_back(*record);
+  }
   double total = 0.0;
   for (const double weight : weights)
     total += weight;
   if (!(total > 0.0) || !std::isfinite(total)) {
     table.offsets.assign(instances.size(), kNoLights);
     table.lights.clear();
+    table.emissive_triangles = 0;
     return table;
   }
   // Vose's alias method: columns of mean probability, each split between
@@ -185,6 +377,11 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
     table.lights[index].threshold = 1.0F;
     table.lights[index].alias = index;
   }
+  // Each analytic record keeps its entry's probability, which weighs the
+  // emission BSDF sampling finds on it.
+  for (const std::uint32_t entry : analytic_entries)
+    table.analytic[table.lights[entry].instance & ~kAnalyticLight].radiance[3] =
+        table.lights[entry].pdf;
   return table;
 }
 
@@ -319,6 +516,20 @@ bool ValidMaterial(const SceneMaterial& entry) {
          ValidTextureInput(material.specular_color_texture, true) &&
          std::isfinite(material.texcoord_fallback[0]) &&
          std::isfinite(material.texcoord_fallback[1]);
+}
+
+bool ValidLight(const Light& light) {
+  const std::array<float, 4> sizes{
+      light.radius, light.width, light.height, light.angle};
+  return static_cast<std::uint32_t>(light.shape) <=
+             static_cast<std::uint32_t>(LightShape::Distant) &&
+         std::all_of(light.world_from_light.begin(),
+             light.world_from_light.end(),
+             [](float value) { return std::isfinite(value); }) &&
+         ValidRadiance(light.radiance) &&
+         std::all_of(sizes.begin(), sizes.end(), [](float value) {
+           return std::isfinite(value) && value >= 0.0F;
+         });
 }
 
 VkTransformMatrixKHR TlasTransform(const Matrix4& world_from_object) {
@@ -503,7 +714,10 @@ void GpuScene::Destroy() {
   DestroyBuffer(memory_, device_, materials_);
   DestroyBuffer(memory_, device_, lights_);
   scene_instances_.clear();
+  scene_lights_.clear();
   light_count_ = 0;
+  analytic_count_ = 0;
+  emissive_triangles_ = 0;
   DestroyBuffer(memory_, device_, tlas_instances_);
   DestroyBuffer(memory_, device_, scratch_);
   DestroyBuffer(memory_, device_, staging_);
@@ -706,6 +920,14 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
   if (update.environment_changed && !ValidRadiance(update.environment)) {
     detail = "the scene update's environment radiance is negative or not "
              "finite";
+    return false;
+  }
+  if (!update.lights_changed && !update.lights.empty()) {
+    detail = "the scene update lists lights without replacing them";
+    return false;
+  }
+  if (!std::all_of(update.lights.begin(), update.lights.end(), ValidLight)) {
+    detail = "the scene update has a light value out of range";
     return false;
   }
   if (acceleration_ && update.instances.size() > max_instances_) {
@@ -943,6 +1165,9 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   if (update.instances_changed) {
     scene_instances_ = update.instances;
   }
+  if (update.lights_changed) {
+    scene_lights_ = update.lights;
+  }
   // Only instances read the table, so it waits for the first of them.
   const bool has_instances = update.instances_changed
                                  ? !update.instances.empty()
@@ -950,7 +1175,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   const bool write_materials = !materials_current_ && has_instances;
   if (update.geometry_releases.empty() && update.geometry_uploads.empty() &&
       update.texture_releases.empty() && update.texture_uploads.empty() &&
-      !update.instances_changed && !write_materials) {
+      !update.instances_changed && !write_materials &&
+      !update.lights_changed) {
     return true;
   }
   // Retain compatible geometry in its slot before applying ordinary releases.
@@ -1021,16 +1247,23 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       acceleration_ && update.instances_changed && !tlas_current;
   const VkDeviceSize tlas_input_bytes =
       build_tlas ? update.instances.size() * kTlasInstanceBytes : 0;
-  // Emission depends on the instances' geometry, transforms and materials.
-  const bool write_lights = update.instances_changed || write_materials;
+  // Emission depends on the instances' geometry, transforms and materials,
+  // and on the lights; distant lights' weights on the scene's extent.
+  const bool write_lights =
+      update.instances_changed || write_materials || update.lights_changed;
   LightTable light_table;
   VkDeviceSize light_entries_offset = 0;
+  VkDeviceSize analytic_offset = 0;
   VkDeviceSize light_bytes = 0;
   if (write_lights) {
-    light_table = BuildLightTable(scene_instances_, material_table_);
+    light_table =
+        BuildLightTable(scene_instances_, material_table_, scene_lights_);
     light_entries_offset =
         AlignUp(light_table.offsets.size() * sizeof(std::uint32_t), kLightBytes);
-    light_bytes = light_entries_offset + light_table.lights.size() * kLightBytes;
+    analytic_offset =
+        light_entries_offset + light_table.lights.size() * kLightBytes;
+    light_bytes = analytic_offset +
+                  light_table.analytic.size() * kAnalyticLightBytes;
   }
   staging_bytes += instance_bytes + material_bytes + tlas_input_bytes +
                    light_bytes;
@@ -1350,11 +1583,17 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
           light_table.offsets.size() * sizeof(std::uint32_t));
       std::memcpy(staging + offset + light_entries_offset,
           light_table.lights.data(), light_table.lights.size() * kLightBytes);
+      std::memcpy(staging + offset + analytic_offset,
+          light_table.analytic.data(),
+          light_table.analytic.size() * kAnalyticLightBytes);
       copies.push_back({lights_.buffer, VkBufferCopy{offset, 0, light_bytes}});
     }
     offset += light_bytes;
     light_entries_offset_ = light_entries_offset;
     light_count_ = static_cast<std::uint32_t>(light_table.lights.size());
+    analytic_offset_ = analytic_offset;
+    analytic_count_ = static_cast<std::uint32_t>(light_table.analytic.size());
+    emissive_triangles_ = light_table.emissive_triangles;
     stats_.light_bytes = light_bytes;
     ++stats_.light_writes;
   }
@@ -1608,7 +1847,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.instance_bytes = instance_count_ * kInstanceBytes;
   stats_.material_count = material_count_;
   stats_.material_bytes = material_count_ * kMaterialBytes;
-  stats_.emissive_triangles = light_count_;
+  stats_.emissive_triangles = emissive_triangles_;
+  stats_.analytic_lights = analytic_count_;
   stats_.resident_textures =
       static_cast<std::uint32_t>(texture_slot_of_.size());
   if (acceleration_) {

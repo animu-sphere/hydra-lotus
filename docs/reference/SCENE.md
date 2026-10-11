@@ -1,8 +1,8 @@
 # Scene snapshots and the GPU scene
 
 `include/lotus/render_world.hpp` owns the host-neutral CPU scene interface.
-`RenderWorld` remains the mutable entry point; `LotusScene` is its mesh and
-lighting state, published through `FrameSnapshot::scene`. Only standard C++
+`RenderWorld` remains the mutable entry point; `LotusScene` is its mesh,
+material and lighting state, published through `FrameSnapshot::scene`. Only standard C++
 types cross this boundary. Camera conventions are in the header and the
 [camera evidence](../reports/2026-10-04-foundation-camera-boundary.md).
 
@@ -140,6 +140,37 @@ with a non-finite scale, bias or fallback, a texture whose texels do not
 match its size and format or are not finite, and a binding for a missing
 mesh throw `std::invalid_argument` without changing the world.
 
+## Analytic lights
+
+`LotusScene::lights` maps stable host-supplied keys to `Light` records, in
+deterministic order: UsdLux's sphere, rect, disk and distant lights
+(`LightShape`). `SetLight` inserts or replaces one and `RemoveLight`
+removes one. A light only emits: it neither reflects nor blocks light, and
+camera rays do not see it, as they do not see the environment.
+
+- `world_from_light` places the light's frame. A sphere is centred on its
+  origin, and its `radius` scales by the cube root of the frame's absolute
+  determinant (its scale when uniform), so it stays a sphere. A rect
+  (`width` along X, `height` along Y) or disk (`radius`) is centred in the
+  frame's XY plane and takes the full transform, so a non-uniform scale or
+  a shear makes it a parallelogram or an ellipse. It emits from its -Z
+  side only, the side to which the frame's inverse transpose takes -Z. A
+  distant light shines along the frame's -Z axis from beyond the scene,
+  within a cone of angular diameter `angle` degrees (360 at most); at 0 it
+  is a parallel light.
+- `radiance` is UsdLux's `color * intensity * 2^exposure`, linear RGB. A
+  parallel light has no radiance: its value is the irradiance on a surface
+  facing it.
+- `normalize` divides the radiance by the light's world-space area, or for
+  a distant light of positive angle by UsdLux's size factor, π sin²θ for a
+  half angle θ up to 90° and (2 − sin²θ) π beyond, so that the light's
+  power, or a distant light's irradiance at normal incidence, does not
+  change with its size. A parallel light ignores it.
+
+A non-finite transform or radiance, negative radiance or sizes, an unknown
+shape and an empty key throw `std::invalid_argument` without changing the
+world. Lights do not count towards `FrameSnapshot::triangle_count`.
+
 ## Update plan
 
 `include/lotus/extraction.hpp` owns the host-neutral update plan.
@@ -171,12 +202,15 @@ planned and returns a `SceneUpdate`:
   default alone, so a scene without materials plans no table;
 - `environment`: when `environment_changed`, the scene's environment
   radiance. A GPU scene, and the extraction after `Reset`, start from
-  black, so only a different environment is planned.
+  black, so only a different environment is planned;
+- `lights`: when `lights_changed`, every analytic light, in key order. A
+  GPU scene, and the extraction after `Reset`, start without lights.
 
 A geometry buffer or a texture is identified by its address. Every mesh with triangles
 keeps its geometry resident, even hidden or placed nowhere, so visibility,
 transform, placement and binding changes rewrite only the instances, and a
-material's value edit rewrites only the material table. Adding or removing
+material's value edit rewrites only the material table, and a light edit
+plans only the lights. Adding or removing
 a material moves the later slots, so it rewrites both. A texture edit
 replaces the texture (a release and an upload) and the table that samples
 it; a material edit that changes its texture-coordinate set rewrites the
@@ -241,11 +275,21 @@ empty plan records no GPU work.
 - One device-local light table holds, for each instance record, a uint32:
   its first entry or `kNoLights`, padded to 16 bytes; then a 16-byte entry
   per triangle of every instance whose material's emission estimate is
-  positive, in instance and triangle order: the probability with which the
-  table chooses it, its alias-method threshold and alias, and its
-  instance. It is rebuilt from the plan's instances, their geometry and
-  transforms, and the material table whenever the instance records or the
-  material table are rewritten ([light sampling](#light-sampling)).
+  positive, in instance and triangle order, and one per analytic light of
+  positive weight: the probability with which the table chooses it, its
+  alias-method threshold and alias, and its instance, or `kAnalyticLight`
+  with the light's index. A 96-byte world-space record per analytic light
+  follows: a sphere's centre and radius, a rect's or disk's centre, half
+  axes, emitting normal and area, a distant light's direction and the
+  1 − cos of its cone's half angle, the normalized radiance (a parallel
+  light's irradiance) and its entry's probability. A distant light whose
+  cone is too narrow for float densities (1 − cos below the smallest
+  normal float) is kept as a parallel light of the cone's irradiance.
+  Black lights, lights of zero size and lights whose normalized radiance
+  exceeds float range are left out. The table is rebuilt from the plan's instances, their geometry
+  and transforms, the material table and the lights whenever the instance
+  records, the material table or the lights are rewritten
+  ([light sampling](#light-sampling)).
 - The environment is host state: a plan that changes only the environment
   records no GPU work, and the scene pass reads it with each frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
@@ -255,8 +299,8 @@ empty plan records no GPU work.
   layout.
 
 `GpuSceneStats` reports resident geometry and textures, instances, material
-table entries, the light table's emissive triangles, their bytes and
-lifetime upload counts, light-table rewrites included. `ReadBackScene`
+table entries, the light table's emissive triangles and analytic lights,
+its bytes and lifetime upload counts, light-table rewrites included. `ReadBackScene`
 copies the device buffers and images back for validation: the corner
 normals and texture-coordinate sets (`GpuGeometryContents`), each
 instance's set, the material table with each lookup's texture slot
@@ -519,10 +563,19 @@ of compute kernels. Both call the same transport steps
 - **Emission** is added at every hit, the camera's included. With light
   sampling, emission that a sampled direction finds is weighed against
   next event estimation's density for the same point.
+- **Analytic lights.** A scattered ray adds the radiance of each
+  [analytic light](#analytic-lights) it crosses before its hit, or before
+  it escapes: a sphere's near side from outside it, a rect's or disk's
+  emitting side, and, for a ray that escapes, each distant light whose
+  cone holds its direction. Lights block neither rays nor one another,
+  and camera rays pass them. With light sampling, each is weighed against
+  next event estimation's density for the direction.
 - **Direct light.** With light sampling, each scattering event that may
-  continue samples one point on an emissive triangle through a shadow ray,
-  after Russian roulette and before the BSDF sample
-  ([light sampling](#light-sampling)).
+  continue samples one emissive triangle or analytic light through a
+  shadow ray, after Russian roulette and before the BSDF sample
+  ([light sampling](#light-sampling)). Under BSDF sampling, the same event
+  adds each parallel light, which no sampled direction can find, through a
+  shadow ray of its own, drawing no random numbers.
 - **BSDF.** A dielectric GGX coat over Lambert, blended with the existing
   GGX metal by `metallic`. Dielectric F0 is `((ior - 1)/(ior + 1))²`;
   `ior = 1` removes the interface and recovers uncoated Lambert. In the
@@ -761,8 +814,9 @@ and that the bounce limit fails cleanly
 `PathTracingSettings::light_sampling` selects the Renderer Phase 3
 estimator ([roadmap policy](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis)).
 `LightSampling::Bsdf` is brute force: emission counts only where a camera
-ray or a sampled BSDF direction happens to find it. The committed reference
-images are its images; `--write-reference` and the reference check's
+ray or a sampled BSDF direction happens to find it, except a parallel
+light's, which each scattering event adds through its own shadow ray,
+drawing no random numbers. The committed reference images are its images; `--write-reference` and the reference check's
 bitwise reproduction use it, and so do the transport checks whose exact
 expectations are its samples. `LightSampling::Mis`, the default, adds next
 event estimation, both integrators running it in the same random-number
@@ -773,10 +827,17 @@ order. Changing it restarts the accumulation.
   computed in double precision, times its material's emission estimate:
   the mean of its RGB emission, or for a lookup the bound
   `max(scale, 0) + max(bias, 0)` for texels in [0, 1], or the fallback
-  when the key names no texture. Entries are chosen by Vose's alias method
-  in proportion to their weights; each stores its own probability. The
-  estimate only steers sampling: emission it misses is still found by BSDF
-  sampling, at full weight where the table's density is 0.
+  when the key names no texture. Each [analytic light](#analytic-lights)
+  that emits gets an entry too, weighed by its estimated power over 2π,
+  the scale of a triangle's weight (a triangle emits from both sides): half
+  its mean normalized radiance times its area, or for a distant light half
+  its mean irradiance at normal incidence times the squared radius of the
+  sphere about the instances' bounding box, which a disk of that radius
+  intercepts. Entries are chosen by Vose's alias method in proportion to
+  their weights; each stores its own probability, and an analytic light's
+  record a copy. The estimate only steers sampling: emission it misses is
+  still found by BSDF sampling, at full weight where the table's density
+  is 0.
 - **Sampling.** Four random numbers choose an entry, as a column and its
   alias, and a point uniformly by area on its triangle. The point's
   radiance is its emission after texture lookup times its coverage
@@ -785,24 +846,36 @@ order. Changing it restarts the accumulation.
   divided by the triangle's area, times the squared distance over the
   cosine at the light. A point below the geometric surface, or one in a
   direction the BSDF does not reflect, contributes nothing, as a sampled
-  direction there would. A table without entries draws no random numbers.
+  direction there would. An analytic light uses the same four numbers: a
+  sphere seen from outside is sampled uniformly over the cone it subtends,
+  then at the cone direction's point on its near side (Pharr et al.,
+  *Physically Based Rendering*, 4th edition, section 6.2.4); a rect
+  uniformly by area, a disk by Shirley and Chiu's concentric mapping; a
+  distant light uniformly over its cone, and a parallel light in its one
+  direction with its selection probability as its density. A rect or disk
+  seen from behind, or a sphere from inside, contributes nothing. A table
+  without entries draws no random numbers.
 - **Shadow rays** run from the offset hit position to the point, offset
-  off the light's surface towards the receiver. The first opaque surface
+  off an emissive triangle towards the receiver; they end at an analytic
+  light's point, and are unbounded towards a distant light. The first opaque surface
   blocks them; a partially covering surface multiplies the light they
   carry by `1 - coverage`, drawing no random numbers, whose expectation is
   what traced rays' coverage tests produce.
 - **MIS.** A light sample is weighed by the power heuristic of its density
   against `BsdfPdf` for the same direction, and emission a sampled
   direction finds by the power heuristic of that direction's density
-  against the light table's for the hit point; the camera's view of an
-  emitter is unweighted. The constant environment is not sampled:
+  against the light table's for the hit point, and so is an analytic
+  light's radiance that a sampled direction crosses, against its
+  selection probability times its density for the direction; the camera's
+  view of an emitter is unweighted, and so is parallel light. The constant environment is not sampled:
   BSDF sampling's cosine-weighted directions sample it better than uniform
   directions do, and escaping rays add it unweighted
   ([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
 - **Determinism.** Under BSDF sampling no step draws a number or adds a
   term, so the committed reference is reproduced bit for bit. The
   wavefront shade kernel traces the shadow ray inline and, for the emission
-  weight, reads the path's ray origin section.
+  weight and, with analytic lights, for the lights a ray crossed, reads the
+  path's ray origin section.
 
 `renderer.path.light_sampling` compares the Cornell box's images under
 light sampling at 1–1024 spp with the committed reference by the DES-Q5
@@ -817,6 +890,30 @@ Cornell box's variance and must not raise the sky-lit scene's. It also
 checks the light-table sizes, that switching the estimator restarts the
 accumulation and that an environment edit leaves the table alone
 ([evidence](../reports/2026-10-11-emissive-nee-mis.md)).
+
+`renderer.path.analytic_lights` lights an uncoated Lambert floor under a
+black sky, in OrthographicCamera's view, with each kind of analytic light
+alone: a sphere scaled into the camera's view and a smaller normalized
+one (whose irradiance does not depend on its radius), a tilted rect behind
+whose plane part of the floor lies, a normalized disk stretched
+into an ellipse, a normalized 20° distant light and a parallel light; then
+with all of them and an emissive square. Each 1024-spp image under either
+estimator, and the combined scene's under either integrator, is compared
+by the DES-Q5 metric with an independent double-precision oracle: the
+floor's albedo over π times the lights' irradiance (Lambert's formula for
+polygons, a 1024-gon for the disk, the projected solid angle of a sphere's
+or cone's cap, a parallel light's cosine), averaged over 4×4 points of
+each pixel. Light sampling must lower each sphere, rect, disk and cone
+light's per-sample variance; the combined scene's variance and GPU time
+per sample under both estimators, and whether both integrators render its
+64 spp bit for bit, are recorded. With the lights above an opaque roof
+beyond the camera's near plane the floor must be black under either
+estimator and integrator, and under a roof of 50% coverage half as
+bright; with the lights below the opaque roof as a ceiling, which every
+sampled direction hits, it must match the oracle without the distant
+lights under either estimator and integrator. A light edit must restart the accumulation and rewrite only the
+light table, and black and zero-size lights must stay off the GPU
+([evidence](../reports/2026-10-11-analytic-lights.md)).
 
 ### Fixed benchmarks
 
@@ -964,52 +1061,74 @@ visibility and instancer edits, like camera, framing,
 restart the
 accumulation. Other devices
 retain the bootstrap path and converge after one pass. Dome lights feed the
-constant environment as [below](#lights); an environment change restarts the
-accumulation. The host evidence log identifies the choice as
+constant environment and the other UsdLux lights the analytic lights as
+[below](#lights); a lighting change restarts the accumulation. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `integrator` (`reference` or
 `wavefront`), `wavefront_rounds` (0 unless the pass added a wavefront
 sample), `light_sampling` (`mis` or `bsdf`), `emissive_triangles`,
-`sample_index`, `samples` and `converged`.
+`analytic_lights`, `sample_index`, `samples` and `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass, and `GetFrameEvidence` that pass's `GpuFrameEvidence` without
 its colour and depth products.
 
 ### Lights
 
-The delegate supports `domeLight` sprims. Each visible dome contributes
-constant linear RGB radiance `color * intensity * 2^exposure`, using Hydra's
-`HdLightTokens` parameters and the defaults white, 1 and 0 from
-[UsdLux LightAPI](https://openusd.org/release/user_guides/schemas/usdLux/LightAPI.html).
-Visibility is read from the scene delegate, including inherited visibility;
-`HdLight::DirtyParams` covers it as well as parameter edits, and
-`DirtyResource` also refreshes the contribution. Transforms have no effect
-on a uniform environment.
+The delegate supports `domeLight`, `sphereLight`, `rectLight`, `diskLight`
+and `distantLight` sprims. Visibility is read from the scene delegate,
+including inherited visibility; `HdLight::DirtyParams` covers it as well
+as parameter edits, and `DirtyResource` also refreshes the light. A light's
+radiance is `color * intensity * 2^exposure`, using Hydra's
+`HdLightTokens` parameters and the defaults white, 1 (50,000 for a
+DistantLight) and 0 from
+[UsdLux](https://openusd.org/release/user_guides/schemas/usdLux/LightAPI.html).
+Negative intensity and colour channels are clamped to zero; non-finite
+inputs or a radiance outside float range warn.
 
-Contributions are summed in path order with double precision and stored in
-the existing `LotusScene::environment`. A hidden or zero-intensity dome
-contributes black. Negative intensity and colour channels are clamped to
-zero; non-finite inputs or a per-dome radiance outside float range warn and
-make that dome black. A sum above float range saturates to the largest finite
-float per channel. This numeric guard is not a useful rendering range.
+Each visible dome contributes constant linear RGB radiance; a hidden,
+zero-intensity or invalid one contributes black. Transforms have no effect
+on a uniform environment. Contributions are summed in path order with
+double precision and stored in the existing `LotusScene::environment`. A
+sum above float range saturates to the largest finite float per channel.
+This numeric guard is not a useful rendering range.
 
-With no synced domes, the adapter uses its white fallback environment. An
-authored dome that is invisible, black or invalid still suppresses that
-fallback; destroying the last dome restores it. Fallback sprims never
-contribute. The aggregate changes the scene snapshot only when its RGB value
-changes, so equivalent lighting edits preserve the accumulation. An
-environment-only change neither uploads geometry nor rebuilds acceleration
-structures. Environment radiance continues to light secondary misses only;
-camera misses keep their AOV clear background.
+Each visible sphere, rect, disk or distant light becomes an
+[analytic light](#analytic-lights) keyed by its path: its shape, its world
+transform (`HdLight::DirtyTransform`), its radiance, `normalize`,
+`radius`, `width`, `height` and `angle`, with UsdLux's defaults. Negative
+sizes count as 0 and angles are clipped to [0, 360], as UsdLux specifies.
+A hidden light is left out, and so, with a warning, is one with a
+non-finite value or transform or an out-of-range radiance. Textures,
+shaping (cone and IES), shadow controls, colour temperature, diffuse and
+specular multipliers, `treatAsPoint` and light and shadow linking are not
+read, and cylinder, portal, geometry and mesh lights are not supported.
+
+With no synced domes and no synced analytic lights, the adapter uses its
+white fallback environment. An authored light that is invisible, black or
+invalid still suppresses that fallback, so a stage lit only by a sphere or
+the sun has a black sky; destroying the last one restores it. Fallback
+sprims never contribute. The scene snapshot changes only when the
+aggregate environment or a light changes, so equivalent lighting edits
+preserve the accumulation. A lighting-only change neither uploads geometry
+nor rebuilds acceleration structures. Environment radiance continues to
+light secondary misses only; camera misses keep their AOV clear
+background, and camera rays do not see analytic lights.
 
 This is constant dome lighting only: environment textures, colour
 temperature, diffuse/specular contribution controls, light/shadow linking,
-light filters, instanced lights and other light types are not evaluated.
-Light sampling does not sample the dome, and there is no environment
-importance sampling ([light sampling](#light-sampling)). CTest
-`lotus-renderer-hydra-light` checks composed USD edits and snapshot lifetimes;
-its GPU-gated `-gpu` variant checks analytic mirror radiance, accumulation
-restarts and unchanged upload/build counters
-([evidence](../reports/2026-10-08-dome-lights.md)).
+light filters and instanced lights are not evaluated. Light sampling does
+not sample the dome, and there is no environment importance sampling
+([light sampling](#light-sampling)). CTest `lotus-renderer-hydra-light`
+checks composed dome edits and snapshot lifetimes; its GPU-gated `-gpu`
+variant checks analytic mirror radiance, accumulation restarts and
+unchanged upload/build counters
+([evidence](../reports/2026-10-08-dome-lights.md)). CTest
+`lotus-renderer-hydra-analytic-lights` checks each analytic light's
+translation, edits, visibility, clipped and invalid values and the
+fallback environment; its GPU-gated `-gpu` variant requires the backend's
+converged images under both estimators bit for bit, their statistical
+agreement, and that a light edit restarts the accumulation and rewrites
+only the light table
+([evidence](../reports/2026-10-11-analytic-lights.md#hydra)).
 
 ### Deterministic mode through Hydra
 
@@ -1068,9 +1187,9 @@ estimation with multiple importance sampling, false leaves
 `bool`, so usdview lists it as the checkable *Light sampling (NEE + MIS)*
 item of its Hydra Settings menu, checked by default; a value that cannot
 be cast to `bool` selects light sampling. A change restarts the
-accumulation. `UsdPreviewSurface` emission (`emissiveColor`) is what the
-light table samples; UsdLux lights other than the dome are not
-translated.
+accumulation. `UsdPreviewSurface` emission (`emissiveColor`) and the
+sphere, rect, disk and distant lights are what the light table samples;
+the dome is left to BSDF sampling.
 
 CTest `lotus-renderer-hydra-light-sampling` (GPU-gated) converges a
 UsdImaging stage lit by an emissive panel at 16 spp under each estimator

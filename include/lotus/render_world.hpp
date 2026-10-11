@@ -70,6 +70,45 @@ struct MeshInstance {
 [[nodiscard]] std::vector<Matrix4> PlacementTransforms(
     const MeshInstance& instance);
 
+// The kinds of analytic light: UsdLux's SphereLight, RectLight, DiskLight
+// and DistantLight.
+enum class LightShape : std::uint32_t {
+  Sphere,
+  Rect,
+  Disk,
+  Distant,
+};
+
+// A light with a shape of its own rather than an emissive mesh. It only
+// emits: it neither reflects nor blocks light, and camera rays do not see
+// it, as they do not see the environment.
+struct Light {
+  LightShape shape = LightShape::Sphere;
+  // The light's frame. A sphere is centred on its origin; a rect or disk is
+  // centred in its XY plane and emits from its -Z side; a distant light
+  // shines along its -Z axis from beyond the scene. A sphere's radius scales
+  // by the cube root of the frame's absolute determinant (its scale when
+  // uniform), so it stays a sphere; a rect or disk takes the full transform.
+  Matrix4 world_from_light = IdentityMatrix();
+  // Emitted radiance, linear RGB, non-negative: UsdLux's
+  // color * intensity * 2^exposure. A distant light of angle 0 has no
+  // radiance; this is then its irradiance at normal incidence.
+  std::array<float, 3> radiance{1.0F, 1.0F, 1.0F};
+  // UsdLux normalize: divides the radiance by the light's world-space area,
+  // or for a distant light of positive angle by its UsdLux size factor, so
+  // that its power does not change with its size.
+  bool normalize = false;
+  // Non-negative sizes: a sphere's or disk's radius, a rect's extent along
+  // its X and Y axes, and a distant light's angular diameter in degrees,
+  // 0 for parallel light; angles above 360 count as 360.
+  float radius = 0.5F;
+  float width = 1.0F;
+  float height = 1.0F;
+  float angle = 0.53F;
+
+  bool operator==(const Light&) const = default;
+};
+
 struct SceneMesh {
   std::shared_ptr<const MeshGeometry> geometry;
   MeshInstance instance;
@@ -91,6 +130,9 @@ struct LotusScene {
   // Constant environment radiance, linear RGB, arriving from every direction
   // a path escapes in. Camera rays that miss do not see it.
   std::array<float, 3> environment{0.0F, 0.0F, 0.0F};
+  // Analytic lights, keyed by stable host-supplied identifiers, in
+  // deterministic order.
+  std::map<std::string, Light> lights;
 };
 
 struct FrameSnapshot {
@@ -125,6 +167,9 @@ public:
   void SetTexture(const std::string& id, Texture texture);
   void RemoveTexture(const std::string& id);
   void SetEnvironment(const std::array<float, 3>& radiance);
+  // Inserts or replaces an analytic light.
+  void SetLight(const std::string& id, const Light& light);
+  void RemoveLight(const std::string& id);
   [[nodiscard]] FrameSnapshot Commit();
 
 private:

@@ -168,8 +168,10 @@ struct GpuSceneStats {
   // Entries in the material table, the default material included.
   std::uint32_t material_count = 0;
   // Triangles of emissive instances, which next event estimation samples:
-  // the light table's entries.
+  // the light table's entries besides the analytic lights'.
   std::uint32_t emissive_triangles = 0;
+  // Analytic lights that emit, which the scene passes sample and intersect.
+  std::uint32_t analytic_lights = 0;
   std::uint32_t resident_textures = 0;
   // Device bytes of the geometry buffers, of the instances, of the
   // material table in use and of the textures' texels.
@@ -177,7 +179,8 @@ struct GpuSceneStats {
   std::uint64_t instance_bytes = 0;
   std::uint64_t material_bytes = 0;
   std::uint64_t texture_bytes = 0;
-  // Device bytes of the light table, its per-instance offsets included.
+  // Device bytes of the light table, its per-instance offsets and analytic
+  // light records included.
   std::uint64_t light_bytes = 0;
   // Lifetime: geometry residencies added/removed (compatible replacements
   // can retain GPU storage), textures created/destroyed, instance
@@ -189,7 +192,7 @@ struct GpuSceneStats {
   std::uint64_t texture_releases = 0;
   std::uint64_t instance_writes = 0;
   std::uint64_t material_writes = 0;
-  // Lifetime light-table rewrites: after instance or material table
+  // Lifetime light-table rewrites: after instance, material table or light
   // rewrites, never for an environment-only change.
   std::uint64_t light_writes = 0;
   std::uint64_t upload_submissions = 0;
@@ -350,15 +353,17 @@ enum class Integrator {
 // converge to the same image; neither changes which surfaces emit.
 enum class LightSampling {
   // Brute force: emission counts only where a camera ray or a sampled BSDF
-  // direction happens to find it. The estimator of the committed reference
+  // direction happens to find it. Parallel light, which no direction finds,
+  // is added at every scattering event through a shadow ray per light,
+  // drawing no random numbers. The estimator of the committed reference
   // images.
   Bsdf,
   // Next event estimation as well: at each scattering event a shadow ray
-  // goes to one point on an emissive triangle, chosen in proportion to its
-  // estimated power. Each contribution is weighed against BSDF sampling's
-  // density for the same direction by the power heuristic, and so is the
-  // emission BSDF sampling finds. The constant environment is left to BSDF
-  // sampling alone.
+  // goes to one point on an emissive triangle or analytic light, chosen in
+  // proportion to its estimated power. Each contribution is weighed against
+  // BSDF sampling's density for the same direction by the power heuristic,
+  // and so is the emission BSDF sampling finds. The constant environment is
+  // left to BSDF sampling alone.
   Mis,
 };
 

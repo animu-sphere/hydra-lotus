@@ -15,6 +15,10 @@ the `lotus:lightSampling` Hydra flag
 the time to equal quality 2.61×. The constant environment stays with BSDF
 sampling until environment importance sampling
 ([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
+LOTUS-LIGHT-02 adds UsdLux sphere, rect, disk and distant lights as
+analytic lights of the core scene, translated by the Hydra adapter and
+sampled in the same light table, with the radiance a sampled direction
+crosses weighed by MIS ([evidence](../reports/2026-10-11-analytic-lights.md)).
 The remaining Renderer Phase 3 tasks are [below](#renderer-phase-3).
 
 Renderer Phase 2 is complete
@@ -61,11 +65,6 @@ in the reference documentation.
 
 In order, within the [phase scope](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis):
 
-- [ ] **LOTUS-LIGHT-02 — Analytic lights.** A light representation in the
-  core scene for UsdLux sphere, rect, disk and distant lights, translated
-  by the Hydra adapter and sampled by next event estimation beside the
-  emissive triangles, with BSDF-found hits weighed by MIS. Current limits
-  are in the [light reference](../reference/SCENE.md#lights).
 - [ ] **LOTUS-LIGHT-03 — Environment importance sampling.** Dome-light
   textures, and light sampling of the environment in proportion to its
   radiance, measured against BSDF sampling as the
@@ -74,7 +73,9 @@ In order, within the [phase scope](../design/ROADMAP_POLICY.md#renderer-phase-3-
 - [ ] **LOTUS-LIGHT-04 — Renderer Phase 3 exit review.** Time to equal
   quality against brute-force BSDF sampling on the fixed workloads and the
   lit scenes, under both integrators; whether the wavefront integrator's
-  inline shadow rays should move to a queue of their own.
+  inline shadow rays should move to a queue of their own, and whether
+  intersecting every analytic light along each ray needs an acceleration
+  structure of its own.
 
 ## Deferred adapter work
 

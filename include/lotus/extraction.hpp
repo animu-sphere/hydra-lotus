@@ -98,6 +98,10 @@ struct SceneUpdate {
   // GPU scene starts with a black environment.
   bool environment_changed = false;
   std::array<float, 3> environment{};
+  // When set, `lights` replaces every analytic light: the scene's lights in
+  // key order. A GPU scene starts without any. Otherwise `lights` is empty.
+  bool lights_changed = false;
+  std::vector<Light> lights;
 
   // True when the GPU scene has nothing to do.
   [[nodiscard]] bool Empty() const;
@@ -122,6 +126,7 @@ private:
   std::vector<SceneInstance> instances_;
   std::vector<SceneMaterial> materials_{SceneMaterial{}};
   std::array<float, 3> environment_{};
+  std::vector<Light> lights_;
 };
 
 } // namespace Lotus

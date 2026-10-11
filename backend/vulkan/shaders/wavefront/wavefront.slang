@@ -98,11 +98,13 @@ PathState LoadPath(uint slot, uint depth) {
 
 // What shading reads of a path: everything but its ray's interval, which a
 // scattering event replaces, and its origin, which only weighing emission
-// against light sampling reads. A camera path's throughput and last density
-// are the ones StartPath gives it, so neither is stored for it.
+// against light sampling and finding the analytic lights the ray crossed
+// read. A camera path's throughput and last density are the ones StartPath
+// gives it, so neither is stored for it.
 PathState LoadShadedPath(uint slot, uint depth) {
   PathState path;
-  path.ray.Origin = depth != 0 && SampleLights()
+  path.ray.Origin =
+      depth != 0 && (SampleLights() || path_constants.analytic_count != 0)
       ? asfloat(LoadSection(kOriginSection, slot)).xyz
       : float3(0.0);
   path.ray.TMin = 0.0;

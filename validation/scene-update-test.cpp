@@ -119,6 +119,42 @@ int main() try {
       !update.Empty(),
       "an environment edit was not planned on its own");
 
+  // Lights are planned on their own, in key order, as a whole.
+  Lotus::Light sun;
+  sun.shape = Lotus::LightShape::Distant;
+  Lotus::Light bulb;
+  bulb.radius = 0.25F;
+  world.SetLight("/z/sun", sun);
+  world.SetLight("/a/bulb", bulb);
+  update = extraction.Update(world.Commit());
+  Check(update.lights_changed && update.lights.size() == 2 &&
+      update.lights[0] == bulb && update.lights[1] == sun &&
+      !update.instances_changed && !update.materials_changed &&
+      !update.environment_changed && update.geometry_uploads.empty() &&
+      !update.Empty(),
+      "a light insertion was not planned on its own in key order");
+  sun.angle = 2.0F;
+  world.SetLight("/z/sun", sun);
+  update = extraction.Update(world.Commit());
+  Check(update.lights_changed && update.lights.size() == 2 &&
+      update.lights[1] == sun, "a light edit was not planned");
+  world.SetLight("/z/sun", sun);
+  world.SetEnvironment({1.0F, 0.5F, 0.25F});
+  Check(extraction.Update(world.Commit()).Empty(),
+      "unchanged lights were planned again");
+  world.RemoveLight("/a/bulb");
+  update = extraction.Update(world.Commit());
+  Check(update.lights_changed && update.lights.size() == 1 &&
+      update.lights[0] == sun, "a light removal was not planned");
+  extraction.Reset();
+  update = extraction.Update(world.Commit());
+  Check(update.lights_changed && update.lights.size() == 1,
+      "a reset did not plan the lights again");
+  world.RemoveLight("/z/sun");
+  update = extraction.Update(world.Commit());
+  Check(update.lights_changed && update.lights.empty(),
+      "removing the last light was not planned");
+
   // Each instancer placement is an instance of the same resident geometry,
   // in placement order after the meshes before it.
   auto prototype = instance;
