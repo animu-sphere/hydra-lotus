@@ -1,8 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.24)
 
+# VERSION is the project's version; release.py checks that openstrata.toml
+# declares the same one.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" LOTUS_VERSION)
+string(STRIP "${LOTUS_VERSION}" LOTUS_VERSION)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS VERSION)
+
 project(Lotus
-  VERSION 0.1.0
+  VERSION ${LOTUS_VERSION}
   DESCRIPTION "lotus — an OpenStrata renderer skeleton"
   LANGUAGES CXX)
 

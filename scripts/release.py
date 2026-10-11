@@ -58,12 +58,11 @@ def changelog(root: Path, version: str, allow_unreleased: bool = False) -> str:
 
 def project_version(root: Path, tag: str | None = None,
                     allow_unreleased: bool = False) -> str:
+    # CMake reads VERSION; OpenStrata names packages from openstrata.toml.
+    version = (root / "VERSION").read_text(encoding="utf-8").removesuffix("\n")
     manifest = tomllib.loads((root / "openstrata.toml").read_text(encoding="utf-8"))
-    version = manifest["project"]["version"]
-    cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-    match = re.search(r"project\(\s*Lotus\b[^)]*?\bVERSION\s+([0-9.]+)", cmake, re.S)
-    if not VERSION.fullmatch(version) or not match or match[1] != version:
-        raise ValueError("openstrata.toml and project(Lotus VERSION) must agree on stable SemVer")
+    if not VERSION.fullmatch(version) or manifest["project"]["version"] != version:
+        raise ValueError("VERSION and openstrata.toml must agree on stable SemVer")
     if tag is not None and tag != f"v{version}":
         raise ValueError(f"tag {tag} does not match v{version}")
     changelog(root, version, allow_unreleased)

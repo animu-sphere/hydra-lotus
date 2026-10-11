@@ -7,6 +7,48 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-11
+
+The wavefront release adds Renderer Phase 2: a wavefront integrator that
+reproduces the reference transport, its measured queue scheduling and
+path-state layout, and integrator selection through Hydra. It is also the
+first release published through the tag-driven lane with a Windows Hydra
+package. See the [release record](docs/releases/v0.2.0.md) for scope,
+validation and compatibility notes.
+
+### Added
+
+- Integrator selection through Hydra. The `lotus:wavefront` render
+  setting, a flag that usdview lists as the checkable *Wavefront
+  integrator* item of its Hydra Settings menu, selects the wavefront
+  integrator instead of the reference integrator (the default); a change
+  restarts the accumulation. The plugin installs `wavefront.comp.spv`
+  with its shaders, and releases require it. The host evidence log
+  records each pass's `integrator` and `wavefront_rounds`, and
+  `HdLotusRenderDelegate::GetFrameEvidence` returns the latest pass's
+  frame evidence.
+  `lotus-renderer-hydra-integrator` compares converged Hydra images under
+  both integrators with the backend's, and the usdview smoke test toggles
+  the installed plugin's menu item on and off. This completes Renderer
+  Phase 2.
+
+- Renderer Phase 2 wavefront path tracing, selected with
+  `PathTracingSettings::integrator`: compute kernels pass persistent path
+  state between ray, hit and terminated-path queues with indirect
+  dispatches, and share the reference transport through new `common/scene`
+  and `common/transport` Slang modules. It reproduces the committed
+  reference and the fixed benchmarks' images bit for bit on the measured
+  device; `renderer.path.wavefront` runs the transport scenarios and the
+  reference comparison with it. Frames report per-bounce queue occupancy
+  and per-kernel GPU timings, and `--benchmark-integrator wavefront`
+  measures it. Queues and scheduling are not yet optimized.
+
+- Tag-driven GitHub Actions releases, reusing renderer CI and the pinned
+  Windows Hydra runtime. The lane checks version/changelog agreement,
+  reproducible packaging and required products, assembles manifest/SBOM,
+  source and checksums, and publishes as `hydra-lotus vX.Y.Z`. Manual
+  dispatch builds a dry-run bundle without publishing.
+
 ### Changed
 
 - The wavefront integrator's camera kernel traces the camera rays it
@@ -34,37 +76,9 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   (`GpuFrameEvidence::wavefront_rounds`) and the tail's GPU duration, and
   `--benchmark-size` measures other square targets.
 
-### Added
-
-- Integrator selection through Hydra. The `lotus:wavefront` render
-  setting, a flag that usdview lists as the checkable *Wavefront
-  integrator* item of its Hydra Settings menu, selects the wavefront
-  integrator instead of the reference integrator (the default); a change
-  restarts the accumulation. The plugin installs `wavefront.comp.spv` with its shaders, and releases
-  require it. The host evidence log records each pass's `integrator` and
-  `wavefront_rounds`, and `HdLotusRenderDelegate::GetFrameEvidence`
-  returns the latest pass's frame evidence.
-  `lotus-renderer-hydra-integrator` compares converged Hydra images under
-  both integrators with the backend's, and the usdview smoke test toggles
-  the installed plugin's menu item on and off. This completes Renderer
-  Phase 2.
-
-- Renderer Phase 2 wavefront path tracing, selected with
-  `PathTracingSettings::integrator`: compute kernels pass persistent path
-  state between ray, hit and terminated-path queues with indirect
-  dispatches, and share the reference transport through new `common/scene`
-  and `common/transport` Slang modules. It reproduces the committed
-  reference and the fixed benchmarks' images bit for bit on the measured
-  device; `renderer.path.wavefront` runs the transport scenarios and the
-  reference comparison with it. Frames report per-bounce queue occupancy
-  and per-kernel GPU timings, and `--benchmark-integrator wavefront`
-  measures it. Queues and scheduling are not yet optimized.
-
-- Tag-driven GitHub Actions releases, reusing renderer CI and the pinned
-  Windows Hydra runtime. The lane checks version/changelog agreement,
-  reproducible packaging and required products, assembles manifest/SBOM,
-  source and checksums, and publishes as `hydra-lotus vX.Y.Z`. Manual
-  dispatch builds a dry-run bundle without publishing.
+- The project version is declared in a top-level `VERSION` file, which
+  CMake's `project(Lotus VERSION)` reads; `scripts/release.py` checks that
+  `openstrata.toml` declares the same version.
 
 ## [0.1.0] - 2026-10-10
 
