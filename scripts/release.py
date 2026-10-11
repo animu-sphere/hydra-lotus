@@ -28,7 +28,8 @@ REQUIRED = {
     "share/lotus/tests/usdview-smoke.usda",
 } | {f"{directory}/{shader}.spv"
      for directory in ("bin/shaders", "lib/usd/hdLotus/shaders")
-     for shader in ("triangle.vert", "triangle.frag", "path_trace.vert", "path_trace.frag")}
+     for shader in ("triangle.vert", "triangle.frag", "path_trace.vert", "path_trace.frag",
+                    "wavefront.comp")}
 
 
 def changelog(root: Path, version: str, allow_unreleased: bool = False) -> str:

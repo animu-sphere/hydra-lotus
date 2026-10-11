@@ -11,7 +11,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | Wavefront optimization and integrator selection through Hydra, with deferred adapter work. |
+| [current.md](current.md) | Deferred adapter work; Renderer Phase 2 is complete and the next phase is not yet scheduled. |
 
 ## Sequences
 
@@ -42,7 +42,7 @@ a version here when its predecessor is done.
 | Renderer Phase 0 — Foundation | ✅ scope and entry-point exit reviewed ([closure evidence](../reports/2026-10-10-foundation-closure.md)); [release gate passed](../reports/2026-10-10-release-gate.md) | [v0.1.0](../releases/v0.1.0.md) |
 | Renderer Phase 1 — Reference path tracer | ✅ exit criteria met ([reference images](../reports/2026-10-05-reference-images.md), [Hydra determinism](../reports/2026-10-05-hydra-deterministic-mode.md), [GPU timestamps](../reports/2026-10-05-gpu-timestamps.md)) | [v0.1.0](../releases/v0.1.0.md) |
 | Renderer Phase 1.5 — Minimal material IR | ✅ minimal scope implemented (including dielectric GGX and the specular workflow, [evidence](../reports/2026-10-08-dielectric-specular.md); limits in the [scene reference](../reference/SCENE.md#materials-and-environment)) | [v0.1.0](../releases/v0.1.0.md) |
-| Renderer Phase 2 — Wavefront path tracing | 🚧 reference equivalence reached ([evidence](../reports/2026-10-10-wavefront-equivalence.md)); queue bookkeeping and round scheduling [measured](../reports/2026-10-10-wavefront-scheduling.md), path state [stored by section](../reports/2026-10-10-wavefront-path-state.md), generate and accumulate kernels [replaced](../reports/2026-10-11-wavefront-camera-resolve.md); path classification deferred to Renderer Phase 8 ([upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification)); Hydra integrator selection remains | unscheduled |
+| Renderer Phase 2 — Wavefront path tracing | ✅ exit criteria met ([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)): reference equivalence reached ([evidence](../reports/2026-10-10-wavefront-equivalence.md)); queue bookkeeping and round scheduling [measured](../reports/2026-10-10-wavefront-scheduling.md), path state [stored by section](../reports/2026-10-10-wavefront-path-state.md), generate and accumulate kernels [replaced](../reports/2026-10-11-wavefront-camera-resolve.md); path classification deferred to Renderer Phase 8 ([upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification)); integrator [selected through Hydra](../reports/2026-10-11-hydra-integrator-selection.md) | unscheduled |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ⬜ | unscheduled |
 | Renderer Phase 4 — Temporal infrastructure | ⬜ | unscheduled |
 | Renderer Phase 5 — ReSTIR DI | ⬜ | unscheduled |

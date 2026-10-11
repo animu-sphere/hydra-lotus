@@ -97,6 +97,8 @@ public:
   // convergedSamplesPerPixel: the radiance samples per pixel at which a
   // path-traced frame converges. lotus:sampleIndex: the sample index of an
   // accumulation's first sample, which selects its random numbers (0 by
+  // default). lotus:wavefront: a flag selecting the wavefront integrator to
+  // trace the radiance instead of the reference integrator (false by
   // default).
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
@@ -107,6 +109,9 @@ public:
   // outside the pass's collection or render tags hidden. Recorded before the
   // pass validates its AOVs or creates a renderer; empty before the first.
   [[nodiscard]] Lotus::FrameSnapshot GetSelectedSnapshot();
+  // The latest render pass's frame evidence, without the colour and depth
+  // products; empty before the first pass that rendered.
+  [[nodiscard]] Lotus::GpuFrameEvidence GetFrameEvidence();
 
 private:
   class Impl;

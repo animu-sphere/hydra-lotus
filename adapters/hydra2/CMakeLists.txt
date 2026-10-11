@@ -55,7 +55,7 @@ add_dependencies(hdLotus lotus-renderer-shaders)
 # A shader change relinks, so the copies below follow it.
 set_property(TARGET hdLotus APPEND PROPERTY LINK_DEPENDS
   "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-  "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
+  "${LOTUS_WAVEFRONT_SPV}" "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
 add_custom_command(TARGET hdLotus POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:hdLotus>/resources"
@@ -66,7 +66,7 @@ add_custom_command(TARGET hdLotus POST_BUILD
     "$<TARGET_FILE_DIR:hdLotus>/shaders"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-    "$<TARGET_FILE_DIR:hdLotus>/shaders"
+    "${LOTUS_WAVEFRONT_SPV}" "$<TARGET_FILE_DIR:hdLotus>/shaders"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "${LOTUS_VERTEX_SPV}"
     "$<TARGET_FILE_DIR:hdLotus>/shaders/triangle.vert.spv"
@@ -84,6 +84,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/resources")
 install(FILES "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
   "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
+  "${LOTUS_WAVEFRONT_SPV}"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/shaders")
 install(FILES tests/usdview-smoke.usda
   DESTINATION "${CMAKE_INSTALL_DATADIR}/lotus/tests")
@@ -160,6 +161,14 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-deterministic-test hdLotus)
 
+  add_executable(lotus-hydra2-integrator-test tests/integrator_test.cpp)
+  target_link_libraries(lotus-hydra2-integrator-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
+      usdImaging usd sdf)
+  target_compile_definitions(lotus-hydra2-integrator-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-integrator-test hdLotus)
+
   add_executable(lotus-hydra2-light-test tests/light_test.cpp)
   target_link_libraries(lotus-hydra2-light-test
     PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
@@ -199,6 +208,8 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-render-pass-test --gpu)
   add_test(NAME lotus-renderer-hydra-deterministic
     COMMAND lotus-hydra2-deterministic-test)
+  add_test(NAME lotus-renderer-hydra-integrator
+    COMMAND lotus-hydra2-integrator-test)
   add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
   add_test(NAME lotus-renderer-hydra-light-gpu
     COMMAND lotus-hydra2-light-test --gpu)
@@ -216,6 +227,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-aov
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
+    lotus-renderer-hydra-integrator
     lotus-renderer-hydra-light-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-texture-gpu
@@ -230,6 +242,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-render-pass
     lotus-renderer-hydra-render-pass-gpu
     lotus-renderer-hydra-deterministic
+    lotus-renderer-hydra-integrator
     lotus-renderer-hydra-material
     lotus-renderer-hydra-light
     lotus-renderer-hydra-light-gpu

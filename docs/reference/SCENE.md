@@ -714,7 +714,9 @@ specialized per kernel) that run before the scene render pass.
 - **Requirements.** The scene passes' queue family must also support
   compute, and the renderer needs the wavefront kernels' SPIR-V
   (`RayQueryShaders::wavefront`); without it, a wavefront frame fails.
-  The Hydra adapter always uses the reference integrator.
+  The Hydra adapter installs it beside the plugin and selects the
+  integrator with the `lotus:wavefront` render setting
+  ([below](#integrator-selection-through-hydra)).
 
 `renderer.path.wavefront` runs the `bsdf`, `normals`, `textures`,
 `normal_maps`, `opacity`, `multibounce` and `accumulation` scenarios with
@@ -865,18 +867,23 @@ Each Hydra render pass plans and applies a scene update before its frame,
 and a newly created renderer resets the extraction.
 On ray-query devices each pass adds one sample with `RenderScene`, with
 `max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
-default) and `sample_index` to the `lotus:sampleIndex` render setting (0 by
-default); the render pass and the colour buffer report convergence when the
+default), `sample_index` to the `lotus:sampleIndex` render setting (0 by
+default) and `integrator` to the `lotus:wavefront` render setting
+([reference by default](#integrator-selection-through-hydra)); the render
+pass and the colour buffer report convergence when the
 accumulation reaches its sample count. Point, normal, topology, transform,
-visibility and instancer edits, like camera, framing and
-`lotus:sampleIndex` changes, restart the accumulation. Other devices
+visibility and instancer edits, like camera, framing,
+`lotus:sampleIndex` and `lotus:wavefront` changes, restart the
+accumulation. Other devices
 retain the bootstrap path and converge after one pass. Dome lights feed the
 constant environment as [below](#lights); an environment change restarts the
 accumulation. The host evidence log identifies the choice as
-`ray_query=1` or `0`, with each pass's `sample_index`, `samples` and
-`converged`.
+`ray_query=1` or `0`, with each pass's `integrator` (`reference` or
+`wavefront`), `wavefront_rounds` (0 unless the pass added a wavefront
+sample), `sample_index`, `samples` and `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
-latest pass.
+latest pass, and `GetFrameEvidence` that pass's `GpuFrameEvidence` without
+its colour and depth products.
 
 ### Lights
 
@@ -918,7 +925,8 @@ restarts and unchanged upload/build counters
 
 A converged Hydra image is the backend's deterministic image
 ([reference images](#reference-images)): a function of the
-`lotus:sampleIndex` and `convergedSamplesPerPixel` render settings, the
+`lotus:sampleIndex`, `convergedSamplesPerPixel` and `lotus:wavefront`
+render settings, the
 scene the pass selects, the camera with its framing, and the colour AOV's
 size and clear colour. `lotus:sampleIndex` is the RNG seed: the first
 sample index, so the k-th pass's sample uses `lotus:sampleIndex + k`.
@@ -933,6 +941,33 @@ interrupted or restarted the accumulation, or which renderer instance
 traced it. One exception: lowering `convergedSamplesPerPixel` below the
 samples already accumulated keeps them, as `max_samples` does; the image
 is then that larger count's.
+
+### Integrator selection through Hydra
+
+The `lotus:wavefront` render setting selects
+`PathTracingSettings::integrator`: true selects the
+[wavefront integrator](#wavefront-integrator), false (the default) the
+reference integrator. Its descriptor holds a `bool`, so usdview lists it
+as the checkable *Wavefront integrator* item of its Hydra Settings menu.
+A value that is not a `bool` is converted by `VtValue::Cast`, and one that
+cannot be selects the reference integrator. A change of integrator
+restarts the accumulation. Both integrators draw the same samples, so the converged
+images differ by floating-point evaluation at most; on the measured device
+they are identical. The plugin installs `wavefront.comp.spv` with its other
+shaders under `lib/usd/hdLotus/shaders`, and the release requires it there
+and under `bin/shaders`.
+
+CTest `lotus-renderer-hydra-integrator` (GPU-gated) converges a UsdImaging
+stage at 8 spp under each integrator and checks that each pass's sample
+came from the selected integrator (only wavefront frames report queue
+occupancy, one camera path per pixel), that each restart takes exactly
+the sample count, that each converged image is the backend's image for
+that integrator bit for bit, that the two images' channel means agree
+within 10⁻³, and that toggling the flag and a new delegate reproduce the
+images. The usdview smoke test checks the installed plugin's menu item,
+triggers it, checks that the accumulation restarted and wavefront rounds
+ran, and that unchecking it reproduces the earlier screenshot
+([evidence](../reports/2026-10-11-hydra-integrator-selection.md)).
 
 ### Render-pass selection
 

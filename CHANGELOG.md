@@ -36,6 +36,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Integrator selection through Hydra. The `lotus:wavefront` render
+  setting, a flag that usdview lists as the checkable *Wavefront
+  integrator* item of its Hydra Settings menu, selects the wavefront
+  integrator instead of the reference integrator (the default); a change
+  restarts the accumulation. The plugin installs `wavefront.comp.spv` with its shaders, and releases
+  require it. The host evidence log records each pass's `integrator` and
+  `wavefront_rounds`, and `HdLotusRenderDelegate::GetFrameEvidence`
+  returns the latest pass's frame evidence.
+  `lotus-renderer-hydra-integrator` compares converged Hydra images under
+  both integrators with the backend's, and the usdview smoke test toggles
+  the installed plugin's menu item on and off. This completes Renderer
+  Phase 2.
+
 - Renderer Phase 2 wavefront path tracing, selected with
   `PathTracingSettings::integrator`: compute kernels pass persistent path
   state between ray, hit and terminated-path queues with indirect
