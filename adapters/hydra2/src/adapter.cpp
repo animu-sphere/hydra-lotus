@@ -62,6 +62,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -145,6 +146,7 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " light_sampling="
          << (settings.light_sampling == Lotus::LightSampling::Mis ? "mis" : "bsdf")
          << " emissive_triangles=" << scene.emissive_triangles
+         << " analytic_lights=" << scene.analytic_lights
          << " sample_index=" << settings.sample_index
          << " samples=" << frame.samples_per_pixel
          << " converged=" << (converged ? 1 : 0)
@@ -162,6 +164,32 @@ Lotus::Matrix4 ToLotusMatrix(const GfMatrix4d& matrix) {
     result[index] = static_cast<float>(data[index]);
   }
   return result;
+}
+
+// UsdLux's color * intensity * 2^exposure, linear RGB: black for a
+// non-positive intensity, negative colour channels clamped to zero; nothing
+// when an input is not finite or a channel exceeds float range.
+std::optional<std::array<float, 3>> LightRadiance(const GfVec3f& color,
+    float intensity, float exposure) {
+  std::array<float, 3> radiance{};
+  bool valid = std::isfinite(intensity) && std::isfinite(exposure);
+  for (std::size_t c = 0; c < radiance.size(); ++c) {
+    valid = valid && std::isfinite(color[c]);
+  }
+  if (valid && intensity > 0.0F) {
+    for (std::size_t c = 0; c < radiance.size(); ++c) {
+      // Double precision avoids intermediate overflow for representable
+      // RGB values. Zero channels stay zero at very large exposures.
+      const double value = color[c] > 0.0F
+          ? double(color[c]) * intensity * std::exp2(double(exposure))
+          : 0.0;
+      valid = valid && std::isfinite(value) &&
+          value <= std::numeric_limits<float>::max();
+      if (valid) radiance[c] = static_cast<float>(value);
+    }
+  }
+  if (!valid) return std::nullopt;
+  return radiance;
 }
 
 // The render pass state's matrices already conform the camera to the framing
@@ -442,6 +470,27 @@ public:
     if (domes_.erase(id) != 0) UpdateEnvironment();
   }
 
+  // An analytic light under its path; none for a hidden or invalid one,
+  // which still replaces the fallback environment as a dome does.
+  void SyncLight(const SdfPath& id, const std::optional<Lotus::Light>& light) {
+    std::scoped_lock lock(mutex_);
+    lights_.insert(id);
+    if (light) {
+      world_.SetLight(id.GetString(), *light);
+    } else {
+      world_.RemoveLight(id.GetString());
+    }
+    UpdateEnvironment();
+  }
+
+  void RemoveLight(const SdfPath& id) {
+    std::scoped_lock lock(mutex_);
+    if (lights_.erase(id) != 0) {
+      world_.RemoveLight(id.GetString());
+      UpdateEnvironment();
+    }
+  }
+
   // A mesh's material binding is the bound material's SdfPath string, or
   // a private material for its constant displayColor when it is unbound.
   void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
@@ -720,6 +769,8 @@ private:
   Lotus::RenderWorld world_;
   // Path order makes the sum independent of Hydra's parallel sync order.
   std::map<SdfPath, std::array<float, 3>> domes_;
+  // The synced analytic lights, hidden and invalid ones included.
+  std::set<SdfPath> lights_;
 
   void UpdateEnvironment() {
     std::array<double, 3> sum{};
@@ -731,7 +782,9 @@ private:
       radiance[c] = static_cast<float>(std::min(sum[c],
           static_cast<double>(std::numeric_limits<float>::max())));
     }
-    world_.SetEnvironment(domes_.empty() ? kFallbackEnvironment : radiance);
+    world_.SetEnvironment(domes_.empty() && lights_.empty()
+                              ? kFallbackEnvironment
+                              : radiance);
   }
   // The texture keys each material names, and how many materials name each
   // key.
@@ -948,27 +1001,13 @@ public:
           const VtValue value = delegate->GetLightParamValue(GetId(), token);
           return value.IsHolding<T>() ? value.UncheckedGet<T>() : fallback;
         };
-        const GfVec3f color = parameter(HdLightTokens->color, GfVec3f(1.0F));
-        const float intensity = parameter(HdLightTokens->intensity, 1.0F);
-        const float exposure = parameter(HdLightTokens->exposure, 0.0F);
-        bool valid = std::isfinite(intensity) && std::isfinite(exposure);
-        for (std::size_t c = 0; c < radiance.size(); ++c) {
-          valid = valid && std::isfinite(color[c]);
-        }
-        if (valid && intensity > 0.0F) {
-          for (std::size_t c = 0; c < radiance.size(); ++c) {
-            // Double precision avoids intermediate overflow for representable
-            // RGB values. Zero channels stay zero at very large exposures.
-            const double value = color[c] > 0.0F
-                ? double(color[c]) * intensity * std::exp2(double(exposure))
-                : 0.0;
-            valid = valid && std::isfinite(value) &&
-                value <= std::numeric_limits<float>::max();
-            if (valid) radiance[c] = static_cast<float>(value);
-          }
-        }
-        if (!valid) {
-          radiance = {};
+        const auto value = LightRadiance(
+            parameter(HdLightTokens->color, GfVec3f(1.0F)),
+            parameter(HdLightTokens->intensity, 1.0F),
+            parameter(HdLightTokens->exposure, 0.0F));
+        if (value) {
+          radiance = *value;
+        } else {
           TF_WARN("Lotus ignores invalid or overflowing dome radiance on %s",
               GetId().GetText());
         }
@@ -981,6 +1020,92 @@ public:
 private:
   std::shared_ptr<AdapterState> state_;
 };
+
+// A UsdLux sphere, rect, disk or distant light: its shape, transform,
+// radiance and normalize. Textures, shaping, shadow controls, colour
+// temperature, diffuse and specular multipliers, treatAsPoint and linking
+// are not read. Visibility shares HdLight::DirtyParams. Fallback sprims
+// have no state, so they cannot change authored lighting.
+class HdLotusLight final : public HdLight {
+public:
+  HdLotusLight(const SdfPath& id, Lotus::LightShape shape,
+      std::shared_ptr<AdapterState> state)
+      : HdLight(id), shape_(shape), state_(std::move(state)) {
+  }
+
+  ~HdLotusLight() override {
+    if (state_) state_->RemoveLight(GetId());
+  }
+
+  HdDirtyBits GetInitialDirtyBitsMask() const override { return AllDirty; }
+
+  void Sync(HdSceneDelegate* delegate, HdRenderParam*,
+      HdDirtyBits* dirty_bits) override {
+    if (state_ &&
+        (*dirty_bits & (DirtyTransform | DirtyParams | DirtyResource))) {
+      std::optional<Lotus::Light> light;
+      if (delegate->GetVisible(GetId())) {
+        light = Translate(delegate);
+        if (!light) {
+          TF_WARN("Lotus ignores a light with invalid or overflowing values "
+                  "on %s", GetId().GetText());
+        }
+      }
+      state_->SyncLight(GetId(), light);
+    }
+    *dirty_bits = Clean;
+  }
+
+private:
+  // UsdLux's parameters, with its defaults, as a Lotus light; nothing when
+  // a value is not finite or the radiance overflows. Negative sizes count
+  // as 0 and angles are clipped to [0, 360], as UsdLux specifies.
+  std::optional<Lotus::Light> Translate(HdSceneDelegate* delegate) const {
+    const auto parameter = [&](const TfToken& token, auto fallback) {
+      using T = decltype(fallback);
+      const VtValue value = delegate->GetLightParamValue(GetId(), token);
+      return value.IsHolding<T>() ? value.UncheckedGet<T>() : fallback;
+    };
+    const bool distant = shape_ == Lotus::LightShape::Distant;
+    const auto radiance = LightRadiance(
+        parameter(HdLightTokens->color, GfVec3f(1.0F)),
+        parameter(HdLightTokens->intensity, distant ? 50000.0F : 1.0F),
+        parameter(HdLightTokens->exposure, 0.0F));
+    if (!radiance) return std::nullopt;
+    Lotus::Light light;
+    light.shape = shape_;
+    light.world_from_light = ToLotusMatrix(delegate->GetTransform(GetId()));
+    light.radiance = *radiance;
+    light.normalize = parameter(HdLightTokens->normalize, false);
+    light.radius = parameter(HdLightTokens->radius, 0.5F);
+    light.width = parameter(HdLightTokens->width, 1.0F);
+    light.height = parameter(HdLightTokens->height, 1.0F);
+    light.angle = parameter(HdLightTokens->angle, 0.53F);
+    for (float* size : {&light.radius, &light.width, &light.height}) {
+      if (!std::isfinite(*size)) return std::nullopt;
+      *size = std::max(*size, 0.0F);
+    }
+    if (!std::isfinite(light.angle)) return std::nullopt;
+    light.angle = std::clamp(light.angle, 0.0F, 360.0F);
+    for (const float value : light.world_from_light) {
+      if (!std::isfinite(value)) return std::nullopt;
+    }
+    return light;
+  }
+
+  Lotus::LightShape shape_;
+  std::shared_ptr<AdapterState> state_;
+};
+
+// The analytic light shapes and their Hydra prim types.
+const std::array<std::pair<TfToken, Lotus::LightShape>, 4>& LightPrimTypes() {
+  static const std::array<std::pair<TfToken, Lotus::LightShape>, 4> types{{
+      {HdPrimTypeTokens->sphereLight, Lotus::LightShape::Sphere},
+      {HdPrimTypeTokens->rectLight, Lotus::LightShape::Rect},
+      {HdPrimTypeTokens->diskLight, Lotus::LightShape::Disk},
+      {HdPrimTypeTokens->distantLight, Lotus::LightShape::Distant}}};
+  return types;
+}
 
 class HdLotusMesh final : public HdMesh {
 public:
@@ -1786,9 +1911,10 @@ const TfTokenVector& HdLotusRenderDelegate::GetSupportedRprimTypes() const {
 }
 
 const TfTokenVector& HdLotusRenderDelegate::GetSupportedSprimTypes() const {
-  static const TfTokenVector types{
-      HdPrimTypeTokens->camera, HdPrimTypeTokens->material,
-      HdPrimTypeTokens->domeLight};
+  static const TfTokenVector types{HdPrimTypeTokens->camera,
+      HdPrimTypeTokens->material, HdPrimTypeTokens->domeLight,
+      HdPrimTypeTokens->sphereLight, HdPrimTypeTokens->rectLight,
+      HdPrimTypeTokens->diskLight, HdPrimTypeTokens->distantLight};
   return types;
 }
 
@@ -1839,6 +1965,11 @@ HdSprim* HdLotusRenderDelegate::CreateSprim(const TfToken& type_id,
   if (type_id == HdPrimTypeTokens->domeLight) {
     return new HdLotusDomeLight(sprim_id, impl_->state);
   }
+  for (const auto& [type, shape] : LightPrimTypes()) {
+    if (type_id == type) {
+      return new HdLotusLight(sprim_id, shape, impl_->state);
+    }
+  }
   return nullptr;
 }
 
@@ -1852,6 +1983,11 @@ HdSprim* HdLotusRenderDelegate::CreateFallbackSprim(
   }
   if (type_id == HdPrimTypeTokens->domeLight) {
     return new HdLotusDomeLight(SdfPath("/__lotusFallbackDome"), nullptr);
+  }
+  for (const auto& [type, shape] : LightPrimTypes()) {
+    if (type_id == type) {
+      return new HdLotusLight(SdfPath("/__lotusFallbackLight"), shape, nullptr);
+    }
   }
   return nullptr;
 }

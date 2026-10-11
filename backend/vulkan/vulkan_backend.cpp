@@ -100,9 +100,12 @@ struct PathConstants {
   std::uint64_t light_offsets;
   std::uint64_t lights;
   std::uint32_t light_count;
-  std::uint32_t reserved[3];
+  // The GPU scene's analytic light records.
+  std::uint32_t analytic_count;
+  std::uint64_t analytic_lights;
 };
 static_assert(sizeof(PathConstants) == 144 &&
+              offsetof(PathConstants, analytic_lights) == 136 &&
               offsetof(PathConstants, instances) == 48 &&
               offsetof(PathConstants, materials) == 56 &&
               offsetof(PathConstants, width) == 80 &&
@@ -948,6 +951,8 @@ public:
     constants.light_offsets = scene_.LightOffsetAddress();
     constants.lights = scene_.LightAddress();
     constants.light_count = scene_.LightCount();
+    constants.analytic_lights = scene_.AnalyticLightAddress();
+    constants.analytic_count = scene_.AnalyticLightCount();
     constants.sample_index = settings.sample_index + accumulated_samples_;
     constants.accumulated = accumulated_samples_;
     constants.add_sample = add_sample ? 1U : 0U;

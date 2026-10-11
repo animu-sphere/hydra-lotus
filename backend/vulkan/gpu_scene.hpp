@@ -98,6 +98,42 @@ struct GpuLightRecord {
 };
 static_assert(sizeof(GpuLightRecord) == 16);
 inline constexpr std::uint32_t kNoLights = 0xFFFFFFFFU;
+// A light table entry whose `instance` has this bit is an analytic light:
+// the other bits index the analytic light records, which follow the
+// entries, 16-byte aligned. The emissive triangles' entries come first.
+inline constexpr std::uint32_t kAnalyticLight = 0x80000000U;
+
+// GpuAnalyticLightRecord::shape. A distant light of angle 0 is a parallel
+// light.
+inline constexpr std::uint32_t kSphereLight = 0;
+inline constexpr std::uint32_t kRectLight = 1;
+inline constexpr std::uint32_t kDiskLight = 2;
+inline constexpr std::uint32_t kDistantLight = 3;
+inline constexpr std::uint32_t kParallelLight = 4;
+
+// One analytic light in world space, as the scene passes sample and
+// intersect it. Its mirror is `AnalyticLightRecord` in
+// shaders/common/scene.slang.
+struct GpuAnalyticLightRecord {
+  // A sphere's, rect's or disk's centre; w: a sphere's radius.
+  float position[4];
+  // A rect's or disk's half axes: its points are position + a * axis_u +
+  // b * axis_v for |a|, |b| <= 1, or a^2 + b^2 <= 1. A distant light's
+  // axis_u is the unit direction towards it, and axis_u.w its cone's
+  // 1 - cos(theta_max).
+  float axis_u[4];
+  float axis_v[4];
+  // A rect's or disk's unit normal on its emitting side; w: the world-space
+  // area of a sphere, rect or disk.
+  float normal[4];
+  // The radiance after normalization, or a parallel light's irradiance at
+  // normal incidence; w: the probability with which the light table chooses
+  // the light, 0 without an entry.
+  float radiance[4];
+  std::uint32_t shape;
+  std::uint32_t reserved[3];
+};
+static_assert(sizeof(GpuAnalyticLightRecord) == 96);
 
 // The texture table: the size of the scene passes' sampled-image array, and
 // so the most textures a GPU scene holds.
@@ -181,6 +217,13 @@ public:
   }
   [[nodiscard]] std::uint32_t LightCount() const {
     return light_count_;
+  }
+  // The analytic light records, under the same conditions.
+  [[nodiscard]] VkDeviceAddress AnalyticLightAddress() const {
+    return lights_.address == 0 ? 0 : lights_.address + analytic_offset_;
+  }
+  [[nodiscard]] std::uint32_t AnalyticLightCount() const {
+    return analytic_count_;
   }
   // The texture table: one view per slot, VK_NULL_HANDLE for a free slot.
   // Views are in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. The generation
@@ -283,9 +326,14 @@ private:
   std::uint32_t materials_used_ = 0;
   // The last instance plan, from which the light table is built.
   std::vector<SceneInstance> scene_instances_;
+  // The last light plan, from which the analytic records are built.
+  std::vector<Light> scene_lights_;
   DeviceBuffer lights_;
   VkDeviceSize light_entries_offset_ = 0;
   std::uint32_t light_count_ = 0;
+  VkDeviceSize analytic_offset_ = 0;
+  std::uint32_t analytic_count_ = 0;
+  std::uint32_t emissive_triangles_ = 0;
   std::array<float, 3> environment_{};
   DeviceBuffer staging_;
   DeviceBuffer readback_;

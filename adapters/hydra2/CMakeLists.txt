@@ -177,6 +177,14 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-light-sampling-test hdLotus)
 
+  add_executable(lotus-hydra2-analytic-light-test tests/analytic_light_test.cpp)
+  target_link_libraries(lotus-hydra2-analytic-light-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
+      usdImaging usdGeom usd sdf)
+  target_compile_definitions(lotus-hydra2-analytic-light-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-analytic-light-test hdLotus)
+
   add_executable(lotus-hydra2-light-test tests/light_test.cpp)
   target_link_libraries(lotus-hydra2-light-test
     PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
@@ -223,6 +231,10 @@ if(LOTUS_BUILD_TESTS)
   add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
   add_test(NAME lotus-renderer-hydra-light-gpu
     COMMAND lotus-hydra2-light-test --gpu)
+  add_test(NAME lotus-renderer-hydra-analytic-lights
+    COMMAND lotus-hydra2-analytic-light-test)
+  add_test(NAME lotus-renderer-hydra-analytic-lights-gpu
+    COMMAND lotus-hydra2-analytic-light-test --gpu)
   add_test(NAME lotus-renderer-hydra-material
     COMMAND lotus-hydra2-material-test)
   add_test(NAME lotus-renderer-hydra-material-gpu
@@ -240,6 +252,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-integrator
     lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-light-gpu
+    lotus-renderer-hydra-analytic-lights-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-texture-gpu
     PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
@@ -258,6 +271,8 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-material
     lotus-renderer-hydra-light
     lotus-renderer-hydra-light-gpu
+    lotus-renderer-hydra-analytic-lights
+    lotus-renderer-hydra-analytic-lights-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-normals
     lotus-renderer-hydra-texture

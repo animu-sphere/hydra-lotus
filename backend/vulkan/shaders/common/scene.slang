@@ -83,6 +83,34 @@ public struct LightRecord {
 };
 // An instance without entries in the light table.
 public static const uint kNoLights = 0xFFFFFFFFu;
+// A light table entry whose instance has this bit is an analytic light,
+// which the other bits index.
+public static const uint kAnalyticLight = 0x80000000u;
+
+// Mirrors GpuAnalyticLightRecord in gpu_scene.hpp: one analytic light in
+// world space.
+public struct AnalyticLightRecord {
+  // A sphere's, rect's or disk's centre; w: a sphere's radius.
+  public float4 position;
+  // A rect's or disk's half axes. A distant light's unit direction towards
+  // it, and in w its cone's 1 - cos(theta_max).
+  public float4 axis_u;
+  public float4 axis_v;
+  // A rect's or disk's unit normal on its emitting side; w: the light's
+  // world-space area.
+  public float4 normal;
+  // The radiance, or a parallel light's irradiance; w: the probability
+  // with which the light table chooses the light.
+  public float4 radiance;
+  // x: kSphereLight, kRectLight, kDiskLight, kDistantLight or
+  // kParallelLight.
+  public uint4 shape;
+};
+public static const uint kSphereLight = 0;
+public static const uint kRectLight = 1;
+public static const uint kDiskLight = 2;
+public static const uint kDistantLight = 3;
+public static const uint kParallelLight = 4;
 
 // Mirrors PathConstants in vulkan_backend.cpp.
 public struct PathConstants {
@@ -117,6 +145,8 @@ public struct PathConstants {
   public uint* light_offsets;
   public LightRecord* lights;
   public uint light_count;
+  public uint analytic_count;
+  public AnalyticLightRecord* analytic_lights;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -377,33 +407,45 @@ float3 Emission(MaterialRecord material, float2 st) {
   return max(Lookup(input, st).xyz, 0.0);
 }
 
-// A point next event estimation chose on an emissive triangle.
-public struct EmitterPoint {
-  public float3 position;
-  // The triangle's unit geometric normal, either side.
-  public float3 normal;
-  // The radiance it emits, times its coverage: the probability that a ray
-  // reaching it does not pass through.
+// A direction next event estimation chose towards a light.
+public struct LightSample {
+  // Unit length, from the shading point.
+  public float3 direction;
+  // Where the shadow ray ends.
+  public float distance;
+  // The radiance arriving along the direction, before shadowing: an
+  // emissive triangle's emission times its coverage, the probability that
+  // a ray reaching it stops there; a parallel light's irradiance.
   public Spectrum radiance;
-  // The probability density of choosing the point, per unit area.
+  // The density of the direction per unit solid angle, the light's
+  // selection included, or for a parallel light its selection's
+  // probability; 0 when the light sends nothing towards the point.
   public float pdf;
+  // A parallel light, which only next event estimation finds.
+  public bool delta;
 };
 
-// Chooses an emissive triangle from the light table in proportion to its
-// estimated power (u.x, u.y), then a point on it uniformly by area (u.zw).
-public EmitterPoint SampleEmitter(float4 u) {
-  const uint count = path_constants.light_count;
-  const uint column = min(uint(u.x * float(count)), count - 1);
-  const LightRecord record = path_constants.lights[column];
-  const uint light = u.y < record.threshold ? column : record.alias;
-  const LightRecord chosen = path_constants.lights[light];
+LightSample NoLight() {
+  LightSample sample;
+  sample.direction = float3(0.0, 0.0, 1.0);
+  sample.distance = 0.0;
+  sample.radiance = SpectrumConstant(0.0);
+  sample.pdf = 0.0;
+  sample.delta = false;
+  return sample;
+}
+
+// A point uniformly by area on emissive triangle `light` of the table,
+// seen from `origin`.
+LightSample SampleTriangle(uint light, LightRecord chosen, float2 u,
+    float3 origin) {
   Hit hit;
   hit.instance = chosen.instance;
   hit.primitive = light - path_constants.light_offsets[chosen.instance];
   // Uniform barycentrics (Pharr et al., Physically Based Rendering, 4th
   // edition, section A.5.5).
-  const float root = sqrt(u.z);
-  hit.barycentrics = float2(root * (1.0 - u.w), root * u.w);
+  const float root = sqrt(u.x);
+  hit.barycentrics = float2(root * (1.0 - u.y), root * u.y);
   hit.t = 0.0;
   const InstanceRecord instance = path_constants.instances[hit.instance];
   const uint3 triangle = instance.triangles[hit.primitive];
@@ -415,25 +457,241 @@ public EmitterPoint SampleEmitter(float4 u) {
       float4(instance.positions[triangle.z], 1.0)).xyz;
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
-  EmitterPoint point;
-  point.position = p0 + hit.barycentrics.x * (p1 - p0) +
-                   hit.barycentrics.y * (p2 - p0);
-  point.normal = normalize(cross(p1 - p0, p2 - p0));
+  const float3 position = p0 + hit.barycentrics.x * (p1 - p0) +
+                          hit.barycentrics.y * (p2 - p0);
+  const float3 normal = normalize(cross(p1 - p0, p2 - p0));
   const float area = TriangleArea(p0, p1, p2);
-  point.pdf = area > 0.0 ? chosen.pdf / area : 0.0;
-  point.radiance = SpectrumFromRgb(
+  const Spectrum radiance = SpectrumFromRgb(
       Emission(material, HitTexcoords(instance, material, hit)) * Coverage(hit));
-  return point;
+  const float3 toward = position - origin;
+  const float distance2 = dot(toward, toward);
+  if (!(area > 0.0) || !(distance2 > 0.0) || MaxComponent(radiance) <= 0.0) {
+    return NoLight();
+  }
+  LightSample sample;
+  sample.direction = toward * rsqrt(distance2);
+  const float cosine = abs(dot(normal, sample.direction));
+  if (!(cosine > 0.0)) {
+    return NoLight();
+  }
+  // End the shadow ray off the light's surface, on the receiver's side.
+  const float3 end = OffsetRayOrigin(position,
+      dot(normal, sample.direction) > 0.0 ? -normal : normal);
+  sample.distance = max(0.0, dot(end - origin, sample.direction));
+  sample.radiance = radiance;
+  sample.pdf = chosen.pdf / area * distance2 / cosine;
+  sample.delta = false;
+  return sample;
 }
 
-// The probability density, per unit area, with which SampleEmitter chooses
-// a point of the hit's triangle.
+// The density per unit solid angle with which a sphere light's directions
+// are sampled from outside it, given sin^2 of the angle it subtends: uniform
+// over its cone.
+float SphereConePdf(float sin2_max) {
+  // 1 - cos(theta_max) without cancellation for small spheres.
+  const float one_minus_cos = sin2_max < 0.00068523
+      ? 0.5 * sin2_max
+      : 1.0 - sqrt(max(0.0, 1.0 - sin2_max));
+  return 1.0 / (2.0 * kPi * one_minus_cos);
+}
+
+// A direction towards an analytic light, chosen with probability
+// `selection`: by solid angle over a sphere's cone or a distant light's,
+// by area on a rect or disk.
+LightSample SampleAnalytic(AnalyticLightRecord light, float selection,
+    float2 u, float3 origin) {
+  LightSample sample = NoLight();
+  sample.radiance = SpectrumFromRgb(light.radiance.xyz);
+  const uint shape = light.shape.x;
+  if (shape == kSphereLight) {
+    // Uniform over the sphere's cone, then the cone's direction's point on
+    // the sphere's near side (Pharr et al., Physically Based Rendering, 4th
+    // edition, section 6.2.4).
+    const float3 centre = light.position.xyz;
+    const float radius = light.position.w;
+    const float3 to_centre = centre - origin;
+    const float distance2 = dot(to_centre, to_centre);
+    if (!(distance2 > radius * radius)) {
+      return NoLight();
+    }
+    const float sin2_max = radius * radius / distance2;
+    const float sin_max = sqrt(sin2_max);
+    const float cos_max = sqrt(max(0.0, 1.0 - sin2_max));
+    float cos_theta = (cos_max - 1.0) * u.x + 1.0;
+    float sin2_theta = 1.0 - cos_theta * cos_theta;
+    if (sin2_max < 0.00068523) {
+      sin2_theta = sin2_max * u.x;
+      cos_theta = sqrt(1.0 - sin2_theta);
+    }
+    // The angle at the centre between the origin and the point.
+    const float cos_alpha = sin2_theta / sin_max +
+        cos_theta * sqrt(max(0.0, 1.0 - sin2_theta / sin2_max));
+    const float sin_alpha = sqrt(max(0.0, 1.0 - cos_alpha * cos_alpha));
+    const float phi = 2.0 * kPi * u.y;
+    const ShadingFrame frame = MakeShadingFrame(normalize(to_centre));
+    const float3 outward = frame.ToWorld(
+        -float3(sin_alpha * cos(phi), sin_alpha * sin(phi), cos_alpha));
+    const float3 toward = centre + radius * outward - origin;
+    sample.distance = length(toward);
+    sample.direction = toward / sample.distance;
+    sample.pdf = selection * SphereConePdf(sin2_max);
+  } else if (shape == kRectLight || shape == kDiskLight) {
+    const float2 ab = shape == kRectLight ? 2.0 * u - 1.0
+                                          : SampleConcentricDisk(u);
+    const float3 toward = light.position.xyz + ab.x * light.axis_u.xyz +
+                          ab.y * light.axis_v.xyz - origin;
+    const float distance2 = dot(toward, toward);
+    if (!(distance2 > 0.0)) {
+      return NoLight();
+    }
+    sample.distance = sqrt(distance2);
+    sample.direction = toward / sample.distance;
+    // Light leaves only the emitting side.
+    const float cosine = -dot(light.normal.xyz, sample.direction);
+    if (!(cosine > 0.0)) {
+      return NoLight();
+    }
+    sample.pdf = selection * distance2 / (cosine * light.normal.w);
+  } else if (shape == kDistantLight) {
+    const ShadingFrame frame = MakeShadingFrame(light.axis_u.xyz);
+    sample.direction =
+        normalize(frame.ToWorld(SampleUniformCone(u, light.axis_u.w)));
+    sample.distance = kFloatMax;
+    sample.pdf = selection / (2.0 * kPi * light.axis_u.w);
+  } else {
+    sample.direction = light.axis_u.xyz;
+    sample.distance = kFloatMax;
+    sample.pdf = selection;
+    sample.delta = true;
+  }
+  return sample;
+}
+
+// Chooses a light from the light table in proportion to its estimated
+// power (u.x, u.y), then a direction towards it from `origin` (u.zw).
+public LightSample SampleLight(float4 u, float3 origin) {
+  const uint count = path_constants.light_count;
+  const uint column = min(uint(u.x * float(count)), count - 1);
+  const LightRecord record = path_constants.lights[column];
+  const uint light = u.y < record.threshold ? column : record.alias;
+  const LightRecord chosen = path_constants.lights[light];
+  if ((chosen.instance & kAnalyticLight) != 0) {
+    return SampleAnalytic(
+        path_constants.analytic_lights[chosen.instance & ~kAnalyticLight],
+        chosen.pdf, u.zw, origin);
+  }
+  return SampleTriangle(light, chosen, u.zw, origin);
+}
+
+// The parallel light `index` of the analytic lights: its direction and
+// irradiance, as a delta light of density 1.
+public LightSample ParallelLight(uint index) {
+  const AnalyticLightRecord light = path_constants.analytic_lights[index];
+  if (light.shape.x != kParallelLight) {
+    return NoLight();
+  }
+  LightSample sample;
+  sample.direction = light.axis_u.xyz;
+  sample.distance = kFloatMax;
+  sample.radiance = SpectrumFromRgb(light.radiance.xyz);
+  sample.pdf = 1.0;
+  sample.delta = true;
+  return sample;
+}
+
+// The probability density, per unit area, with which SampleLight chooses
+// a point of the hit's emissive triangle.
 public float EmitterPdf(Hit hit, float area) {
   const uint first = path_constants.light_offsets[hit.instance];
   if (first == kNoLights || !(area > 0.0)) {
     return 0.0;
   }
   return path_constants.lights[first + hit.primitive].pdf / area;
+}
+
+// The emission of the analytic lights that a ray from `origin` along unit
+// `direction` crosses before `distance`, as the ray sees it: a sphere's near
+// side from outside it, a rect's or disk's emitting side, and, for a ray
+// that escapes the scene, the distant lights whose cone holds its direction.
+// Lights neither block rays nor each other. With `weigh`, each is weighed
+// against light sampling's density for the direction by the power
+// heuristic, the ray's own density being `pdf`.
+public Spectrum CrossedLights(float3 origin, float3 direction, float distance,
+    bool escaped, bool weigh, float pdf) {
+  Spectrum sum = SpectrumConstant(0.0);
+  for (uint index = 0; index < path_constants.analytic_count; ++index) {
+    const AnalyticLightRecord light = path_constants.analytic_lights[index];
+    const uint shape = light.shape.x;
+    // The density with which light sampling finds this direction.
+    float light_pdf = 0.0;
+    if (shape == kSphereLight) {
+      // The nearer root without cancellation (Haines et al., "Precision
+      // Improvements for Ray/Sphere Intersection", Ray Tracing Gems, 2019).
+      const float radius = light.position.w;
+      const float3 offset = origin - light.position.xyz;
+      const float c = dot(offset, offset) - radius * radius;
+      const float b = -dot(offset, direction);
+      const float3 perpendicular = offset + b * direction;
+      const float discriminant =
+          radius * radius - dot(perpendicular, perpendicular);
+      // Only from outside, towards the sphere.
+      if (!(c > 0.0) || !(b > 0.0) || discriminant < 0.0) {
+        continue;
+      }
+      const float t = c / (b + sqrt(discriminant));
+      if (!(t < distance)) {
+        continue;
+      }
+      light_pdf = SphereConePdf(radius * radius / dot(offset, offset));
+    } else if (shape == kRectLight || shape == kDiskLight) {
+      const float facing = dot(direction, light.normal.xyz);
+      if (!(facing < 0.0)) {
+        continue;
+      }
+      const float t = dot(light.position.xyz - origin, light.normal.xyz) / facing;
+      if (!(t > 0.0) || !(t < distance)) {
+        continue;
+      }
+      // The point's coordinates along the half axes.
+      const float3 q = origin + t * direction - light.position.xyz;
+      const float3 u = light.axis_u.xyz;
+      const float3 v = light.axis_v.xyz;
+      const float uu = dot(u, u);
+      const float uv = dot(u, v);
+      const float vv = dot(v, v);
+      const float qu = dot(q, u);
+      const float qv = dot(q, v);
+      const float determinant = uu * vv - uv * uv;
+      const float a = (qu * vv - qv * uv) / determinant;
+      const float b = (qv * uu - qu * uv) / determinant;
+      if (shape == kRectLight ? !(abs(a) <= 1.0 && abs(b) <= 1.0)
+                              : !(a * a + b * b <= 1.0)) {
+        continue;
+      }
+      light_pdf = t * t / (-facing * light.normal.w);
+    } else if (shape == kDistantLight && escaped) {
+      const float3 toward = light.axis_u.xyz;
+      const float one_minus_cos = light.axis_u.w;
+      const float cosine = dot(direction, toward);
+      // Within the cone, by its sine where the cosine is too coarse.
+      if (one_minus_cos <= 1.0) {
+        const float3 across = cross(direction, toward);
+        if (!(cosine > 0.0) ||
+            !(dot(across, across) <= one_minus_cos * (2.0 - one_minus_cos))) {
+          continue;
+        }
+      } else if (!(cosine >= 1.0 - one_minus_cos)) {
+        continue;
+      }
+      light_pdf = 1.0 / (2.0 * kPi * one_minus_cos);
+    } else {
+      continue;
+    }
+    const float weight =
+        weigh ? PowerHeuristic(pdf, light.radiance.w * light_pdf) : 1.0;
+    sum = sum + SpectrumFromRgb(light.radiance.xyz) * weight;
+  }
+  return sum;
 }
 
 // Surface hit reconstruction from the instance record and the geometry and

@@ -36,8 +36,31 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   under both estimators with the backend's, and the usdview smoke test
   toggles the menu item.
 
+- Renderer Phase 3 analytic lights. `Lotus::Light` in `LotusScene::lights`
+  (`RenderWorld::SetLight`, `RemoveLight`, `SceneUpdate::lights`) holds
+  UsdLux sphere, rect, disk and distant lights: shape, transform, radiance,
+  `normalize` and sizes. The GPU scene adds them to the light table beside
+  the emissive triangles, weighed by estimated power; next event
+  estimation samples a sphere's cone, a rect or disk by area and a distant
+  light's cone, and a ray adds the radiance of the lights it crosses,
+  weighed by MIS. Lights only emit: they block nothing and camera rays do
+  not see them. A parallel light (angle 0) is added at every scattering
+  event under BSDF sampling too. `GpuSceneStats` gains `analytic_lights`.
+  The new check `renderer.path.analytic_lights` compares each light, and
+  all of them with an emissive square, with an independent irradiance
+  oracle under both estimators and integrators
+  ([evidence](docs/reports/2026-10-11-analytic-lights.md)).
+- `sphereLight`, `rectLight`, `diskLight` and `distantLight` Hydra sprims,
+  translated into analytic lights; the host evidence log records
+  `analytic_lights`. CTest `lotus-renderer-hydra-analytic-lights` (and its
+  GPU-gated `-gpu` variant) checks their translation and edits and
+  compares converged images with the backend's.
+
 ### Changed
 
+- Any synced analytic light, like any dome, replaces the Hydra adapter's
+  white fallback environment, so a stage lit only by a sphere or the sun
+  renders under a black sky.
 - `lotus-renderer-hydra-texture-gpu` sets `lotus:lightSampling` to false:
   its exact radiance is BSDF sampling's, sample for sample.
 

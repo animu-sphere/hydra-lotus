@@ -151,6 +151,47 @@ int main() try {
       painted.scene->environment == std::array<float, 3>{},
       "an environment edit was lost or changed a retained snapshot");
 
+  // Analytic lights are validated, keyed and shared like materials.
+  Lotus::Light lamp;
+  lamp.shape = Lotus::LightShape::Rect;
+  lamp.world_from_light[14] = 2.0F;
+  lamp.radiance = {4.0F, 2.0F, 1.0F};
+  lamp.width = 0.5F;
+  world.SetLight("/lamp", lamp);
+  const auto lamped = world.Commit();
+  Check(lamped.revision == lit.revision + 1 &&
+      lamped.scene->lights.at("/lamp") == lamp && lit.scene->lights.empty() &&
+      lamped.triangle_count == lit.triangle_count,
+      "a light insertion was lost, counted triangles or changed a retained "
+      "snapshot");
+  world.SetLight("/lamp", lamp);
+  Check(world.Commit().revision == lamped.revision,
+      "an unchanged light changed the scene revision");
+  auto invalid_light = lamp;
+  invalid_light.radiance[1] = -1.0F;
+  Reject([&] { world.SetLight("/lamp", invalid_light); });
+  invalid_light = lamp;
+  invalid_light.world_from_light[3] = std::numeric_limits<float>::infinity();
+  Reject([&] { world.SetLight("/lamp", invalid_light); });
+  invalid_light = lamp;
+  invalid_light.radius = -0.5F;
+  Reject([&] { world.SetLight("/lamp", invalid_light); });
+  invalid_light = lamp;
+  invalid_light.angle = std::numeric_limits<float>::quiet_NaN();
+  Reject([&] { world.SetLight("/lamp", invalid_light); });
+  invalid_light = lamp;
+  invalid_light.shape = static_cast<Lotus::LightShape>(4);
+  Reject([&] { world.SetLight("/lamp", invalid_light); });
+  Reject([&] { world.SetLight("", lamp); });
+  world.RemoveLight("/missing");
+  Check(world.Commit().revision == lamped.revision,
+      "a rejected light or a missing removal changed the scene revision");
+  world.RemoveLight("/lamp");
+  const auto unlit = world.Commit();
+  Check(unlit.revision == lamped.revision + 1 && unlit.scene->lights.empty() &&
+      lamped.scene->lights.at("/lamp") == lamp,
+      "removing a light was lost or changed a retained snapshot");
+
   // An instancer prototype is placed once per instancer transform, applied
   // after its own transform; an empty list places it nowhere.
   auto prototype = instance;
@@ -165,7 +206,7 @@ int main() try {
   const auto instanced = world.Commit();
   const auto placements = Lotus::PlacementTransforms(
       instanced.scene->meshes.at("/mesh").instance);
-  Check(instanced.revision == lit.revision + 1 && instanced.triangle_count == 2 &&
+  Check(instanced.revision == unlit.revision + 1 && instanced.triangle_count == 2 &&
       placements.size() == 2 &&
       placements[0] == Lotus::Matrix4{2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
           1, 5, 0, 1} &&

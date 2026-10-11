@@ -321,6 +321,43 @@ void RenderWorld::SetEnvironment(const std::array<float, 3>& radiance) {
   }
 }
 
+void RenderWorld::SetLight(const std::string& id, const Light& light) {
+  if (id.empty()) {
+    throw std::invalid_argument("light identifier must not be empty");
+  }
+  if (light.shape != LightShape::Sphere && light.shape != LightShape::Rect &&
+      light.shape != LightShape::Disk && light.shape != LightShape::Distant) {
+    throw std::invalid_argument("a light has an unknown shape");
+  }
+  if (!Finite(light.world_from_light)) {
+    throw std::invalid_argument("light transform must be finite");
+  }
+  if (!Finite(light.radiance) ||
+      !std::all_of(light.radiance.begin(), light.radiance.end(),
+          [](float value) { return value >= 0.0F; })) {
+    throw std::invalid_argument(
+        "light radiance must be finite and non-negative");
+  }
+  const std::array<float, 4> sizes{
+      light.radius, light.width, light.height, light.angle};
+  if (!Finite(sizes) || !std::all_of(sizes.begin(), sizes.end(),
+                            [](float value) { return value >= 0.0F; })) {
+    throw std::invalid_argument("light sizes must be finite and non-negative");
+  }
+  const auto found = scene_->lights.find(id);
+  if (found == scene_->lights.end() || found->second != light) {
+    MakeSceneWritable();
+    scene_->lights[id] = light;
+  }
+}
+
+void RenderWorld::RemoveLight(const std::string& id) {
+  if (scene_->lights.contains(id)) {
+    MakeSceneWritable();
+    scene_->lights.erase(id);
+  }
+}
+
 void RenderWorld::RemoveMesh(const std::string& id) {
   if (scene_->meshes.contains(id)) {
     MakeSceneWritable();
