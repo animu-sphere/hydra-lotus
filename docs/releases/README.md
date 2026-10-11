@@ -11,4 +11,5 @@ dry runs, asset naming and publication.
 
 | Version | Record | Theme |
 | --- | --- | --- |
+| [v0.2.0](v0.2.0.md) | [Wavefront release](v0.2.0.md) | Wavefront path tracing that reproduces the reference transport, selectable headless and through Hydra, and the first tag-driven Windows Hydra package. |
 | [v0.1.0](v0.1.0.md) | [Foundation release](v0.1.0.md) | Deterministic Vulkan reference rendering for OpenUSD Hydra, minimal materials and measured backend behavior. |

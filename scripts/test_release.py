@@ -15,7 +15,7 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "openstrata.toml").write_text('[project]\nversion = "0.1.0"\n', encoding="utf-8")
-        (self.root / "CMakeLists.txt").write_text('project(Lotus VERSION 0.1.0 LANGUAGES CXX)', encoding="utf-8")
+        (self.root / "VERSION").write_text("0.1.0\n", encoding="utf-8")
         self.write_changelog('## [Unreleased]\n\n## [0.1.0] - 2026-10-10\n\nShipped [scope](docs/releases/v0.1.0.md).\n')
         self.stem = f"lotus-0.1.0-{release.TARGET}--hydra"
         self.archive = self.root / (self.stem + ".tar.zst")
@@ -54,10 +54,17 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 release.project_version(self.root, tag)
 
-    def test_cmake_manifest_disagreement(self):
-        (self.root / "CMakeLists.txt").write_text('project(Lotus VERSION 0.2.0)', encoding="utf-8")
+    def test_version_file_manifest_disagreement(self):
+        (self.root / "VERSION").write_text("0.2.0\n", encoding="utf-8")
         with self.assertRaises(ValueError):
             release.project_version(self.root)
+
+    def test_malformed_version_file(self):
+        for text in ("", "0.1.0\n\n", " 0.1.0\n", "v0.1.0\n", "0.1.0-rc.1\n"):
+            (self.root / "VERSION").write_text(text, encoding="utf-8")
+            (self.root / "openstrata.toml").write_text(f'[project]\nversion = "{text.strip()}"\n', encoding="utf-8")
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                release.project_version(self.root)
 
     def test_invalid_or_undated_changelog(self):
         for heading in ("## [0.1.0]", "## [0.1.0] - 2026-02-30"):

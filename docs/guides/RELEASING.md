@@ -9,8 +9,10 @@ OpenStrata package name; `hdLotus` remains the Hydra module name.
 
 ## Prepare and verify
 
-Before tagging, make `[project].version` in `openstrata.toml` and
-`project(Lotus VERSION)` in `CMakeLists.txt` agree. Finalize the dated
+Before tagging, set the version in the top-level `VERSION` file, which
+`project(Lotus VERSION)` in `CMakeLists.txt` reads, and make
+`[project].version` in `openstrata.toml`, from which OpenStrata names the
+package, agree with it. Finalize the dated
 `## [X.Y.Z] - YYYY-MM-DD` changelog section, retain an empty `[Unreleased]`
 section above it, and write the release record. Phase/release status remains
 in the [canonical roadmap](../roadmap/README.md#status-at-a-glance).
@@ -19,7 +21,7 @@ The repository-owned helper checks version agreement, stable SemVer and the
 finalized changelog. Local verification used:
 
 ```sh
-python scripts/release.py version --tag v0.1.0
+python scripts/release.py version --tag v0.2.0
 python -m unittest discover -s scripts -p "test_*.py"
 ost ci validate
 ```

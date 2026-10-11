@@ -85,8 +85,9 @@ Linux, macOS, AMD and Intel GPUs are not measured.
 
 - Standalone presentation remains a bootstrap triangle, one frame in flight
   with CPU readback in the offscreen path. This is accepted for the entry-point
-  and resource-lifetime foundation; scene presentation and throughput changes
-  belong with measured Renderer Phase 2 optimization.
+  and resource-lifetime foundation. Renderer Phase 2 optimized the
+  transport kernels, not presentation; scene presentation and frames in
+  flight are not yet assigned to a phase.
 - Hydra ID channels are CPU sentinels, so picking is unavailable. The
   [AOV contract](AOVS.md#channels) accepts these bootstrap placeholders because
   the required products are color and depth. Additional debug channels are

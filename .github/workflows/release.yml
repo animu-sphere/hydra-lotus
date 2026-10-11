@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - VERSION
       - .github/workflows/release.yml
       - .github/workflows/renderer-ci.yml
       - scripts/release.py
