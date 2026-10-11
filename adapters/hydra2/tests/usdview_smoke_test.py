@@ -15,7 +15,7 @@ def _frames():
             fields = {}
             for field in line.split():
                 key, value = field.split("=", 1)
-                fields[key] = int(value)
+                fields[key] = value if key == "integrator" else int(value)
             result.append(fields)
     return result
 
@@ -118,3 +118,33 @@ def testUsdviewInputFunction(appController):
     assert restored["sample_index"] == 0
     assert _image("sample-index-restored") == _image("stable-update"), \
         "returning to sample index 0 did not reproduce the image"
+
+    # Integrator selection: lotus:wavefront is a checkable item of the
+    # Hydra Settings menu. Checking it restarts the accumulation with the
+    # wavefront kernels installed beside the plugin, and unchecking it
+    # renders the same image as before.
+    assert restored["integrator"] == "reference"
+    actions = [action for action in appController._ui.settingsFlagActions
+               if action.key == "lotus:wavefront"]
+    assert len(actions) == 1, "the Hydra Settings menu has no wavefront item"
+    action = actions[0]
+    assert action.isCheckable() and not action.isChecked()
+    before = len(_frames())
+    action.trigger()
+    assert action.isChecked()
+    wavefront = _render(appController, "wavefront")
+    assert wavefront["integrator"] == "wavefront"
+    if wavefront["ray_query"] == 1:
+        frames = _frames()[before:]
+        assert wavefront["samples"] == restored["samples"]
+        assert any(frame["samples"] < wavefront["samples"] for frame in frames), \
+            "checking the wavefront item did not restart the accumulation"
+        assert any(frame["wavefront_rounds"] > 0 for frame in frames), \
+            "no Hydra frame ran the wavefront kernels"
+    action.trigger()
+    assert not action.isChecked()
+    reference = _render(appController, "integrator-restored")
+    assert reference["integrator"] == "reference"
+    assert reference["wavefront_rounds"] == 0
+    assert _image("integrator-restored") == _image("stable-update"), \
+        "returning to the reference integrator did not reproduce the image"

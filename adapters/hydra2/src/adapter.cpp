@@ -108,8 +108,8 @@ void AppendHostEvidence(std::uint64_t frame_index,
     std::size_t buffers_written,
     std::uint64_t scene_revision,
     std::uint64_t renderer_creations,
-    const Lotus::GpuSceneStats& scene, std::uint32_t sample_index,
-    bool converged) {
+    const Lotus::GpuSceneStats& scene,
+    const Lotus::PathTracingSettings& settings, bool converged) {
   const char* path = std::getenv("LOTUS_HYDRA_EVIDENCE");
   if (path == nullptr || *path == '\0') {
     return;
@@ -138,7 +138,11 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " tlas_builds=" << scene.tlas_builds
          << " tlas_updates=" << scene.tlas_updates
          << " ray_query=" << (frame.ray_query_used ? 1 : 0)
-         << " sample_index=" << sample_index
+         << " integrator="
+         << (settings.integrator == Lotus::Integrator::Wavefront ? "wavefront"
+                                                                 : "reference")
+         << " wavefront_rounds=" << frame.wavefront_rounds
+         << " sample_index=" << settings.sample_index
          << " samples=" << frame.samples_per_pixel
          << " converged=" << (converged ? 1 : 0)
          << " synchronization_validation="
@@ -171,6 +175,11 @@ constexpr int kDefaultConvergedSamples = 64;
 // The render setting that fixes an accumulation's first sample index, and so
 // its random numbers: PathTracingSettings::sample_index.
 const TfToken kSampleIndexSetting("lotus:sampleIndex");
+
+// The render setting that selects PathTracingSettings::integrator: a flag,
+// so that usdview offers it as a checkable menu item. True selects the
+// wavefront integrator, false (the default) the reference integrator.
+const TfToken kWavefrontSetting("lotus:wavefront");
 
 HdAovDescriptor AovDescriptor(const TfToken& name) {
   if (name == HdAovTokens->color) {
@@ -497,6 +506,11 @@ public:
     return selected_snapshot_;
   }
 
+  Lotus::GpuFrameEvidence GetFrameEvidence() {
+    std::scoped_lock lock(mutex_);
+    return frame_evidence_;
+  }
+
   // Whether the latest pass finished its image. A failed pass counts as
   // finished, so a host waiting for convergence does not wait forever.
   bool IsConverged() {
@@ -553,7 +567,8 @@ public:
           (shaders / "triangle.vert.spv").string(),
           (shaders / "triangle.frag.spv").string(), status, error,
           {(shaders / "path_trace.vert.spv").string(),
-              (shaders / "path_trace.frag.spv").string()});
+              (shaders / "path_trace.frag.spv").string(),
+              (shaders / "wavefront.comp.spv").string()});
       if (!renderer_) {
         TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",
             error.c_str());
@@ -576,6 +591,9 @@ public:
     const Lotus::GpuFrameEvidence frame =
         trace ? renderer_->RenderScene(draw, target, 1, settings)
               : renderer_->Render(draw, target, 1);
+    frame_evidence_ = frame;
+    frame_evidence_.color.payload = {};
+    frame_evidence_.depth.payload = {};
     if (frame.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus Hydra frame failed: %s", frame.detail.c_str());
       // A failed submission leaves the renderer unusable; the next frame
@@ -618,7 +636,7 @@ public:
     ++frame_index_;
     AppendHostEvidence(frame_index_, frame, target.width, target.height,
         buffers_written, snapshot.revision, renderer_creations_, scene_stats_,
-        settings.sample_index, converged_);
+        settings, converged_);
   }
 
 private:
@@ -724,6 +742,8 @@ private:
   // Plans the renderer's GPU scene updates; reset with each new renderer.
   Lotus::SceneExtraction extraction_;
   Lotus::GpuSceneStats scene_stats_;
+  // The latest frame's evidence without its products.
+  Lotus::GpuFrameEvidence frame_evidence_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
   bool converged_ = true;
@@ -1446,6 +1466,10 @@ private:
         1));
     settings.sample_index = static_cast<std::uint32_t>(
         std::max(delegate.GetRenderSetting<int>(kSampleIndexSetting, 0), 0));
+    settings.integrator =
+        delegate.GetRenderSetting<bool>(kWavefrontSetting, false)
+            ? Lotus::Integrator::Wavefront
+            : Lotus::Integrator::Reference;
     return settings;
   }
 
@@ -1859,7 +1883,8 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
   return {{"Converged samples per pixel",
                HdRenderSettingsTokens->convergedSamplesPerPixel,
                VtValue(kDefaultConvergedSamples)},
-      {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)}};
+      {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)},
+      {"Wavefront integrator", kWavefrontSetting, VtValue(false)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
@@ -1872,6 +1897,10 @@ Lotus::GpuSceneStats HdLotusRenderDelegate::GetGpuSceneStats() {
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetSelectedSnapshot() {
   return impl_->state->GetSelectedSnapshot();
+}
+
+Lotus::GpuFrameEvidence HdLotusRenderDelegate::GetFrameEvidence() {
+  return impl_->state->GetFrameEvidence();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

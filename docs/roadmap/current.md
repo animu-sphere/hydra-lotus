@@ -7,7 +7,9 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Integrator selection through Hydra.
+Renderer Phase 2 is complete
+([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit));
+the next phase's tasks are not yet scheduled.
 
 The wavefront integrator reproduces the reference transport
 ([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
@@ -16,8 +18,9 @@ the [scheduling](../reports/2026-10-10-wavefront-scheduling.md),
 [camera and resolve](../reports/2026-10-11-wavefront-camera-resolve.md)
 reports record its cost against the reference integrator after queue
 bookkeeping, round scheduling, per-path state traffic and the generate
-and accumulate kernels. Path classification is assigned to Renderer
-Phase 8 (LOTUS-MATERIAL-01).
+and accumulate kernels. Hydra selects either integrator
+([integrator selection](../reports/2026-10-11-hydra-integrator-selection.md)).
+Path classification is assigned to Renderer Phase 8 (LOTUS-MATERIAL-01).
 
 The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
 records four repeatable workloads and metric availability. The
@@ -44,13 +47,6 @@ The [fixed baseline](../reports/2026-10-10-performance-baseline.md),
 as the reference for subsequent transport changes. Shipped scope belongs
 in the [release records](../releases/README.md); known limitations remain
 in the reference documentation.
-
-## Renderer Phase 2 — Wavefront path tracing
-
-- [ ] **LOTUS-WAVE-03 — Integrator selection through Hydra.** Expose
-  `PathTracingSettings::integrator` as a render setting, install the
-  wavefront kernels with the Hydra plugin, and check converged Hydra images
-  under both integrators.
 
 ## Deferred adapter work
 
