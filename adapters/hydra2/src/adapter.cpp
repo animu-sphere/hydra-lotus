@@ -39,6 +39,7 @@
 #include <pxr/imaging/hd/vertexAdjacency.h>
 #include <pxr/imaging/hio/image.h>
 #include <pxr/imaging/hio/types.h>
+#include <pxr/usd/sdf/assetPath.h>
 
 #include <lotus/extraction.hpp>
 #include <lotus/render_world.hpp>
@@ -453,21 +454,55 @@ std::optional<Lotus::Texture> LoadTexture(const HdLotusTextureRequest& request,
   return texture;
 }
 
+// What a dome light contributes: its radiance and, with a texture, the
+// image file and the frame its latitude-longitude layout is in.
+struct DomeLighting {
+  std::array<float, 3> radiance{};
+  // Empty for an untextured dome.
+  std::string file;
+  Lotus::Matrix4 frame = Lotus::IdentityMatrix();
+};
+
 class AdapterState {
 public:
   AdapterState() {
     world_.SetEnvironment(kFallbackEnvironment);
   }
 
-  void SyncDome(const SdfPath& id, const std::array<float, 3>& radiance) {
+  // A dome's image is decoded when its file changes. One that cannot be
+  // decoded warns and leaves the dome uniform.
+  void SyncDome(const SdfPath& id, const DomeLighting& lighting) {
     std::scoped_lock lock(mutex_);
-    domes_[id] = radiance;
+    Dome& dome = domes_[id];
+    if (lighting.file != dome.file) {
+      const std::string key = DomeTextureKey(id);
+      dome.file = lighting.file;
+      dome.textured = false;
+      world_.RemoveTexture(key);
+      if (!dome.file.empty()) {
+        std::string error;
+        if (auto texture = LoadTexture({key, dome.file, TfToken()}, error)) {
+          world_.SetTexture(key, std::move(*texture));
+          dome.textured = true;
+        } else {
+          TF_WARN("Lotus cannot read the dome texture %s of %s, which lights "
+                  "uniformly: %s",
+              dome.file.c_str(), id.GetText(), error.c_str());
+        }
+      }
+    }
+    dome.radiance = lighting.radiance;
+    dome.frame = lighting.frame;
     UpdateEnvironment();
   }
 
   void RemoveDome(const SdfPath& id) {
     std::scoped_lock lock(mutex_);
-    if (domes_.erase(id) != 0) UpdateEnvironment();
+    if (domes_.erase(id) != 0) {
+      world_.RemoveTexture(DomeTextureKey(id));
+      ignored_domes_.erase(id);
+      UpdateEnvironment();
+    }
   }
 
   // An analytic light under its path; none for a hidden or invalid one,
@@ -765,17 +800,50 @@ private:
     return snapshot;
   }
 
+  // A property path cannot collide with a material's texture key.
+  static std::string DomeTextureKey(const SdfPath& id) {
+    return id.AppendProperty(TfToken("lotus:domeTexture")).GetString();
+  }
+
+  struct Dome {
+    std::array<float, 3> radiance{};
+    std::string file;
+    // Whether `file` decoded into the scene's texture under DomeTextureKey.
+    bool textured = false;
+    Lotus::Matrix4 frame = Lotus::IdentityMatrix();
+  };
+
   std::mutex mutex_;
   Lotus::RenderWorld world_;
   // Path order makes the sum independent of Hydra's parallel sync order.
-  std::map<SdfPath, std::array<float, 3>> domes_;
+  std::map<SdfPath, Dome> domes_;
+  // Textured domes that emit but were left out, each warned about once.
+  std::set<SdfPath> ignored_domes_;
   // The synced analytic lights, hidden and invalid ones included.
   std::set<SdfPath> lights_;
 
+  // The untextured domes' radiance is summed into the constant environment.
+  // The first textured dome in path order that emits is the environment
+  // image, its radiance scaling the image; the scene holds one image, so
+  // any further textured dome that emits is left out with a warning.
   void UpdateEnvironment() {
     std::array<double, 3> sum{};
-    for (const auto& [id, radiance] : domes_) {
-      for (std::size_t c = 0; c < sum.size(); ++c) sum[c] += radiance[c];
+    std::optional<Lotus::EnvironmentMap> map;
+    for (const auto& [id, dome] : domes_) {
+      if (!dome.textured) {
+        for (std::size_t c = 0; c < sum.size(); ++c) sum[c] += dome.radiance[c];
+        continue;
+      }
+      if (dome.radiance == std::array<float, 3>{}) {
+        continue;
+      }
+      if (!map) {
+        map = Lotus::EnvironmentMap{DomeTextureKey(id), dome.radiance, dome.frame};
+      } else if (ignored_domes_.insert(id).second) {
+        TF_WARN("Lotus ignores the textured dome %s: only the first textured "
+                "dome, %s, lights the scene",
+            id.GetText(), SdfPath(map->texture).GetPrimPath().GetText());
+      }
     }
     std::array<float, 3> radiance{};
     for (std::size_t c = 0; c < sum.size(); ++c) {
@@ -785,6 +853,7 @@ private:
     world_.SetEnvironment(domes_.empty() && lights_.empty()
                               ? kFallbackEnvironment
                               : radiance);
+    world_.SetEnvironmentMap(map);
   }
   // The texture keys each material names, and how many materials name each
   // key.
@@ -977,8 +1046,10 @@ private:
   std::shared_ptr<AdapterState> state_;
 };
 
-// A uniform, untextured dome. Visibility shares HdLight::DirtyParams.
-// Fallback sprims have no state, so they cannot change authored lighting.
+// A dome: its radiance and, with a latitude-longitude texture, its image,
+// oriented by its transform after its domeOffset (DomeLight_1's pole axis),
+// as Storm orients it. Visibility shares HdLight::DirtyParams. Fallback
+// sprims have no state, so they cannot change authored lighting.
 class HdLotusDomeLight final : public HdLight {
 public:
   HdLotusDomeLight(const SdfPath& id, std::shared_ptr<AdapterState> state)
@@ -993,26 +1064,55 @@ public:
 
   void Sync(HdSceneDelegate* delegate, HdRenderParam*,
       HdDirtyBits* dirty_bits) override {
-    if (state_ && (*dirty_bits & (DirtyParams | DirtyResource))) {
-      std::array<float, 3> radiance{};
+    if (state_ &&
+        (*dirty_bits & (DirtyTransform | DirtyParams | DirtyResource))) {
+      const auto parameter = [&](const TfToken& token, auto fallback) {
+        using T = decltype(fallback);
+        const VtValue value = delegate->GetLightParamValue(GetId(), token);
+        return value.IsHolding<T>() ? value.UncheckedGet<T>() : fallback;
+      };
+      DomeLighting lighting;
       if (delegate->GetVisible(GetId())) {
-        const auto parameter = [&](const TfToken& token, auto fallback) {
-          using T = decltype(fallback);
-          const VtValue value = delegate->GetLightParamValue(GetId(), token);
-          return value.IsHolding<T>() ? value.UncheckedGet<T>() : fallback;
-        };
         const auto value = LightRadiance(
             parameter(HdLightTokens->color, GfVec3f(1.0F)),
             parameter(HdLightTokens->intensity, 1.0F),
             parameter(HdLightTokens->exposure, 0.0F));
         if (value) {
-          radiance = *value;
+          lighting.radiance = *value;
         } else {
           TF_WARN("Lotus ignores invalid or overflowing dome radiance on %s",
               GetId().GetText());
         }
       }
-      state_->SyncDome(GetId(), radiance);
+      // A hidden dome keeps its image, so that showing it again does not
+      // decode it again.
+      const SdfAssetPath asset =
+          parameter(HdLightTokens->textureFile, SdfAssetPath());
+      lighting.file = asset.GetResolvedPath().empty() ? asset.GetAssetPath()
+                                                      : asset.GetResolvedPath();
+      const TfToken format =
+          parameter(HdLightTokens->textureFormat, TfToken("automatic"));
+      GfMatrix4d transform = delegate->GetTransform(GetId());
+      const VtValue offset =
+          delegate->GetLightParamValue(GetId(), HdLightTokens->domeOffset);
+      if (offset.IsHolding<GfMatrix4d>()) {
+        transform = offset.UncheckedGet<GfMatrix4d>() * transform;
+      }
+      lighting.frame = ToLotusMatrix(transform);
+      if (!lighting.file.empty()) {
+        if (format != TfToken("automatic") && format != TfToken("latlong")) {
+          TF_WARN("Lotus reads only latlong dome textures; %s, of format %s, "
+                  "lights uniformly",
+              GetId().GetText(), format.GetText());
+          lighting.file.clear();
+        } else if (!Lotus::EnvironmentFrame(lighting.frame)) {
+          TF_WARN("Lotus ignores the texture of %s, whose transform is not "
+                  "finite or has dependent axes; it lights uniformly",
+              GetId().GetText());
+          lighting.file.clear();
+        }
+      }
+      state_->SyncDome(GetId(), lighting);
     }
     *dirty_bits = Clean;
   }

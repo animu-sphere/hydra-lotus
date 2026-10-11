@@ -185,6 +185,18 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-analytic-light-test hdLotus)
 
+  add_executable(lotus-hydra2-dome-texture-test tests/dome_texture_test.cpp
+    "${CMAKE_SOURCE_DIR}/adapters/headless/reference.cpp")
+  target_include_directories(lotus-hydra2-dome-texture-test
+    PRIVATE "${CMAKE_SOURCE_DIR}/adapters/headless")
+  target_link_libraries(lotus-hydra2-dome-texture-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderWorld Lotus::Vulkan usdImaging
+      usdGeom usd sdf)
+  target_compile_definitions(lotus-hydra2-dome-texture-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING
+    LOTUS_ASSETS_DIRECTORY="${CMAKE_SOURCE_DIR}/validation/assets")
+  add_dependencies(lotus-hydra2-dome-texture-test hdLotus)
+
   add_executable(lotus-hydra2-light-test tests/light_test.cpp)
   target_link_libraries(lotus-hydra2-light-test
     PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
@@ -231,6 +243,10 @@ if(LOTUS_BUILD_TESTS)
   add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
   add_test(NAME lotus-renderer-hydra-light-gpu
     COMMAND lotus-hydra2-light-test --gpu)
+  add_test(NAME lotus-renderer-hydra-dome-texture
+    COMMAND lotus-hydra2-dome-texture-test)
+  add_test(NAME lotus-renderer-hydra-dome-texture-gpu
+    COMMAND lotus-hydra2-dome-texture-test --gpu)
   add_test(NAME lotus-renderer-hydra-analytic-lights
     COMMAND lotus-hydra2-analytic-light-test)
   add_test(NAME lotus-renderer-hydra-analytic-lights-gpu
@@ -253,6 +269,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-light-gpu
     lotus-renderer-hydra-analytic-lights-gpu
+    lotus-renderer-hydra-dome-texture-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-texture-gpu
     PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
@@ -273,6 +290,8 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-light-gpu
     lotus-renderer-hydra-analytic-lights
     lotus-renderer-hydra-analytic-lights-gpu
+    lotus-renderer-hydra-dome-texture
+    lotus-renderer-hydra-dome-texture-gpu
     lotus-renderer-hydra-material-gpu
     lotus-renderer-hydra-normals
     lotus-renderer-hydra-texture

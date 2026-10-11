@@ -31,6 +31,13 @@ struct RgbImage {
 [[nodiscard]] std::string ReadPfm(
     const std::filesystem::path& path, RgbImage& image);
 
+// A Radiance RGBE image ("#?RADIANCE" or "#?RGBE", 32-bit_rle_rgbe, rows
+// from the top) as an Rgba32Float texture with alpha 1. Texels decode as
+// stb_image, which Hio reads such images with, decodes them: each channel
+// times 2^(exponent - 136), 0 for exponent 0.
+[[nodiscard]] std::string ReadRadianceHdr(
+    const std::filesystem::path& path, Lotus::Texture& texture);
+
 // Replaces the world's camera and scene with the reference scene: a Cornell
 // box lit only by an emissive panel under its ceiling, with red and green
 // coated diffuse side walls, a GGX metal block and a coated diffuse block.

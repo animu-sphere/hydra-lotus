@@ -109,6 +109,33 @@ struct Light {
   bool operator==(const Light&) const = default;
 };
 
+// A latitude-longitude environment image: UsdLux DomeLight's texture. In
+// its frame it follows the OpenEXR convention: image column 0 is longitude
+// +pi and the last column -pi, the top row latitude +pi/2 (+Y) and the
+// bottom row -pi/2 (-Y); latitude 0 is +Z at longitude 0 and +X at
+// longitude pi/2. Its radiance arrives from every direction a path escapes
+// in, like the constant environment's, which it adds to.
+struct EnvironmentMap {
+  // The key in LotusScene::textures of the image. A key with no texture
+  // contributes nothing.
+  std::string texture;
+  // Multiplies the texels' RGB, linear and non-negative: UsdLux's
+  // color * intensity * 2^exposure.
+  std::array<float, 3> scale{1.0F, 1.0F, 1.0F};
+  // The image's frame. Only its orientation counts: see EnvironmentFrame.
+  Matrix4 world_from_environment = IdentityMatrix();
+
+  bool operator==(const EnvironmentMap&) const = default;
+};
+
+// The world-space unit X, Y and Z axes of an environment map's frame: the
+// transform's linear part's columns orthonormalized in that order
+// (Gram-Schmidt), so that a scale or shear does not distort the image and a
+// mirroring transform mirrors it. Nothing when they are not finite or not
+// independent.
+[[nodiscard]] std::optional<std::array<std::array<double, 3>, 3>>
+EnvironmentFrame(const Matrix4& world_from_environment);
+
 struct SceneMesh {
   std::shared_ptr<const MeshGeometry> geometry;
   MeshInstance instance;
@@ -130,6 +157,8 @@ struct LotusScene {
   // Constant environment radiance, linear RGB, arriving from every direction
   // a path escapes in. Camera rays that miss do not see it.
   std::array<float, 3> environment{0.0F, 0.0F, 0.0F};
+  // An environment image, whose radiance adds to `environment`'s.
+  std::optional<EnvironmentMap> environment_map;
   // Analytic lights, keyed by stable host-supplied identifiers, in
   // deterministic order.
   std::map<std::string, Light> lights;
@@ -167,6 +196,9 @@ public:
   void SetTexture(const std::string& id, Texture texture);
   void RemoveTexture(const std::string& id);
   void SetEnvironment(const std::array<float, 3>& radiance);
+  // Sets or, with nothing, removes the environment image. Its key may name
+  // a texture that does not exist yet.
+  void SetEnvironmentMap(const std::optional<EnvironmentMap>& map);
   // Inserts or replaces an analytic light.
   void SetLight(const std::string& id, const Light& light);
   void RemoveLight(const std::string& id);

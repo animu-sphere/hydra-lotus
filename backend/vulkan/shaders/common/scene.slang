@@ -106,6 +106,25 @@ public struct AnalyticLightRecord {
   // kParallelLight.
   public uint4 shape;
 };
+// The instance of the light table's entry for the environment image.
+public static const uint kEnvironmentLight = 0xFFFFFFFFu;
+
+// Mirrors GpuEnvironmentRecord in gpu_scene.hpp: the environment image,
+// followed in its buffer by its sampling distribution over columns x rows
+// cells, rows from the top: each cell's density per unit image area, the
+// rows' cumulative distribution (rows + 1 floats), then each row's over its
+// cells (columns + 1 floats each).
+public struct EnvironmentRecord {
+  // Rows of the rotation from world space to the image's frame.
+  public float4 environment_from_world[3];
+  public float4 scale;
+  public uint texture;
+  public uint sampler_index;
+  public uint columns;
+  public uint rows;
+};
+static const uint64_t kEnvironmentRecordBytes = 80;
+
 public static const uint kSphereLight = 0;
 public static const uint kRectLight = 1;
 public static const uint kDiskLight = 2;
@@ -147,6 +166,11 @@ public struct PathConstants {
   public uint light_count;
   public uint analytic_count;
   public AnalyticLightRecord* analytic_lights;
+  // The environment buffer's address, or 0 without an environment image,
+  // and the probability with which the light table chooses the image.
+  public uint64_t environment_map;
+  public float environment_selection;
+  public uint reserved;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -567,6 +591,136 @@ LightSample SampleAnalytic(AnalyticLightRecord light, float selection,
   return sample;
 }
 
+EnvironmentRecord LoadEnvironment() {
+  return ((EnvironmentRecord*)path_constants.environment_map)[0];
+}
+
+// The distribution's floats after the record: densities, then the rows'
+// cumulative distribution, then each row's.
+float EnvironmentFloat(uint64_t index) {
+  return ((float*)(path_constants.environment_map +
+      kEnvironmentRecordBytes))[index];
+}
+
+// The largest i in [0, count) with cdf[i] <= u, for a cumulative
+// distribution of count + 1 floats from `first`.
+uint FindInterval(uint64_t first, uint count, float u) {
+  uint low = 0;
+  uint length = count + 1;
+  while (length > 0) {
+    const uint half = length >> 1;
+    const uint middle = low + half;
+    if (EnvironmentFloat(first + middle) <= u) {
+      low = middle + 1;
+      length -= half + 1;
+    } else {
+      length = half;
+    }
+  }
+  return clamp(low, 1u, count) - 1;
+}
+
+// A point of [0, 1) distributed as the cumulative distribution of count
+// cells from `first`, and the cell it falls in (Pharr et al., Physically
+// Based Rendering, 3rd edition, section 13.6.7).
+float SampleCumulative(uint64_t first, uint count, float u, out uint cell) {
+  cell = FindInterval(first, count, u);
+  const float low = EnvironmentFloat(first + cell);
+  const float width = EnvironmentFloat(first + cell + 1) - low;
+  const float offset = width > 0.0 ? (u - low) / width : 0.5;
+  return min((float(cell) + offset) / float(count), 0.99999994);
+}
+
+// The image coordinates of a direction in the image's frame, as OpenEXR
+// lays out latitude-longitude maps: u from longitude +pi at the left edge to
+// -pi at the right, v from +Y at the top to -Y at the bottom.
+float2 EnvironmentUv(float3 local) {
+  const float u = 0.5 - atan2(local.x, local.z) * (0.5 / kPi);
+  const float v = acos(clamp(local.y, -1.0, 1.0)) * (1.0 / kPi);
+  return float2(u - floor(u), v);
+}
+
+float3 EnvironmentDirection(float2 uv) {
+  const float theta = kPi * uv.y;
+  const float phi = kPi * (1.0 - 2.0 * uv.x);
+  const float sin_theta = sin(theta);
+  return float3(sin_theta * sin(phi), cos(theta), sin_theta * cos(phi));
+}
+
+// The image's radiance at `uv`: its bilinear texel times the scale.
+Spectrum EnvironmentLookup(EnvironmentRecord environment, float2 uv) {
+  const float4 texel =
+      textures[NonUniformResourceIndex(environment.texture)].SampleLevel(
+          samplers[NonUniformResourceIndex(environment.sampler_index)], uv, 0.0);
+  return SpectrumFromRgb(max(texel.xyz, 0.0) * environment.scale.xyz);
+}
+
+// The density per unit solid angle with which the distribution chooses the
+// direction at `uv`, before the image's selection: the cell's density per
+// unit image area over the area's 2 pi^2 sin(theta) steradians.
+float EnvironmentDirectionPdf(EnvironmentRecord environment, float2 uv) {
+  const uint column = min(uint(uv.x * float(environment.columns)),
+      environment.columns - 1);
+  const uint row = min(uint(uv.y * float(environment.rows)),
+      environment.rows - 1);
+  const float sin_theta = sin(kPi * uv.y);
+  if (!(sin_theta > 0.0)) {
+    return 0.0;
+  }
+  return EnvironmentFloat(uint64_t(row) * environment.columns + column) /
+         (2.0 * kPi * kPi * sin_theta);
+}
+
+// A direction of the environment image chosen with probability
+// `selection`, then by its distribution: a row by u.x, a cell of the row by
+// u.y, uniformly within the cell.
+LightSample SampleEnvironment(float selection, float2 u) {
+  const EnvironmentRecord environment = LoadEnvironment();
+  const uint64_t cells = uint64_t(environment.columns) * environment.rows;
+  uint row;
+  uint column;
+  float2 uv;
+  uv.y = SampleCumulative(cells, environment.rows, u.x, row);
+  uv.x = SampleCumulative(cells + environment.rows + 1 +
+          uint64_t(row) * (environment.columns + 1),
+      environment.columns, u.y, column);
+  const float sin_theta = sin(kPi * uv.y);
+  const float density =
+      EnvironmentFloat(uint64_t(row) * environment.columns + column);
+  if (!(sin_theta > 0.0) || !(density > 0.0)) {
+    return NoLight();
+  }
+  const float3 local = EnvironmentDirection(uv);
+  LightSample sample;
+  sample.direction = normalize(
+      local.x * environment.environment_from_world[0].xyz +
+      local.y * environment.environment_from_world[1].xyz +
+      local.z * environment.environment_from_world[2].xyz);
+  sample.distance = kFloatMax;
+  sample.radiance = EnvironmentLookup(environment, uv);
+  sample.pdf = selection * density / (2.0 * kPi * kPi * sin_theta);
+  sample.delta = false;
+  return sample;
+}
+
+// The environment image's radiance arriving along unit world `direction`.
+// With `weigh`, it is weighed against light sampling's density for the
+// direction by the power heuristic, the direction's own density being `pdf`.
+public Spectrum EnvironmentRadiance(float3 direction, bool weigh, float pdf) {
+  const EnvironmentRecord environment = LoadEnvironment();
+  const float3 local = float3(
+      dot(environment.environment_from_world[0].xyz, direction),
+      dot(environment.environment_from_world[1].xyz, direction),
+      dot(environment.environment_from_world[2].xyz, direction));
+  const float2 uv = EnvironmentUv(local);
+  const Spectrum radiance = EnvironmentLookup(environment, uv);
+  if (!weigh || !(path_constants.environment_selection > 0.0)) {
+    return radiance;
+  }
+  return radiance * PowerHeuristic(pdf, path_constants.environment_selection *
+      EnvironmentDirectionPdf(environment, uv));
+}
+
 // Chooses a light from the light table in proportion to its estimated
 // power (u.x, u.y), then a direction towards it from `origin` (u.zw).
 public LightSample SampleLight(float4 u, float3 origin) {
@@ -575,6 +729,9 @@ public LightSample SampleLight(float4 u, float3 origin) {
   const LightRecord record = path_constants.lights[column];
   const uint light = u.y < record.threshold ? column : record.alias;
   const LightRecord chosen = path_constants.lights[light];
+  if (chosen.instance == kEnvironmentLight) {
+    return SampleEnvironment(chosen.pdf, u.zw);
+  }
   if ((chosen.instance & kAnalyticLight) != 0) {
     return SampleAnalytic(
         path_constants.analytic_lights[chosen.instance & ~kAnalyticLight],

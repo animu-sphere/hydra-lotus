@@ -79,4 +79,8 @@ adapter, the viewport and plain CMake are in [BUILDING.md](docs/guides/BUILDING.
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](LICENSE). The validation image `validation/assets/StinsonBeach.hdr`
+is OpenUSD's, under the Tomorrow Open Source Technology License 1.0
+([licence](validation/assets/LICENSE.OpenUSD.txt),
+[manifest](validation/assets/manifest.json)); packages install it with
+both beside `lotus-headless`.

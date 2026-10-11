@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -55,6 +56,16 @@ struct SceneMaterial {
   bool operator==(const SceneMaterial&) const = default;
 };
 
+// The environment image as the GPU scene holds it: the resident texture its
+// key names, with its scale and frame.
+struct SceneEnvironmentMap {
+  const Texture* texture = nullptr;
+  std::array<float, 3> scale{};
+  Matrix4 world_from_environment = IdentityMatrix();
+
+  bool operator==(const SceneEnvironmentMap&) const = default;
+};
+
 // Optional correspondence for a mesh edited under the same stable key.
 // Both addresses also occur in this plan's releases and uploads. The backend
 // may retain storage and refit a BLAS when the topology is compatible.
@@ -94,10 +105,13 @@ struct SceneUpdate {
   // Otherwise `materials` is empty.
   bool materials_changed = false;
   std::vector<SceneMaterial> materials;
-  // When set, the scene's environment radiance replaces the GPU scene's. A
-  // GPU scene starts with a black environment.
+  // When set, the scene's environment radiance and image replace the GPU
+  // scene's. A GPU scene starts with a black environment without an image.
+  // The image is absent when the scene has none, its scale is black or its
+  // key names no texture.
   bool environment_changed = false;
   std::array<float, 3> environment{};
+  std::optional<SceneEnvironmentMap> environment_map;
   // When set, `lights` replaces every analytic light: the scene's lights in
   // key order. A GPU scene starts without any. Otherwise `lights` is empty.
   bool lights_changed = false;
@@ -126,6 +140,7 @@ private:
   std::vector<SceneInstance> instances_;
   std::vector<SceneMaterial> materials_{SceneMaterial{}};
   std::array<float, 3> environment_{};
+  std::optional<SceneEnvironmentMap> environment_map_;
   std::vector<Light> lights_;
 };
 

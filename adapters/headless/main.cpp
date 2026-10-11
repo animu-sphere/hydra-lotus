@@ -1486,6 +1486,7 @@ public:
       world_.RemoveLight(key);
     }
     world_.SetEnvironment({});
+    world_.SetEnvironmentMap(std::nullopt);
     target_ = DefaultTarget();
     const auto upload = renderer_.UpdateScene(extraction_.Update(world_.Commit()));
     return upload.status == Lotus::FrameStatus::Pass ? "" : upload.detail;
@@ -4399,6 +4400,498 @@ std::string AnalyticLightsFailure(PathScenes& scenes) {
   return {};
 }
 
+// An environment image's bilinear radiance at image coordinates (u, v), as
+// the scene passes filter it: texel centres at half-integer coordinates,
+// repeated across u and clamped at the top and bottom rows, times `scale`.
+Rgb EnvironmentTexel(const Lotus::Texture& texture, const Rgb& scale, double u,
+    double v) {
+  const auto width = static_cast<int>(texture.width);
+  const auto height = static_cast<int>(texture.height);
+  const double x = u * width - 0.5;
+  const double y = v * height - 0.5;
+  const double x0 = std::floor(x);
+  const double y0 = std::floor(y);
+  const double a = x - x0;
+  const double b = y - y0;
+  const auto column = [&](double i) {
+    const int wrapped = static_cast<int>(i) % width;
+    return wrapped < 0 ? wrapped + width : wrapped;
+  };
+  const auto row = [&](double j) {
+    return std::clamp(static_cast<int>(j), 0, height - 1);
+  };
+  const int i0 = column(x0);
+  const int i1 = column(x0 + 1);
+  const int j0 = row(y0);
+  const int j1 = row(y0 + 1);
+  Rgb result{};
+  for (int c = 0; c < 3; ++c) {
+    const auto at = [&](int i, int j) {
+      float value = 0;
+      std::memcpy(&value,
+          texture.texels.data() + (std::size_t(j) * texture.width + i) * 16 + c * 4,
+          sizeof(value));
+      return std::max(0.0, double{value});
+    };
+    result[c] = scale[c] * ((1 - b) * ((1 - a) * at(i0, j0) + a * at(i1, j0)) +
+                               b * ((1 - a) * at(i0, j1) + a * at(i1, j1)));
+  }
+  return result;
+}
+
+// The irradiance on a surface of unit normal `n` from an environment image
+// of frame `world_from_environment`, double precision: its radiance times
+// the cosine over the image's directions above the surface, by the midpoint
+// rule on 4x4 points per texel, each covering 2 pi^2 sin(theta) du dv
+// steradians, with the OpenEXR latitude-longitude layout written out
+// independently of the shader's. With `squared`, it also receives the same
+// integral of the radiance's square.
+Rgb EnvironmentIrradiance(const Lotus::Texture& texture, const Rgb& scale,
+    const Lotus::Matrix4& world_from_environment, const Vec3& n,
+    Rgb* squared = nullptr) {
+  constexpr double kPi = 3.14159265358979323846;
+  const auto axes = *Lotus::EnvironmentFrame(world_from_environment);
+  const std::size_t columns = std::size_t{texture.width} * 4;
+  const std::size_t rows = std::size_t{texture.height} * 4;
+  std::vector<double> sin_phi(columns);
+  std::vector<double> cos_phi(columns);
+  for (std::size_t i = 0; i < columns; ++i) {
+    // Longitude +pi at the left edge, -pi at the right.
+    const double phi = kPi * (1.0 - 2.0 * (i + 0.5) / columns);
+    sin_phi[i] = std::sin(phi);
+    cos_phi[i] = std::cos(phi);
+  }
+  Rgb sum{};
+  Rgb sum_squares{};
+  for (std::size_t j = 0; j < rows; ++j) {
+    const double v = (j + 0.5) / rows;
+    // Latitude +pi/2 (+Y) at the top edge, -pi/2 at the bottom.
+    const double theta = kPi * v;
+    const double sin_theta = std::sin(theta);
+    const double cos_theta = std::cos(theta);
+    for (std::size_t i = 0; i < columns; ++i) {
+      const Vec3 local{sin_theta * sin_phi[i], cos_theta, sin_theta * cos_phi[i]};
+      double cosine = 0;
+      for (std::size_t k = 0; k < 3; ++k)
+        cosine += local[k] * Dot(axes[k], n);
+      if (cosine <= 0)
+        continue;
+      const Rgb radiance =
+          EnvironmentTexel(texture, scale, (i + 0.5) / columns, v);
+      for (int c = 0; c < 3; ++c) {
+        sum[c] += radiance[c] * cosine * sin_theta;
+        sum_squares[c] += radiance[c] * radiance[c] * cosine * sin_theta;
+      }
+    }
+  }
+  const double area = 2.0 * kPi * kPi / static_cast<double>(columns * rows);
+  for (int c = 0; c < 3; ++c) {
+    sum[c] *= area;
+    sum_squares[c] *= area;
+  }
+  if (squared != nullptr)
+    *squared = sum_squares;
+  return sum;
+}
+
+// An Rgba32Float texture with every RGB component limited to `limit`.
+Lotus::Texture ClampedTexture(const Lotus::Texture& texture, float limit) {
+  Lotus::Texture clamped = texture;
+  for (std::size_t texel = 0; texel * 16 < clamped.texels.size(); ++texel) {
+    for (std::size_t c = 0; c < 3; ++c) {
+      float value = 0;
+      std::memcpy(&value, clamped.texels.data() + texel * 16 + c * 4, 4);
+      value = std::min(value, limit);
+      std::memcpy(clamped.texels.data() + texel * 16 + c * 4, &value, 4);
+    }
+  }
+  return clamped;
+}
+
+// Compares the scene's 1024-spp image under the scenes' estimator with a
+// uniform image of `expected` radiance by the DES-Q5 metric, the per-sample
+// variance measured from the same 16 batches; `variance` receives its mean.
+std::string UniformOracleFailure(PathScenes& scenes, const std::string& name,
+    const Rgb& expected, double& variance) {
+  constexpr std::uint32_t kBatches = 16;
+  constexpr std::uint32_t kBatch = 64;
+  LotusHeadless::Reference measured;
+  if (auto failure = BatchStatistics(
+          scenes, kComparedSampleIndex, kBatches, kBatch, measured);
+      !failure.empty())
+    return name + ": " + failure;
+  LotusHeadless::Reference oracle;
+  oracle.mean = measured.mean;
+  for (std::size_t i = 0; i < oracle.mean.values.size(); ++i)
+    oracle.mean.values[i] = static_cast<float>(expected[i % 3]);
+  oracle.variance = measured.variance;
+  oracle.samples = 1U << 30;
+  const LotusHeadless::Comparison comparison =
+      LotusHeadless::Compare(measured.mean, kBatches * kBatch, oracle);
+  if (!comparison.failure.empty())
+    return name + ": " + comparison.failure;
+  variance = MeanVariance(measured);
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(2) << name << " image z "
+       << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+       << comparison.image_z[2] << " max tile |z| " << comparison.max_tile_z;
+  scenes.Summarize(line.str());
+  return {};
+}
+
+// A mirror floor facing OrthographicCamera, whose rays it reflects straight
+// up (+Z), under an 8x4 image whose regions are known from the OpenEXR
+// latitude-longitude layout: columns 3-4 face longitude 0 (+Z), 1-2 +pi/2
+// (+X), 5-6 -pi/2 (-X), 0 and 7 pi (-Z) in the middle rows; the top row is
+// the +Y pole and the bottom row -Y. Each frame turns a different region
+// to +Z, and bilinear filtering there sees only that region's colour. BSDF
+// sampling makes each sample exact; under light sampling the near-mirror's
+// lobe tails share weight with light samples, exact only in expectation.
+std::string EnvironmentOrientationFailure(PathScenes& scenes) {
+  const Rgb toward_z{0.25, 0.5, 1};
+  const Rgb toward_x{2, 0.5, 0.25};
+  const Rgb toward_minus_x{0.5, 2, 0.5};
+  const Rgb toward_minus_z{1, 1, 0.25};
+  const Rgb top{4, 0.25, 0.25};
+  const Rgb bottom{0.25, 0.25, 4};
+  const std::array<Rgb, 8> columns{toward_minus_z, toward_x, toward_x,
+      toward_z, toward_z, toward_minus_x, toward_minus_x, toward_minus_z};
+  auto& world = scenes.World();
+  world.SetTexture("/regions", MakeTexture(8, 4, Lotus::TextureFormat::Rgba32Float,
+      [&](std::uint32_t i, std::uint32_t j) {
+        const Rgb& rgb = j == 0 ? top : j == 3 ? bottom : columns[i];
+        return std::array<double, 4>{rgb[0], rgb[1], rgb[2], 1};
+      }));
+  world.SetCamera(OrthographicCamera());
+  Lotus::MeshInstance floor;
+  floor.world_from_object = Scaling(1.5F, 1.5F, 1);
+  world.SetMesh("/floor", Square(), floor);
+  Lotus::Material mirror;
+  mirror.base_color = {1, 1, 1};
+  mirror.metallic = 1;
+  mirror.roughness = 0;
+  Paint(world, "/floor", mirror);
+  const Rgb scale{2, 1, 0.5};
+  struct Case {
+    const char* name;
+    Lotus::Matrix4 frame;
+    Rgb expected;
+  };
+  const std::array<Case, 6> cases{{
+      {"identity", Lotus::IdentityMatrix(), toward_z},
+      {"+Z turned to -X", RotationY(90), toward_minus_x},
+      {"+Z turned to +X", RotationY(-90), toward_x},
+      {"+Z turned to -Z", RotationY(180), toward_minus_z},
+      {"+Y pole up", RotationX(90), top},
+      {"-Y pole up", RotationX(-90), bottom},
+  }};
+  {
+    for (const Case& entry : cases) {
+      Lotus::EnvironmentMap map;
+      map.texture = "/regions";
+      map.scale = {static_cast<float>(scale[0]), static_cast<float>(scale[1]),
+          static_cast<float>(scale[2])};
+      map.world_from_environment = entry.frame;
+      world.SetEnvironmentMap(map);
+      Rgb expected{};
+      for (int c = 0; c < 3; ++c)
+        expected[c] = entry.expected[c] * scale[c];
+      if (auto failure = scenes.ExpectExact(1, expected); !failure.empty())
+        return std::string("mirror, ") + entry.name + ": " + failure;
+    }
+  }
+  // The constant environment adds to the image.
+  Lotus::EnvironmentMap turned;
+  turned.texture = "/regions";
+  turned.scale = {2, 1, 0.5F};
+  turned.world_from_environment = RotationY(90);
+  world.SetEnvironmentMap(turned);
+  world.SetEnvironment({0.5F, 0.25F, 0.125F});
+  if (auto failure = scenes.ExpectExact(1, {0.5 + toward_minus_x[0] * scale[0],
+          0.25 + toward_minus_x[1] * scale[1], 0.125 + toward_minus_x[2] * scale[2]});
+      !failure.empty())
+    return "mirror, constant and image: " + failure;
+  scenes.Summarize("mirror reflections of 6 image frames: the OpenEXR "
+                   "layout's regions");
+  return scenes.Clear();
+}
+
+// Renderer Phase 3 environment importance sampling. A mirror reflects the
+// regions of a synthetic image that the OpenEXR layout puts in each
+// direction. Under OpenUSD's Stinson Beach image, tilted so that its pole
+// is the floor's normal, turned and scaled, plus a constant sky, a Lambert
+// floor must match an independent double-precision irradiance oracle under
+// light sampling through either integrator, and under a copy without the
+// sun under either estimator; light sampling must lower its variance. An
+// open scene with a glossy panel and a partly covering layer under the copy
+// must match BSDF sampling's 4096-spp estimate through either integrator,
+// which render it the same. An image edit rewrites the light table and
+// its distribution and restarts the accumulation without touching geometry,
+// a constant edit neither, and an image whose key names no texture
+// contributes nothing.
+std::string EnvironmentFailure(PathScenes& scenes,
+    const std::filesystem::path& assets_directory) {
+  if (auto failure = EnvironmentOrientationFailure(scenes); !failure.empty())
+    return failure;
+
+  Lotus::Texture beach;
+  if (auto failure = LotusHeadless::ReadRadianceHdr(
+          assets_directory / "StinsonBeach.hdr", beach);
+      !failure.empty())
+    return failure;
+  // The sun holds over half the image's power in ten texels, which BSDF
+  // sampling's 1024 samples per pixel hit about once per ten pixels: too
+  // rarely for the comparison's normal approximation. BSDF sampling is
+  // compared on a copy whose texels are limited to kSunless.
+  constexpr float kSunless = 8;
+  const Lotus::Texture sunless = ClampedTexture(beach, kSunless);
+  const Lotus::Texture beach_texels = beach;
+  SetLightFloor(scenes);
+  auto& world = scenes.World();
+  world.SetTexture("/beach", std::move(beach));
+  world.SetTexture("/sunless", sunless);
+  Lotus::EnvironmentMap map;
+  map.texture = "/sunless";
+  map.scale = {0.75F, 0.75F, 0.75F};
+  // Pole to +Z, turned 30 degrees about it; the scale must not distort it.
+  map.world_from_environment = Lotus::Multiply(RotationX(90),
+      Lotus::Multiply(RotationY(30), Scaling(2, 5, 3)));
+  const Rgb sky{0.05, 0.04, 0.03};
+  world.SetEnvironment({0.05F, 0.04F, 0.03F});
+  constexpr double kPi = 3.14159265358979323846;
+  // The floor's radiance under an image: its albedo over pi times the
+  // image's and the sky's irradiance. Each camera path scatters once and
+  // escapes, so a BSDF-sampled sample is the albedo times the radiance in a
+  // cosine-distributed direction, whose exact per-sample variance
+  // `bsdf_variance` receives, averaged over the channels.
+  const auto floor_radiance = [&](const Lotus::Texture& texture,
+                                  double& bsdf_variance) {
+    Rgb squared{};
+    const Rgb irradiance = EnvironmentIrradiance(texture,
+        {map.scale[0], map.scale[1], map.scale[2]}, map.world_from_environment,
+        {0, 0, 1}, &squared);
+    Rgb radiance{};
+    bsdf_variance = 0;
+    for (int c = 0; c < 3; ++c) {
+      radiance[c] = kFloorAlbedo[c] / kPi * (irradiance[c] + kPi * sky[c]);
+      const double second = kFloorAlbedo[c] * kFloorAlbedo[c] / kPi *
+          (squared[c] + 2 * sky[c] * irradiance[c] + kPi * sky[c] * sky[c]);
+      bsdf_variance += (second - radiance[c] * radiance[c]) / 3;
+    }
+    return radiance;
+  };
+  double sunless_bsdf_variance = 0;
+  double bsdf_variance = 0;
+  const Rgb sunless_expected = floor_radiance(sunless, sunless_bsdf_variance);
+  const Rgb expected = floor_radiance(beach_texels, bsdf_variance);
+  {
+    std::ostringstream line;
+    line << std::setprecision(5) << "floor oracle radiance under the beach "
+         << expected[0] << ' ' << expected[1] << ' ' << expected[2]
+         << ", without its sun " << sunless_expected[0] << ' '
+         << sunless_expected[1] << ' ' << sunless_expected[2];
+    scenes.Summarize(line.str());
+  }
+  const std::array<Lotus::LightSampling, 2> estimators{
+      Lotus::LightSampling::Bsdf, Lotus::LightSampling::Mis};
+  std::array<double, 2> sunless_variance{};
+  world.SetEnvironmentMap(map);
+  for (std::size_t index = 0; index < estimators.size(); ++index) {
+    scenes.SetLightSampling(estimators[index]);
+    if (auto failure = UniformOracleFailure(scenes,
+            index == 0 ? "sunless floor under bsdf" : "sunless floor under mis",
+            sunless_expected, sunless_variance[index]);
+        !failure.empty())
+      return failure;
+  }
+  // The beach itself under light sampling, through both integrators, and
+  // each estimator's variance and GPU time per sample.
+  map.texture = "/beach";
+  world.SetEnvironmentMap(map);
+  std::array<double, 2> variance{};
+  std::array<double, 2> milliseconds{};
+  for (const Lotus::Integrator integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    scenes.SetIntegrator(integrator);
+    scenes.SetLightSampling(Lotus::LightSampling::Mis);
+    if (auto failure = UniformOracleFailure(scenes,
+            integrator == Lotus::Integrator::Reference
+                ? "beach floor under mis"
+                : "beach floor under mis, wavefront",
+            expected, variance[1]);
+        !failure.empty())
+      return failure;
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  {
+    const Lotus::GpuSceneStats& stats = scenes.LastUpload().stats;
+    if (!stats.environment_map || !stats.environment_sampled)
+      return "the GPU scene neither reads nor samples the beach image";
+  }
+  for (std::size_t index = 0; index < estimators.size(); ++index) {
+    scenes.SetLightSampling(estimators[index]);
+    LotusHeadless::Reference statistics;
+    if (auto failure = BatchStatistics(
+            scenes, kStatisticsSampleIndex, 16, 64, statistics);
+        !failure.empty())
+      return failure;
+    variance[index] = MeanVariance(statistics);
+    if (auto failure = MedianSampleMilliseconds(scenes, 16, milliseconds[index]);
+        !failure.empty())
+      return failure;
+  }
+  // Sixteen batches catch the sun's rare hits too seldom to measure BSDF
+  // sampling's variance; the exact one is the oracle's.
+  const double variance_ratio = bsdf_variance / variance[1];
+  std::ostringstream line;
+  line << std::setprecision(4) << "beach floor per-sample variance bsdf "
+       << bsdf_variance << " exact, " << variance[0] << " measured, mis "
+       << variance[1] << " (" << std::fixed << std::setprecision(2)
+       << variance_ratio << "x lower)";
+  if (milliseconds[0] > 0 && milliseconds[1] > 0)
+    line << std::setprecision(3) << ", GPU ms per sample bsdf "
+         << milliseconds[0] << " mis " << milliseconds[1]
+         << ", time to equal quality " << std::setprecision(2)
+         << variance_ratio * milliseconds[0] / milliseconds[1] << "x shorter";
+  line << std::defaultfloat << std::setprecision(4)
+       << "; sunless floor per-sample variance bsdf "
+       << sunless_bsdf_variance << " exact, " << sunless_variance[0]
+       << " measured, mis " << sunless_variance[1] << " (" << std::fixed
+       << std::setprecision(2) << sunless_bsdf_variance / sunless_variance[1]
+       << "x lower)";
+  scenes.Summarize(line.str());
+  if (!(variance_ratio > 1.0) || !(sunless_bsdf_variance > sunless_variance[1]))
+    return "light sampling did not lower the floor's variance";
+  // The measured variance of the copy without the sun checks the exact one.
+  if (!(std::abs(sunless_variance[0] / sunless_bsdf_variance - 1) < 0.25))
+    return "BSDF sampling's measured variance " +
+           std::to_string(sunless_variance[0]) + " is not the exact " +
+           std::to_string(sunless_bsdf_variance);
+
+  // An image edit restarts the accumulation and rewrites the image's
+  // distribution and the light table, and nothing else; a constant edit
+  // rewrites neither.
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  Lotus::GpuSceneStats before = scenes.LastUpload().stats;
+  world.SetEnvironment({0.1F, 0.1F, 0.1F});
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (frame.samples_per_pixel != 1)
+    return "a constant environment edit continued the accumulation";
+  if (scenes.LastUpload().stats.light_writes != before.light_writes ||
+      scenes.LastUpload().stats.environment_writes != before.environment_writes)
+    return "a constant environment edit rewrote the light table or the image";
+  before = scenes.LastUpload().stats;
+  map.scale = {1, 0.5F, 0.25F};
+  world.SetEnvironmentMap(map);
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  const Lotus::GpuSceneStats& after = scenes.LastUpload().stats;
+  if (frame.samples_per_pixel != 1)
+    return "an environment image edit continued the accumulation";
+  if (after.environment_writes != before.environment_writes + 1 ||
+      after.light_writes != before.light_writes + 1 ||
+      after.geometry_uploads != before.geometry_uploads ||
+      after.texture_uploads != before.texture_uploads ||
+      after.instance_writes != before.instance_writes ||
+      after.material_writes != before.material_writes ||
+      after.blas_builds != before.blas_builds ||
+      after.tlas_builds != before.tlas_builds ||
+      after.tlas_updates != before.tlas_updates)
+    return "an environment image edit did more than rewrite the image and the "
+           "light table";
+  // A key with no texture contributes nothing: only the constant sky lights
+  // the floor.
+  map.texture = "/missing";
+  world.SetEnvironmentMap(map);
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (scenes.LastUpload().stats.environment_map ||
+      scenes.LastUpload().stats.environment_sampled)
+    return "an image whose key names no texture reached the GPU scene";
+  world.SetEnvironmentMap(std::nullopt);
+  if (auto failure = scenes.Clear(); !failure.empty())
+    return failure;
+
+  // An open scene against BSDF sampling's estimate of it, without the sun.
+  SetOpenLightScene(scenes, false);
+  world.SetTexture("/sunless", sunless);
+  map.texture = "/sunless";
+  map.scale = {0.75F, 0.75F, 0.75F};
+  world.SetEnvironmentMap(map);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  LotusHeadless::Reference brute_force;
+  if (auto failure = BatchStatistics(scenes, 0, 64, 64, brute_force);
+      !failure.empty())
+    return "open scene, BSDF sampling: " + failure;
+  scenes.SetLightSampling(Lotus::LightSampling::Mis);
+  constexpr std::uint32_t kCompared = 256;
+  for (const Lotus::Integrator integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    scenes.SetIntegrator(integrator);
+    const std::string name = integrator == Lotus::Integrator::Reference
+                                 ? "open scene"
+                                 : "open scene, wavefront";
+    LotusHeadless::RgbImage image;
+    if (auto failure =
+            RenderReferenceImage(scenes, kComparedSampleIndex, kCompared, image);
+        !failure.empty())
+      return name + ": " + failure;
+    const LotusHeadless::Comparison comparison =
+        LotusHeadless::Compare(image, kCompared, brute_force);
+    if (!comparison.failure.empty())
+      return name + ": " + comparison.failure;
+    line.str({});
+    line << std::fixed << std::setprecision(2) << name << ": " << kCompared
+         << " spp against BSDF sampling's 4096, image z "
+         << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+         << comparison.image_z[2] << ", max tile |z| " << comparison.max_tile_z;
+    scenes.Summarize(line.str());
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  LotusHeadless::Reference sampled;
+  if (auto failure =
+          BatchStatistics(scenes, kStatisticsSampleIndex, 16, 16, sampled);
+      !failure.empty())
+    return "open scene, light sampling: " + failure;
+  line.str({});
+  line << std::fixed << std::setprecision(2)
+       << "open scene per-sample variance "
+       << MeanVariance(brute_force) / MeanVariance(sampled) << "x lower";
+  scenes.Summarize(line.str());
+
+  // The same samples through both integrators.
+  constexpr std::uint32_t kSamples = 64;
+  LotusHeadless::RgbImage reference;
+  LotusHeadless::RgbImage wavefront_image;
+  if (auto failure =
+          RenderReferenceImage(scenes, kComparedSampleIndex, kSamples, reference);
+      !failure.empty())
+    return failure;
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  auto wavefront_failure = RenderReferenceImage(
+      scenes, kComparedSampleIndex, kSamples, wavefront_image);
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (!wavefront_failure.empty())
+    return "wavefront integrator: " + wavefront_failure;
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < wavefront_image.values.size(); ++i)
+    differing += std::memcmp(&reference.values[i], &wavefront_image.values[i],
+                     sizeof(float)) != 0;
+  scenes.Summarize("the open scene's same " + std::to_string(kSamples) +
+                   " spp from both integrators: " +
+                   (differing == 0 ? std::string("bit for bit")
+                                   : std::to_string(differing) + " of " +
+                                         std::to_string(wavefront_image.values.size()) +
+                                         " values differ"));
+  world.SetEnvironmentMap(std::nullopt);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  return {};
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -4429,6 +4922,7 @@ int main(int argc, char** argv) {
   std::string report_path = "renderer-report.json";
   bool install_tree = false;
   std::filesystem::path reference_directory = executable_directory / "reference";
+  std::filesystem::path assets_directory = executable_directory / "assets";
   std::filesystem::path images;
   std::filesystem::path write_reference;
   for (int index = 1; index < argc; ++index) {
@@ -4439,13 +4933,16 @@ int main(int argc, char** argv) {
       install_tree = true;
     } else if (argument == "--reference" && index + 1 < argc) {
       reference_directory = argv[++index];
+    } else if (argument == "--assets" && index + 1 < argc) {
+      assets_directory = argv[++index];
     } else if (argument == "--images" && index + 1 < argc) {
       images = argv[++index];
     } else if (argument == "--write-reference" && index + 1 < argc) {
       write_reference = argv[++index];
     } else {
       std::cerr << "usage: lotus-headless [--report <path>] [--install-tree]\n"
-                   "           [--reference <directory>] [--images <directory>]\n"
+                   "           [--reference <directory>] [--assets <directory>]\n"
+                   "           [--images <directory>]\n"
                    "       lotus-headless --write-reference <directory>\n"
                    "       lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                    "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n";
@@ -4713,6 +5210,12 @@ int main(int argc, char** argv) {
         light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
         return failure;
       });
+      run("renderer.path.environment", [&](PathScenes& light_scenes) {
+        std::string failure = EnvironmentFailure(light_scenes, assets_directory);
+        light_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -4727,6 +5230,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.wavefront", "skip", ray_query.detail});
       checks.push_back({"renderer.path.light_sampling", "skip", ray_query.detail});
       checks.push_back({"renderer.path.analytic_lights", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.environment", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -4743,6 +5247,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.wavefront", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.light_sampling", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.environment", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

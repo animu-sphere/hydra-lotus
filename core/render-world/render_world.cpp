@@ -214,6 +214,40 @@ std::vector<Matrix4> PlacementTransforms(const MeshInstance& instance) {
   return placements;
 }
 
+std::optional<std::array<std::array<double, 3>, 3>>
+EnvironmentFrame(const Matrix4& world_from_environment) {
+  if (!Finite(world_from_environment)) {
+    return std::nullopt;
+  }
+  const auto dot = [](const std::array<double, 3>& a,
+                       const std::array<double, 3>& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  };
+  std::array<std::array<double, 3>, 3> axes{};
+  for (std::size_t column = 0; column < 3; ++column) {
+    std::array<double, 3> axis{};
+    for (std::size_t row = 0; row < 3; ++row) {
+      axis[row] = world_from_environment[column * 4 + row];
+    }
+    const double length = std::sqrt(dot(axis, axis));
+    for (std::size_t previous = 0; previous < column; ++previous) {
+      const double along = dot(axis, axes[previous]);
+      for (std::size_t row = 0; row < 3; ++row) {
+        axis[row] -= along * axes[previous][row];
+      }
+    }
+    // A remainder this small is rounding, not an independent direction.
+    const double remainder = std::sqrt(dot(axis, axis));
+    if (!std::isfinite(length) || !(remainder > 1e-6 * length)) {
+      return std::nullopt;
+    }
+    for (std::size_t row = 0; row < 3; ++row) {
+      axes[column][row] = axis[row] / remainder;
+    }
+  }
+  return axes;
+}
+
 void RenderWorld::MakeSceneWritable() {
   if (scene_.use_count() != 1) {
     // Scene records are copied, while immutable geometry buffers are shared.
@@ -318,6 +352,29 @@ void RenderWorld::SetEnvironment(const std::array<float, 3>& radiance) {
   if (scene_->environment != radiance) {
     MakeSceneWritable();
     scene_->environment = radiance;
+  }
+}
+
+void RenderWorld::SetEnvironmentMap(const std::optional<EnvironmentMap>& map) {
+  if (map) {
+    if (map->texture.empty()) {
+      throw std::invalid_argument(
+          "an environment map's texture key must not be empty");
+    }
+    if (!Finite(map->scale) ||
+        !std::all_of(map->scale.begin(), map->scale.end(),
+            [](float value) { return value >= 0.0F; })) {
+      throw std::invalid_argument(
+          "an environment map's scale must be finite and non-negative");
+    }
+    if (!EnvironmentFrame(map->world_from_environment)) {
+      throw std::invalid_argument(
+          "an environment map's frame must be finite with independent axes");
+    }
+  }
+  if (scene_->environment_map != map) {
+    MakeSceneWritable();
+    scene_->environment_map = map;
   }
 }
 

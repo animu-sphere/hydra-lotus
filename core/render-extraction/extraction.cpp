@@ -140,10 +140,22 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
   }
   const std::array<float, 3> environment =
       snapshot.scene ? snapshot.scene->environment : std::array<float, 3>{};
-  if (environment != environment_) {
+  std::optional<SceneEnvironmentMap> environment_map;
+  if (snapshot.scene && snapshot.scene->environment_map) {
+    const EnvironmentMap& map = *snapshot.scene->environment_map;
+    const auto texture = snapshot.scene->textures.find(map.texture);
+    if (texture != snapshot.scene->textures.end() &&
+        map.scale != std::array<float, 3>{}) {
+      environment_map = SceneEnvironmentMap{
+          texture->second.get(), map.scale, map.world_from_environment};
+    }
+  }
+  if (environment != environment_ || environment_map != environment_map_) {
     update.environment_changed = true;
     update.environment = environment;
+    update.environment_map = environment_map;
     environment_ = environment;
+    environment_map_ = environment_map;
   }
   std::vector<Light> lights;
   if (snapshot.scene) {
@@ -171,6 +183,7 @@ void SceneExtraction::Reset() {
   instances_.clear();
   materials_ = {SceneMaterial{}};
   environment_ = {};
+  environment_map_.reset();
   lights_.clear();
   reset_ = true;
 }
