@@ -107,6 +107,28 @@ int main() try {
   Reject([&] {
     world.SetEnvironment({std::numeric_limits<float>::infinity(), 0.0F, 0.0F});
   });
+  Lotus::EnvironmentMap invalid_map;
+  invalid_map.texture = "/sky";
+  invalid_map.scale = {1.0F, -1.0F, 1.0F};
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  invalid_map.scale = {1.0F, std::numeric_limits<float>::quiet_NaN(), 1.0F};
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  invalid_map.scale = {1.0F, 1.0F, 1.0F};
+  invalid_map.texture.clear();
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  invalid_map.texture = "/sky";
+  // Dependent axes and non-finite frames have no orientation.
+  invalid_map.world_from_environment[5] = 0.0F;
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  invalid_map.world_from_environment = Lotus::IdentityMatrix();
+  invalid_map.world_from_environment[4] = 1.0F;
+  invalid_map.world_from_environment[5] = 0.0F;
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  invalid_map.world_from_environment = Lotus::IdentityMatrix();
+  invalid_map.world_from_environment[12] =
+      std::numeric_limits<float>::infinity();
+  Reject([&] { world.SetEnvironmentMap(invalid_map); });
+  world.SetEnvironmentMap(std::nullopt);
   world.BindMaterial("/mesh", "");
   world.RemoveMaterial("/missing");
   world.SetEnvironment({});
@@ -145,6 +167,20 @@ int main() try {
       "removing a material dropped its binding or changed a retained "
       "snapshot");
   world.SetMaterial("/paint", material);
+  // An environment frame's orientation: scale and shear removed, axes
+  // orthonormalized in X, Y, Z order, a mirror kept.
+  {
+    Lotus::Matrix4 frame = Lotus::IdentityMatrix();
+    frame[0] = 3.0F;  // X scaled
+    frame[4] = 2.0F;  // Y sheared towards X
+    frame[5] = 5.0F;
+    frame[10] = -0.5F;  // Z mirrored
+    const auto axes = Lotus::EnvironmentFrame(frame);
+    Check(axes && (*axes)[0] == std::array<double, 3>{1, 0, 0} &&
+        (*axes)[1] == std::array<double, 3>{0, 1, 0} &&
+        (*axes)[2] == std::array<double, 3>{0, 0, -1},
+        "an environment frame was not orthonormalized in X, Y, Z order");
+  }
   world.SetEnvironment({0.25F, 0.5F, 4.0F});
   const auto lit = world.Commit();
   Check(lit.scene->environment == std::array<float, 3>{0.25F, 0.5F, 4.0F} &&

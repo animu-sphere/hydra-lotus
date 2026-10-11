@@ -119,6 +119,60 @@ int main() try {
       !update.Empty(),
       "an environment edit was not planned on its own");
 
+  // An environment image is planned with the environment once its key
+  // names a texture, and with a scale that is not black.
+  Lotus::EnvironmentMap sky;
+  sky.texture = "/t/sky";
+  sky.scale = {2.0F, 1.0F, 0.5F};
+  world.SetEnvironmentMap(sky);
+  Check(extraction.Update(world.Commit()).Empty(),
+      "an image whose key names no texture was planned");
+  Lotus::Texture sky_texels;
+  sky_texels.width = 2;
+  sky_texels.height = 1;
+  sky_texels.texels.assign(8, 255);
+  world.SetTexture("/t/sky", sky_texels);
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && update.environment_map &&
+      update.environment_map->texture != nullptr &&
+      update.environment_map->texture == update.texture_uploads.at(0).get() &&
+      update.environment_map->scale == sky.scale &&
+      update.environment == std::array<float, 3>{1.0F, 0.5F, 0.25F} &&
+      !update.instances_changed && !update.lights_changed,
+      "an environment image was not planned with its texture");
+  sky.world_from_environment[12] = 4.0F;
+  world.SetEnvironmentMap(sky);
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && update.environment_map &&
+      update.environment_map->world_from_environment[12] == 4.0F,
+      "an environment frame edit was not planned");
+  sky.scale = {};
+  world.SetEnvironmentMap(sky);
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && !update.environment_map,
+      "a black environment image was planned");
+  sky.scale = {1.0F, 1.0F, 1.0F};
+  world.SetEnvironmentMap(sky);
+  update = extraction.Update(world.Commit());
+  Check(update.environment_map.has_value(), "a restored image was not planned");
+  world.RemoveTexture("/t/sky");
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && !update.environment_map &&
+      update.texture_releases.size() == 1,
+      "removing the image's texture did not drop the image");
+  world.SetTexture("/t/sky", sky_texels);
+  update = extraction.Update(world.Commit());
+  Check(update.environment_map.has_value(), "a returning texture was not planned");
+  extraction.Reset();
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && update.environment_map.has_value(),
+      "a reset did not plan the environment image again");
+  world.SetEnvironmentMap(std::nullopt);
+  world.RemoveTexture("/t/sky");
+  update = extraction.Update(world.Commit());
+  Check(update.environment_changed && !update.environment_map,
+      "removing the environment image was not planned");
+
   // Lights are planned on their own, in key order, as a whole.
   Lotus::Light sun;
   sun.shape = Lotus::LightShape::Distant;

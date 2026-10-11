@@ -168,10 +168,15 @@ struct GpuSceneStats {
   // Entries in the material table, the default material included.
   std::uint32_t material_count = 0;
   // Triangles of emissive instances, which next event estimation samples:
-  // the light table's entries besides the analytic lights'.
+  // the light table's entries besides the analytic lights' and the
+  // environment image's.
   std::uint32_t emissive_triangles = 0;
   // Analytic lights that emit, which the scene passes sample and intersect.
   std::uint32_t analytic_lights = 0;
+  // Whether the scene passes read an environment image (one that emits),
+  // and whether the light table samples it, which needs instances to light.
+  bool environment_map = false;
+  bool environment_sampled = false;
   std::uint32_t resident_textures = 0;
   // Device bytes of the geometry buffers, of the instances, of the
   // material table in use and of the textures' texels.
@@ -182,6 +187,9 @@ struct GpuSceneStats {
   // Device bytes of the light table, its per-instance offsets and analytic
   // light records included.
   std::uint64_t light_bytes = 0;
+  // Device bytes of the environment image's record and sampling
+  // distribution; its texels count among the textures'.
+  std::uint64_t environment_bytes = 0;
   // Lifetime: geometry residencies added/removed (compatible replacements
   // can retain GPU storage), textures created/destroyed, instance
   // buffer and material table rewrites, upload submissions and bytes copied
@@ -192,9 +200,13 @@ struct GpuSceneStats {
   std::uint64_t texture_releases = 0;
   std::uint64_t instance_writes = 0;
   std::uint64_t material_writes = 0;
-  // Lifetime light-table rewrites: after instance, material table or light
-  // rewrites, never for an environment-only change.
+  // Lifetime light-table rewrites: after instance, material table, light or
+  // environment image changes, never for a change of the constant
+  // environment alone.
   std::uint64_t light_writes = 0;
+  // Lifetime environment image changes, each of which rebuilds its
+  // distribution.
+  std::uint64_t environment_writes = 0;
   std::uint64_t upload_submissions = 0;
   std::uint64_t uploaded_bytes = 0;
 
@@ -359,11 +371,12 @@ enum class LightSampling {
   // images.
   Bsdf,
   // Next event estimation as well: at each scattering event a shadow ray
-  // goes to one point on an emissive triangle or analytic light, chosen in
-  // proportion to its estimated power. Each contribution is weighed against
-  // BSDF sampling's density for the same direction by the power heuristic,
-  // and so is the emission BSDF sampling finds. The constant environment is
-  // left to BSDF sampling alone.
+  // goes to one point on an emissive triangle or analytic light, or to one
+  // direction of the environment image, chosen in proportion to its
+  // estimated power. Each contribution is weighed against BSDF sampling's
+  // density for the same direction by the power heuristic, and so is the
+  // emission BSDF sampling finds. The constant environment is left to BSDF
+  // sampling alone.
   Mis,
 };
 

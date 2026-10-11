@@ -19,7 +19,12 @@ LOTUS-LIGHT-02 adds UsdLux sphere, rect, disk and distant lights as
 analytic lights of the core scene, translated by the Hydra adapter and
 sampled in the same light table, with the radiance a sampled direction
 crosses weighed by MIS ([evidence](../reports/2026-10-11-analytic-lights.md)).
-The remaining Renderer Phase 3 tasks are [below](#renderer-phase-3).
+LOTUS-LIGHT-03 reads dome textures into a latitude-longitude environment
+image and samples it in proportion to its radiance in the same light
+table: under OpenUSD's Stinson Beach image a Lambert floor's per-sample
+variance falls over a thousandfold
+([evidence](../reports/2026-10-11-environment-importance-sampling.md)).
+The remaining Renderer Phase 3 task is [below](#renderer-phase-3).
 
 Renderer Phase 2 is complete
 ([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)).
@@ -65,11 +70,6 @@ in the reference documentation.
 
 In order, within the [phase scope](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis):
 
-- [ ] **LOTUS-LIGHT-03 — Environment importance sampling.** Dome-light
-  textures, and light sampling of the environment in proportion to its
-  radiance, measured against BSDF sampling as the
-  [constant environment](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)
-  was.
 - [ ] **LOTUS-LIGHT-04 — Renderer Phase 3 exit review.** Time to equal
   quality against brute-force BSDF sampling on the fixed workloads and the
   lit scenes, under both integrators; whether the wavefront integrator's

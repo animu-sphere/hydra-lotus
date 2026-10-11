@@ -22,6 +22,20 @@ add_custom_command(TARGET lotus-headless POST_BUILD
   VERBATIM)
 set_property(TARGET lotus-headless APPEND PROPERTY LINK_DEPENDS
   ${LOTUS_REFERENCE_FILES})
+# The third-party assets the checks read, with their licence and manifest.
+set(LOTUS_ASSET_FILES
+  "${CMAKE_SOURCE_DIR}/validation/assets/StinsonBeach.hdr"
+  "${CMAKE_SOURCE_DIR}/validation/assets/LICENSE.OpenUSD.txt"
+  "${CMAKE_SOURCE_DIR}/validation/assets/manifest.json")
+set(LOTUS_ASSET_FILES "${LOTUS_ASSET_FILES}" PARENT_SCOPE)
+add_custom_command(TARGET lotus-headless POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "$<TARGET_FILE_DIR:lotus-headless>/assets"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${LOTUS_ASSET_FILES}
+    "$<TARGET_FILE_DIR:lotus-headless>/assets"
+  VERBATIM)
+set_property(TARGET lotus-headless APPEND PROPERTY LINK_DEPENDS
+  ${LOTUS_ASSET_FILES})
 
 if(LOTUS_WITH_VULKAN)
   add_dependencies(lotus-headless lotus-renderer-shaders)

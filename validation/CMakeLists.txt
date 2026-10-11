@@ -28,6 +28,12 @@ add_executable(lotus-scene-update-test scene-update-test.cpp)
 target_link_libraries(lotus-scene-update-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-renderer-scene-update COMMAND lotus-scene-update-test)
 
+# The committed third-party validation assets match their manifest.
+add_test(NAME lotus-validation-assets
+  COMMAND "${CMAKE_COMMAND}"
+    "-DASSETS=${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/assets-test.cmake")
+
 add_test(NAME lotus-renderer-host-capability-gate
   COMMAND "${CMAKE_COMMAND}"
     "-DGATE=${CMAKE_SOURCE_DIR}/adapters/hydra2/tests/check_gpu_evidence.cmake"

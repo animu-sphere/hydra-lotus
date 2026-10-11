@@ -56,6 +56,41 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   GPU-gated `-gpu` variant) checks their translation and edits and
   compares converged images with the backend's.
 
+- Renderer Phase 3 environment importance sampling.
+  `LotusScene::environment_map` (`RenderWorld::SetEnvironmentMap`,
+  `Lotus::EnvironmentMap`, `Lotus::EnvironmentFrame`,
+  `SceneUpdate::environment_map`) holds a latitude-longitude environment
+  image in the OpenEXR layout: a texture key, an RGB scale and a frame of
+  which only the orientation counts. Its radiance adds to the constant
+  environment's on escaping paths. The GPU scene builds its
+  piecewise-constant distribution (radiance times sin θ, at most
+  2,048 × 1,024 cells) on the host and gives it the light table's last
+  entry, weighed like a distant light; next event estimation samples a
+  row and a cell continuously with the usual four random numbers, and
+  escaping BSDF-sampled directions are weighed by MIS. The constant
+  environment stays with BSDF sampling. `GpuSceneStats` gains
+  `environment_map`, `environment_sampled`, `environment_bytes` and
+  `environment_writes`. The new check `renderer.path.environment` checks
+  the OpenEXR layout by mirror reflections and compares a floor under
+  OpenUSD's Stinson Beach image with an independent irradiance oracle
+  under both estimators and integrators, where light sampling lowers the
+  per-sample variance 3,728-fold
+  ([evidence](docs/reports/2026-10-11-environment-importance-sampling.md)).
+- Textured `domeLight` sprims: `texture:file` (latitude-longitude,
+  `texture:format` `automatic` or `latlong`) decoded with Hio becomes the
+  environment image, scaled by the dome's radiance and oriented by its
+  transform after `domeOffset`, so DomeLight_1's `poleAxis` is honoured.
+  One textured dome lights a scene; others warn. CTest
+  `lotus-renderer-hydra-dome-texture` (and its GPU-gated `-gpu` variant)
+  checks the translation, Hio's decoding against the headless reader and
+  the layout's directions through a mirror.
+- `validation/assets/`: OpenUSD's `StinsonBeach.hdr` (v26.05,
+  `pxr/imaging/hdx/textures/`), its Tomorrow Open Source Technology
+  License 1.0 text and a `manifest.json` of source, revision, size and
+  SHA-256, checked by CTest `lotus-validation-assets`. `lotus-headless`
+  reads them from `assets/` beside it (`--assets` overrides), installs
+  them to `bin/assets/`, and releases require them.
+
 ### Changed
 
 - Any synced analytic light, like any dome, replaces the Hydra adapter's
@@ -63,6 +98,9 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   renders under a black sky.
 - `lotus-renderer-hydra-texture-gpu` sets `lotus:lightSampling` to false:
   its exact radiance is BSDF sampling's, sample for sample.
+- `GpuSceneStats::light_writes` also counts rewrites after an environment
+  image change; a change of the constant environment alone still rewrites
+  nothing.
 
 ## [0.2.0] - 2026-10-11
 

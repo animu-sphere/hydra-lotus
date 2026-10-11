@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // The reference light transport (design policy section 9), as the steps of
 // one camera path: start it, scatter it at each hit, and end it on a miss.
-// BSDF sampling, emissive surfaces, analytic lights, a constant environment
-// and Russian roulette, with emissive surfaces and analytic lights found
-// either by BSDF sampling alone (the brute-force reference estimator) or
-// also by next event estimation, combined by multiple importance sampling
-// (Renderer Phase 3). The reference integrator runs the steps in one loop
+// BSDF sampling, emissive surfaces, analytic lights, a constant environment,
+// an environment image and Russian roulette, with emissive surfaces,
+// analytic lights and the environment image found either by BSDF sampling
+// alone (the brute-force reference estimator) or also by next event
+// estimation, combined by multiple importance sampling (Renderer Phase 3). The reference integrator runs the steps in one loop
 // per pixel; the wavefront integrator runs each as a kernel over a queue of
 // paths. Both consume a path's random numbers in the same order, so a pixel
 // and sample index select the same path in either.
@@ -93,11 +93,12 @@ Spectrum ShadowedLight(SurfaceHit surface, ShadingFrame basis, float3 wo,
   return IsFinite(contribution) ? contribution : SpectrumConstant(0.0);
 }
 
-// Next event estimation at a surface: one emissive triangle or analytic
-// light, chosen from the light table, its light carried through a shadow
-// ray. Draws four random numbers when the table has entries. The constant
-// environment is left to BSDF sampling, whose cosine-weighted directions
-// sample it better than uniform directions would.
+// Next event estimation at a surface: one emissive triangle, analytic light
+// or environment image direction, chosen from the light table, its light
+// carried through a shadow ray. Draws four random numbers when the table has
+// entries. The constant environment is left to BSDF sampling, whose
+// cosine-weighted directions sample it better than uniform directions
+// would.
 Spectrum DirectLight(SurfaceHit surface, ShadingFrame basis, float3 wo,
     inout uint rng) {
   if (path_constants.light_count == 0) {
@@ -198,10 +199,15 @@ public bool ScatterPath(inout PathState path, Hit hit) {
 }
 
 // A continuation ray that leaves the scene ends its path with the
-// environment's radiance and that of the analytic lights it crossed.
+// environment's radiance, the image's weighed against light sampling, and
+// that of the analytic lights it crossed.
 public void MissPath(inout PathState path) {
-  path.radiance = path.radiance +
-      path.throughput * SpectrumFromRgb(path_constants.environment.xyz);
+  Spectrum environment = SpectrumFromRgb(path_constants.environment.xyz);
+  if (path_constants.environment_map != 0) {
+    environment = environment + EnvironmentRadiance(
+        path.ray.Direction, SampleLights(), path.lastPdf);
+  }
+  path.radiance = path.radiance + path.throughput * environment;
   if (path_constants.analytic_count != 0) {
     path.radiance = path.radiance + path.throughput *
         CrossedLights(path.ray.Origin, path.ray.Direction, kFloatMax, true,

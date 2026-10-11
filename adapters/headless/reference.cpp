@@ -127,6 +127,97 @@ std::string ReadPfm(const std::filesystem::path& path, RgbImage& image) {
   return {};
 }
 
+std::string ReadRadianceHdr(
+    const std::filesystem::path& path, Lotus::Texture& texture) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input)
+    return "cannot open " + path.string();
+  std::string line;
+  std::getline(input, line);
+  if (line != "#?RADIANCE" && line != "#?RGBE")
+    return path.string() + " is not a Radiance image";
+  bool rgbe = false;
+  while (std::getline(input, line) && !line.empty()) {
+    rgbe = rgbe || line == "FORMAT=32-bit_rle_rgbe";
+  }
+  if (!rgbe)
+    return path.string() + " is not in the 32-bit_rle_rgbe format";
+  std::getline(input, line);
+  std::istringstream resolution(line);
+  std::string y_axis;
+  std::string x_axis;
+  long long height = 0;
+  long long width = 0;
+  resolution >> y_axis >> height >> x_axis >> width;
+  if (!resolution || y_axis != "-Y" || x_axis != "+X" || width <= 0 ||
+      height <= 0 || width > 65536 || height > 65536)
+    return path.string() + " has an unsupported resolution line: " + line;
+  std::vector<std::uint8_t> row(static_cast<std::size_t>(width) * 4);
+  std::vector<float> texels;
+  texels.reserve(static_cast<std::size_t>(width * height) * 4);
+  const auto byte = [&]() -> int { return input.get(); };
+  for (long long y = 0; y < height; ++y) {
+    const int first[4] = {byte(), byte(), byte(), byte()};
+    if (width >= 8 && width < 32768 && first[0] == 2 && first[1] == 2 &&
+        (first[2] & 0x80) == 0) {
+      // Run-length encoded: each of the four components in turn.
+      if (((first[2] << 8) | first[3]) != width)
+        return path.string() + " has a scanline of the wrong width";
+      for (int component = 0; component < 4; ++component) {
+        long long x = 0;
+        while (x < width) {
+          int count = byte();
+          if (count < 0)
+            return path.string() + " is truncated";
+          if (count > 128) {
+            count -= 128;
+            const int value = byte();
+            if (value < 0 || x + count > width)
+              return path.string() + " has a bad run";
+            for (int i = 0; i < count; ++i)
+              row[static_cast<std::size_t>(x++) * 4 + component] =
+                  static_cast<std::uint8_t>(value);
+          } else {
+            if (count == 0 || x + count > width)
+              return path.string() + " has a bad run";
+            for (int i = 0; i < count; ++i) {
+              const int value = byte();
+              if (value < 0)
+                return path.string() + " is truncated";
+              row[static_cast<std::size_t>(x++) * 4 + component] =
+                  static_cast<std::uint8_t>(value);
+            }
+          }
+        }
+      }
+    } else {
+      // Flat RGBE texels.
+      for (int c = 0; c < 4; ++c)
+        row[c] = static_cast<std::uint8_t>(first[c]);
+      input.read(reinterpret_cast<char*>(row.data()) + 4,
+          static_cast<std::streamsize>(row.size() - 4));
+      if (first[3] < 0 ||
+          input.gcount() != static_cast<std::streamsize>(row.size() - 4))
+        return path.string() + " is truncated";
+    }
+    for (long long x = 0; x < width; ++x) {
+      const std::uint8_t* rgbe_texel = row.data() + x * 4;
+      const float factor = rgbe_texel[3] == 0
+          ? 0.0F
+          : std::ldexp(1.0F, int{rgbe_texel[3]} - (128 + 8));
+      for (int c = 0; c < 3; ++c)
+        texels.push_back(rgbe_texel[c] * factor);
+      texels.push_back(1.0F);
+    }
+  }
+  texture.width = static_cast<std::uint32_t>(width);
+  texture.height = static_cast<std::uint32_t>(height);
+  texture.format = Lotus::TextureFormat::Rgba32Float;
+  texture.texels.resize(texels.size() * sizeof(float));
+  std::memcpy(texture.texels.data(), texels.data(), texture.texels.size());
+  return {};
+}
+
 void SetCornellBox(Lotus::RenderWorld& world) {
   // The bootstrap camera: 3 units in front of the box's centre, looking down
   // -Z with a 45 degree vertical field of view. The open front at z = 1 is

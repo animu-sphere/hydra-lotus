@@ -134,8 +134,30 @@ means the default `Material`, so a binding may name a material before it
 exists and outlives the material's removal. `SetMesh` keeps a mesh's binding
 when it replaces the geometry or the instance. `LotusScene::environment` is
 a constant environment radiance, finite and non-negative, black by default,
-changed with `SetEnvironment`. Out-of-range values, an empty material or
-texture key, a texture input without a key, with a channel out of range or
+changed with `SetEnvironment`.
+
+`LotusScene::environment_map`, set or removed with `SetEnvironmentMap`, is an
+optional environment image (`EnvironmentMap`) whose radiance adds to the
+constant's in every direction a path escapes in:
+
+- `texture` names a texture in `LotusScene::textures`, which may come
+  later; a key with no texture contributes nothing. The image follows the
+  OpenEXR latitude-longitude layout in its frame: column 0 is longitude +π
+  and the last column −π, the top row latitude +π/2 (+Y) and the bottom
+  row −π/2 (−Y); latitude 0 is +Z at longitude 0 and +X at longitude π/2.
+  It is filtered bilinearly, repeating across longitudes and clamped at the
+  poles; negative texels count as 0.
+- `scale` multiplies the texels' RGB: UsdLux's `color * intensity *
+  2^exposure`, finite and non-negative.
+- `world_from_environment` orients it. Only its orientation counts:
+  `EnvironmentFrame` orthonormalizes the linear part's X, Y and Z columns in
+  that order (Gram–Schmidt), so a scale or shear does not distort the image
+  and a mirroring transform mirrors it.
+
+Out-of-range values, an empty material or
+texture key, an environment image with an empty key, a negative or
+non-finite scale, or a frame that is not finite or whose axes are not
+independent, a texture input without a key, with a channel out of range or
 with a non-finite scale, bias or fallback, a texture whose texels do not
 match its size and format or are not finite, and a binding for a missing
 mesh throw `std::invalid_argument` without changing the world.
@@ -200,9 +222,13 @@ planned and returns a `SceneUpdate`:
   names (null without one). A mesh whose binding names no material gets
   slot 0. A GPU scene, and the extraction after `Reset`, start with the
   default alone, so a scene without materials plans no table;
-- `environment`: when `environment_changed`, the scene's environment
-  radiance. A GPU scene, and the extraction after `Reset`, start from
-  black, so only a different environment is planned;
+- `environment` and `environment_map`: when `environment_changed`, the
+  scene's environment radiance and its image as a `SceneEnvironmentMap`:
+  the resident texture its key names, its scale and its frame. The image
+  is absent when the scene has none, when its key names no texture and
+  when its scale is black. A GPU scene, and the extraction after `Reset`,
+  start from black without an image, so only a different environment is
+  planned;
 - `lights`: when `lights_changed`, every analytic light, in key order. A
   GPU scene, and the extraction after `Reset`, start without lights.
 
@@ -290,8 +316,20 @@ empty plan records no GPU work.
   and transforms, the material table and the lights whenever the instance
   records, the material table or the lights are rewritten
   ([light sampling](#light-sampling)).
-- The environment is host state: a plan that changes only the environment
-  records no GPU work, and the scene pass reads it with each frame.
+- An environment image with a lit texture gets one device-local buffer: an
+  80-byte record (the rows of the rotation from world space to the image's
+  frame, the scale, the texture slot, the sampler that repeats across
+  longitudes and clamps at the poles, and the distribution's columns and
+  rows), then its sampling distribution as floats over a grid of at most
+  2,048 × 1,024 cells, each the mean of the texels whose centres it holds:
+  each cell's density per unit image area, the rows' cumulative
+  distribution, then each row's over its cells
+  ([light sampling](#light-sampling)). It is rebuilt on the host, and the
+  light table with it, whenever the plan changes the image, its scale or
+  its frame; an image whose texels are all black gets none.
+- The constant environment is host state: a plan that changes only the
+  constant records no GPU work, and the scene pass reads it with each
+  frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
   in one submission per plan, followed by a barrier that makes them
   visible to later shader reads and transfers. Texture copies go to the
@@ -300,7 +338,10 @@ empty plan records no GPU work.
 
 `GpuSceneStats` reports resident geometry and textures, instances, material
 table entries, the light table's emissive triangles and analytic lights,
-its bytes and lifetime upload counts, light-table rewrites included. `ReadBackScene`
+whether the scene passes read an environment image (`environment_map`) and
+whether the light table samples it (`environment_sampled`), its bytes and
+lifetime upload counts, light-table and environment-image rewrites
+included. `ReadBackScene`
 copies the device buffers and images back for validation: the corner
 normals and texture-coordinate sets (`GpuGeometryContents`), each
 instance's set, the material table with each lookup's texture slot
@@ -596,7 +637,9 @@ of compute kernels. Both call the same transport steps
   the GGX density cancels analytically in the weight for mirror precision.
   [Measured verification](../reports/2026-10-08-dielectric-specular.md).
 - **Environment.** A scattered ray that escapes adds the throughput times
-  the environment radiance. Camera rays that miss do not see it.
+  the environment radiance: the constant's plus the environment image's
+  in its direction, weighed by MIS under light sampling
+  ([below](#light-sampling)). Camera rays that miss do not see it.
 - **Termination.** A path ends after `PathTracingSettings::max_bounces`
   scattering events (64 by default; 0 keeps only the emission the camera
   sees), when a sampled direction is not above the shading normal's
@@ -827,7 +870,10 @@ order. Changing it restarts the accumulation.
   computed in double precision, times its material's emission estimate:
   the mean of its RGB emission, or for a lookup the bound
   `max(scale, 0) + max(bias, 0)` for texels in [0, 1], or the fallback
-  when the key names no texture. Each [analytic light](#analytic-lights)
+  when the key names no texture. An environment image gets the last
+  entry, weighed as a distant light is by the flux through a disk of the
+  scene's radius over 2π: π² R² times the mean of its distribution's cell
+  values. Each [analytic light](#analytic-lights)
   that emits gets an entry too, weighed by its estimated power over 2π,
   the scale of a triangle's weight (a triangle emits from both sides): half
   its mean normalized radiance times its area, or for a distant light half
@@ -853,21 +899,32 @@ order. Changing it restarts the accumulation.
   uniformly by area, a disk by Shirley and Chiu's concentric mapping; a
   distant light uniformly over its cone, and a parallel light in its one
   direction with its selection probability as its density. A rect or disk
-  seen from behind, or a sphere from inside, contributes nothing. A table
-  without entries draws no random numbers.
+  seen from behind, or a sphere from inside, contributes nothing. The
+  environment image's two numbers choose a row by the rows' cumulative
+  distribution and a cell of the row by its own, each continuously, so the
+  direction is uniform within its cell (Pharr et al., *Physically Based
+  Rendering*, 3rd edition, sections 13.6.7 and 14.2.4). A cell's value is
+  the mean of its scaled RGB radiance times sin θ at its row's centre, so
+  directions are chosen in proportion to radiance per solid angle; the
+  density per solid angle is the entry's probability times the cell's
+  density per unit image area over 2π² sin θ. A table without entries
+  draws no random numbers.
 - **Shadow rays** run from the offset hit position to the point, offset
   off an emissive triangle towards the receiver; they end at an analytic
   light's point, and are unbounded towards a distant light. The first opaque surface
   blocks them; a partially covering surface multiplies the light they
   carry by `1 - coverage`, drawing no random numbers, whose expectation is
-  what traced rays' coverage tests produce.
+  what traced rays' coverage tests produce. Shadow rays towards the
+  environment image are unbounded, as towards a distant light.
 - **MIS.** A light sample is weighed by the power heuristic of its density
   against `BsdfPdf` for the same direction, and emission a sampled
   direction finds by the power heuristic of that direction's density
   against the light table's for the hit point, and so is an analytic
   light's radiance that a sampled direction crosses, against its
   selection probability times its density for the direction; the camera's
-  view of an emitter is unweighted, and so is parallel light. The constant environment is not sampled:
+  view of an emitter is unweighted, and so is parallel light. An escaping
+  sampled direction's environment-image radiance is weighed against the
+  image's selection probability times its density for the direction. The constant environment is not sampled:
   BSDF sampling's cosine-weighted directions sample it better than uniform
   directions do, and escaping rays add it unweighted
   ([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
@@ -888,7 +945,7 @@ variance. It records each estimator's per-sample variance, and in the
 Cornell box its GPU time per sample; light sampling must at least halve the
 Cornell box's variance and must not raise the sky-lit scene's. It also
 checks the light-table sizes, that switching the estimator restarts the
-accumulation and that an environment edit leaves the table alone
+accumulation and that a constant environment edit leaves the table alone
 ([evidence](../reports/2026-10-11-emissive-nee-mis.md)).
 
 `renderer.path.analytic_lights` lights an uncoated Lambert floor under a
@@ -914,6 +971,30 @@ sampled direction hits, it must match the oracle without the distant
 lights under either estimator and integrator. A light edit must restart the accumulation and rewrite only the
 light table, and black and zero-size lights must stay off the GPU
 ([evidence](../reports/2026-10-11-analytic-lights.md)).
+
+`renderer.path.environment` first lights a mirror floor, which reflects
+OrthographicCamera's rays straight up, with an 8×4 image whose regions
+the OpenEXR layout puts at +Z, ±X, −Z and the poles, under six frames that
+each turn a different region up; under BSDF sampling each sample must be
+that region's scaled colour exactly, and with a constant sky their sum.
+It then lights the Lambert floor with OpenUSD's Stinson Beach image
+(`validation/assets/StinsonBeach.hdr`), its pole tilted to the floor's
+normal, turned and scaled non-uniformly, plus a constant sky, and compares
+1024-spp images by the DES-Q5 metric with an independent double-precision
+oracle: the floor's albedo over π times the irradiance by the midpoint
+rule on 4×4 points per texel of the bilinear image. Light sampling must
+match it through both integrators. The sun holds over half the image's
+power in ten texels, which BSDF sampling hits too rarely for the metric's
+normal approximation, so both estimators are compared on a copy whose
+texels are limited to 8, and light sampling must lower both images'
+per-sample variance; each estimator's variance and GPU time per sample
+are recorded. An open scene with a glossy metal panel and a 25% coverage
+layer under the copy is compared at 256 spp with BSDF sampling's
+4096-spp estimate through both integrators, which must render its 64 spp
+the same. An image edit must restart the accumulation and rewrite only
+the image's distribution and the light table, a constant edit neither,
+and an image whose key names no texture must stay off the GPU
+([evidence](../reports/2026-10-11-environment-importance-sampling.md)).
 
 ### Fixed benchmarks
 
@@ -1061,7 +1142,8 @@ visibility and instancer edits, like camera, framing,
 restart the
 accumulation. Other devices
 retain the bootstrap path and converge after one pass. Dome lights feed the
-constant environment and the other UsdLux lights the analytic lights as
+constant environment or the environment image and the other UsdLux
+lights the analytic lights as
 [below](#lights); a lighting change restarts the accumulation. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `integrator` (`reference` or
 `wavefront`), `wavefront_rounds` (0 unless the pass added a wavefront
@@ -1084,12 +1166,29 @@ DistantLight) and 0 from
 Negative intensity and colour channels are clamped to zero; non-finite
 inputs or a radiance outside float range warn.
 
-Each visible dome contributes constant linear RGB radiance; a hidden,
-zero-intensity or invalid one contributes black. Transforms have no effect
-on a uniform environment. Contributions are summed in path order with
-double precision and stored in the existing `LotusScene::environment`. A
-sum above float range saturates to the largest finite float per channel.
-This numeric guard is not a useful rendering range.
+An untextured visible dome contributes constant linear RGB radiance; a
+hidden, zero-intensity or invalid one contributes black. Transforms have
+no effect on a uniform environment. Contributions are summed in path
+order with double precision and stored in the existing
+`LotusScene::environment`. A sum above float range saturates to the
+largest finite float per channel. This numeric guard is not a useful
+rendering range.
+
+A dome with `texture:file` becomes the scene's
+[environment image](#materials-and-environment) instead: its radiance is
+the image's scale, and its frame is its world transform after its
+`domeOffset` (DomeLight_1's alignment of its pole axis, which UsdImaging
+supplies), applied as Storm applies it. The image is decoded with Hio as
+material textures are, under a key of the dome's own, when its file
+changes; colour, intensity, exposure, transform and visibility edits
+keep the decoded image, and a hidden dome keeps it resident while it
+contributes nothing. `texture:format` `automatic` and `latlong` are read;
+a dome whose format is `angular`, `mirroredBall` or
+`cubeMapVerticalCross`, whose file cannot be decoded, or whose transform
+has no orientation warns and contributes its radiance as an untextured
+dome. The scene holds one image: the first textured dome in path order
+that emits is it, and any further one that emits is left out with a
+warning.
 
 Each visible sphere, rect, disk or distant light becomes an
 [analytic light](#analytic-lights) keyed by its path: its shape, its world
@@ -1113,10 +1212,11 @@ nor rebuilds acceleration structures. Environment radiance continues to
 light secondary misses only; camera misses keep their AOV clear
 background, and camera rays do not see analytic lights.
 
-This is constant dome lighting only: environment textures, colour
-temperature, diffuse/specular contribution controls, light/shadow linking,
-light filters and instanced lights are not evaluated. Light sampling does
-not sample the dome, and there is no environment importance sampling
+Colour temperature, diffuse/specular contribution controls,
+`texture:format` other than latitude-longitude, light/shadow linking,
+light filters, portals and instanced lights are not evaluated. Light
+sampling samples a textured dome's image in proportion to its radiance;
+an untextured dome is left to BSDF sampling
 ([light sampling](#light-sampling)). CTest `lotus-renderer-hydra-light`
 checks composed dome edits and snapshot lifetimes; its GPU-gated `-gpu`
 variant checks analytic mirror radiance, accumulation restarts and
@@ -1128,7 +1228,17 @@ fallback environment; its GPU-gated `-gpu` variant requires the backend's
 converged images under both estimators bit for bit, their statistical
 agreement, and that a light edit restarts the accumulation and rewrites
 only the light table
-([evidence](../reports/2026-10-11-analytic-lights.md#hydra)).
+([evidence](../reports/2026-10-11-analytic-lights.md#hydra)). CTest
+`lotus-renderer-hydra-dome-texture` reads Stinson Beach through a dome and
+requires Hio's texels to equal the headless checks' decoding of the
+committed image bit for bit, the dome's radiance as the image's scale, its
+transform and DomeLight_1's `poleAxis` as its frame, edits that keep the
+decoded image, a hidden dome, the first of two textured domes beside an
+untextured one, and unreadable formats and files lighting uniformly; its
+GPU-gated `-gpu` variant reflects a synthetic image's regions off a
+mirror under turned domes and DomeLight_1 pole axes, exactly, without
+geometry or acceleration-structure work
+([evidence](../reports/2026-10-11-environment-importance-sampling.md#hydra)).
 
 ### Deterministic mode through Hydra
 
@@ -1188,8 +1298,9 @@ estimation with multiple importance sampling, false leaves
 item of its Hydra Settings menu, checked by default; a value that cannot
 be cast to `bool` selects light sampling. A change restarts the
 accumulation. `UsdPreviewSurface` emission (`emissiveColor`) and the
-sphere, rect, disk and distant lights are what the light table samples;
-the dome is left to BSDF sampling.
+sphere, rect, disk and distant lights and a textured dome's image are
+what the light table samples; an untextured dome is left to BSDF
+sampling.
 
 CTest `lotus-renderer-hydra-light-sampling` (GPU-gated) converges a
 UsdImaging stage lit by an emissive panel at 16 spp under each estimator

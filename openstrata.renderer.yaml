@@ -43,6 +43,7 @@ validation:
     - renderer.path.wavefront
     - renderer.path.light_sampling
     - renderer.path.analytic_lights
+    - renderer.path.environment
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

@@ -103,9 +103,15 @@ struct PathConstants {
   // The GPU scene's analytic light records.
   std::uint32_t analytic_count;
   std::uint64_t analytic_lights;
+  // The GPU scene's environment buffer, or 0 without an image, and the
+  // probability with which the light table chooses the image.
+  std::uint64_t environment_map;
+  float environment_selection;
+  std::uint32_t reserved;
 };
-static_assert(sizeof(PathConstants) == 144 &&
+static_assert(sizeof(PathConstants) == 160 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
+              offsetof(PathConstants, environment_map) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
               offsetof(PathConstants, materials) == 56 &&
               offsetof(PathConstants, width) == 80 &&
@@ -953,6 +959,8 @@ public:
     constants.light_count = scene_.LightCount();
     constants.analytic_lights = scene_.AnalyticLightAddress();
     constants.analytic_count = scene_.AnalyticLightCount();
+    constants.environment_map = scene_.EnvironmentAddress();
+    constants.environment_selection = scene_.EnvironmentSelection();
     constants.sample_index = settings.sample_index + accumulated_samples_;
     constants.accumulated = accumulated_samples_;
     constants.add_sample = add_sample ? 1U : 0U;

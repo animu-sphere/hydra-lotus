@@ -1,0 +1,24 @@
+{
+  "description": "Third-party assets the validation checks read. Each file is an unmodified copy of its upstream source; its licence travels with it.",
+  "assets": [
+    {
+      "path": "StinsonBeach.hdr",
+      "purpose": "Latitude-longitude environment image for the renderer.path.environment check and the Hydra dome-texture tests",
+      "format": "Radiance RGBE (32-bit_rle_rgbe), 1024 x 512, -Y 512 +X 1024",
+      "bytes": 1463672,
+      "sha256": "4897697c757edc524dc9b7bcc692e8e05a7f02dbede3e30d2291dc0831dece17",
+      "upstream": {
+        "project": "OpenUSD",
+        "repository": "https://github.com/PixarAnimationStudios/OpenUSD",
+        "path": "pxr/imaging/hdx/textures/StinsonBeach.hdr",
+        "tag": "v26.05",
+        "commit": "2095fafafd033fa23386d7ec6d58c7cc33974518"
+      },
+      "license": {
+        "name": "Tomorrow Open Source Technology License 1.0",
+        "file": "LICENSE.OpenUSD.txt",
+        "upstream_path": "LICENSE.txt"
+      }
+    }
+  ]
+}

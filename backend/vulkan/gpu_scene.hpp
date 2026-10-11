@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -102,6 +103,9 @@ inline constexpr std::uint32_t kNoLights = 0xFFFFFFFFU;
 // the other bits index the analytic light records, which follow the
 // entries, 16-byte aligned. The emissive triangles' entries come first.
 inline constexpr std::uint32_t kAnalyticLight = 0x80000000U;
+// The `instance` of the light table's last entry when it is the environment
+// image's.
+inline constexpr std::uint32_t kEnvironmentLight = 0xFFFFFFFFU;
 
 // GpuAnalyticLightRecord::shape. A distant light of angle 0 is a parallel
 // light.
@@ -134,6 +138,32 @@ struct GpuAnalyticLightRecord {
   std::uint32_t reserved[3];
 };
 static_assert(sizeof(GpuAnalyticLightRecord) == 96);
+
+// The environment image as the scene passes look it up and sample it. Its
+// mirror is `EnvironmentRecord` in shaders/common/scene.slang. The record
+// starts the environment buffer; its sampling distribution follows, as
+// floats over `columns` x `rows` cells of the image, rows from the top: each
+// cell's density per unit image area, then the rows' cumulative
+// distribution (rows + 1 entries from 0 to 1), then each row's cumulative
+// distribution over its cells (columns + 1 entries each).
+struct GpuEnvironmentRecord {
+  // The rows of the rotation from world space to the image's frame: its
+  // unit axes; w unused.
+  float environment_from_world[3][4];
+  // The texels' RGB scale; w unused.
+  float scale[4];
+  // The image's texture table slot and the sampler that repeats it across
+  // longitudes and clamps it at the poles.
+  std::uint32_t texture;
+  std::uint32_t sampler;
+  std::uint32_t columns;
+  std::uint32_t rows;
+};
+static_assert(sizeof(GpuEnvironmentRecord) == 80);
+// The most cells of an environment image's distribution along each axis.
+// A larger image's texels are averaged into them.
+inline constexpr std::uint32_t kMaxEnvironmentColumns = 2048;
+inline constexpr std::uint32_t kMaxEnvironmentRows = 1024;
 
 // The texture table: the size of the scene passes' sampled-image array, and
 // so the most textures a GPU scene holds.
@@ -235,6 +265,16 @@ public:
   [[nodiscard]] const std::array<float, 3>& Environment() const {
     return environment_;
   }
+  // The environment buffer's address, zero without an image that emits or
+  // without acceleration structures.
+  [[nodiscard]] VkDeviceAddress EnvironmentAddress() const {
+    return environment_lit_ ? environment_buffer_.address : 0;
+  }
+  // The probability with which the light table chooses the environment
+  // image, 0 without its entry.
+  [[nodiscard]] float EnvironmentSelection() const {
+    return environment_selection_;
+  }
 
 private:
   struct AccelerationStructure {
@@ -335,6 +375,15 @@ private:
   std::uint32_t analytic_count_ = 0;
   std::uint32_t emissive_triangles_ = 0;
   std::array<float, 3> environment_{};
+  // The last plan's environment image; its buffer, which holds its record
+  // and distribution when `environment_lit_`; and the mean of the
+  // distribution's unnormalized cell values, which the light table weighs
+  // it by.
+  std::optional<SceneEnvironmentMap> environment_map_;
+  DeviceBuffer environment_buffer_;
+  bool environment_lit_ = false;
+  double environment_mean_ = 0.0;
+  float environment_selection_ = 0.0F;
   DeviceBuffer staging_;
   DeviceBuffer readback_;
 

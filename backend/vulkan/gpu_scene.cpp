@@ -291,16 +291,30 @@ std::optional<GpuAnalyticLightRecord> MakeAnalyticLight(const Light& light,
 // proportion to its weight: a triangle's world-space area times its
 // material's emission estimate, an analytic light's as MakeAnalyticLight
 // estimates it. The analytic records follow, in the lights' order.
+// With an environment image of positive weight, its entry comes last, and
+// `environment_pdf` is the entry's probability.
 struct LightTable {
   std::vector<std::uint32_t> offsets;
   std::vector<GpuLightRecord> lights;
   std::vector<GpuAnalyticLightRecord> analytic;
   std::uint32_t emissive_triangles = 0;
+  float environment_pdf = 0.0F;
 };
+
+// An environment image's light-table weight, its estimated power over 2 pi
+// as a distant light's is: the flux of its radiance from every direction
+// through a disk of the scene's radius, pi R^2 times its integral over the
+// sphere, 2 pi^2 times the mean of its distribution's cell values (mean
+// radiance times sin(theta)), over 2 pi.
+double EnvironmentWeight(double cell_mean, double scene_radius) {
+  constexpr double kPi = 3.14159265358979323846;
+  const double weight = kPi * kPi * scene_radius * scene_radius * cell_mean;
+  return std::isfinite(weight) ? weight : std::numeric_limits<double>::max();
+}
 
 LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
     const std::vector<SceneMaterial>& materials,
-    const std::vector<Light>& lights) {
+    const std::vector<Light>& lights, double environment_mean) {
   LightTable table;
   table.offsets.assign(instances.size(), kNoLights);
   std::vector<double> weights;
@@ -318,8 +332,10 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
     }
   }
   table.emissive_triangles = static_cast<std::uint32_t>(table.lights.size());
-  const bool distant = std::any_of(lights.begin(), lights.end(),
-      [](const Light& light) { return light.shape == LightShape::Distant; });
+  const bool distant = environment_mean > 0.0 ||
+      std::any_of(lights.begin(), lights.end(), [](const Light& light) {
+        return light.shape == LightShape::Distant;
+      });
   const double scene_radius = distant ? SceneRadius(instances) : 0.0;
   std::vector<std::uint32_t> analytic_entries;
   for (const Light& light : lights) {
@@ -334,6 +350,13 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
           kAnalyticLight | static_cast<std::uint32_t>(table.analytic.size())});
     }
     table.analytic.push_back(*record);
+  }
+  const double environment_weight =
+      environment_mean > 0.0 ? EnvironmentWeight(environment_mean, scene_radius)
+                             : 0.0;
+  if (environment_weight > 0.0) {
+    weights.push_back(environment_weight);
+    table.lights.push_back({0.0F, 1.0F, 0, kEnvironmentLight});
   }
   double total = 0.0;
   for (const double weight : weights)
@@ -382,7 +405,118 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
   for (const std::uint32_t entry : analytic_entries)
     table.analytic[table.lights[entry].instance & ~kAnalyticLight].radiance[3] =
         table.lights[entry].pdf;
+  if (environment_weight > 0.0)
+    table.environment_pdf = table.lights.back().pdf;
   return table;
+}
+
+// A texel's linear RGB: sRGB-encoded texels decoded, as the sampler does.
+std::array<double, 3> TexelRgb(const Texture& texture, std::size_t index) {
+  std::array<double, 3> rgb{};
+  if (texture.format == TextureFormat::Rgba32Float) {
+    float values[3];
+    std::memcpy(values, texture.texels.data() + index * 16, sizeof(values));
+    for (std::size_t c = 0; c < 3; ++c)
+      rgb[c] = values[c];
+    return rgb;
+  }
+  for (std::size_t c = 0; c < 3; ++c) {
+    const double value = texture.texels[index * 4 + c] / 255.0;
+    rgb[c] = texture.format == TextureFormat::Rgba8Srgb
+                 ? (value <= 0.04045 ? value / 12.92
+                                     : std::pow((value + 0.055) / 1.055, 2.4))
+                 : value;
+  }
+  return rgb;
+}
+
+// An environment image's sampling distribution: piecewise constant over a
+// grid of cells, each the mean of the texels whose centres it holds, at
+// most kMaxEnvironmentColumns x kMaxEnvironmentRows. A cell's value is the
+// mean of its scaled RGB radiance times sin(theta) at its row's centre, so
+// that sampling by image area is in proportion to radiance by solid angle
+// (Pharr et al., Physically Based Rendering, 3rd edition, section 14.2.4).
+// The density, the rows' cumulative distribution and each row's are what
+// GpuEnvironmentRecord's buffer holds; `mean` is the mean cell value, 0
+// when the image is black.
+struct EnvironmentDistribution {
+  std::uint32_t columns = 0;
+  std::uint32_t rows = 0;
+  std::vector<float> density;
+  std::vector<float> marginal;
+  std::vector<float> conditional;
+  double mean = 0.0;
+};
+
+EnvironmentDistribution BuildEnvironmentDistribution(const Texture& texture,
+    const std::array<float, 3>& scale) {
+  constexpr double kPi = 3.14159265358979323846;
+  EnvironmentDistribution distribution;
+  const std::uint32_t columns = std::min(texture.width, kMaxEnvironmentColumns);
+  const std::uint32_t rows = std::min(texture.height, kMaxEnvironmentRows);
+  distribution.columns = columns;
+  distribution.rows = rows;
+  const std::size_t cells = std::size_t{columns} * rows;
+  std::vector<double> sums(cells);
+  std::vector<std::uint32_t> counts(cells);
+  for (std::uint32_t y = 0; y < texture.height; ++y) {
+    const std::size_t row = std::uint64_t{y} * rows / texture.height;
+    for (std::uint32_t x = 0; x < texture.width; ++x) {
+      const std::size_t column = std::uint64_t{x} * columns / texture.width;
+      const auto rgb = TexelRgb(texture, std::size_t{y} * texture.width + x);
+      double radiance = 0.0;
+      for (std::size_t c = 0; c < 3; ++c)
+        radiance += std::max(rgb[c], 0.0) * scale[c];
+      sums[row * columns + column] += radiance / 3.0;
+      ++counts[row * columns + column];
+    }
+  }
+  std::vector<double> values(cells);
+  std::vector<double> row_sums(rows);
+  double total = 0.0;
+  for (std::uint32_t row = 0; row < rows; ++row) {
+    const double sin_theta = std::sin(kPi * (row + 0.5) / rows);
+    for (std::uint32_t column = 0; column < columns; ++column) {
+      const std::size_t cell = std::size_t{row} * columns + column;
+      values[cell] = sums[cell] / counts[cell] * sin_theta;
+      row_sums[row] += values[cell];
+    }
+    total += row_sums[row];
+  }
+  const double mean = total / static_cast<double>(cells);
+  distribution.density.assign(cells, 0.0F);
+  distribution.marginal.assign(rows + 1, 0.0F);
+  distribution.conditional.assign(std::size_t{rows} * (columns + 1), 0.0F);
+  if (!(mean > 0.0) || !std::isfinite(mean))
+    return distribution;
+  distribution.mean = mean;
+  for (std::size_t cell = 0; cell < cells; ++cell)
+    distribution.density[cell] = static_cast<float>(values[cell] / mean);
+  double cumulative = 0.0;
+  for (std::uint32_t row = 0; row < rows; ++row) {
+    cumulative += row_sums[row];
+    distribution.marginal[row + 1] = static_cast<float>(cumulative / total);
+    float* cdf =
+        distribution.conditional.data() + std::size_t{row} * (columns + 1);
+    double along = 0.0;
+    for (std::uint32_t column = 0; column < columns; ++column) {
+      along += values[std::size_t{row} * columns + column];
+      // A black row is never chosen; uniform keeps its distribution valid.
+      cdf[column + 1] = row_sums[row] > 0.0
+                            ? static_cast<float>(along / row_sums[row])
+                            : static_cast<float>(column + 1) / columns;
+    }
+    cdf[columns] = 1.0F;
+  }
+  distribution.marginal[rows] = 1.0F;
+  return distribution;
+}
+
+VkDeviceSize EnvironmentBytes(const EnvironmentDistribution& distribution) {
+  return sizeof(GpuEnvironmentRecord) +
+         (distribution.density.size() + distribution.marginal.size() +
+             distribution.conditional.size()) *
+             sizeof(float);
 }
 
 VkFormat TextureVkFormat(TextureFormat format) {
@@ -713,6 +847,11 @@ void GpuScene::Destroy() {
   DestroyBuffer(memory_, device_, instances_);
   DestroyBuffer(memory_, device_, materials_);
   DestroyBuffer(memory_, device_, lights_);
+  DestroyBuffer(memory_, device_, environment_buffer_);
+  environment_map_.reset();
+  environment_lit_ = false;
+  environment_mean_ = 0.0;
+  environment_selection_ = 0.0F;
   scene_instances_.clear();
   scene_lights_.clear();
   light_count_ = 0;
@@ -921,6 +1060,23 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
     detail = "the scene update's environment radiance is negative or not "
              "finite";
     return false;
+  }
+  if (update.environment_map) {
+    const SceneEnvironmentMap& map = *update.environment_map;
+    if (!update.environment_changed) {
+      detail = "the scene update has an environment image without changing "
+               "the environment";
+      return false;
+    }
+    if (map.texture == nullptr || !texture_resident(map.texture)) {
+      detail = "the environment image's texture is not resident";
+      return false;
+    }
+    if (!ValidRadiance(map.scale) ||
+        !EnvironmentFrame(map.world_from_environment)) {
+      detail = "the environment image's scale or frame is out of range";
+      return false;
+    }
   }
   if (!update.lights_changed && !update.lights.empty()) {
     detail = "the scene update lists lights without replacing them";
@@ -1154,9 +1310,14 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     return false;
   }
   stats_.source_revision = update.source_revision;
+  // The image's buffer and the light table follow a change of the image,
+  // not of the constant radiance.
+  const bool map_changed =
+      update.environment_changed && update.environment_map != environment_map_;
   if (update.environment_changed) {
     // Host state: the scene pass reads it with each frame's constants.
     environment_ = update.environment;
+    environment_map_ = update.environment_map;
   }
   if (update.materials_changed) {
     material_table_ = update.materials;
@@ -1176,7 +1337,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   if (update.geometry_releases.empty() && update.geometry_uploads.empty() &&
       update.texture_releases.empty() && update.texture_uploads.empty() &&
       !update.instances_changed && !write_materials &&
-      !update.lights_changed) {
+      !update.lights_changed && !map_changed) {
     return true;
   }
   // Retain compatible geometry in its slot before applying ordinary releases.
@@ -1247,17 +1408,29 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       acceleration_ && update.instances_changed && !tlas_current;
   const VkDeviceSize tlas_input_bytes =
       build_tlas ? update.instances.size() * kTlasInstanceBytes : 0;
+  // The environment image's distribution, built on the host from its texels.
+  EnvironmentDistribution environment;
+  VkDeviceSize environment_bytes = 0;
+  if (map_changed && environment_map_) {
+    environment = BuildEnvironmentDistribution(
+        *environment_map_->texture, environment_map_->scale);
+    if (environment.mean > 0.0)
+      environment_bytes = EnvironmentBytes(environment);
+  }
+  if (map_changed)
+    environment_mean_ = environment.mean;
   // Emission depends on the instances' geometry, transforms and materials,
-  // and on the lights; distant lights' weights on the scene's extent.
-  const bool write_lights =
-      update.instances_changed || write_materials || update.lights_changed;
+  // and on the lights and the environment image; distant lights' and the
+  // image's weights on the scene's extent.
+  const bool write_lights = update.instances_changed || write_materials ||
+                            update.lights_changed || map_changed;
   LightTable light_table;
   VkDeviceSize light_entries_offset = 0;
   VkDeviceSize analytic_offset = 0;
   VkDeviceSize light_bytes = 0;
   if (write_lights) {
-    light_table =
-        BuildLightTable(scene_instances_, material_table_, scene_lights_);
+    light_table = BuildLightTable(
+        scene_instances_, material_table_, scene_lights_, environment_mean_);
     light_entries_offset =
         AlignUp(light_table.offsets.size() * sizeof(std::uint32_t), kLightBytes);
     analytic_offset =
@@ -1266,7 +1439,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
                   light_table.analytic.size() * kAnalyticLightBytes;
   }
   staging_bytes += instance_bytes + material_bytes + tlas_input_bytes +
-                   light_bytes;
+                   light_bytes + environment_bytes;
   if (staging_bytes != 0 && !EnsureStaging(staging_bytes, detail)) {
     return false;
   }
@@ -1594,8 +1767,58 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     analytic_offset_ = analytic_offset;
     analytic_count_ = static_cast<std::uint32_t>(light_table.analytic.size());
     emissive_triangles_ = light_table.emissive_triangles;
+    environment_selection_ = light_table.environment_pdf;
     stats_.light_bytes = light_bytes;
     ++stats_.light_writes;
+  }
+
+  if (map_changed) {
+    environment_lit_ = environment_bytes != 0;
+    if (environment_bytes > environment_buffer_.size) {
+      const VkDeviceSize capacity =
+          std::max(environment_bytes, environment_buffer_.size * 2);
+      DestroyBuffer(memory_, device_, environment_buffer_);
+      VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      if (acceleration_) {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      }
+      if (!CreateDeviceBuffer(capacity, usage, environment_buffer_, detail)) {
+        environment_lit_ = false;
+        return false;
+      }
+    }
+    if (environment_lit_) {
+      GpuEnvironmentRecord record{};
+      const auto axes =
+          *EnvironmentFrame(environment_map_->world_from_environment);
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        for (std::size_t c = 0; c < 3; ++c)
+          record.environment_from_world[axis][c] =
+              static_cast<float>(axes[axis][c]);
+      }
+      std::copy(environment_map_->scale.begin(), environment_map_->scale.end(),
+          record.scale);
+      record.texture = texture_slot_of_.at(environment_map_->texture);
+      // Repeat across longitudes, clamp at the poles: wrap_s * 4 + wrap_t.
+      record.sampler = static_cast<std::uint32_t>(TextureWrap::Repeat) * 4 +
+                       static_cast<std::uint32_t>(TextureWrap::Clamp);
+      record.columns = environment.columns;
+      record.rows = environment.rows;
+      std::uint8_t* target = staging + offset;
+      std::memcpy(target, &record, sizeof(record));
+      target += sizeof(record);
+      for (const auto* part : {&environment.density, &environment.marginal,
+               &environment.conditional}) {
+        std::memcpy(target, part->data(), part->size() * sizeof(float));
+        target += part->size() * sizeof(float);
+      }
+      copies.push_back({environment_buffer_.buffer,
+          VkBufferCopy{offset, 0, environment_bytes}});
+    }
+    offset += environment_bytes;
+    stats_.environment_bytes = environment_bytes;
+    ++stats_.environment_writes;
   }
 
   if (build_tlas) {
@@ -1849,6 +2072,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.material_bytes = material_count_ * kMaterialBytes;
   stats_.emissive_triangles = emissive_triangles_;
   stats_.analytic_lights = analytic_count_;
+  stats_.environment_map = environment_lit_;
+  stats_.environment_sampled = environment_selection_ > 0.0F;
   stats_.resident_textures =
       static_cast<std::uint32_t>(texture_slot_of_.size());
   if (acceleration_) {
