@@ -142,6 +142,9 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << (settings.integrator == Lotus::Integrator::Wavefront ? "wavefront"
                                                                  : "reference")
          << " wavefront_rounds=" << frame.wavefront_rounds
+         << " light_sampling="
+         << (settings.light_sampling == Lotus::LightSampling::Mis ? "mis" : "bsdf")
+         << " emissive_triangles=" << scene.emissive_triangles
          << " sample_index=" << settings.sample_index
          << " samples=" << frame.samples_per_pixel
          << " converged=" << (converged ? 1 : 0)
@@ -180,6 +183,11 @@ const TfToken kSampleIndexSetting("lotus:sampleIndex");
 // so that usdview offers it as a checkable menu item. True selects the
 // wavefront integrator, false (the default) the reference integrator.
 const TfToken kWavefrontSetting("lotus:wavefront");
+
+// The render setting that selects PathTracingSettings::light_sampling, also
+// a flag: true (the default) adds next event estimation with multiple
+// importance sampling, false leaves BSDF sampling alone.
+const TfToken kLightSamplingSetting("lotus:lightSampling");
 
 HdAovDescriptor AovDescriptor(const TfToken& name) {
   if (name == HdAovTokens->color) {
@@ -1470,6 +1478,10 @@ private:
         delegate.GetRenderSetting<bool>(kWavefrontSetting, false)
             ? Lotus::Integrator::Wavefront
             : Lotus::Integrator::Reference;
+    settings.light_sampling =
+        delegate.GetRenderSetting<bool>(kLightSamplingSetting, true)
+            ? Lotus::LightSampling::Mis
+            : Lotus::LightSampling::Bsdf;
     return settings;
   }
 
@@ -1884,7 +1896,8 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
                HdRenderSettingsTokens->convergedSamplesPerPixel,
                VtValue(kDefaultConvergedSamples)},
       {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)},
-      {"Wavefront integrator", kWavefrontSetting, VtValue(false)}};
+      {"Wavefront integrator", kWavefrontSetting, VtValue(false)},
+      {"Light sampling (NEE + MIS)", kLightSamplingSetting, VtValue(true)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {

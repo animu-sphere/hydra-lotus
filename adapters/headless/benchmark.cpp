@@ -35,7 +35,14 @@ struct Options {
   // The square target's side in pixels.
   std::uint32_t size = kReferenceSize;
   Lotus::Integrator integrator = Lotus::Integrator::Reference;
+  // BSDF sampling unless chosen, so that the fixed baseline's earlier
+  // measurements stay comparable.
+  Lotus::LightSampling light_sampling = Lotus::LightSampling::Bsdf;
 };
+
+bool Mis(const Options& options) {
+  return options.light_sampling == Lotus::LightSampling::Mis;
+}
 
 bool Wavefront(const Options& options) {
   return options.integrator == Lotus::Integrator::Wavefront;
@@ -246,6 +253,7 @@ Result Measure(const std::string& id, const Options& options,
     target.width = target.height = options.size;
     Lotus::PathTracingSettings settings;
     settings.integrator = options.integrator;
+    settings.light_sampling = options.light_sampling;
     settings.sample_index = 1; // Warmup has its own sequence, then reset to seed 0.
     for (std::uint32_t i = 0; i < options.warmup; ++i)
       Check(renderer->RenderScene(draw, target, 1, settings));
@@ -441,7 +449,8 @@ int BenchmarkMain(int argc, char** argv) {
   if (argc < 3 || std::string_view(argv[2]).starts_with("--")) {
     std::cerr << "usage: lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                  "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n"
-                 "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n";
+                 "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n"
+                 "       [--benchmark-light-sampling <bsdf|mis>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -454,6 +463,11 @@ int BenchmarkMain(int argc, char** argv) {
       if (value == "reference") options.integrator = Lotus::Integrator::Reference;
       else if (value == "wavefront") options.integrator = Lotus::Integrator::Wavefront;
       else { std::cerr << "invalid integrator: " << value << '\n'; return 2; }
+    }
+    else if (option == "--benchmark-light-sampling") {
+      if (value == "bsdf") options.light_sampling = Lotus::LightSampling::Bsdf;
+      else if (value == "mis") options.light_sampling = Lotus::LightSampling::Mis;
+      else { std::cerr << "invalid light sampling: " << value << '\n'; return 2; }
     }
     else if (option == "--benchmark-size") {
       const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.size);
@@ -498,6 +512,7 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"cpu_logical_processors\":" << std::thread::hardware_concurrency()
         << "},\"procedure\":{\"integrator\":"
         << Quote(Wavefront(options) ? "wavefront" : "reference")
+        << ",\"light_sampling\":" << Quote(Mis(options) ? "mis" : "bsdf")
         << ",\"width\":" << options.size << ",\"height\":" << options.size
         << ",\"cornell_reference_compared\":"
         << (options.size == kReferenceSize ? "true" : "false")

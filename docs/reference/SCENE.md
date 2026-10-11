@@ -238,6 +238,14 @@ empty plan records no GPU work.
   leaves unchanged, when an instance reads a texture-coordinate set its
   geometry lacks, and when the table after the plan samples a texture that
   is not resident.
+- One device-local light table holds, for each instance record, a uint32:
+  its first entry or `kNoLights`, padded to 16 bytes; then a 16-byte entry
+  per triangle of every instance whose material's emission estimate is
+  positive, in instance and triangle order: the probability with which the
+  table chooses it, its alias-method threshold and alias, and its
+  instance. It is rebuilt from the plan's instances, their geometry and
+  transforms, and the material table whenever the instance records or the
+  material table are rewritten ([light sampling](#light-sampling)).
 - The environment is host state: a plan that changes only the environment
   records no GPU work, and the scene pass reads it with each frame.
 - Uploads go through a persistent, grow-only host-visible staging buffer,
@@ -247,7 +255,8 @@ empty plan records no GPU work.
   layout.
 
 `GpuSceneStats` reports resident geometry and textures, instances, material
-table entries, their bytes and lifetime upload counts. `ReadBackScene`
+table entries, the light table's emissive triangles, their bytes and
+lifetime upload counts, light-table rewrites included. `ReadBackScene`
 copies the device buffers and images back for validation: the corner
 normals and texture-coordinate sets (`GpuGeometryContents`), each
 instance's set, the material table with each lookup's texture slot
@@ -448,7 +457,11 @@ explained SKIPs.
 
 The `Radiance` output is the reference path tracer of
 [design policy section 9](../design/DESIGN_POLICY.md#9-baseline-path-tracer):
-one brute-force camera path per pixel per sample, with no light sampling.
+one camera path per pixel per sample.
+`PathTracingSettings::light_sampling` chooses how a path finds emission:
+by BSDF sampling alone, the brute-force estimator of the committed
+reference, or also by next event estimation
+([light sampling](#light-sampling)).
 `PathTracingSettings::integrator` selects how the paths are scheduled: the
 reference integrator follows each path to its end in a fullscreen fragment
 pass (`backend/vulkan/shaders/path_trace.slang`), and the
@@ -503,7 +516,13 @@ of compute kernels. Both call the same transport steps
   existing path exactly, preserving untextured reference images. Tangents
   are computed per hit; there are no stored vertex tangents or MikkTSpace
   compatibility guarantees.
-- **Emission** is added at every hit, the camera's included.
+- **Emission** is added at every hit, the camera's included. With light
+  sampling, emission that a sampled direction finds is weighed against
+  next event estimation's density for the same point.
+- **Direct light.** With light sampling, each scattering event that may
+  continue samples one point on an emissive triangle through a shadow ray,
+  after Russian roulette and before the BSDF sample
+  ([light sampling](#light-sampling)).
 - **BSDF.** A dielectric GGX coat over Lambert, blended with the existing
   GGX metal by `metallic`. Dielectric F0 is `((ior - 1)/(ior + 1))²`;
   `ior = 1` removes the interface and recovers uncoated Lambert. In the
@@ -677,8 +696,9 @@ specialized per kernel) that run before the scene render pass.
 - **Kernels.** *Camera* starts the frame's camera path at every pixel of
   the data window and traces its camera ray: a hit is queued for shading,
   and a miss adds no sample. Then, in each round, *shade* runs one
-  scattering event of every queued hit and queues the continuation ray for
-  the next bounce, or ends the path; from the second round on, *intersect*
+  scattering event of every queued hit, with
+  [light sampling](#light-sampling) tracing its shadow ray inline, and
+  queues the continuation ray for the next bounce, or ends the path; from the second round on, *intersect*
   first traces the bounce's ray queue, queuing a hit for shading and
   ending the path of a ray that misses with the environment. After the
   rounds, *tail* follows every path still queued to its end in one
@@ -736,6 +756,68 @@ and that the bounce limit fails cleanly
 [path-state report](../reports/2026-10-10-wavefront-path-state.md),
 [camera and resolve report](../reports/2026-10-11-wavefront-camera-resolve.md)).
 
+### Light sampling
+
+`PathTracingSettings::light_sampling` selects the Renderer Phase 3
+estimator ([roadmap policy](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis)).
+`LightSampling::Bsdf` is brute force: emission counts only where a camera
+ray or a sampled BSDF direction happens to find it. The committed reference
+images are its images; `--write-reference` and the reference check's
+bitwise reproduction use it, and so do the transport checks whose exact
+expectations are its samples. `LightSampling::Mis`, the default, adds next
+event estimation, both integrators running it in the same random-number
+order. Changing it restarts the accumulation.
+
+- **Light table.** Each triangle of an instance whose material emits gets
+  an entry ([GPU scene](#gpu-scene)), weighed by its world-space area,
+  computed in double precision, times its material's emission estimate:
+  the mean of its RGB emission, or for a lookup the bound
+  `max(scale, 0) + max(bias, 0)` for texels in [0, 1], or the fallback
+  when the key names no texture. Entries are chosen by Vose's alias method
+  in proportion to their weights; each stores its own probability. The
+  estimate only steers sampling: emission it misses is still found by BSDF
+  sampling, at full weight where the table's density is 0.
+- **Sampling.** Four random numbers choose an entry, as a column and its
+  alias, and a point uniformly by area on its triangle. The point's
+  radiance is its emission after texture lookup times its coverage
+  (opacity, or 0 or 1 under a mask), the probability that a ray reaching
+  it stops there. Its density per solid angle is the entry's probability
+  divided by the triangle's area, times the squared distance over the
+  cosine at the light. A point below the geometric surface, or one in a
+  direction the BSDF does not reflect, contributes nothing, as a sampled
+  direction there would. A table without entries draws no random numbers.
+- **Shadow rays** run from the offset hit position to the point, offset
+  off the light's surface towards the receiver. The first opaque surface
+  blocks them; a partially covering surface multiplies the light they
+  carry by `1 - coverage`, drawing no random numbers, whose expectation is
+  what traced rays' coverage tests produce.
+- **MIS.** A light sample is weighed by the power heuristic of its density
+  against `BsdfPdf` for the same direction, and emission a sampled
+  direction finds by the power heuristic of that direction's density
+  against the light table's for the hit point; the camera's view of an
+  emitter is unweighted. The constant environment is not sampled:
+  BSDF sampling's cosine-weighted directions sample it better than uniform
+  directions do, and escaping rays add it unweighted
+  ([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
+- **Determinism.** Under BSDF sampling no step draws a number or adds a
+  term, so the committed reference is reproduced bit for bit. The
+  wavefront shade kernel traces the shadow ray inline and, for the emission
+  weight, reads the path's ray origin section.
+
+`renderer.path.light_sampling` compares the Cornell box's images under
+light sampling at 1–1024 spp with the committed reference by the DES-Q5
+metric through both integrators, and renders the same 64 spp through both
+(bit for bit on the measured device). Open scenes lit by a constant sky
+alone, and by the sky and two emitters (one textured, half covered and of
+unequal triangles, one constant) through a 25% coverage layer, are compared
+at 256 spp with BSDF sampling's 4096-spp estimate and its per-pixel
+variance. It records each estimator's per-sample variance, and in the
+Cornell box its GPU time per sample; light sampling must at least halve the
+Cornell box's variance and must not raise the sky-lit scene's. It also
+checks the light-table sizes, that switching the estimator restarts the
+accumulation and that an environment edit leaves the table alone
+([evidence](../reports/2026-10-11-emissive-nee-mis.md)).
+
 ### Fixed benchmarks
 
 `lotus-headless --benchmark <json-path>` runs four procedural workloads from
@@ -756,6 +838,9 @@ frame, with 64 maximum bounces. `--benchmark-frames` and
 `--benchmark-warmup` accept 1–4096. `--benchmark-integrator reference`
 (the default) or `wavefront` selects the
 [integrator](#wavefront-integrator), recorded as `procedure.integrator`.
+`--benchmark-light-sampling bsdf` (the default, so that earlier
+measurements stay comparable) or `mis` selects the
+[light sampling](#light-sampling), recorded as `procedure.light_sampling`.
 The non-Cornell workloads use a white environment, coated diffuse surfaces
 and deterministic grid heights.
 
@@ -868,19 +953,23 @@ and a newly created renderer resets the extraction.
 On ray-query devices each pass adds one sample with `RenderScene`, with
 `max_samples` set to the `convergedSamplesPerPixel` render setting (64 by
 default), `sample_index` to the `lotus:sampleIndex` render setting (0 by
-default) and `integrator` to the `lotus:wavefront` render setting
-([reference by default](#integrator-selection-through-hydra)); the render
+default), `integrator` to the `lotus:wavefront` render setting
+([reference by default](#integrator-selection-through-hydra)) and
+`light_sampling` to the `lotus:lightSampling` render setting
+([light sampling by default](#light-sampling-through-hydra)); the render
 pass and the colour buffer report convergence when the
 accumulation reaches its sample count. Point, normal, topology, transform,
 visibility and instancer edits, like camera, framing,
-`lotus:sampleIndex` and `lotus:wavefront` changes, restart the
+`lotus:sampleIndex`, `lotus:wavefront` and `lotus:lightSampling` changes,
+restart the
 accumulation. Other devices
 retain the bootstrap path and converge after one pass. Dome lights feed the
 constant environment as [below](#lights); an environment change restarts the
 accumulation. The host evidence log identifies the choice as
 `ray_query=1` or `0`, with each pass's `integrator` (`reference` or
 `wavefront`), `wavefront_rounds` (0 unless the pass added a wavefront
-sample), `sample_index`, `samples` and `converged`.
+sample), `light_sampling` (`mis` or `bsdf`), `emissive_triangles`,
+`sample_index`, `samples` and `converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass, and `GetFrameEvidence` that pass's `GpuFrameEvidence` without
 its colour and depth products.
@@ -915,7 +1004,8 @@ camera misses keep their AOV clear background.
 This is constant dome lighting only: environment textures, colour
 temperature, diffuse/specular contribution controls, light/shadow linking,
 light filters, instanced lights and other light types are not evaluated.
-There is no NEE or environment importance sampling. CTest
+Light sampling does not sample the dome, and there is no environment
+importance sampling ([light sampling](#light-sampling)). CTest
 `lotus-renderer-hydra-light` checks composed USD edits and snapshot lifetimes;
 its GPU-gated `-gpu` variant checks analytic mirror radiance, accumulation
 restarts and unchanged upload/build counters
@@ -925,8 +1015,8 @@ restarts and unchanged upload/build counters
 
 A converged Hydra image is the backend's deterministic image
 ([reference images](#reference-images)): a function of the
-`lotus:sampleIndex`, `convergedSamplesPerPixel` and `lotus:wavefront`
-render settings, the
+`lotus:sampleIndex`, `convergedSamplesPerPixel`, `lotus:wavefront` and
+`lotus:lightSampling` render settings, the
 scene the pass selects, the camera with its framing, and the colour AOV's
 size and clear colour. `lotus:sampleIndex` is the RNG seed: the first
 sample index, so the k-th pass's sample uses `lotus:sampleIndex + k`.
@@ -968,6 +1058,30 @@ images. The usdview smoke test checks the installed plugin's menu item,
 triggers it, checks that the accumulation restarted and wavefront rounds
 ran, and that unchecking it reproduces the earlier screenshot
 ([evidence](../reports/2026-10-11-hydra-integrator-selection.md)).
+
+### Light sampling through Hydra
+
+The `lotus:lightSampling` render setting selects
+`PathTracingSettings::light_sampling`: true (the default) adds next event
+estimation with multiple importance sampling, false leaves
+[BSDF sampling](#light-sampling) alone. Like `lotus:wavefront` it is a
+`bool`, so usdview lists it as the checkable *Light sampling (NEE + MIS)*
+item of its Hydra Settings menu, checked by default; a value that cannot
+be cast to `bool` selects light sampling. A change restarts the
+accumulation. `UsdPreviewSurface` emission (`emissiveColor`) is what the
+light table samples; UsdLux lights other than the dome are not
+translated.
+
+CTest `lotus-renderer-hydra-light-sampling` (GPU-gated) converges a
+UsdImaging stage lit by an emissive panel at 16 spp under each estimator
+and checks the flag's descriptor, the panel's two light-table triangles,
+that each converged image is the backend's image for that estimator bit
+for bit, that the two images' channel means agree within five standard
+errors of their pixel differences, and that toggling the flag and a new
+delegate reproduce the images. The usdview smoke test checks the
+installed plugin's menu item, unchecks it, checks that the accumulation
+restarted, and that checking it again reproduces the earlier screenshot
+([evidence](../reports/2026-10-11-emissive-nee-mis.md#hydra)).
 
 ### Render-pass selection
 

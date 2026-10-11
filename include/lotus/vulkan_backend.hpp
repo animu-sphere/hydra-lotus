@@ -167,6 +167,9 @@ struct GpuSceneStats {
   std::uint32_t instance_count = 0;
   // Entries in the material table, the default material included.
   std::uint32_t material_count = 0;
+  // Triangles of emissive instances, which next event estimation samples:
+  // the light table's entries.
+  std::uint32_t emissive_triangles = 0;
   std::uint32_t resident_textures = 0;
   // Device bytes of the geometry buffers, of the instances, of the
   // material table in use and of the textures' texels.
@@ -174,6 +177,8 @@ struct GpuSceneStats {
   std::uint64_t instance_bytes = 0;
   std::uint64_t material_bytes = 0;
   std::uint64_t texture_bytes = 0;
+  // Device bytes of the light table, its per-instance offsets included.
+  std::uint64_t light_bytes = 0;
   // Lifetime: geometry residencies added/removed (compatible replacements
   // can retain GPU storage), textures created/destroyed, instance
   // buffer and material table rewrites, upload submissions and bytes copied
@@ -184,6 +189,9 @@ struct GpuSceneStats {
   std::uint64_t texture_releases = 0;
   std::uint64_t instance_writes = 0;
   std::uint64_t material_writes = 0;
+  // Lifetime light-table rewrites: after instance or material table
+  // rewrites, never for an environment-only change.
+  std::uint64_t light_writes = 0;
   std::uint64_t upload_submissions = 0;
   std::uint64_t uploaded_bytes = 0;
 
@@ -338,6 +346,22 @@ enum class Integrator {
   Wavefront,
 };
 
+// How Radiance finds the scene's lights (Renderer Phase 3). Both estimators
+// converge to the same image; neither changes which surfaces emit.
+enum class LightSampling {
+  // Brute force: emission counts only where a camera ray or a sampled BSDF
+  // direction happens to find it. The estimator of the committed reference
+  // images.
+  Bsdf,
+  // Next event estimation as well: at each scattering event a shadow ray
+  // goes to one point on an emissive triangle, chosen in proportion to its
+  // estimated power. Each contribution is weighed against BSDF sampling's
+  // density for the same direction by the power heuristic, and so is the
+  // emission BSDF sampling finds. The constant environment is left to BSDF
+  // sampling alone.
+  Mis,
+};
+
 // The bounces the wavefront integrator records per sample; a larger
 // `max_bounces` fails.
 inline constexpr std::uint32_t kMaxWavefrontBounces = 1024;
@@ -347,6 +371,8 @@ struct PathTracingSettings {
   SceneOutput output = SceneOutput::Radiance;
   // Changing it restarts the accumulation.
   Integrator integrator = Integrator::Reference;
+  // Changing it restarts the accumulation.
+  LightSampling light_sampling = LightSampling::Mis;
   // The random sequence of an accumulation's first sample; its k-th sample
   // uses sample_index + k. With the pixel's coordinates it selects each
   // sample's random numbers: the same index, scene, camera and target give

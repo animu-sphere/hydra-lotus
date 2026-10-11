@@ -99,7 +99,8 @@ public:
   // accumulation's first sample, which selects its random numbers (0 by
   // default). lotus:wavefront: a flag selecting the wavefront integrator to
   // trace the radiance instead of the reference integrator (false by
-  // default).
+  // default). lotus:lightSampling: a flag adding next event estimation with
+  // multiple importance sampling to BSDF sampling (true by default).
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();

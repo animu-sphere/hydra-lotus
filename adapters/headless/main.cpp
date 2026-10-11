@@ -1320,16 +1320,33 @@ public:
     integrator_ = integrator;
   }
 
+  // Likewise the light sampling. It is BSDF sampling unless set: the
+  // scenarios' exact expectations are the brute-force estimator's, and the
+  // committed reference is its image.
+  void SetLightSampling(Lotus::LightSampling light_sampling) {
+    light_sampling_ = light_sampling;
+  }
+
+  Lotus::LightSampling LightSampling() const {
+    return light_sampling_;
+  }
+
+  // The scene update of the last Render.
+  const Lotus::GpuSceneEvidence& LastUpload() const {
+    return last_upload_;
+  }
+
   // Applies the world's update plan and renders it, adding `frames`
   // samples to a Radiance accumulation.
   std::string Render(const Lotus::PathTracingSettings& settings,
       Lotus::GpuFrameEvidence& frame, std::uint32_t frames = 1) {
     const auto snapshot = world_.Commit();
-    const auto upload = renderer_.UpdateScene(extraction_.Update(snapshot));
-    if (upload.status != Lotus::FrameStatus::Pass)
-      return upload.detail;
+    last_upload_ = renderer_.UpdateScene(extraction_.Update(snapshot));
+    if (last_upload_.status != Lotus::FrameStatus::Pass)
+      return last_upload_.detail;
     Lotus::PathTracingSettings effective = settings;
     effective.integrator = integrator_;
+    effective.light_sampling = light_sampling_;
     frame = renderer_.RenderScene(Lotus::ExtractDrawSummary(snapshot), target_,
         frames, effective);
     if (frame.status != Lotus::FrameStatus::Pass)
@@ -1484,6 +1501,8 @@ private:
   Lotus::SceneExtraction extraction_;
   Lotus::OffscreenTarget target_;
   Lotus::Integrator integrator_ = Lotus::Integrator::Reference;
+  Lotus::LightSampling light_sampling_ = Lotus::LightSampling::Bsdf;
+  Lotus::GpuSceneEvidence last_upload_;
   std::string summary_;
 };
 
@@ -3232,6 +3251,7 @@ std::string RenderReferenceImage(PathScenes& scenes, std::uint32_t sample_index,
 // preceding accumulation from there.
 std::string WriteReference(PathScenes& scenes, const std::filesystem::path& directory) {
   SetReferenceScene(scenes);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
   constexpr std::uint32_t kBatch = kReferenceSamples / kReferenceBatches;
   std::vector<double> sum;
   std::vector<double> squares;
@@ -3279,10 +3299,11 @@ std::string WriteReference(PathScenes& scenes, const std::filesystem::path& dire
 
 // The reference images: the Cornell box rendered at each of
 // kReferenceLevels in one accumulation, from an independent sample index,
-// written to `images` when it is not empty, and each compared with the
-// committed reference by the DES-Q5 metric. Then the metric must reject a
-// scene whose red wall is brighter, and the reference's own samples are
-// compared bitwise with it, for the record.
+// with the scenes' light sampling, written to `images` when it is not
+// empty, and each compared with the committed reference by the DES-Q5
+// metric. Then the metric must reject a scene whose red wall is brighter,
+// and the reference's own samples, BSDF sampling's, are compared bitwise
+// with it, for the record.
 std::string ReferenceFailure(PathScenes& scenes,
     const std::filesystem::path& reference_directory,
     const std::filesystem::path& images) {
@@ -3362,10 +3383,13 @@ std::string ReferenceFailure(PathScenes& scenes,
 
   // On the device and build that wrote the reference, deterministic mode
   // reproduces it bit for bit; elsewhere it need not.
+  const Lotus::LightSampling light_sampling = scenes.LightSampling();
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
   LotusHeadless::RgbImage own;
-  if (auto failure = RenderReferenceImage(scenes, 0, kReferenceSamples, own);
-      !failure.empty())
-    return "the reference's samples: " + failure;
+  auto own_failure = RenderReferenceImage(scenes, 0, kReferenceSamples, own);
+  scenes.SetLightSampling(light_sampling);
+  if (!own_failure.empty())
+    return "the reference's samples: " + own_failure;
   std::size_t differing = 0;
   for (std::size_t i = 0; i < own.values.size(); ++i)
     differing +=
@@ -3589,6 +3613,303 @@ std::string WavefrontFailure(PathScenes& scenes,
     return "the maximum bounce limit: " + failure;
   if (frame.samples_per_pixel != 1)
     return "switching to the wavefront integrator continued the accumulation";
+  return {};
+}
+
+// The first sample index of variance estimates, apart from the compared
+// images' so that no batch continues one of their accumulations.
+constexpr std::uint32_t kStatisticsSampleIndex = 2U << 20;
+
+// An estimator's image statistics from `batches` fresh accumulations of
+// `batch` samples each, consecutive from `sample_index`: the mean of the
+// batches and each value's per-sample variance, as WriteReference
+// estimates the committed reference's.
+std::string BatchStatistics(PathScenes& scenes, std::uint32_t sample_index,
+    std::uint32_t batches, std::uint32_t batch,
+    LotusHeadless::Reference& statistics) {
+  std::vector<double> sum;
+  std::vector<double> squares;
+  LotusHeadless::RgbImage image;
+  for (std::uint32_t index = 0; index < batches; ++index) {
+    if (auto failure = RenderReferenceImage(
+            scenes, sample_index + index * batch, batch, image);
+        !failure.empty())
+      return "batch " + std::to_string(index) + ": " + failure;
+    sum.resize(image.values.size());
+    squares.resize(image.values.size());
+    for (std::size_t i = 0; i < image.values.size(); ++i) {
+      sum[i] += image.values[i];
+      squares[i] += double{image.values[i]} * image.values[i];
+    }
+  }
+  statistics.samples = batches * batch;
+  statistics.mean = image;
+  statistics.variance = image;
+  for (std::size_t i = 0; i < sum.size(); ++i) {
+    const double mean = sum[i] / batches;
+    statistics.mean.values[i] = static_cast<float>(mean);
+    statistics.variance.values[i] = static_cast<float>(
+        std::max(0.0, (squares[i] - batches * mean * mean) / (batches - 1)) * batch);
+  }
+  return {};
+}
+
+double MeanVariance(const LotusHeadless::Reference& statistics) {
+  double sum = 0;
+  for (const float value : statistics.variance.values)
+    sum += value;
+  return sum / static_cast<double>(statistics.variance.values.size());
+}
+
+// The median GPU duration of `count` single-sample radiance frames, or 0
+// without timestamps.
+std::string MedianSampleMilliseconds(PathScenes& scenes, std::uint32_t count,
+    double& milliseconds) {
+  Lotus::PathTracingSettings settings;
+  settings.sample_index = kComparedSampleIndex;
+  std::vector<double> durations;
+  for (std::uint32_t frame_index = 0; frame_index < count; ++frame_index) {
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(settings, frame); !failure.empty())
+      return failure;
+    if (frame.primary_ray_timestamp_available)
+      durations.push_back(frame.primary_ray_gpu_ms);
+  }
+  milliseconds = 0;
+  if (durations.size() == count) {
+    std::sort(durations.begin(), durations.end());
+    milliseconds = durations[durations.size() / 2];
+  }
+  return {};
+}
+
+// An open scene in OrthographicCamera's view that every camera ray hits: a
+// coated diffuse floor, a rough metal panel over it and a 25% coverage
+// layer above part of it, under a constant sky. With `emitter`, two
+// panels outside the view also light it: a half-covered one with textured
+// emission from both sides, its triangles of different areas, and a small
+// one of constant emission.
+void SetOpenLightScene(PathScenes& scenes, bool emitter) {
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  world.SetEnvironment({0.2F, 0.3F, 0.4F});
+  Lotus::MeshInstance floor;
+  floor.world_from_object = Scaling(1.5F, 1.5F, 1);
+  world.SetMesh("/floor", Square(), floor);
+  Lotus::Material white;
+  white.base_color = {0.8F, 0.8F, 0.8F};
+  Paint(world, "/floor", white);
+  Lotus::MeshInstance panel;
+  panel.world_from_object = Lotus::Multiply(Translation(0.5F, 0.4F, 0.3F),
+      Lotus::Multiply(RotationX(40), Scaling(0.35F, 0.35F, 1)));
+  world.SetMesh("/panel", Square(), panel);
+  Lotus::Material metal;
+  metal.base_color = {0.9F, 0.7F, 0.5F};
+  metal.metallic = 1;
+  metal.roughness = 0.25F;
+  Paint(world, "/panel", metal);
+  Lotus::MeshInstance layer;
+  layer.world_from_object = Lotus::Multiply(Translation(-0.5F, -0.3F, 0.8F),
+      Scaling(0.6F, 0.6F, 1));
+  world.SetMesh("/layer", Square(), layer);
+  Lotus::Material veil;
+  veil.base_color = {0.5F, 0.5F, 0.5F};
+  veil.opacity = 0.25F;
+  Paint(world, "/layer", veil);
+  if (!emitter)
+    return;
+  Lotus::Texture radiance;
+  radiance.width = 2;
+  radiance.height = 1;
+  radiance.format = Lotus::TextureFormat::Rgba32Float;
+  const float texels[8] = {6, 3, 1, 1, 1, 3, 6, 1};
+  radiance.texels.resize(sizeof(texels));
+  std::memcpy(radiance.texels.data(), texels, sizeof(texels));
+  world.SetTexture("/radiance", std::move(radiance));
+  Lotus::MeshGeometry square = Square();
+  square.positions[3] = {-1, 0.2F, 0};
+  square.texcoords["st"] = {{{0, 0}}, {{1, 0}}, {{1, 1}}, {{0, 0}}, {{1, 1}}, {{0, 0.6F}}};
+  Lotus::MeshInstance placed;
+  placed.world_from_object = Lotus::Multiply(Translation(-1.9F, 0, 1.4F),
+      Lotus::Multiply(RotationY(-60), Scaling(0.5F, 0.5F, 1)));
+  world.SetMesh("/emitter", square, placed);
+  Lotus::Material light;
+  light.base_color = {0, 0, 0};
+  light.emission_texture = Lotus::TextureInput{"/radiance"};
+  light.emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  light.emission_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  light.texcoords = "st";
+  light.opacity = 0.5F;
+  Paint(world, "/emitter", light);
+  Lotus::MeshInstance spark;
+  spark.world_from_object = Lotus::Multiply(Translation(1.8F, -0.5F, 1.0F),
+      Lotus::Multiply(RotationY(50), Scaling(0.15F, 0.15F, 1)));
+  world.SetMesh("/spark", Square(), spark);
+  Lotus::Material glow;
+  glow.base_color = {0, 0, 0};
+  glow.emission = {20, 16, 12};
+  Paint(world, "/spark", glow);
+}
+
+// Renderer Phase 3 light sampling. Next event estimation with multiple
+// importance sampling must converge to BSDF sampling's image: the Cornell
+// box's reference images under either integrator match the committed
+// reference by the DES-Q5 metric, and open scenes, lit by the sky alone and
+// by the sky and two emitters, one textured and partly covered, through a
+// partly covering layer, match BSDF sampling's 4096-spp estimate. Both integrators render the same
+// samples; switching the light sampling restarts the accumulation; and an
+// environment edit leaves the light table alone. The per-sample variance
+// of each estimator, and in the Cornell box its GPU time, are recorded;
+// light sampling must at least halve the Cornell box's variance and must
+// not raise the sky-lit scene's, which it leaves to BSDF sampling.
+std::string LightSamplingFailure(PathScenes& scenes,
+    const std::filesystem::path& reference_directory) {
+  scenes.SetLightSampling(Lotus::LightSampling::Mis);
+  if (auto failure = ReferenceFailure(scenes, reference_directory, {});
+      !failure.empty())
+    return "reference images: " + failure;
+  const Lotus::GpuSceneStats& cornell = scenes.LastUpload().stats;
+  if (cornell.emissive_triangles != 2)
+    return "the Cornell box's light table holds " +
+           std::to_string(cornell.emissive_triangles) +
+           " triangles instead of its emitter's 2";
+
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  auto wavefront_reference = ReferenceFailure(scenes, reference_directory, {});
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (!wavefront_reference.empty())
+    return "wavefront reference images: " + wavefront_reference;
+
+  // The same samples through both integrators.
+  constexpr std::uint32_t kSamples = 64;
+  LotusHeadless::RgbImage reference;
+  LotusHeadless::RgbImage wavefront;
+  if (auto failure = RenderReferenceImage(
+          scenes, kComparedSampleIndex, kSamples, reference);
+      !failure.empty())
+    return "reference integrator: " + failure;
+  scenes.SetIntegrator(Lotus::Integrator::Wavefront);
+  auto wavefront_failure =
+      RenderReferenceImage(scenes, kComparedSampleIndex, kSamples, wavefront);
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  if (!wavefront_failure.empty())
+    return "wavefront integrator: " + wavefront_failure;
+  std::size_t differing = 0;
+  double max_difference = 0.0;
+  for (std::size_t i = 0; i < wavefront.values.size(); ++i) {
+    const float a = reference.values[i];
+    const float b = wavefront.values[i];
+    if (std::memcmp(&a, &b, sizeof(float)) == 0)
+      continue;
+    ++differing;
+    max_difference = std::max(max_difference, std::abs(double{a} - b));
+  }
+  std::ostringstream line;
+  line << "the same " << kSamples << " spp from both integrators: ";
+  if (differing == 0)
+    line << "bit for bit";
+  else
+    line << differing << " of " << wavefront.values.size()
+         << " values differ, by at most " << max_difference;
+  scenes.Summarize(line.str());
+
+  // Variance and GPU time per sample of each estimator.
+  constexpr std::uint32_t kBatches = 16;
+  constexpr std::uint32_t kBatch = 16;
+  std::array<double, 2> variance{};
+  std::array<double, 2> milliseconds{};
+  const std::array<Lotus::LightSampling, 2> estimators{
+      Lotus::LightSampling::Bsdf, Lotus::LightSampling::Mis};
+  for (std::size_t index = 0; index < estimators.size(); ++index) {
+    scenes.SetLightSampling(estimators[index]);
+    LotusHeadless::Reference statistics;
+    if (auto failure = BatchStatistics(
+            scenes, kStatisticsSampleIndex, kBatches, kBatch, statistics);
+        !failure.empty())
+      return failure;
+    variance[index] = MeanVariance(statistics);
+    if (auto failure = MedianSampleMilliseconds(scenes, 16, milliseconds[index]);
+        !failure.empty())
+      return failure;
+  }
+  const double variance_ratio = variance[0] / variance[1];
+  line.str({});
+  line << std::setprecision(4) << "Cornell box per-sample variance bsdf "
+       << variance[0] << " mis " << variance[1] << " (" << std::fixed
+       << std::setprecision(2) << variance_ratio << "x lower)";
+  if (milliseconds[0] > 0 && milliseconds[1] > 0)
+    line << std::setprecision(3) << ", GPU ms per sample bsdf "
+         << milliseconds[0] << " mis " << milliseconds[1]
+         << ", time to equal quality " << std::setprecision(2)
+         << variance_ratio * milliseconds[0] / milliseconds[1] << "x shorter";
+  scenes.Summarize(line.str());
+  if (!(variance_ratio >= 2.0))
+    return "light sampling lowered the Cornell box's per-sample variance only " +
+           std::to_string(variance_ratio) + " times";
+
+  // Switching the light sampling restarts the accumulation.
+  Lotus::PathTracingSettings settings;
+  Lotus::GpuFrameEvidence frame;
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (frame.samples_per_pixel != 1)
+    return "switching the light sampling continued the accumulation";
+
+  // Open scenes against BSDF sampling's estimate of them.
+  if (auto failure = scenes.Clear(); !failure.empty())
+    return failure;
+  for (const bool emitter : {false, true}) {
+    const std::string name = emitter ? "sky and emitter" : "sky alone";
+    SetOpenLightScene(scenes, emitter);
+    scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+    LotusHeadless::Reference brute_force;
+    if (auto failure = BatchStatistics(scenes, 0, 64, 64, brute_force);
+        !failure.empty())
+      return name + ", BSDF sampling: " + failure;
+    if (scenes.LastUpload().stats.emissive_triangles != (emitter ? 4U : 0U))
+      return name + ": the light table holds " +
+             std::to_string(scenes.LastUpload().stats.emissive_triangles) +
+             " triangles";
+    scenes.SetLightSampling(Lotus::LightSampling::Mis);
+    constexpr std::uint32_t kCompared = 256;
+    LotusHeadless::RgbImage image;
+    if (auto failure =
+            RenderReferenceImage(scenes, kComparedSampleIndex, kCompared, image);
+        !failure.empty())
+      return name + ": " + failure;
+    const LotusHeadless::Comparison comparison =
+        LotusHeadless::Compare(image, kCompared, brute_force);
+    if (!comparison.failure.empty())
+      return name + ": " + comparison.failure;
+    LotusHeadless::Reference sampled;
+    if (auto failure =
+            BatchStatistics(scenes, kStatisticsSampleIndex, 16, 16, sampled);
+        !failure.empty())
+      return name + ", light sampling: " + failure;
+    line.str({});
+    const double lowered = MeanVariance(brute_force) / MeanVariance(sampled);
+    line << std::fixed << std::setprecision(2) << name << ": " << kCompared
+         << " spp against BSDF sampling's 4096, image z "
+         << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+         << comparison.image_z[2] << ", max tile |z| " << comparison.max_tile_z
+         << ", per-sample variance " << lowered << "x lower";
+    scenes.Summarize(line.str());
+    // Independent estimates of the same variance differ by a few percent.
+    if (!emitter && !(lowered > 0.8))
+      return "light sampling raised the sky-lit scene's per-sample variance " +
+             std::to_string(1 / lowered) + " times";
+  }
+  // A sky edit changes the environment's radiance and probability only.
+  const std::uint64_t light_writes = scenes.LastUpload().stats.light_writes;
+  scenes.World().SetEnvironment({0.1F, 0.1F, 0.1F});
+  if (auto failure = scenes.Render(settings, frame); !failure.empty())
+    return failure;
+  if (scenes.LastUpload().stats.light_writes != light_writes)
+    return "an environment edit rewrote the light table";
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
   return {};
 }
 
@@ -3893,6 +4214,13 @@ int main(int argc, char** argv) {
         wavefront_scenes.SetIntegrator(Lotus::Integrator::Reference);
         return failure;
       });
+      run("renderer.path.light_sampling", [&](PathScenes& light_scenes) {
+        std::string failure =
+            LightSamplingFailure(light_scenes, reference_directory);
+        light_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -3905,6 +4233,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.accumulation", "skip", ray_query.detail});
       checks.push_back({"renderer.path.reference", "skip", ray_query.detail});
       checks.push_back({"renderer.path.wavefront", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.light_sampling", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -3919,6 +4248,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.accumulation", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.reference", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.wavefront", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.light_sampling", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

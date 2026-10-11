@@ -68,6 +68,22 @@ public struct MaterialRecord {
   public TextureInputRecord inputs[7];
 };
 
+// Mirrors GpuLightRecord in gpu_scene.hpp: one emissive triangle of the
+// light table, chosen by the alias method (Vose, "A Linear Algorithm for
+// Generating Random Numbers with a Given Distribution", 1991).
+public struct LightRecord {
+  // The probability with which the table chooses this triangle.
+  public float pdf;
+  // The column's probability of keeping its own triangle, else its alias's.
+  public float threshold;
+  public uint alias;
+  // The triangle's instance; its primitive is its entry's index less the
+  // instance's first entry.
+  public uint instance;
+};
+// An instance without entries in the light table.
+public static const uint kNoLights = 0xFFFFFFFFu;
+
 // Mirrors PathConstants in vulkan_backend.cpp.
 public struct PathConstants {
   public float4 environment;
@@ -92,11 +108,18 @@ public struct PathConstants {
   public uint surface_output;
   // The wavefront integrator's path slots: one per target pixel.
   public uint path_capacity;
-  public uint reserved;
+  // kBsdfSampling or kMisLightSampling.
+  public uint light_sampling;
   // The pixels the scene passes render, {x, y, width, height}: the data
   // window clamped to the target.
   public uint4 data_rect;
+  // Per instance record, its first entry in the light table or kNoLights.
+  public uint* light_offsets;
+  public LightRecord* lights;
+  public uint light_count;
 };
+public static const uint kBsdfSampling = 0;
+public static const uint kMisLightSampling = 1;
 [[vk::binding(0, 0)]] public RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] public ConstantBuffer<PathConstants> path_constants;
 // Per pixel: the sum of the radiance of the samples that hit the scene, and
@@ -139,6 +162,8 @@ public struct SurfaceHit {
   // The normal the BSDF is evaluated around: on the geometric normal's side
   // and facing the incoming ray.
   public float3 shading_normal;
+  // The triangle's world-space area.
+  public float area;
   // The material's inputs at the hit, after texture lookups.
   public float3 base_color;
   public float roughness;
@@ -178,7 +203,9 @@ float2 HitTexcoords(InstanceRecord instance, MaterialRecord material,
 // Alpha is surface coverage. Rejected candidates leave the ray's interval
 // intact, with no offset, throughput change or scattering event. Geometry
 // forbids duplicate candidates so a fractional test cannot be retried.
-bool AcceptSurface(Hit hit, inout uint rng) {
+// The probability that a ray accepts a candidate: its opacity, or 0 or 1
+// under binary masking.
+float Coverage(Hit hit) {
   const InstanceRecord instance = path_constants.instances[hit.instance];
   const MaterialRecord material = path_constants.materials[instance.material_slot];
   float opacity = material.opacity.x;
@@ -188,10 +215,24 @@ bool AcceptSurface(Hit hit, inout uint rng) {
     // Lookup arithmetic can overflow even with finite float texels.
     opacity = isfinite(opacity) ? saturate(opacity) : 0.0;
   }
-  if (material.opacity.y > 0.0) return opacity >= material.opacity.y;
-  if (opacity <= 0.0) return false;
-  if (opacity >= 1.0) return true;
-  return NextRandom(rng) < opacity;
+  if (material.opacity.y > 0.0) return opacity >= material.opacity.y ? 1.0 : 0.0;
+  return opacity;
+}
+
+bool AcceptSurface(Hit hit, inout uint rng) {
+  const float coverage = Coverage(hit);
+  if (coverage <= 0.0) return false;
+  if (coverage >= 1.0) return true;
+  return NextRandom(rng) < coverage;
+}
+
+Hit CandidateHit<let Flags : int>(RayQuery<Flags> query) {
+  Hit candidate;
+  candidate.instance = query.CandidateInstanceIndex();
+  candidate.primitive = query.CandidatePrimitiveIndex();
+  candidate.barycentrics = query.CandidateTriangleBarycentrics();
+  candidate.t = query.CandidateTriangleRayT();
+  return candidate;
 }
 
 public bool Trace(RayDesc ray, inout uint rng, out Hit hit) {
@@ -199,12 +240,7 @@ public bool Trace(RayDesc ray, inout uint rng, out Hit hit) {
   query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, ray);
   while (query.Proceed()) {
     if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-      Hit candidate;
-      candidate.instance = query.CandidateInstanceIndex();
-      candidate.primitive = query.CandidatePrimitiveIndex();
-      candidate.barycentrics = query.CandidateTriangleBarycentrics();
-      candidate.t = query.CandidateTriangleRayT();
-      if (AcceptSurface(candidate, rng)) query.CommitNonOpaqueTriangleHit();
+      if (AcceptSurface(CandidateHit(query), rng)) query.CommitNonOpaqueTriangleHit();
     }
   }
   hit = (Hit)0;
@@ -214,6 +250,27 @@ public bool Trace(RayDesc ray, inout uint rng, out Hit hit) {
   hit.barycentrics = query.CommittedTriangleBarycentrics();
   hit.t = query.CommittedRayT();
   return true;
+}
+
+// The fraction of light a shadow ray carries through the surfaces on it:
+// the product of their transparency, 1 - coverage, with no random numbers.
+// Its expectation is the probability that a traced ray passes them all, as
+// the coverage tests draw it.
+public float ShadowTransmittance(RayDesc ray) {
+  RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
+  query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, ray);
+  float transmittance = 1.0;
+  while (query.Proceed()) {
+    if (query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      const float coverage = Coverage(CandidateHit(query));
+      if (coverage >= 1.0) {
+        query.CommitNonOpaqueTriangleHit();
+      } else if (coverage > 0.0) {
+        transmittance *= 1.0 - coverage;
+      }
+    }
+  }
+  return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0 : transmittance;
 }
 
 // A hit's object-space corner normals `n` (one per row) interpolated at the
@@ -307,6 +364,78 @@ float3 MappedNormal(float3 tangent_normal, ShadingFrame basis,
   return dot(shading, direction) < 0.0 ? shading : basis.normal;
 }
 
+float TriangleArea(float3 p0, float3 p1, float3 p2) {
+  return 0.5 * length(cross(p1 - p0, p2 - p0));
+}
+
+// The material's emission at texture coordinates `st`.
+float3 Emission(MaterialRecord material, float2 st) {
+  const TextureInputRecord input = material.inputs[kEmissionInput];
+  if (input.mode == kConstantInput) {
+    return material.emission_metallic.xyz;
+  }
+  return max(Lookup(input, st).xyz, 0.0);
+}
+
+// A point next event estimation chose on an emissive triangle.
+public struct EmitterPoint {
+  public float3 position;
+  // The triangle's unit geometric normal, either side.
+  public float3 normal;
+  // The radiance it emits, times its coverage: the probability that a ray
+  // reaching it does not pass through.
+  public Spectrum radiance;
+  // The probability density of choosing the point, per unit area.
+  public float pdf;
+};
+
+// Chooses an emissive triangle from the light table in proportion to its
+// estimated power (u.x, u.y), then a point on it uniformly by area (u.zw).
+public EmitterPoint SampleEmitter(float4 u) {
+  const uint count = path_constants.light_count;
+  const uint column = min(uint(u.x * float(count)), count - 1);
+  const LightRecord record = path_constants.lights[column];
+  const uint light = u.y < record.threshold ? column : record.alias;
+  const LightRecord chosen = path_constants.lights[light];
+  Hit hit;
+  hit.instance = chosen.instance;
+  hit.primitive = light - path_constants.light_offsets[chosen.instance];
+  // Uniform barycentrics (Pharr et al., Physically Based Rendering, 4th
+  // edition, section A.5.5).
+  const float root = sqrt(u.z);
+  hit.barycentrics = float2(root * (1.0 - u.w), root * u.w);
+  hit.t = 0.0;
+  const InstanceRecord instance = path_constants.instances[hit.instance];
+  const uint3 triangle = instance.triangles[hit.primitive];
+  const float3 p0 = mul(instance.world_from_object,
+      float4(instance.positions[triangle.x], 1.0)).xyz;
+  const float3 p1 = mul(instance.world_from_object,
+      float4(instance.positions[triangle.y], 1.0)).xyz;
+  const float3 p2 = mul(instance.world_from_object,
+      float4(instance.positions[triangle.z], 1.0)).xyz;
+  const MaterialRecord material =
+      path_constants.materials[instance.material_slot];
+  EmitterPoint point;
+  point.position = p0 + hit.barycentrics.x * (p1 - p0) +
+                   hit.barycentrics.y * (p2 - p0);
+  point.normal = normalize(cross(p1 - p0, p2 - p0));
+  const float area = TriangleArea(p0, p1, p2);
+  point.pdf = area > 0.0 ? chosen.pdf / area : 0.0;
+  point.radiance = SpectrumFromRgb(
+      Emission(material, HitTexcoords(instance, material, hit)) * Coverage(hit));
+  return point;
+}
+
+// The probability density, per unit area, with which SampleEmitter chooses
+// a point of the hit's triangle.
+public float EmitterPdf(Hit hit, float area) {
+  const uint first = path_constants.light_offsets[hit.instance];
+  if (first == kNoLights || !(area > 0.0)) {
+    return 0.0;
+  }
+  return path_constants.lights[first + hit.primitive].pdf / area;
+}
+
 // Surface hit reconstruction from the instance record and the geometry and
 // material it addresses. Interpolating the world-space corners keeps the
 // position on the triangle's plane.
@@ -323,6 +452,7 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   surface.position = p0 + hit.barycentrics.x * (p1 - p0) +
                      hit.barycentrics.y * (p2 - p0);
   const float3 normal = normalize(cross(p1 - p0, p2 - p0));
+  surface.area = TriangleArea(p0, p1, p2);
   surface.normal = dot(normal, direction) > 0.0 ? -normal : normal;
   surface.shading_normal = surface.normal;
   if (instance.normals != 0) {
@@ -362,10 +492,7 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
     if (input.mode != kConstantInput) {
       surface.metallic = saturate(Lookup(input, st)[input.channel]);
     }
-    input = material.inputs[kEmissionInput];
-    if (input.mode != kConstantInput) {
-      emission = max(Lookup(input, st).xyz, 0.0);
-    }
+    emission = Emission(material, st);
     input = material.inputs[kNormalInput];
     if (input.mode != kConstantInput) {
       tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);

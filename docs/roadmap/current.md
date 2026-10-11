@@ -7,9 +7,18 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
+Renderer Phase 3's first slice, LOTUS-LIGHT-01, adds
+next event estimation towards emissive triangles with power-heuristic MIS
+in both integrators, selected by `PathTracingSettings::light_sampling` and
+the `lotus:lightSampling` Hydra flag
+([evidence](../reports/2026-10-11-emissive-nee-mis.md)): in the Cornell box it shortens
+the time to equal quality 2.61×. The constant environment stays with BSDF
+sampling until environment importance sampling
+([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
+The remaining Renderer Phase 3 tasks are [below](#renderer-phase-3).
+
 Renderer Phase 2 is complete
-([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit));
-the next phase's tasks are not yet scheduled.
+([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)).
 
 The wavefront integrator reproduces the reference transport
 ([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
@@ -48,14 +57,30 @@ as the reference for subsequent transport changes. Shipped scope belongs
 in the [release records](../releases/README.md); known limitations remain
 in the reference documentation.
 
+## Renderer Phase 3
+
+In order, within the [phase scope](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis):
+
+- [ ] **LOTUS-LIGHT-02 — Analytic lights.** A light representation in the
+  core scene for UsdLux sphere, rect, disk and distant lights, translated
+  by the Hydra adapter and sampled by next event estimation beside the
+  emissive triangles, with BSDF-found hits weighed by MIS. Current limits
+  are in the [light reference](../reference/SCENE.md#lights).
+- [ ] **LOTUS-LIGHT-03 — Environment importance sampling.** Dome-light
+  textures, and light sampling of the environment in proportion to its
+  radiance, measured against BSDF sampling as the
+  [constant environment](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)
+  was.
+- [ ] **LOTUS-LIGHT-04 — Renderer Phase 3 exit review.** Time to equal
+  quality against brute-force BSDF sampling on the fixed workloads and the
+  lit scenes, under both integrators; whether the wavefront integrator's
+  inline shadow rays should move to a queue of their own.
+
 ## Deferred adapter work
 
 These are assignments to later phases, rather than additional foundation
 requirements:
 
-- [ ] **LOTUS-LIGHT-01 — Renderer Phase 3 light representation and sampling.**
-  Extend the light representation alongside explicit direct-light sampling.
-  Implementation limits are in the [light reference](../reference/SCENE.md#lights).
 - [ ] **LOTUS-MATERIAL-01 — Renderer Phase 8 production scene coverage.**
   Evaluate remaining material, texture and shading-normal coverage within
   the [production material scope](../design/ROADMAP_POLICY.md#renderer-phase-8--production-material-support),

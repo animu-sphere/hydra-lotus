@@ -85,6 +85,20 @@ struct GpuMaterialRecord {
 };
 static_assert(sizeof(GpuMaterialRecord) == 544);
 
+// One light table element: an emissive triangle, chosen by the alias
+// method. Its mirror is `LightRecord` in shaders/common/scene.slang. The
+// table follows one uint32 per instance record, padded to 16 bytes: the
+// instance's first entry, or kNoLights. An instance's entries are its
+// triangles in order.
+struct GpuLightRecord {
+  float pdf;
+  float threshold;
+  std::uint32_t alias;
+  std::uint32_t instance;
+};
+static_assert(sizeof(GpuLightRecord) == 16);
+inline constexpr std::uint32_t kNoLights = 0xFFFFFFFFU;
+
 // The texture table: the size of the scene passes' sampled-image array, and
 // so the most textures a GPU scene holds.
 inline constexpr std::uint32_t kMaxTextures = 1024;
@@ -156,6 +170,17 @@ public:
   // The material table's device address, under the same conditions.
   [[nodiscard]] VkDeviceAddress MaterialAddress() const {
     return materials_.address;
+  }
+  // The light table's per-instance offsets and entries, under the same
+  // conditions; the offsets cover every instance record.
+  [[nodiscard]] VkDeviceAddress LightOffsetAddress() const {
+    return lights_.address;
+  }
+  [[nodiscard]] VkDeviceAddress LightAddress() const {
+    return lights_.address == 0 ? 0 : lights_.address + light_entries_offset_;
+  }
+  [[nodiscard]] std::uint32_t LightCount() const {
+    return light_count_;
   }
   // The texture table: one view per slot, VK_NULL_HANDLE for a free slot.
   // Views are in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. The generation
@@ -256,6 +281,11 @@ private:
   std::uint32_t material_count_ = 0;
   // One more than the highest material slot an instance uses.
   std::uint32_t materials_used_ = 0;
+  // The last instance plan, from which the light table is built.
+  std::vector<SceneInstance> scene_instances_;
+  DeviceBuffer lights_;
+  VkDeviceSize light_entries_offset_ = 0;
+  std::uint32_t light_count_ = 0;
   std::array<float, 3> environment_{};
   DeviceBuffer staging_;
   DeviceBuffer readback_;

@@ -28,8 +28,10 @@ radiance sample; colour converges when the accumulation reaches the
 `convergedSamplesPerPixel` render setting (64 by default), depth and IDs
 after one pass. The `lotus:sampleIndex` render setting fixes the samples'
 random numbers ([deterministic mode](SCENE.md#deterministic-mode-through-hydra)),
-and the `lotus:wavefront` flag selects the integrator that traces them
-([integrator selection](SCENE.md#integrator-selection-through-hydra)). The render pass's `IsConverged` follows the colour, so a host
+the `lotus:wavefront` flag selects the integrator that traces them
+([integrator selection](SCENE.md#integrator-selection-through-hydra)), and
+the `lotus:lightSampling` flag the estimator
+([light sampling](SCENE.md#light-sampling-through-hydra)). The render pass's `IsConverged` follows the colour, so a host
 that waits for convergence redraws until then.
 
 ## Storage and binding

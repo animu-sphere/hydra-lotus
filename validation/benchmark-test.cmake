@@ -2,11 +2,15 @@
 # Validate the benchmark consumer contract, including capability SKIPs and
 # rejected CLI arguments. No timing threshold is used as a correctness gate.
 # INTEGRATOR selects --benchmark-integrator; reference by default.
+# LIGHT_SAMPLING selects --benchmark-light-sampling; bsdf by default.
 if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "EXECUTABLE and TEST_ROOT are required")
 endif()
 if(NOT DEFINED INTEGRATOR)
   set(INTEGRATOR reference)
+endif()
+if(NOT DEFINED LIGHT_SAMPLING)
+  set(LIGHT_SAMPLING bsdf)
 endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 if(NO_DRIVER)
@@ -22,6 +26,7 @@ execute_process(COMMAND "${EXECUTABLE}" --benchmark "${report}"
   --benchmark-frames 16 --benchmark-warmup 2
   --benchmark-label "CTest quoted \"label\""
   --benchmark-integrator "${INTEGRATOR}"
+  --benchmark-light-sampling "${LIGHT_SAMPLING}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "Benchmark failed (${result}):\n${output}\n${error}")
@@ -33,12 +38,14 @@ string(JSON frames GET "${json}" procedure measured_frames)
 string(JSON warmup GET "${json}" procedure warmup_frames)
 string(JSON label GET "${json}" build label)
 string(JSON integrator GET "${json}" procedure integrator)
+string(JSON light_sampling GET "${json}" procedure light_sampling)
 string(JSON width GET "${json}" procedure width)
 string(JSON compared GET "${json}" procedure cornell_reference_compared)
 if(NOT schema STREQUAL "lotus-benchmark-v1" OR NOT count EQUAL 4 OR
    NOT frames EQUAL 16 OR NOT warmup EQUAL 2 OR
    NOT label STREQUAL "CTest quoted \"label\"" OR
-   NOT integrator STREQUAL INTEGRATOR OR NOT width EQUAL 128 OR
+   NOT integrator STREQUAL INTEGRATOR OR
+   NOT light_sampling STREQUAL LIGHT_SAMPLING OR NOT width EQUAL 128 OR
    NOT compared STREQUAL "ON")
   message(FATAL_ERROR "Wrong benchmark schema, workload count or procedure")
 endif()
@@ -141,10 +148,15 @@ if(NOT invalid STREQUAL "2")
   message(FATAL_ERROR "An unknown integrator was accepted")
 endif()
 execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
+  --benchmark-light-sampling nee RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+if(NOT invalid STREQUAL "2")
+  message(FATAL_ERROR "An unknown light sampling was accepted")
+endif()
+execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
   --report "${TEST_ROOT}/renderer-report.json" RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
 file(READ "${TEST_ROOT}/sentinel.json" sentinel)
 if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve" OR
    EXISTS "${TEST_ROOT}/renderer-report.json")
   message(FATAL_ERROR "Benchmark accepted correctness options or overwrote rejected output")
 endif()
-message(STATUS "Benchmark schema/workloads/CLI passed for the ${INTEGRATOR} integrator; capability exit ${result}")
+message(STATUS "Benchmark schema/workloads/CLI passed for the ${INTEGRATOR} integrator with ${LIGHT_SAMPLING} light sampling; capability exit ${result}")
