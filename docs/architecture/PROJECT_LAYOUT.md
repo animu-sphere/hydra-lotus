@@ -69,6 +69,10 @@ history through the shared scene shader. The plain-C++ packed products and
 CPU fetch oracle are in `temporal.hpp` and `temporal.cpp`. The uninstalled
 `lotus-temporal-gpu-test` validates both integrators and reports a capability
 SKIP without Vulkan; its missing-driver regression is Vulkan-only.
+The same backend and shader also own the opt-in bounded radiance pass,
+colour/count history, automatic reset classification and third timestamp
+pair. The same GPU validation executable compares fresh batches and moving
+references ([radiance contract](../reference/TEMPORAL.md#temporal-radiance-accumulation)).
 
 The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its

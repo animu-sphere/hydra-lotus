@@ -15,6 +15,7 @@ struct TemporalConstants {
   // absolute/relative depth tolerance, normal cosine, max pixel motion.
   float4 validation;
   uint4 history; // x: preceding frame available; y/z: full target extent.
+  uint4 radiance; // enabled, fresh samples, bounded history samples, reserved
 };
 [[vk::binding(8, 0)]] ConstantBuffer<TemporalConstants> temporal_frame;
 
@@ -50,6 +51,39 @@ struct TemporalValidityPixel {
   uint reserved;
 };
 [[vk::binding(12, 0)]] RWStructuredBuffer<TemporalValidityPixel> temporal_validity;
+
+struct TemporalRadiancePixel {
+  float4 color;
+  uint sample_count;
+  uint reserved0;
+  uint reserved1;
+  uint reserved2;
+};
+[[vk::binding(13, 0)]] StructuredBuffer<float4> temporal_batch;
+[[vk::binding(14, 0)]] RWStructuredBuffer<TemporalRadiancePixel> temporal_radiance;
+[[vk::binding(15, 0)]] StructuredBuffer<TemporalRadiancePixel> temporal_old_radiance;
+
+public float4 AccumulateTemporalRadiance(float2 pixel) {
+  const uint index = uint(pixel.y) * temporal_frame.history.y + uint(pixel.x);
+  TemporalRadiancePixel output = {};
+  output.color = temporal_batch[index];
+  const uint cap = temporal_frame.radiance.z;
+  if ((temporal_surface[index].flags & 1u) != 0) {
+    output.sample_count = min(temporal_frame.radiance.y, cap);
+    const TemporalValidityPixel validity = temporal_validity[index];
+    if (validity.valid != 0) {
+      const TemporalRadiancePixel old = temporal_old_radiance[validity.previous_index];
+      const uint kept = min(old.sample_count, cap - output.sample_count);
+      if (kept != 0 && all(isfinite(old.color))) {
+        const uint count = kept + output.sample_count;
+        output.color += (old.color - output.color) * (float(kept) / float(count));
+        output.sample_count = count;
+      }
+    }
+  }
+  temporal_radiance[index] = output;
+  return output.color;
+}
 
 // TemporalRejection's stable numeric codes. This contract contains no
 // integrator, radiance, reservoir or denoising state.

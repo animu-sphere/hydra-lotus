@@ -9,6 +9,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in temporal radiance accumulation under both integrators, with fresh
+  disjoint sample batches, bounded per-pixel colour/count history, automatic
+  scene/lighting/settings resets, camera/rigid-motion reuse, history debug
+  products and a separate GPU timestamp. Static convergence matches
+  progressive transport; moving sequences and disocclusion are compared
+  with independent references
+  ([contract](docs/reference/TEMPORAL.md#temporal-radiance-accumulation),
+  [evidence](docs/reports/2026-10-12-temporal-radiance.md)).
 - GPU backward reprojection and shared history rejection in both integrators,
   with a CPU fetch oracle, per-pixel validity/rejection/fetch-index debug AOV,
   configurable depth/normal/motion thresholds, persistent output/readback
@@ -21,8 +29,8 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   identities, backward motion and expected previous depth, retained GPU
   surface buffers and a separate primary-surface timestamp. Frame history
   advances only on successful calls, with display/data-window and resize
-  support. Progressive transport is preserved; temporal radiance
-  accumulation and Hydra temporal controls remain pending
+  support. Progressive transport is preserved; Hydra temporal controls
+  remain pending
   ([contract](docs/reference/TEMPORAL.md),
   [evidence](docs/reports/2026-10-12-temporal-primary-surfaces.md)).
 - The CPU temporal foundation in `lotus/temporal.hpp`, available through

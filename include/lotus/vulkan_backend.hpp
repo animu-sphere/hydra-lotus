@@ -87,6 +87,16 @@ struct TemporalProducts {
   // Persistent device validity buffer and host readback mirror.
   std::uint64_t validity_bytes = 0;
   std::uint64_t metadata_bytes = 0;
+  bool radiance_available = false;
+  std::vector<TemporalRadiancePixel> radiance;
+  std::vector<TemporalRadiancePixel> previous_radiance;
+  std::uint32_t radiance_row_pitch = 0;
+  double accumulation_gpu_ms = 0.0;
+  // Two history buffers, their readback mirror, and a fresh RGBA batch buffer.
+  std::uint64_t radiance_bytes = 0;
+  // RNG start and fresh samples in this frame, independent of history length.
+  std::uint32_t batch_sample_index = 0;
+  std::uint32_t batch_samples = 0;
 };
 
 struct GpuFrameEvidence {
@@ -489,6 +499,10 @@ public:
   // come from target; frame_index/history_key/camera_cut are caller-owned.
   // Only success advances history. Ordinary Render/RenderScene calls break
   // this stream. Same-count instancer reordering requires a cut/key change.
+  // accumulate_radiance traces a fresh batch per call and reuses validated
+  // per-pixel radiance with bounded sample counts. It automatically resets
+  // for transport settings and non-rigid scene edits. Camera/rigid motion
+  // preserves compatible history; history_key/camera_cut reset explicitly.
   [[nodiscard]] virtual GpuFrameEvidence RenderTemporalScene(
       const FrameSnapshot& snapshot, const OffscreenTarget& target,
       std::uint32_t frame_count, const TemporalFrameSettings& temporal,

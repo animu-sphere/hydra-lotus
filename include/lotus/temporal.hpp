@@ -20,6 +20,8 @@ enum class TemporalResetReason {
   FrameGap,
   TargetChanged,
   HistoryKeyChanged,
+  RenderSettingsChanged,
+  SceneChanged,
 };
 
 struct TemporalValidationSettings {
@@ -42,6 +44,12 @@ struct TemporalFrameSettings {
   std::array<float, 4> display_window{};
   std::array<std::int32_t, 4> data_window{};
   TemporalValidationSettings validation;
+  // Opt-in radiance reuse. Each call traces a fresh batch rather than adding
+  // the same progressive mean repeatedly. Metadata-only remains the default.
+  bool accumulate_radiance = false;
+  // Effective samples retained per pixel, including the current batch.
+  // Must be in [1, 65536] when accumulation is enabled.
+  std::uint32_t max_history_samples = 32;
 };
 
 struct TemporalFrame {
@@ -155,6 +163,14 @@ struct TemporalValidityPixel {
   // Row-major history sample, or UINT32_MAX when no fetch took place.
   std::uint32_t previous_index = UINT32_MAX;
   std::uint32_t reserved = 0;
+};
+
+// GPU temporal radiance/history-length debug product, 32 bytes per pixel.
+struct TemporalRadiancePixel {
+  std::array<float, 4> color{};
+  // Zero on misses and outside the data window; such pixels never reuse.
+  std::uint32_t sample_count = 0;
+  std::array<std::uint32_t, 3> reserved{};
 };
 
 // CPU oracle for the GPU's nearest-pixel backward fetch (floor of the

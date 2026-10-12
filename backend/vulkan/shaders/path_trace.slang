@@ -127,6 +127,12 @@ FragmentOutput RadiancePass(VertexOutput input) {
 
 [shader("fragment")]
 FragmentOutput fragment_main(VertexOutput input) {
+  if (kPass == 6) {
+    FragmentOutput output;
+    output.color = AccumulateTemporalRadiance(input.position.xy);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == 4 || kPass == 5) {
     if (kPass == 4)
       WriteTemporalSurface(input.ndc, input.position.xy);
