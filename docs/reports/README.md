@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-12-temporal-radiance.md](2026-10-12-temporal-radiance.md) | Opt-in bounded temporal radiance, static progressive equivalence, independent moving references and per-pixel batch/blend checks, disocclusion, reset policy, memory, GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-gpu-validity.md](2026-10-12-temporal-gpu-validity.md) | GPU backward history fetch and shared validity under both integrators, per-pixel CPU-oracle comparison of every rejection code, self-disocclusion and moving occluders, debug products, separate GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-primary-surfaces.md](2026-10-12-temporal-primary-surfaces.md) | GPU primary-surface history, depth, geometric normals, stable identities and backward motion in both integrators; independent moving-frame projections, window/resize and resource-churn checks, GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-foundation.md](2026-10-12-temporal-foundation.md) | CPU temporal frame lifecycle and resource retention, stable rigid-placement correspondence, independent pinhole reprojection and shared history rejection, with core and runtime-free regression evidence. |

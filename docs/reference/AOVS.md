@@ -24,6 +24,9 @@ products remain `color` and `depth`.
 The opt-in backend `RenderTemporalScene` additionally exposes primary linear
 depth, geometric normal, stable identities and backward motion in
 `GpuFrameEvidence::temporal` ([temporal product contract](TEMPORAL.md#gpu-primary-surface-products)).
+It also publishes shared validity/rejection/fetch indices and, when radiance
+accumulation is enabled, linear RGBA and per-pixel bounded history counts
+([radiance contract](TEMPORAL.md#temporal-radiance-accumulation)).
 These debug products are separate from the Hydra channels above; temporal
 Hydra descriptors and bindings are not implemented yet.
 

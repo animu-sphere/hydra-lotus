@@ -36,10 +36,12 @@ Zero width/height, non-finite display windows and duplicate or decreasing indice
 releases the retained snapshot and permits the frame index to restart. After
 any accepted reset frame, the next compatible frame can reuse it.
 
-`history_key` is a caller-owned compatibility token. The consumer must change
+`history_key` is a caller-owned compatibility token. In CPU/metadata-only
+mode the consumer must change
 it, or explicitly reset, for lighting, integrator, estimator, sampling settings
 or other changes that invalidate radiance globally. There is no automatic
-camera-cut heuristic or automatic scene-wide lighting-change classification.
+camera-cut heuristic. The opt-in GPU radiance mode additionally classifies
+scene and render-setting incompatibilities as described below.
 
 ## Placement correspondence
 
@@ -131,8 +133,8 @@ progressive samples, adds no sample at the convergence limit, or renders an
 empty scene. A failed validation does not consume history. A successful
 ordinary `Render` or `RenderScene` breaks the temporal stream. Device failures
 leave the renderer failed. The existing progressive accumulation and its
-reset rules remain in effect; this entry point does not accumulate temporal
-radiance.
+reset rules remain in effect in the default metadata-only mode. Enabling
+`TemporalFrameSettings::accumulate_radiance` selects the radiance mode below.
 
 `GpuFrameEvidence::temporal` carries tightly packed top-left rows of 64-byte
 `TemporalPixel` records. Every record starts cleared, independent of the
@@ -174,7 +176,7 @@ The primary-surface pass has its own persistent timestamp pair:
 and surface draw, excluding metadata host writes and surface readback.
 Unavailable timestamps report false/zero. `surface_bytes` counts both device
 buffers and their two-buffer host readback mirror (256 bytes per target pixel);
-`metadata_bytes` counts the 256-byte camera/window/validation block and the retained capacity
+`metadata_bytes` counts the 272-byte camera/window/validation/radiance block and the retained capacity
 of the 96-byte-per-instance metadata buffer. Surface buffers/readback persist
 at a fixed extent and are replaced on resize. Instance capacity grows when
 needed. No pipeline or timestamp pool is created in a render call. Targets
@@ -240,10 +242,88 @@ validity pass and excludes host writes and readback. Unavailable timestamps
 report false/zero. `validity_bytes` counts the persistent device output and
 host readback mirror (32 bytes per pixel), separately from `surface_bytes`.
 The two passes have explicit shader-write/read and transfer/readback barriers.
-The validity pipeline and four-query timestamp pool are created at renderer
+The validity pipeline and six-query timestamp pool are created at renderer
 initialization; fixed extents reuse buffers and resize replaces them.
 History is published only after both passes, readbacks and timestamps succeed.
 No transport, reservoir or denoiser state enters validity.
+
+## Temporal radiance accumulation
+
+Set `TemporalFrameSettings::accumulate_radiance = true` in
+`RenderTemporalScene`. The default is false. Both integrators trace a fresh
+batch of `frame_count` samples per call, capped by `PathTracingSettings::max_samples`
+when nonzero. That limit applies to each batch in this mode, rather than
+stopping the temporal stream. `samples_per_pixel` reports fresh batch samples;
+per-pixel retained counts are in `temporal.radiance`. Colour clears must be
+enabled and output must be `Radiance`; unsupported settings fail before
+advancing history. Depth clears/preservation keep their ordinary behavior.
+
+Each compatible batch uses the next disjoint RNG range, starting with
+`sample_index` after a reset. `batch_sample_index` and `batch_samples` expose
+it. The 32-bit RNG index wraps modulo 2^32. Camera and rigid motion do not
+restart the sequence. Failed calls do not consume it. A call is still one
+temporal frame, regardless of its batch size. Ordinary progressive transport
+remains selectable through `RenderScene` or metadata-only temporal mode.
+
+The fresh RGBA batch mean is copied to a persistent device buffer. A third
+fullscreen pass consumes the existing shared validity and nearest previous
+fetch index. For a current primary hit, let `n = min(batch_samples, cap)`
+and `h = min(previous_count, cap - n)` when shared validity accepts history,
+otherwise `h = 0`. The output is `(n * batch_mean + h * previous_mean) / (n + h)`
+and its effective count is `n + h`. `max_history_samples` supplies `cap`,
+default 32, and must be in [1, 65536]. A batch as large as the cap replaces
+history completely. At the cap this becomes a bounded exponential mean;
+the count is an effective weight, not a count of independent surviving paths.
+Below the cap a stationary scene matches progressive transport of the same
+disjoint samples within float summation precision.
+
+Misses and pixels outside the data/display window write the fresh batch
+colour and a zero history count. Rejected hits start with fresh samples only.
+RGBA is accumulated in linear space, including coverage alpha. Primary
+metadata retains its fixed pixel-centre/sample-0 coverage realization while
+radiance is box-filtered and jittered within the pixel, as before.
+
+Radiance mode adds automatic global resets, after the ordinary frame/window/
+key/cut reset priorities:
+
+| Change | `reset_reason` |
+| --- | --- |
+| Enabling radiance after metadata-only, integrator, light estimator, base RNG index, bounce limit, per-batch sample limit, history cap or background colour | `RenderSettingsChanged` |
+| Constant environment, environment map, analytic lights, material table, texture resources, mesh insertion/removal, geometry resource, binding, visibility or instancing mode/count | `SceneChanged` |
+| Camera or existing rigid-placement transform only | No global reset; shared validity controls each pixel |
+
+Scene classification conservatively resets for unused material/texture edits
+too. Same-count instance reordering requires a caller cut/key change. Moving
+emissive/occluding geometry may change illumination without changing the
+primary surface: supported rigid motion therefore preserves an approximate
+history, not an unbiased moving-scene estimator. Use explicit cuts/keys for
+changes requiring immediate radiance replacement. Validation thresholds
+remain per-frame controls and do not reset the stream globally.
+
+`TemporalProducts::radiance` and `previous_radiance` are 32-byte
+`TemporalRadiancePixel` debug records: linear RGBA `color`, uint32
+`sample_count` and three zero reserved words. The rows are top-left and
+`radiance_row_pitch` is width * 32. Previous records are absent on a reset.
+The colour attachment receives the temporal mean; the D32 attachment keeps
+ordinary primary depth. `radiance_available` is false in metadata-only mode.
+
+`accumulation_gpu_ms` uses a separate timestamp pair in the persistent
+six-query pool, with the existing `timestamp_available` flag. It measures
+the accumulation draw, excluding batch copy, transport and readbacks.
+`radiance_bytes` counts two device history buffers, their two-buffer host
+readback mirror and the fresh RGBA device batch: 144 bytes per pixel. These
+buffers persist at a fixed extent and are replaced on resize; returned
+evidence vectors and Vulkan allocation alignment are outside this accounting.
+The pipeline is created at renderer initialization. History and RNG state
+publish only after the passes, readbacks and timestamps succeed.
+
+Nearest history fetch, geometric rejection and bounded weighting supply this
+foundation. There is no radiance neighbourhood clamp, history filtering,
+anti-lag heuristic or motion-aware BRDF correction. View-dependent shading,
+indirect-light changes and jittered silhouette coverage can therefore lag or
+ghost during motion. The [accumulation report](../reports/2026-10-12-temporal-radiance.md)
+measures static equivalence, moving-image error and exposed-surface rejection;
+it does not establish production-quality temporal reconstruction.
 
 ## Entry points and limits
 
@@ -265,7 +345,11 @@ initial empty scene without a TLAS
 Vulkan-disabled configuration and missing-driver regression report explained
 SKIPs.
 
-History filtering, temporal radiance accumulation and Hydra temporal
-settings/AOV bindings remain outside this implementation.
-Geometry deformation is conservatively rejected. No ReSTIR or denoiser state
-is introduced and no temporal image-quality or convergence claim is made.
+The GPU test also compares every temporal colour/count with independent
+fresh batches, static convergence with progressive transport, and moving
+sequences with 256-sample reference images, including cap saturation,
+disocclusion, global resets and failed-call recovery
+([radiance evidence](../reports/2026-10-12-temporal-radiance.md)).
+History filtering and Hydra temporal settings/AOV bindings remain outside
+this implementation. Geometry deformation is conservatively rejected.
+No ReSTIR or denoiser state is introduced.

@@ -21,16 +21,13 @@ integrators ([evidence](../reports/2026-10-12-temporal-primary-surfaces.md),
 LOTUS-TEMPORAL-03 adds GPU backward fetch and shared rejection, CPU-oracle
 comparisons, debug validity/rejection products and a separate timestamp
 ([evidence](../reports/2026-10-12-temporal-gpu-validity.md),
-[contract](../reference/TEMPORAL.md#gpu-reprojection-and-validity)). Work
-proceeds in this order:
+[contract](../reference/TEMPORAL.md#gpu-reprojection-and-validity)).
+LOTUS-TEMPORAL-04 supplies opt-in bounded radiance accumulation, automatic
+reset classification and fresh batch/RNG handling under both integrators
+([evidence](../reports/2026-10-12-temporal-radiance.md),
+[contract](../reference/TEMPORAL.md#temporal-radiance-accumulation)). Work
+proceeds with:
 
-- [ ] **LOTUS-TEMPORAL-04 — Opt-in temporal radiance accumulation.**
-  Accumulate reprojected radiance and per-pixel sample counts with a bounded
-  history. Define reset handling for lighting, render settings, scene edits,
-  target/framing changes and explicit cuts, preserving history on supported
-  camera/rigid motion. Compare static convergence with progressive reference
-  transport and moving sequences with independently rendered references;
-  report rejection behavior, ghosting, GPU time and history memory.
 - [ ] **LOTUS-TEMPORAL-05 — Hydra integration and temporal exit review.**
   Expose temporal selection and reset controls through Hydra, add hosted
   moving-scene validation and motion/history AOV coverage, and keep the
