@@ -91,6 +91,18 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   reads them from `assets/` beside it (`--assets` overrides), installs
   them to `bin/assets/`, and releases require them.
 
+- Two lit benchmark workloads, `lights-v1` (the Cornell box open at the
+  top under one analytic light of each kind) and `environment-v1` (its
+  blocks under OpenUSD's Stinson Beach image), and per-sample variance in
+  every workload's measurements: `per_sample_variance` from 16
+  accumulations of 16 samples and `variance_gpu_ms`, proportional to the
+  time to equal quality. Scenes report their light table. With them the
+  Renderer Phase 3 exit review measured light sampling's time to equal
+  quality against BSDF sampling under both integrators: 2.6–3.0× shorter
+  in the Cornell box and over a thousandfold in the lit workloads. This
+  completes Renderer Phase 3
+  ([exit review](docs/reports/2026-10-12-renderer-phase3-exit.md)).
+
 ### Changed
 
 - Any synced analytic light, like any dome, replaces the Hydra adapter's

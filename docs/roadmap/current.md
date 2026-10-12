@@ -24,7 +24,12 @@ image and samples it in proportion to its radiance in the same light
 table: under OpenUSD's Stinson Beach image a Lambert floor's per-sample
 variance falls over a thousandfold
 ([evidence](../reports/2026-10-11-environment-importance-sampling.md)).
-The remaining Renderer Phase 3 task is [below](#renderer-phase-3).
+Renderer Phase 3 is complete
+([exit review](../reports/2026-10-12-renderer-phase3-exit.md#renderer-phase-3-exit)):
+light sampling shortens the time to equal quality 2.6–3.0× in the Cornell
+box and by three orders of magnitude or more in the lit workloads, under
+both integrators. The wavefront shadow rays stay inline; acceleration for
+many analytic lights is [deferred](#deferred-adapter-work).
 
 Renderer Phase 2 is complete
 ([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)).
@@ -66,17 +71,6 @@ as the reference for subsequent transport changes. Shipped scope belongs
 in the [release records](../releases/README.md); known limitations remain
 in the reference documentation.
 
-## Renderer Phase 3
-
-In order, within the [phase scope](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis):
-
-- [ ] **LOTUS-LIGHT-04 — Renderer Phase 3 exit review.** Time to equal
-  quality against brute-force BSDF sampling on the fixed workloads and the
-  lit scenes, under both integrators; whether the wavefront integrator's
-  inline shadow rays should move to a queue of their own, and whether
-  intersecting every analytic light along each ray needs an acceleration
-  structure of its own.
-
 ## Deferred adapter work
 
 These are assignments to later phases, rather than additional foundation
@@ -91,3 +85,10 @@ requirements:
   classification (hits queued per shading class) against its
   [upper bound on the fixed workloads](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification),
   1–2% of the shade kernel where every material is of one kind.
+- [ ] **LOTUS-LIGHT-05 — Renderer Phase 9 light acceleration.** Every ray
+  tests every analytic light, and a frame's cost grows linearly with their
+  number ([baseline](../reports/2026-10-12-renderer-phase3-exit.md#analytic-lights-along-each-ray)).
+  Evaluate a hierarchy for the crossing test, or the lights as procedural
+  primitives in the ray-tracing acceleration structure, with a light tree
+  for selection, within the
+  [advanced sampling candidates](../design/ROADMAP_POLICY.md#renderer-phase-9--advanced-sampling-and-scheduling).

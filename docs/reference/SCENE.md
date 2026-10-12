@@ -933,6 +933,13 @@ order. Changing it restarts the accumulation.
   wavefront shade kernel traces the shadow ray inline and, for the emission
   weight and, with analytic lights, for the lights a ray crossed, reads the
   path's ray origin section.
+- **Cost.** Light selection takes constant time; every ray tests every
+  analytic light, and under BSDF sampling every scattering event loops
+  over them for parallel lights, so a frame's cost grows linearly with
+  their number, about 3.7 µs per light per 128×128 light-sampled frame on
+  the measured device. There is no acceleration structure for lights, and
+  the wavefront shade kernel keeps its shadow rays inline
+  ([exit review](../reports/2026-10-12-renderer-phase3-exit.md)).
 
 `renderer.path.light_sampling` compares the Cornell box's images under
 light sampling at 1–1024 spp with the committed reference by the DES-Q5
@@ -998,7 +1005,7 @@ and an image whose key names no texture must stay off the GPU
 
 ### Fixed benchmarks
 
-`lotus-headless --benchmark <json-path>` runs four procedural workloads from
+`lotus-headless --benchmark <json-path>` runs six procedural workloads from
 `adapters/headless/benchmark.cpp`, sharing the reference path tracer and
 Cornell scene definition. Workload identities are versioned; changes to
 their geometry, textures, materials or camera require a new identity before
@@ -1019,8 +1026,12 @@ frame, with 64 maximum bounces. `--benchmark-frames` and
 `--benchmark-light-sampling bsdf` (the default, so that earlier
 measurements stay comparable) or `mis` selects the
 [light sampling](#light-sampling), recorded as `procedure.light_sampling`.
-The non-Cornell workloads use a white environment, coated diffuse surfaces
-and deterministic grid heights.
+`textured-v1`, `instanced-v1` and `geometry-v1` use a white environment,
+coated diffuse surfaces and deterministic grid heights; their light tables
+are empty. The lit workloads light the Cornell box's geometry by analytic
+lights and by OpenUSD's Stinson Beach image
+(`validation/assets/StinsonBeach.hdr`), read from `assets/` beside the
+executable.
 
 | Identity | Workload |
 | --- | --- |
@@ -1028,6 +1039,8 @@ and deterministic grid heights.
 | `textured-v1` | 16 independent 32×32-quad patches, 32,768 unique triangles, 16 materials and 16 procedural 256×256 RGBA8 sRGB textures, with per-corner UVs. |
 | `instanced-v1` | One two-triangle prototype in a 64×64 placement grid (4,096 instances). |
 | `geometry-v1` | One indexed 512×512-quad grid, 524,288 triangles and 263,169 vertices. |
+| `lights-v1` | The Cornell box without its ceiling and emissive panel: 32 triangles in 6 placements, lit by a normalized 0.53° distant light through the open top, a sphere, a rect and a disk light, under a black environment. |
+| `environment-v1` | The Cornell box's blocks on its floor scaled to 120 units: 26 triangles in 3 placements under the Stinson Beach image, its sun behind the camera, which looks 25° down. |
 
 The report schema is `lotus-benchmark-v1`, separate from OpenStrata's
 renderer-evidence schema. It retains raw GPU-pass and blocking render wall
@@ -1039,6 +1052,15 @@ report does not record the GPU's power state, which the driver may lower
 between the measured frames; GPU durations are comparable only between
 runs made in the same state
 ([path-state report](../reports/2026-10-10-wavefront-path-state.md#power-states)).
+
+Every workload also renders 16 fresh accumulations of 16 samples from
+sample index 2²¹: `per_sample_variance` is the mean over pixels and
+channels of each value's variance across them, times 16, and
+`variance_gpu_ms` that times the median GPU frame time (null without
+timestamps). The time to a given variance is proportional to it, so the
+ratio of two runs' values is their ratio of times to equal quality. The
+scene's `emissive_triangles`, `analytic_lights` and `environment_sampled`
+describe its light table.
 
 Unchanged-scene CPU cost covers `Commit`, extraction and empty `UpdateScene`,
 including invariant checks, in 16 batches of 1,000 calls. Rendering and these
@@ -1070,7 +1092,9 @@ skipped/failed scenes have null measurements. Benchmark options cannot be
 mixed with correctness-report options. CTest checks the report contract and
 invalid arguments, with an isolated missing-driver variant on Vulkan builds.
 Measured numbers and repeatability evidence are in the
-[fixed baseline report](../reports/2026-10-10-performance-baseline.md).
+[fixed baseline report](../reports/2026-10-10-performance-baseline.md);
+times to equal quality on all six workloads are in the
+[Renderer Phase 3 exit review](../reports/2026-10-12-renderer-phase3-exit.md).
 
 ## Hydra extraction
 
