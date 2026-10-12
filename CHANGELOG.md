@@ -9,13 +9,20 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- GPU backward reprojection and shared history rejection in both integrators,
+  with a CPU fetch oracle, per-pixel validity/rejection/fetch-index debug AOV,
+  configurable depth/normal/motion thresholds, persistent output/readback
+  buffers and a separate GPU timestamp. Moving scenes exercise every
+  rejection code and compare each pixel with the CPU oracle
+  ([contract](docs/reference/TEMPORAL.md#gpu-reprojection-and-validity),
+  [evidence](docs/reports/2026-10-12-temporal-gpu-validity.md)).
 - Opt-in `OffscreenRenderer::RenderTemporalScene` for both integrators:
   pixel-centre linear depth/geometric normals, stable placement/material
   identities, backward motion and expected previous depth, retained GPU
   surface buffers and a separate primary-surface timestamp. Frame history
   advances only on successful calls, with display/data-window and resize
-  support. Progressive transport is preserved; GPU history rejection,
-  temporal radiance accumulation and Hydra temporal controls remain pending
+  support. Progressive transport is preserved; temporal radiance
+  accumulation and Hydra temporal controls remain pending
   ([contract](docs/reference/TEMPORAL.md),
   [evidence](docs/reports/2026-10-12-temporal-primary-surfaces.md)).
 - The CPU temporal foundation in `lotus/temporal.hpp`, available through

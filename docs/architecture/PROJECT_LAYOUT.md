@@ -62,9 +62,11 @@ limits.
 
 `temporal_metadata.cpp` and its private header maintain stable placement and
 material identities without GPU dependencies in the same backend target.
-`vulkan_backend.cpp` owns the primary-surface pass, its persistent history
-buffers and timestamps; `shaders/common/temporal.slang` generates the surface
-products through the shared scene shader. The uninstalled
+`vulkan_backend.cpp` owns the primary-surface and shared-validity passes,
+their persistent history/debug buffers and separate timestamps;
+`shaders/common/temporal.slang` generates surface products and fetches/rejects
+history through the shared scene shader. The plain-C++ packed products and
+CPU fetch oracle are in `temporal.hpp` and `temporal.cpp`. The uninstalled
 `lotus-temporal-gpu-test` validates both integrators and reports a capability
 SKIP without Vulkan; its missing-driver regression is Vulkan-only.
 

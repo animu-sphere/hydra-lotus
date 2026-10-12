@@ -65,22 +65,6 @@ struct WavefrontTimings {
   double tail_gpu_ms = 0.0;
 };
 
-// Tightly packed top-left primary-surface debug products, one per pixel.
-// Zero means a miss/outside data window. Fixed pixel-centre products are
-// independent of jittered radiance and attachment preservation.
-struct TemporalPixel {
-  // Unit world-space geometric normal facing the camera; w: linear depth.
-  std::array<float, 4> normal_depth{};
-  // xy: backward motion in pixels; z: expected previous-camera depth;
-  // w: 1 only for reprojection within both data windows.
-  std::array<float, 4> motion_depth{};
-  std::uint64_t instance_id = 0;
-  std::uint64_t material_id = 0;
-  // bit 0: hit; bit 1: placement correspondence; bit 2: unchanged material.
-  std::uint32_t flags = 0;
-  std::array<std::uint32_t, 3> reserved{};
-};
-
 struct TemporalProducts {
   bool available = false;
   bool history_available = false;
@@ -90,12 +74,18 @@ struct TemporalProducts {
   std::uint32_t row_pitch = 0;
   std::vector<TemporalPixel> current;
   // Retained GPU metadata from the last successful temporal call. Empty
-  // on a reset; it is not reprojected or filtered yet.
+  // on a reset.
   std::vector<TemporalPixel> previous;
+  // Shared GPU rejection/validity debug AOV; tightly packed top-left rows.
+  std::vector<TemporalValidityPixel> validity;
+  std::uint32_t validity_row_pitch = 0;
   bool timestamp_available = false;
   double primary_surface_gpu_ms = 0.0;
+  double reprojection_gpu_ms = 0.0;
   // Two device surface buffers and their persistent host readback mirror.
   std::uint64_t surface_bytes = 0;
+  // Persistent device validity buffer and host readback mirror.
+  std::uint64_t validity_bytes = 0;
   std::uint64_t metadata_bytes = 0;
 };
 

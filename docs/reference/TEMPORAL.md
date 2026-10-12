@@ -167,18 +167,83 @@ Two device surface buffers alternate across successful temporal calls.
 GPU buffer copied for validation, empty when `history_available` is false.
 That flag describes frame compatibility, not per-pixel visibility or history
 validity. `motion_depth.w` likewise does not validate the fetched previous
-surface. GPU fetch/rejection belongs to the next implementation slice.
+surface; the separate shared-validity pass supplies that result.
 
 The primary-surface pass has its own persistent timestamp pair:
 `timestamp_available` and `primary_surface_gpu_ms`, covering the buffer clear
 and surface draw, excluding metadata host writes and surface readback.
 Unavailable timestamps report false/zero. `surface_bytes` counts both device
 buffers and their two-buffer host readback mirror (256 bytes per target pixel);
-`metadata_bytes` counts the 224-byte camera block and the retained capacity
+`metadata_bytes` counts the 256-byte camera/window/validation block and the retained capacity
 of the 96-byte-per-instance metadata buffer. Surface buffers/readback persist
 at a fixed extent and are replaced on resize. Instance capacity grows when
 needed. No pipeline or timestamp pool is created in a render call. Targets
 or instance tables exceeding the device storage-buffer range fail explicitly.
+
+## GPU reprojection and validity
+
+After the primary-surface pass, a separate fullscreen fragment pass reads
+the retained previous device buffer. Add backward motion to the current
+pixel centre and fetch the pixel containing that continuous coordinate
+(`floor` of each coordinate, equivalent to the nearest pixel centre).
+There is no bilinear filtering of depth, normals or identities.
+`ReprojectTemporalHistory` in `temporal.hpp` implements the CPU fetch oracle
+over the same packed records, then calls `ValidateTemporalHistory`.
+
+`TemporalFrameSettings::validation` supplies the shared thresholds. Changing
+thresholds affects this frame's validity without resetting the frame history.
+Invalid thresholds produce `InvalidData` when the geometric test is reached.
+The pass checks, in priority order, current miss, missing compatible history,
+missing rigid correspondence, changed effective material, and unsuccessful
+or out-of-image reprojection. Only then does it fetch the previous surface
+and apply the shared miss/data/identity/motion/depth/normal contract above.
+Pixels outside the current data/display window are misses. Previous-window
+clipping is encoded by the primary pass in `motion_depth.w`.
+
+`GpuFrameEvidence::temporal.validity` is a debug AOV of 16-byte
+`TemporalValidityPixel` records for the **entire** top-left target.
+`validity_row_pitch` is `width * 16`. Every record is overwritten, including
+empty scenes, misses and pixels outside the data window:
+
+| Field | Meaning |
+| --- | --- |
+| `valid` | 1 only when rejection is `None`; otherwise 0 |
+| `rejection` | Stable numeric `TemporalRejection` code below |
+| `previous_index` | Row-major fetched pixel, including rejected fetches; `UINT32_MAX` if no fetch occurred |
+| `reserved` | Zero |
+
+| Code | Rejection |
+| --- | --- |
+| 0 | `None` |
+| 1 | `Miss` |
+| 2 | `InvalidData` |
+| 3 | `InstanceChanged` |
+| 4 | `MaterialChanged` |
+| 5 | `LargeMotion` |
+| 6 | `DepthDiscontinuity` |
+| 7 | `NormalDiscontinuity` |
+| 8 | `HistoryUnavailable` |
+| 9 | `CorrespondenceMissing` |
+| 10 | `ReprojectionOutside` |
+
+GPU arithmetic uses float precision; the CPU geometry oracle retains double
+intermediates. Threshold comparisons are inclusive in both implementations,
+but rounding can change a decision within float precision of a boundary.
+For example, motion `(32, epsilon)` can round to length 32 on the GPU while
+the CPU length exceeds 32. The measured sequences compare exact codes and
+fetch indices away from such ambiguous boundaries; CPU checks separately
+exercise inclusive threshold and fetch-edge behavior.
+
+`reprojection_gpu_ms` has its own persistent timestamp pair, sharing
+`timestamp_available` with the primary-surface pass. It covers the fullscreen
+validity pass and excludes host writes and readback. Unavailable timestamps
+report false/zero. `validity_bytes` counts the persistent device output and
+host readback mirror (32 bytes per pixel), separately from `surface_bytes`.
+The two passes have explicit shader-write/read and transfer/readback barriers.
+The validity pipeline and four-query timestamp pool are created at renderer
+initialization; fixed extents reuse buffers and resize replaces them.
+History is published only after both passes, readbacks and timestamps succeed.
+No transport, reservoir or denoiser state enters validity.
 
 ## Entry points and limits
 
@@ -191,11 +256,16 @@ additional window and identity-registry checks. `lotus-renderer-temporal-gpu`
 checks stationary, camera-only, object-only, combined motion, rotated normals,
 orthographic projection, framing, resize, scene/material/texture/instancer
 churn, successful-only history and progressive output under both integrators
-([GPU evidence](../reports/2026-10-12-temporal-primary-surfaces.md)). Its
+([GPU evidence](../reports/2026-10-12-temporal-primary-surfaces.md)). It also
+compares GPU rejection, validity and fetch indices with the CPU oracle at
+every pixel, requires all rejection codes to be exercised, and checks
+self-disocclusion, an independent moving occluder, invalid thresholds and an
+initial empty scene without a TLAS
+([validity evidence](../reports/2026-10-12-temporal-gpu-validity.md)). Its
 Vulkan-disabled configuration and missing-driver regression report explained
 SKIPs.
 
-History fetch/filtering, GPU shared validity, temporal radiance accumulation
-and Hydra temporal settings/AOV bindings remain outside this implementation.
+History filtering, temporal radiance accumulation and Hydra temporal
+settings/AOV bindings remain outside this implementation.
 Geometry deformation is conservatively rejected. No ReSTIR or denoiser state
 is introduced and no temporal image-quality or convergence claim is made.

@@ -14,20 +14,16 @@ and phase status belong to the [canonical table](README.md#status-at-a-glance).
 LOTUS-TEMPORAL-01 provides CPU frame history, rigid-placement correspondence,
 full-frame backward reprojection and shared validity
 ([evidence](../reports/2026-10-12-temporal-foundation.md),
-[contract and limits](../reference/TEMPORAL.md)). The next slices connect
-that metadata to the GPU. LOTUS-TEMPORAL-02 now supplies primary-surface depth,
+[contract and limits](../reference/TEMPORAL.md)). LOTUS-TEMPORAL-02 supplies primary-surface depth,
 normal, stable identities and motion with retained GPU buffers for both
 integrators ([evidence](../reports/2026-10-12-temporal-primary-surfaces.md),
-[contract](../reference/TEMPORAL.md#gpu-primary-surface-products)). Work
+[contract](../reference/TEMPORAL.md#gpu-primary-surface-products)).
+LOTUS-TEMPORAL-03 adds GPU backward fetch and shared rejection, CPU-oracle
+comparisons, debug validity/rejection products and a separate timestamp
+([evidence](../reports/2026-10-12-temporal-gpu-validity.md),
+[contract](../reference/TEMPORAL.md#gpu-reprojection-and-validity)). Work
 proceeds in this order:
 
-- [ ] **LOTUS-TEMPORAL-03 — GPU reprojection and shared validity.**
-  Fetch the preceding frame's surface metadata and implement the shared
-  rejection contract on the GPU, checked against the CPU oracle. Exercise
-  disocclusion, depth/normal discontinuity, changed material/texture/instance,
-  missing history, large motion and camera cuts. Expose rejection reasons
-  and history validity as debug AOVs, with per-pass GPU timestamps. Keep
-  all validity code independent of ReSTIR and denoiser state.
 - [ ] **LOTUS-TEMPORAL-04 — Opt-in temporal radiance accumulation.**
   Accumulate reprojected radiance and per-pixel sample counts with a bounded
   history. Define reset handling for lighting, render settings, scene edits,

@@ -439,6 +439,56 @@ void WindowsAndIdentities() {
       "mesh reinsertion reused instance incarnation");
 }
 
+void PixelFetch() {
+  using namespace Lotus;
+  TemporalPixel current;
+  current.flags = 7;
+  current.instance_id = 7;
+  current.material_id = 3;
+  current.normal_depth = {0, 0, 1, 3};
+  current.motion_depth = {0.75F, 0, 4, 1};
+  std::array<TemporalPixel, 4> previous;
+  previous.fill(current);
+  for (auto& p : previous)
+    p.normal_depth[3] = 4;
+  auto Fetch = [&] {
+    return ReprojectTemporalHistory(current, 0, 0, 2, 2, previous);
+  };
+  Check(Fetch().valid == 1 && Fetch().previous_index == 1,
+      "nearest fetch or expected previous-camera depth");
+  current.motion_depth[0] = 0.5F;
+  Check(Fetch().previous_index == 1, "integer pixel boundary did not select right pixel");
+  current.motion_depth[0] = -0.5F;
+  Check(Fetch().valid == 1 && Fetch().previous_index == 0, "top-left edge excluded");
+  current.motion_depth[0] = 1.5F;
+  Check(Fetch().rejection == TemporalRejection::ReprojectionOutside &&
+            Fetch().previous_index == UINT32_MAX,
+      "right edge fetched out of bounds");
+  current.motion_depth[0] = std::numeric_limits<float>::quiet_NaN();
+  Check(Fetch().rejection == TemporalRejection::InvalidData, "nonfinite fetch accepted");
+  current.motion_depth[0] = 0;
+  Check(ReprojectTemporalHistory(current, 0, 0, 2, 2, {}).rejection ==
+            TemporalRejection::HistoryUnavailable,
+      "missing history fetched");
+  current.flags = 1;
+  Check(Fetch().rejection == TemporalRejection::CorrespondenceMissing, "missing rigid pair accepted");
+  current.flags = 3;
+  Check(Fetch().rejection == TemporalRejection::MaterialChanged, "changed material accepted");
+  current.flags = 7;
+  current.motion_depth[3] = 0;
+  Check(Fetch().rejection == TemporalRejection::ReprojectionOutside, "failed projection fetched");
+  current.motion_depth[3] = 1;
+  previous[0].flags = 0;
+  Check(Fetch().rejection == TemporalRejection::Miss && Fetch().previous_index == 0,
+      "previous miss reused history");
+  current.flags = 0;
+  Check(ReprojectTemporalHistory(current, 0, 0, 2, 2, {}).rejection == TemporalRejection::Miss,
+      "miss lost precedence over missing history");
+  current.flags = 7;
+  Check(ReprojectTemporalHistory(current, 0, 0, 2, 3, previous).rejection == TemporalRejection::InvalidData,
+      "malformed history extent accepted");
+}
+
 } // namespace
 
 int main() try {
@@ -446,6 +496,7 @@ int main() try {
   Correspondence();
   Validity(Reprojection());
   WindowsAndIdentities();
+  PixelFetch();
   std::cout << "temporal lifecycle, correspondence, reprojection and rejection PASS\n";
   return 0;
 } catch (const std::exception& error) {

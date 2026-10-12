@@ -254,4 +254,49 @@ TemporalRejection ValidateTemporalHistory(const TemporalReprojection& reprojecti
   return TemporalRejection::None;
 }
 
+TemporalValidityPixel ReprojectTemporalHistory(const TemporalPixel& current,
+    std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height,
+    std::span<const TemporalPixel> previous, const TemporalValidationSettings& settings) {
+  TemporalValidityPixel output;
+  auto Reject = [&](TemporalRejection reason) {
+    output.rejection = reason;
+    return output;
+  };
+  if ((current.flags & 1u) == 0)
+    return Reject(TemporalRejection::Miss);
+  if (previous.empty())
+    return Reject(TemporalRejection::HistoryUnavailable);
+  if ((current.flags & 2u) == 0)
+    return Reject(TemporalRejection::CorrespondenceMissing);
+  if ((current.flags & 4u) == 0)
+    return Reject(TemporalRejection::MaterialChanged);
+  if (current.motion_depth[3] != 1.0F)
+    return Reject(TemporalRejection::ReprojectionOutside);
+  // Float pixel arithmetic matches the GPU fetch before the double-precision
+  // geometry oracle runs. Never convert non-finite/out-of-range floats to uint.
+  const std::array<float, 2> pixel{static_cast<float>(x) + 0.5F,
+      static_cast<float>(y) + 0.5F};
+  const std::array<float, 2> old_pixel{pixel[0] + current.motion_depth[0],
+      pixel[1] + current.motion_depth[1]};
+  if (!Finite(old_pixel))
+    return Reject(TemporalRejection::InvalidData);
+  if (x >= width || y >= height || previous.size() != std::uint64_t{width} * height)
+    return Reject(TemporalRejection::InvalidData);
+  if (old_pixel[0] < 0 || old_pixel[1] < 0 ||
+      old_pixel[0] >= width || old_pixel[1] >= height)
+    return Reject(TemporalRejection::ReprojectionOutside);
+  output.previous_index = static_cast<std::uint32_t>(old_pixel[1]) * width +
+                          static_cast<std::uint32_t>(old_pixel[0]);
+  const auto& old = previous[output.previous_index];
+  const TemporalSurface surface{true, current.instance_id, current.material_id,
+      current.normal_depth[3], {current.normal_depth[0], current.normal_depth[1], current.normal_depth[2]}};
+  const TemporalSurface old_surface{(old.flags & 1u) != 0, old.instance_id, old.material_id,
+      old.normal_depth[3], {old.normal_depth[0], old.normal_depth[1], old.normal_depth[2]}};
+  const TemporalReprojection reprojection{pixel, old_pixel,
+      {current.motion_depth[0], current.motion_depth[1]}, current.motion_depth[2]};
+  output.rejection = ValidateTemporalHistory(reprojection, surface, old_surface, settings);
+  output.valid = output.rejection == TemporalRejection::None ? 1u : 0u;
+  return output;
+}
+
 } // namespace Lotus
