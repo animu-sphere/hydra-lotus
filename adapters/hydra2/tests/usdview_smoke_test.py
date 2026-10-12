@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import json
+import time
 
 from pxr import Gf, Vt
 
@@ -26,20 +27,29 @@ def _image(phase):
         return stream.read()
 
 
-def _render(app_controller, phase):
+def _render(app_controller, phase, temporal=False):
     before = len(_frames())
     app_controller._stageView.SetForceRefresh(True)
     app_controller._stageView.updateView()
+    if temporal:
+        # Qt's processEvents iteration count does not count rendered frames.
+        # Observe five real completions without waiting for convergence.
+        deadline = time.monotonic() + 10
+        while len(_frames()) < before + 5 and time.monotonic() < deadline:
+            app_controller._processEvents(iterations=10, waitForConvergence=False)
+        assert len(_frames()) >= before + 5, f"temporal stream stalled for {phase}"
     image_root = os.environ["LOTUS_HYDRA_IMAGE"]
     app_controller._takeShot(
-        f"{image_root}-{phase}.png", iterations=10, waitForConvergence=True)
+        f"{image_root}-{phase}.png", iterations=10,
+        waitForConvergence=not temporal)
     frames = _frames()
     assert len(frames) > before, f"no Hydra frame completed for {phase}"
     assert frames[-1]["buffers_written"] >= 2
     assert frames[-1]["width"] > 0 and frames[-1]["height"] > 0
     # Waiting for convergence leaves a finished image: the bootstrap's
     # one frame, or every path-traced sample the render settings ask for.
-    assert frames[-1]["converged"] == 1, f"{phase} did not converge"
+    assert frames[-1]["converged"] == (0 if temporal else 1), \
+        f"{phase} has incorrect convergence"
     assert all(frame["validation_messages"] == 0 for frame in frames), \
         "Vulkan validation reported messages during a Hydra frame"
     with open(os.environ["LOTUS_RENDERER_REPORT"], encoding="utf-8") as stream:
@@ -175,3 +185,51 @@ def testUsdviewInputFunction(appController):
     assert sampled["light_sampling"] == "mis"
     assert _image("light-sampling-restored") == _image("stable-update"), \
         "returning to light sampling did not reproduce the image"
+
+    # Continuous temporal transport must never wait for progressive convergence.
+    if sampled["ray_query"] != 1:
+        return
+    # A camera-following light changes illumination on camera motion, which
+    # correctly resets radiance. Keep lighting fixed for reprojection checks.
+    appController._dataModel.viewSettings.ambientLightOnly = False
+    appController._dataModel.viewSettings.domeLightEnabled = False
+    _render(appController, "temporal-fixed-lighting")
+    actions = [action for action in appController._ui.settingsFlagActions
+               if action.key == "lotus:temporal"]
+    assert len(actions) == 1 and actions[0].isCheckable()
+    temporal_action = actions[0]
+    assert not temporal_action.isChecked()
+    appController._stageView.SetRendererSetting("lotus:historySamples", 4)
+    for wavefront in (False, True):
+        appController._stageView.SetRendererSetting("lotus:wavefront", wavefront)
+        before = len(_frames())
+        temporal_action.trigger()
+        label = "wavefront" if wavefront else "reference"
+        static = _render(appController, f"temporal-{label}-static", temporal=True)
+        frames = _frames()[before:]
+        assert all(frame["temporal_radiance"] == 1 for frame in frames)
+        assert static["samples"] == 1 and static["temporal_history_samples"] == 4
+        assert static["temporal_valid_pixels"] > 0
+        assert static["integrator"] == label
+        camera = appController._dataModel.stage.GetPrimAtPath("/Camera")
+        matrix = Gf.Matrix4d(1).SetTranslate(Gf.Vec3d(0.04 if not wavefront else 0.08, 0, 5))
+        camera.GetAttribute("xformOp:transform").Set(matrix)
+        before = len(_frames())
+        _render(appController, f"temporal-{label}-camera", temporal=True)
+        assert any(frame["temporal_motion_pixels"] > 0 for frame in _frames()[before:])
+        assert all(frame["temporal_reset"] == 0 for frame in _frames()[before:])
+        triangle = appController._dataModel.stage.GetPrimAtPath("/World/Triangle")
+        triangle.GetAttribute("xformOp:translate").Set(
+            Gf.Vec3d(0.04 if not wavefront else 0.08, 0, 0))
+        before = len(_frames())
+        _render(appController, f"temporal-{label}-object", temporal=True)
+        assert any(frame["temporal_motion_pixels"] > 0 for frame in _frames()[before:])
+        assert all(frame["temporal_reset"] == 0 for frame in _frames()[before:])
+        before = len(_frames())
+        appController._stageView.SetRendererSetting("lotus:historyReset", 1 if not wavefront else 2)
+        _render(appController, f"temporal-{label}-reset", temporal=True)
+        frames = _frames()[before:]
+        assert sum(frame["temporal_reset"] == 3 for frame in frames) == 1
+        assert frames[-1]["temporal_history"] == 1
+        temporal_action.trigger()
+        _render(appController, f"temporal-{label}-progressive")

@@ -7,40 +7,20 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Renderer Phase 3's [exit review](../reports/2026-10-12-renderer-phase3-exit.md#renderer-phase-3-exit)
-provides the NEE / MIS baseline for the temporal cycle. The release target
-and phase status belong to the [canonical table](README.md#status-at-a-glance).
+The temporal scope review and Hydra integration are recorded in the
+[exit evidence](../reports/2026-10-13-temporal-hydra-exit.md#renderer-phase-4-scope-review).
+Core, runtime-free and physical-GPU Hydra checks are recorded there. The
+release target and phase status belong to the
+[canonical table](README.md#status-at-a-glance). Work proceeds with:
 
-LOTUS-TEMPORAL-01 provides CPU frame history, rigid-placement correspondence,
-full-frame backward reprojection and shared validity
-([evidence](../reports/2026-10-12-temporal-foundation.md),
-[contract and limits](../reference/TEMPORAL.md)). LOTUS-TEMPORAL-02 supplies primary-surface depth,
-normal, stable identities and motion with retained GPU buffers for both
-integrators ([evidence](../reports/2026-10-12-temporal-primary-surfaces.md),
-[contract](../reference/TEMPORAL.md#gpu-primary-surface-products)).
-LOTUS-TEMPORAL-03 adds GPU backward fetch and shared rejection, CPU-oracle
-comparisons, debug validity/rejection products and a separate timestamp
-([evidence](../reports/2026-10-12-temporal-gpu-validity.md),
-[contract](../reference/TEMPORAL.md#gpu-reprojection-and-validity)).
-LOTUS-TEMPORAL-04 supplies opt-in bounded radiance accumulation, automatic
-reset classification and fresh batch/RNG handling under both integrators
-([evidence](../reports/2026-10-12-temporal-radiance.md),
-[contract](../reference/TEMPORAL.md#temporal-radiance-accumulation)). Work
-proceeds with:
+- [ ] **LOTUS-RELEASE-04 — Temporal release preparation.** Prepare the next
+  version declarations, dated changelog and release record; run the
+  [release checks](../guides/RELEASING.md#prepare-and-verify) and repeatable
+  local packaging, and record the gate evidence before tagging or publication.
 
-- [ ] **LOTUS-TEMPORAL-05 — Hydra integration and temporal exit review.**
-  Expose temporal selection and reset controls through Hydra, add hosted
-  moving-scene validation and motion/history AOV coverage, and keep the
-  deterministic progressive mode selectable. Review every temporal scope
-  item and its evidence, then run core, runtime-free and Hydra release checks
-  before preparing the next release record.
-
-The exit review must demonstrate frame history, previous transforms, motion,
-reprojection, disocclusion and shared validity, temporal accumulation and a
-measured reset policy on static, camera-motion and object-motion sequences.
-The temporal cycle excludes ReSTIR, denoising, spectral research, production
-material expansion and broad platform/backend expansion; their scope remains
-in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
+The next renderer cycle follows the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
+ReSTIR, denoising, spectral research, production material expansion and broad
+platform/backend expansion retain their separate phase assignments.
 
 ## Performance baseline and foundation release
 

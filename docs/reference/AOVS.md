@@ -27,10 +27,10 @@ depth, geometric normal, stable identities and backward motion in
 It also publishes shared validity/rejection/fetch indices and, when radiance
 accumulation is enabled, linear RGBA and per-pixel bounded history counts
 ([radiance contract](TEMPORAL.md#temporal-radiance-accumulation)).
-These debug products are separate from the Hydra channels above; temporal
-Hydra descriptors and bindings are not implemented yet.
+The adapter exposes selected records through the temporal channels below.
 
-All other names have an invalid default descriptor. Normal, albedo,
+Names outside the foundation and temporal channels have an invalid default
+descriptor. Normal, albedo,
 roughness, path depth, throughput and the other debug channels are introduced
 with the renderer passes that produce them. Each Hydra pass adds one
 radiance sample; colour converges when the accumulation reaches the
@@ -41,7 +41,27 @@ the `lotus:wavefront` flag selects the integrator that traces them
 ([integrator selection](SCENE.md#integrator-selection-through-hydra)), and
 the `lotus:lightSampling` flag the estimator
 ([light sampling](SCENE.md#light-sampling-through-hydra)). The render pass's `IsConverged` follows the colour, so a host
-that waits for convergence redraws until then.
+that waits for convergence redraws until then. Temporal radiance mode instead
+remains unconverged, as described in the
+[Hydra temporal contract](TEMPORAL.md#hydra-controls-and-debug-aovs).
+
+## Temporal Hydra channels
+
+| Hydra name | Format | Default clear | Product |
+| --- | --- | --- | --- |
+| `lotus:motion` | `HdFormatFloat32Vec4` | `(0, 0, 0, 0)` | Backward motion XY in top-left pixel coordinates, expected previous linear depth Z, successful projection flag W |
+| `lotus:historyLength` | `HdFormatInt32` | `0` | Effective bounded radiance sample count; zero on misses and in metadata-only mode |
+| `lotus:historyValidity` | `HdFormatInt32` | `0` | Shared validity, 1 when accepted and 0 when rejected |
+| `lotus:historyRejection` | `HdFormatInt32` | `0` | Numeric `TemporalRejection` from the [shared rejection contract](TEMPORAL.md#gpu-reprojection-and-validity) |
+
+Binding any channel above enables GPU primary-surface and shared-validity
+products. `lotus:temporal` independently selects radiance reuse. Debug
+channels are overwritten each pass, including empty scenes and pixels
+outside the data window; empty clears do not preserve old debug records.
+Motion components retain the backend convention while storage rows flip
+to Hydra's bottom-up order. The validity flag is distinct from the motion
+W projection flag. These buffers finish after one pass; colour and the
+render pass follow the selected temporal/progressive mode.
 
 ## Storage and binding
 

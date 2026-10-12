@@ -45,6 +45,8 @@ public:
   bool WriteDepth(const std::vector<float>& depth,
       std::uint32_t source_width, std::uint32_t source_height);
   bool WriteIds(std::int32_t value);
+  bool WriteTemporal(const TfToken& name, const Lotus::TemporalProducts& products,
+      std::uint32_t source_width, std::uint32_t source_height);
   // Copy unmapped CPU contents to a top-down backend restoration input.
   bool ReadColor(std::vector<float>& color) const;
   bool ReadDepth(std::vector<float>& depth) const;
@@ -101,6 +103,10 @@ public:
   // trace the radiance instead of the reference integrator (false by
   // default). lotus:lightSampling: a flag adding next event estimation with
   // multiple importance sampling to BSDF sampling (true by default).
+  // lotus:temporal selects continuous bounded radiance reuse (false by
+  // default); lotus:historySamples bounds its effective sample count.
+  // lotus:historyKey changes compatibility; changing lotus:historyReset
+  // cuts history once, on the next successful temporal frame.
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();
