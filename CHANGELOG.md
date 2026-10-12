@@ -7,6 +7,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+The direct lighting release adds Renderer Phase 3: next event estimation
+with multiple importance sampling towards emissive triangles, UsdLux
+sphere, rect, disk and distant lights and textured dome lights, in both
+integrators and through Hydra, on by default. See the
+[release record](docs/releases/v0.3.0.md) for scope, validation and
+compatibility notes.
+
 ### Added
 
 - Renderer Phase 3 next event estimation with multiple importance

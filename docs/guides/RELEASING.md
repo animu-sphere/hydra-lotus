@@ -21,7 +21,7 @@ The repository-owned helper checks version agreement, stable SemVer and the
 finalized changelog. Local verification used:
 
 ```sh
-python scripts/release.py version --tag v0.2.0
+python scripts/release.py version --tag v0.3.0
 python -m unittest discover -s scripts -p "test_*.py"
 ost ci validate
 ```
