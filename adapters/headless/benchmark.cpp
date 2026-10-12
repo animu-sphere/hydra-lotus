@@ -40,6 +40,12 @@ struct Options {
   Lotus::LightSampling light_sampling = Lotus::LightSampling::Bsdf;
 };
 
+// The per-sample variance's batches: their count, their samples each, and
+// the first one's sample index, apart from the timed frames' sequence.
+constexpr std::uint32_t kVarianceBatches = 16;
+constexpr std::uint32_t kVarianceBatch = 16;
+constexpr std::uint32_t kVarianceSampleIndex = 2U << 20;
+
 bool Mis(const Options& options) {
   return options.light_sampling == Lotus::LightSampling::Mis;
 }
@@ -116,16 +122,110 @@ Lotus::MeshGeometry Grid(std::uint32_t divisions, float extent, bool uv) {
   return mesh;
 }
 
+Lotus::Matrix4 Translation(float x, float y, float z) {
+  auto matrix = Lotus::IdentityMatrix();
+  matrix[12] = x;
+  matrix[13] = y;
+  matrix[14] = z;
+  return matrix;
+}
+
+// Right-handed rotations by `degrees` about the X and Y axes.
+Lotus::Matrix4 RotationX(double degrees) {
+  const auto c = static_cast<float>(std::cos(degrees * 3.14159265358979323846 / 180));
+  const auto s = static_cast<float>(std::sin(degrees * 3.14159265358979323846 / 180));
+  auto matrix = Lotus::IdentityMatrix();
+  matrix[5] = c;
+  matrix[6] = s;
+  matrix[9] = -s;
+  matrix[10] = c;
+  return matrix;
+}
+
+Lotus::Matrix4 RotationY(double degrees) {
+  const auto c = static_cast<float>(std::cos(degrees * 3.14159265358979323846 / 180));
+  const auto s = static_cast<float>(std::sin(degrees * 3.14159265358979323846 / 180));
+  auto matrix = Lotus::IdentityMatrix();
+  matrix[0] = c;
+  matrix[2] = -s;
+  matrix[8] = s;
+  matrix[10] = c;
+  return matrix;
+}
+
 struct Workload {
   Lotus::RenderWorld world;
   std::string edit_mesh;
 };
 
-Workload MakeWorkload(std::string_view id) {
+// The lit workloads light the reference scene's geometry as its emissive
+// panel does not: by analytic lights, and by an environment image.
+Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets) {
   Workload work;
   SetCornellBox(work.world);
   if (id == "cornell-v1") {
     work.edit_mesh = "/cornell/back";
+    return work;
+  }
+  if (id == "lights-v1") {
+    // Without its ceiling and panel the box is lit by one light of each
+    // analytic kind: a sun through the open top, a sphere, a rect where the
+    // ceiling was and a disk on the green wall.
+    work.world.RemoveMesh("/cornell/ceiling");
+    work.world.RemoveMesh("/cornell/light");
+    work.world.RemoveMaterial("/materials/light");
+    Lotus::Light sun;
+    sun.shape = Lotus::LightShape::Distant;
+    sun.world_from_light = Lotus::Multiply(RotationY(20), RotationX(-60));
+    sun.radiance = {2.5F, 2.3F, 2.0F};
+    sun.normalize = true;
+    work.world.SetLight("/lights/sun", sun);
+    Lotus::Light sphere;
+    sphere.world_from_light = Translation(-0.5F, 0.55F, 0.2F);
+    sphere.radiance = {40.0F, 32.0F, 24.0F};
+    sphere.radius = 0.12F;
+    work.world.SetLight("/lights/sphere", sphere);
+    Lotus::Light rect;
+    rect.shape = Lotus::LightShape::Rect;
+    rect.world_from_light =
+        Lotus::Multiply(Translation(0.3F, 0.95F, -0.4F), RotationX(-90));
+    rect.radiance = {12.0F, 12.0F, 12.0F};
+    rect.width = 0.4F;
+    rect.height = 0.25F;
+    work.world.SetLight("/lights/rect", rect);
+    Lotus::Light disk;
+    disk.shape = Lotus::LightShape::Disk;
+    disk.world_from_light =
+        Lotus::Multiply(Translation(0.97F, 0.3F, -0.5F), RotationY(90));
+    disk.radiance = {6.0F, 8.0F, 12.0F};
+    disk.radius = 0.15F;
+    work.world.SetLight("/lights/disk", disk);
+    work.edit_mesh = "/cornell/back";
+    return work;
+  }
+  if (id == "environment-v1") {
+    // The blocks on a floor 120 units wide under OpenUSD's Stinson Beach
+    // image, whose sun is behind the camera. The camera looks 25 degrees
+    // down and sees only the floor and the blocks.
+    for (const char* mesh : {"/cornell/ceiling", "/cornell/back", "/cornell/left",
+             "/cornell/right", "/cornell/light"})
+      work.world.RemoveMesh(mesh);
+    for (const char* material : {"/materials/red", "/materials/green", "/materials/light"})
+      work.world.RemoveMaterial(material);
+    Lotus::MeshInstance ground;
+    ground.world_from_object[0] = ground.world_from_object[10] = 60.0F;
+    work.world.SetMeshInstance("/cornell/floor", ground);
+    auto camera = work.world.Commit().camera;
+    camera.view = Lotus::Multiply(RotationX(25), Translation(0.0F, -0.8F, -3.0F));
+    work.world.SetCamera(camera);
+    Lotus::Texture beach;
+    const auto failure = ReadRadianceHdr(assets / "StinsonBeach.hdr", beach);
+    Require(failure.empty(), failure);
+    work.world.SetTexture("/beach", std::move(beach));
+    Lotus::EnvironmentMap map;
+    map.texture = "/beach";
+    work.world.SetEnvironmentMap(map);
+    work.edit_mesh = "/cornell/floor";
     return work;
   }
   const auto old = work.world.Commit();
@@ -237,7 +337,7 @@ Result Measure(const std::string& id, const Options& options,
       result.detail = capability.detail;
       return result;
     }
-    auto work = MakeWorkload(id);
+    auto work = MakeWorkload(id, executable / "assets");
     Lotus::SceneExtraction extraction;
     const auto snapshot = work.world.Commit();
     const auto draw = Lotus::ExtractDrawSummary(snapshot);
@@ -292,6 +392,40 @@ Result Measure(const std::string& id, const Options& options,
       }
     }
     Require(gpu.empty() || gpu.size() == options.frames, "inconsistent timestamp availability");
+
+    // Per-sample variance from fresh accumulations of kVarianceBatch samples,
+    // their sequences apart from the timed frames': the mean over pixels and
+    // channels of each value's variance across the batches, times the batch
+    // size. The time to reach a given variance is proportional to it times
+    // the GPU time per sample.
+    const std::size_t pixels = std::size_t{options.size} * options.size;
+    std::vector<double> sum(pixels * 3), squares(pixels * 3);
+    for (std::uint32_t batch = 0; batch < kVarianceBatches; ++batch) {
+      settings.sample_index = kVarianceSampleIndex + batch * kVarianceBatch;
+      const auto accumulated = renderer->RenderScene(draw, target, kVarianceBatch, settings);
+      Require(accumulated.status == FrameStatus::Pass, accumulated.detail);
+      Require(accumulated.validation_message_count == 0, accumulated.validation_detail);
+      Require(accumulated.samples_per_pixel == kVarianceBatch &&
+          accumulated.color.payload.size() == pixels * 16,
+          "unexpected variance batch accumulation or image");
+      for (std::size_t p = 0; p < pixels; ++p) {
+        std::array<float, 4> rgba;
+        std::memcpy(rgba.data(), accumulated.color.payload.data() + p * 16, 16);
+        for (std::size_t c = 0; c < 3; ++c) {
+          Require(std::isfinite(rgba[c]), "non-finite variance batch");
+          sum[p * 3 + c] += rgba[c];
+          squares[p * 3 + c] += double{rgba[c]} * rgba[c];
+        }
+      }
+    }
+    double variance = 0;
+    for (std::size_t i = 0; i < sum.size(); ++i) {
+      const double mean = sum[i] / kVarianceBatches;
+      variance += std::max(0.0,
+          (squares[i] - kVarianceBatches * mean * mean) / (kVarianceBatches - 1));
+    }
+    variance *= double{kVarianceBatch} / static_cast<double>(sum.size());
+
     const auto after = renderer->UpdateScene({});
     Check(after);
     Require(after.stats.memory == before.stats.memory &&
@@ -302,7 +436,6 @@ Result Measure(const std::string& id, const Options& options,
         after.stats.tlas_updates == before.stats.tlas_updates,
         "steady rendering changed scene allocation/upload/acceleration counters");
 
-    const std::size_t pixels = std::size_t{options.size} * options.size;
     RgbImage image{options.size, options.size, {}};
     Require(frame.color.pixel_format == "rgba32-sfloat" &&
         frame.color.payload.size() == pixels * 16,
@@ -394,8 +527,19 @@ Result Measure(const std::string& id, const Options& options,
         << initial.stats.resident_geometries << ",\"unique_triangles\":" << triangles
         << ",\"instances\":" << initial.stats.instance_count << ",\"textures\":"
         << initial.stats.resident_textures << ",\"texture_bytes\":" << initial.stats.texture_bytes
+        << ",\"emissive_triangles\":" << initial.stats.emissive_triangles
+        << ",\"analytic_lights\":" << initial.stats.analytic_lights
+        << ",\"environment_sampled\":" << (initial.stats.environment_sampled ? "true" : "false")
         << "},\"gpu_frame_ms\":";
     Series(out, gpu);
+    out << ",\"per_sample_variance\":" << variance << ",\"variance_gpu_ms\":";
+    if (gpu.empty()) {
+      out << "null";
+    } else {
+      auto sorted = gpu;
+      std::sort(sorted.begin(), sorted.end());
+      out << variance * (sorted[(sorted.size() - 1) / 2] + sorted[sorted.size() / 2]) * 0.5;
+    }
     out << ",\"render_wall_ms\":"; Series(out, wall);
     out << ",\"pixel_samples_per_second_gpu\":";
     if (gpu.empty()) out << "null";
@@ -493,7 +637,8 @@ int BenchmarkMain(int argc, char** argv) {
     const auto executable = std::filesystem::absolute(argv[0]).parent_path();
     std::vector<Result> results;
     FrameStatus status = FrameStatus::Pass;
-    for (const char* id : {"cornell-v1", "textured-v1", "instanced-v1", "geometry-v1"}) {
+    for (const char* id : {"cornell-v1", "textured-v1", "instanced-v1", "geometry-v1",
+             "lights-v1", "environment-v1"}) {
       auto result = Measure(id, options, executable);
       if (result.status == FrameStatus::Fail) status = FrameStatus::Fail;
       else if (result.status == FrameStatus::Skip && status == FrameStatus::Pass)
@@ -519,12 +664,17 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"sample_index\":0,\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
         << ",\"warmup_frames\":" << options.warmup
+        << ",\"variance_batches\":" << kVarianceBatches
+        << ",\"variance_batch_samples\":" << kVarianceBatch
+        << ",\"variance_sample_index\":" << kVarianceSampleIndex
         << ",\"warmup_sample_index\":1,\"unchanged_batches\":16,\"unchanged_iterations\":1000,"
            "\"fresh_renderer_per_scene\":true,\"update_measurements_per_kind\":1},"
            "\"metric_notes\":{"
            "\"gpu_frame_ms\":\"One sample pass, including clears, excluding readback; one call per sample.\","
            "\"render_wall_ms\":\"Blocking RenderScene, including submit, fence wait, readback and product copies.\","
            "\"pixel_samples_per_second\":\"Full-frame pixel samples divided by total measured GPU or wall time, including camera misses.\","
+           "\"per_sample_variance\":\"Mean over pixels and channels of each value's variance across the variance batches, times their samples each.\","
+           "\"variance_gpu_ms\":\"Per-sample variance times the median GPU frame time: proportional to the time to equal quality; null without timestamps.\","
            "\"unchanged_cpu_ms\":\"Commit, extraction and empty UpdateScene plus invariant checks; batch wall time / 1000.\","
            "\"scene_pool_bytes\":\"Scene pools include device-local and host-visible memory; exclude renderer targets and constants.\","
            "\"update_ms\":\"One initial upload/build, one point refit and one transform refit; CPU wall covers blocking UpdateScene only. Counters are cumulative.\","
