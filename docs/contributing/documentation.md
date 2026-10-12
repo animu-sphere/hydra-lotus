@@ -160,7 +160,9 @@ The checker validates relative hyperlinks and Markdown heading anchors,
 referenced files, recursive category indexes, common duplicate phase-status
 and release-target declarations, active task ownership/IDs, completed-phase
 evidence links, phase naming, design metadata and archive banners/guidance.
-It covers root `README.md`, `CHANGELOG.md` and every Markdown file under `docs/`.
+It covers root `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+`CODE_OF_CONDUCT.md`, `SECURITY.md`, `.github/PULL_REQUEST_TEMPLATE.md`
+and every Markdown file under `docs/`.
 Historical reports/releases are exempt from live-status rules; their links
 are still checked. External URLs are not fetched, and paths inside command
 examples are not interpreted as hyperlinks. Semantic drift still requires review.

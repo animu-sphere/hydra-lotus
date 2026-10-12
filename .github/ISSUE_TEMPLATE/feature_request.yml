@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a renderer capability or workflow improvement.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/animu-sphere/hydra-lotus/blob/main/docs/roadmap/README.md), [current work](https://github.com/animu-sphere/hydra-lotus/blob/main/docs/roadmap/current.md) and [integration scope](https://github.com/animu-sphere/hydra-lotus/blob/main/docs/design/INTEGRATION_SCOPE_POLICY.md).
+        Follow the [Code of Conduct](https://github.com/animu-sphere/hydra-lotus/blob/main/CODE_OF_CONDUCT.md).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core scene / extraction
+        - Vulkan / shaders / headless
+        - Sampling / integrators / temporal reconstruction
+        - Hydra adapter / USD host
+        - Viewport
+        - Build / packaging / CI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain who needs this and what cannot be done today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected result and how it fits the project's ownership and renderer phases.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and evidence
+      description: Describe how correctness, compatibility, capability handling or performance could be verified against the reference renderer.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and constraints
+      description: Include workarounds, related issues, relevant design documents and dependencies.
+    validations:
+      required: false
