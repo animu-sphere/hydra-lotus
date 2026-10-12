@@ -7,8 +7,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
+The temporal infrastructure release adds Renderer Phase 4: frame history,
+rigid motion, reprojection, shared validity and opt-in bounded radiance
+accumulation under both integrators, with Hydra controls and debug AOVs.
+Deterministic progressive rendering remains the default. See the
+[release record](docs/releases/v0.4.0.md) for validation, compatibility and
+known limitations.
+
 ### Added
 
+- Community contribution guidelines, code of conduct, security reporting
+  policy and GitHub issue and pull-request templates.
 - Hydra temporal radiance selection, bounded history controls, compatibility
   keys and one-shot reset counters; motion, history length, shared validity
   and rejection AOVs, with moving USD-stage and installed usdview coverage
@@ -34,8 +45,7 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   identities, backward motion and expected previous depth, retained GPU
   surface buffers and a separate primary-surface timestamp. Frame history
   advances only on successful calls, with display/data-window and resize
-  support. Progressive transport is preserved; Hydra temporal controls
-  remain pending
+  support. Progressive transport is preserved
   ([contract](docs/reference/TEMPORAL.md),
   [evidence](docs/reports/2026-10-12-temporal-primary-surfaces.md)).
 - The CPU temporal foundation in `lotus/temporal.hpp`, available through

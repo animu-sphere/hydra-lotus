@@ -7,18 +7,14 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-The temporal scope review and Hydra integration are recorded in the
-[exit evidence](../reports/2026-10-13-temporal-hydra-exit.md#renderer-phase-4-scope-review).
-Core, runtime-free and physical-GPU Hydra checks are recorded there. The
-release target and phase status belong to the
-[canonical table](README.md#status-at-a-glance). Work proceeds with:
+The temporal release snapshot and verification are recorded in the
+[release record](../releases/v0.4.0.md) and
+[release gate](../reports/2026-10-13-v0.4.0-release-gate.md).
+Phase and release status belong to the
+[canonical table](README.md#status-at-a-glance).
 
-- [ ] **LOTUS-RELEASE-04 — Temporal release preparation.** Prepare the next
-  version declarations, dated changelog and release record; run the
-  [release checks](../guides/RELEASING.md#prepare-and-verify) and repeatable
-  local packaging, and record the gate evidence before tagging or publication.
-
-The next renderer cycle follows the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
+The next renderer cycle follows the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap);
+its implementation tasks have not yet been scheduled.
 ReSTIR, denoising, spectral research, production material expansion and broad
 platform/backend expansion retain their separate phase assignments.
 
