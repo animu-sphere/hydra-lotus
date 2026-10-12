@@ -57,6 +57,8 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
   settings.max_bounces = 0;
   TemporalFrameSettings temporal;
   auto snapshot = world.Commit();
+  std::array<std::uint64_t, 11> rejections{};
+  std::uint64_t compared_pixels = 0;
   auto Render = [&](std::uint32_t samples = 1) {
     snapshot = world.Commit();
     Check(renderer.UpdateScene(extraction.Update(snapshot)).status == FrameStatus::Pass,
@@ -68,12 +70,36 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
               result.temporal.height == target.height &&
               result.temporal.row_pitch == target.width * sizeof(TemporalPixel),
         "product layout");
+    const auto& products = result.temporal;
+    Check(products.validity.size() == products.current.size() &&
+              products.validity_row_pitch == target.width * sizeof(TemporalValidityPixel),
+        "validity AOV layout");
+    for (std::uint32_t y = 0; y < target.height; ++y) {
+      for (std::uint32_t x = 0; x < target.width; ++x) {
+        const auto i = y * target.width + x;
+        const auto expected = ReprojectTemporalHistory(products.current[i], x, y,
+            target.width, target.height, products.previous, temporal.validation);
+        const auto& actual = products.validity[i];
+        if (actual.valid != expected.valid || actual.rejection != expected.rejection ||
+            actual.previous_index != expected.previous_index || actual.reserved != 0) {
+          std::cerr << "frame=" << temporal.frame_index << " pixel=" << x << ',' << y
+                    << " GPU rejection=" << static_cast<unsigned>(actual.rejection)
+                    << " CPU rejection=" << static_cast<unsigned>(expected.rejection)
+                    << " GPU fetch=" << actual.previous_index << " CPU fetch=" << expected.previous_index << '\n';
+          throw std::runtime_error("GPU shared validity differs from CPU oracle");
+        }
+        ++rejections[static_cast<unsigned>(actual.rejection)];
+        ++compared_pixels;
+      }
+    }
     ++temporal.frame_index;
     return result;
   };
   const auto first = Render(3);
   Check(!first.temporal.history_available && first.samples_per_pixel == 3, "first frame/sample count");
   const auto stationary = Render(2);
+  for (const auto& p : stationary.temporal.validity)
+    Check(p.valid == 1 && p.rejection == TemporalRejection::None, "stationary history rejected");
   Check(stationary.temporal.history_available && stationary.samples_per_pixel == 5,
       "spp advanced frame history incorrectly");
   Check(SamePixels(first.temporal.current, stationary.temporal.previous), "GPU previous buffer not retained");
@@ -193,7 +219,7 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
   settings.max_samples = after_failure.samples_per_pixel;
   const auto frozen = Render(5);
   Check(frozen.samples_per_pixel == after_failure.samples_per_pixel &&
-      SamePixels(frozen.temporal.previous, after_failure.temporal.current),
+            SamePixels(frozen.temporal.previous, after_failure.temporal.current),
       "converged transport did not advance a temporal frame");
   settings.max_samples = 0;
   target.clear_depth = 0;
@@ -267,6 +293,13 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
   temporal.camera_cut = true;
   Check(Render().temporal.reset_reason == TemporalResetReason::CameraCut, "camera cut ignored");
   temporal.camera_cut = false;
+  temporal.validation.max_motion_pixels = 1;
+  camera.view = Translation(-0.75F, 0, 1);
+  world.SetCamera(camera);
+  (void)Render();
+  temporal.validation.max_motion_pixels = 32;
+  camera.view = Translation(-0.5F, 0, 1);
+  world.SetCamera(camera);
   ++temporal.history_key;
   Check(Render().temporal.reset_reason == TemporalResetReason::HistoryKeyChanged, "history key ignored");
   ++temporal.frame_index;
@@ -324,6 +357,45 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
             count_change.temporal.current[7 * target.width + 6].instance_id !=
                 instanced.temporal.current[7 * target.width + 6].instance_id,
       "instancer count paired history");
+
+  // Self-disocclusion keeps the stable placement identity: one mesh contains
+  // a background plane and a small foreground quad at half its depth.
+  target.width = 64;
+  target.height = 48;
+  target.display_window = {};
+  target.data_window = {};
+  world.SetCamera(Perspective());
+  auto occluded = kPlane;
+  occluded.positions.insert(occluded.positions.end(),
+      {{-0.5F, -0.5F, -2}, {0.5F, -0.5F, -2}, {0.5F, 0.5F, -2}, {-0.5F, 0.5F, -2}});
+  occluded.triangles.insert(occluded.triangles.end(), {{4, 5, 6}, {4, 6, 7}});
+  occluded.source_faces.insert(occluded.source_faces.end(), {1, 1});
+  world.SetMesh("/plane", occluded, {});
+  (void)Render();
+  auto revealing = Perspective();
+  revealing.view = Translation(-0.5F);
+  world.SetCamera(revealing);
+  (void)Render();
+
+  // A different placement crossing a formerly visible background supplies
+  // the independent identity rejection case.
+  world.SetMesh("/plane", kPlane, {});
+  MeshGeometry foreground{{{-0.5F, -0.5F, -2}, {0.5F, -0.5F, -2},
+                              {0.5F, 0.5F, -2}, {-0.5F, 0.5F, -2}},
+      {{0, 1, 2}, {0, 2, 3}}, {0, 0}};
+  world.SetMesh("/occluder", foreground, {});
+  (void)Render();
+  MeshInstance leaving;
+  leaving.world_from_object = Translation(1.5F);
+  world.SetMeshInstance("/occluder", leaving);
+  (void)Render();
+  world.RemoveMesh("/occluder");
+
+  // Invalid thresholds are classified by the shared pass and recover on the
+  // next compatible frame; they do not invalidate the history lifecycle.
+  temporal.validation.minimum_normal_cosine = 2;
+  (void)Render();
+  temporal.validation = {};
   world.RemoveMesh("/plane");
   world.RemoveMesh("/a");
   const auto removed = Render();
@@ -331,12 +403,30 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
     Check(p.flags == 0 && p.instance_id == 0, "empty scene retained surfaces");
   Check(removed.temporal.timestamp_available == stationary.temporal.timestamp_available,
       "empty scene lost timestamp");
+  for (const auto reason : {TemporalRejection::None, TemporalRejection::Miss,
+           TemporalRejection::InvalidData, TemporalRejection::InstanceChanged,
+           TemporalRejection::MaterialChanged, TemporalRejection::LargeMotion,
+           TemporalRejection::DepthDiscontinuity, TemporalRejection::NormalDiscontinuity,
+           TemporalRejection::HistoryUnavailable, TemporalRejection::CorrespondenceMissing,
+           TemporalRejection::ReprojectionOutside}) {
+    if (rejections[static_cast<unsigned>(reason)] == 0) {
+      std::cerr << "unexercised rejection code=" << static_cast<unsigned>(reason) << '\n';
+      throw std::runtime_error("GPU rejection coverage incomplete");
+    }
+  }
   std::cout << (integrator == Integrator::Reference ? "reference" : "wavefront")
             << " temporal PASS; independent projected pixels=" << valid
             << " object-motion valid pixels=" << object_valid
             << " surface_gpu_ms=" << stationary.temporal.primary_surface_gpu_ms
+            << " reprojection_gpu_ms=" << stationary.temporal.reprojection_gpu_ms
+            << " compared_pixels=" << compared_pixels
+            << " validity_bytes=" << stationary.temporal.validity_bytes
             << " surface_bytes=" << stationary.temporal.surface_bytes
             << " metadata_bytes=" << stationary.temporal.metadata_bytes << '\n';
+  std::cout << "rejection histogram:";
+  for (const auto count : rejections)
+    std::cout << ' ' << count;
+  std::cout << '\n';
 }
 } // namespace
 
@@ -362,6 +452,26 @@ int main(int argc, char** argv) try {
     std::cout << "SKIP: " << renderer->RayQueryCapability().detail << '\n';
     return 77;
   }
+  // The validity pass must run before any TLAS/scene descriptor exists.
+  Lotus::RenderWorld empty_world;
+  Lotus::SceneExtraction empty_extraction;
+  const auto empty_snapshot = empty_world.Commit();
+  Check(renderer->UpdateScene(empty_extraction.Update(empty_snapshot)).status == Lotus::FrameStatus::Pass,
+      "initial empty upload failed");
+  Lotus::OffscreenTarget empty_target;
+  empty_target.width = 4;
+  empty_target.height = 3;
+  const auto empty_frame = renderer->RenderTemporalScene(empty_snapshot, empty_target, 1, {});
+  Check(empty_frame.status == Lotus::FrameStatus::Pass, empty_frame.detail.c_str());
+  Check(empty_frame.validation_message_count == 0, empty_frame.validation_detail.c_str());
+  Check(empty_frame.temporal.validity.size() == 12, "initial empty validity extent");
+  for (const auto& p : empty_frame.temporal.validity)
+    Check(p.valid == 0 && p.rejection == Lotus::TemporalRejection::Miss &&
+              p.previous_index == UINT32_MAX,
+        "initial empty scene fetched history");
+  Check(renderer->RenderScene(Lotus::ExtractDrawSummary(empty_snapshot), empty_target, 1).status ==
+            Lotus::FrameStatus::Pass,
+      "initial empty stream reset failed");
   Sequence(*renderer, Lotus::Integrator::Reference);
   // A fresh renderer supplies an independent history/identity stream.
   renderer = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);

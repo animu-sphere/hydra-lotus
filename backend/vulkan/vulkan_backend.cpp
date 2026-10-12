@@ -84,8 +84,12 @@ struct TemporalConstants {
   Matrix4 previous_world_to_clip;
   std::array<float, 4> previous_display;
   std::array<std::uint32_t, 4> previous_data;
+  std::array<float, 4> validation;
+  std::array<std::uint32_t, 4> history;
 };
-static_assert(sizeof(TemporalConstants) == 224);
+static_assert(sizeof(TemporalConstants) == 256);
+static_assert(sizeof(TemporalValidityPixel) == 16 &&
+              offsetof(TemporalValidityPixel, previous_index) == 8);
 static_assert(sizeof(TemporalPixel) == 64 &&
               offsetof(TemporalPixel, instance_id) == 32 &&
               offsetof(TemporalPixel, flags) == 48);
@@ -150,6 +154,7 @@ constexpr std::uint32_t kRadiancePass = 1;
 constexpr std::uint32_t kSurfacePass = 2;
 constexpr std::uint32_t kResolvePass = 3;
 constexpr std::uint32_t kTemporalPass = 4;
+constexpr std::uint32_t kTemporalValidityPass = 5;
 
 // The wavefront kernels' kKernel specialization constant, in
 // shaders/wavefront/wavefront.slang.
@@ -553,6 +558,7 @@ public:
       vkDestroyPipeline(device_, radiance_pipeline_, nullptr);
       vkDestroyPipeline(device_, resolve_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_pipeline_, nullptr);
+      vkDestroyPipeline(device_, temporal_validity_pipeline_, nullptr);
       vkDestroyQueryPool(device_, temporal_timestamps_, nullptr);
       for (VkPipeline pipeline : wavefront_pipelines_)
         vkDestroyPipeline(device_, pipeline, nullptr);
@@ -628,7 +634,10 @@ public:
               resolve_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kTemporalPass, false, false},
-              temporal_pipeline_, detail))
+              temporal_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kTemporalValidityPass, false, false},
+              temporal_validity_pipeline_, detail))
         return false;
       if (!ray_shaders.wavefront.empty()) {
         std::vector<std::uint32_t> compute_words;
@@ -940,6 +949,8 @@ public:
     for (auto& buffer : temporal_surfaces_)
       DestroyTemporalBuffer(buffer);
     DestroyTemporalBuffer(temporal_readback_);
+    DestroyTemporalBuffer(temporal_validity_);
+    DestroyTemporalBuffer(temporal_validity_readback_);
     DestroyTemporalBuffer(temporal_constants_);
     DestroyTemporalBuffer(temporal_instances_);
     temporal_width_ = temporal_height_ = 0;
@@ -1014,6 +1025,7 @@ public:
 
     std::string detail;
     const VkDeviceSize bytes = VkDeviceSize{target.width} * target.height * sizeof(TemporalPixel);
+    const VkDeviceSize validity_bytes = VkDeviceSize{target.width} * target.height * sizeof(TemporalValidityPixel);
     if (temporal_width_ != target.width || temporal_height_ != target.height) {
       DestroyTemporalBuffers();
       temporal_write_ = 0;
@@ -1025,6 +1037,10 @@ public:
     if (!EnsureTemporalBuffer(temporal_surfaces_[0], bytes, surface_usage, false, detail) ||
         !EnsureTemporalBuffer(temporal_surfaces_[1], bytes, surface_usage, false, detail) ||
         !EnsureTemporalBuffer(temporal_readback_, bytes * 2,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+        !EnsureTemporalBuffer(temporal_validity_, validity_bytes,
+            surface_usage, false, detail) ||
+        !EnsureTemporalBuffer(temporal_validity_readback_, validity_bytes,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
         !EnsureTemporalBuffer(temporal_constants_, sizeof(TemporalConstants),
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, detail) ||
@@ -1046,18 +1062,24 @@ public:
     constants.previous_display = {viewport.x, viewport.y, viewport.width, viewport.height};
     constants.previous_data = {static_cast<std::uint32_t>(scissor.offset.x),
         static_cast<std::uint32_t>(scissor.offset.y), scissor.extent.width, scissor.extent.height};
+    constants.validation = {requested.validation.absolute_depth_tolerance,
+        requested.validation.relative_depth_tolerance, requested.validation.minimum_normal_cosine,
+        requested.validation.max_motion_pixels};
+    constants.history = {frame.previous ? 1u : 0u, target.width, target.height, 0u};
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail) ||
         (!instances.empty() && !WriteTemporalBuffer(temporal_instances_, instances.data(),
                                    instances.size() * sizeof(instances[0]), detail))) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
-    const VkDescriptorBufferInfo buffers[3] = {
+    const VkDescriptorBufferInfo buffers[5] = {
         {temporal_constants_.buffer, 0, sizeof(constants)},
         {temporal_instances_.buffer, 0, VK_WHOLE_SIZE},
-        {temporal_surfaces_[temporal_write_].buffer, 0, bytes}};
-    VkWriteDescriptorSet writes[3]{};
-    for (std::uint32_t i = 0; i < 3; ++i) {
+        {temporal_surfaces_[temporal_write_].buffer, 0, bytes},
+        {temporal_surfaces_[1 - temporal_write_].buffer, 0, bytes},
+        {temporal_validity_.buffer, 0, validity_bytes}};
+    VkWriteDescriptorSet writes[5]{};
+    for (std::uint32_t i = 0; i < 5; ++i) {
       writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
       writes[i].dstSet = ray_descriptor_;
       writes[i].dstBinding = 8 + i;
@@ -1066,7 +1088,7 @@ public:
                                         : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       writes[i].pBufferInfo = &buffers[i];
     }
-    vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device_, 5, writes, 0, nullptr);
     if (!RecordTemporal(target, frame.previous.has_value(), bytes, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
@@ -1079,7 +1101,9 @@ public:
         !VulkanOk(vkWaitForFences(device_, 1, &fence_, VK_TRUE, 10'000'000'000ULL),
             "vkWaitForFences(temporal)", detail) ||
         !InvalidateIfNeeded(device_, temporal_readback_.memory,
-            temporal_readback_.coherent, detail)) {
+            temporal_readback_.coherent, detail) ||
+        !InvalidateIfNeeded(device_, temporal_validity_readback_.memory,
+            temporal_validity_readback_.coherent, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1098,10 +1122,14 @@ public:
           static_cast<const std::uint8_t*>(temporal_readback_.mapped) + bytes, bytes);
     }
     products.surface_bytes = bytes * 4;
+    products.validity.resize(products.current.size());
+    products.validity_row_pitch = target.width * sizeof(TemporalValidityPixel);
+    std::memcpy(products.validity.data(), temporal_validity_readback_.mapped, validity_bytes);
+    products.validity_bytes = validity_bytes * 2;
     products.metadata_bytes = temporal_constants_.bytes + temporal_instances_.bytes;
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
-      std::uint64_t ticks[2]{};
-      if (!VulkanOk(vkGetQueryPoolResults(device_, temporal_timestamps_, 0, 2,
+      std::uint64_t ticks[4]{};
+      if (!VulkanOk(vkGetQueryPoolResults(device_, temporal_timestamps_, 0, 4,
                         sizeof(ticks), ticks, sizeof(ticks[0]),
                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
               "vkGetQueryPoolResults(temporal)", detail)) {
@@ -1113,6 +1141,8 @@ public:
       products.timestamp_available = true;
       products.primary_surface_gpu_ms = static_cast<double>((ticks[1] - ticks[0]) & mask) *
                                         device_properties_.limits.timestampPeriod / 1'000'000.0;
+      products.reprojection_gpu_ms = static_cast<double>((ticks[3] - ticks[2]) & mask) *
+                                     device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     // Publish only after submission, readback and timestamps all succeeded.
     temporal_history_ = std::move(next_history);
@@ -1132,11 +1162,11 @@ public:
             "vkBeginCommandBuffer(temporal)", detail))
       return false;
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
-      vkCmdResetQueryPool(command_, temporal_timestamps_, 0, 2);
+      vkCmdResetQueryPool(command_, temporal_timestamps_, 0, 4);
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, temporal_timestamps_, 0);
     }
     VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
         0, 1, &barrier, 0, nullptr, 0, nullptr);
@@ -1164,6 +1194,31 @@ public:
     vkCmdEndRenderPass(command_);
     if (temporal_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 1);
+    // Make this frame's writes and the preceding frame's retained surface
+    // visible to a separate fullscreen validity pass. It covers misses and
+    // pixels outside the data window too; every debug record is overwritten.
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+    if (temporal_timestamps_ != VK_NULL_HANDLE)
+      vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, temporal_timestamps_, 2);
+    vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
+    const VkViewport full_viewport{0, 0, static_cast<float>(target.width), static_cast<float>(target.height), 0, 1};
+    const VkRect2D full_scissor{{0, 0}, {target.width, target.height}};
+    vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, temporal_validity_pipeline_);
+    vkCmdSetViewport(command_, 0, 1, &full_viewport);
+    vkCmdSetScissor(command_, 0, 1, &full_scissor);
+    vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+    // The shared shader statically declares this range even when the
+    // specialized validity pass does not read the camera. Initialize it
+    // independently of a primary draw (which an empty scene skips).
+    vkCmdPushConstants(command_, ray_layout_, kRayStages, 0, sizeof(RayConstants), &ray_constants_);
+    vkCmdDraw(command_, 3, 1, 0, 0);
+    vkCmdEndRenderPass(command_);
+    if (temporal_timestamps_ != VK_NULL_HANDLE)
+      vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 3);
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -1176,6 +1231,9 @@ public:
       vkCmdCopyBuffer(command_, temporal_surfaces_[1 - temporal_write_].buffer,
           temporal_readback_.buffer, 1, &copy);
     }
+    copy = {0, 0, VkDeviceSize{target.width} * target.height * sizeof(TemporalValidityPixel)};
+    vkCmdCopyBuffer(command_, temporal_validity_.buffer,
+        temporal_validity_readback_.buffer, 1, &copy);
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -1781,7 +1839,7 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[11]{};
+    VkDescriptorSetLayoutBinding bindings[13]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -1815,7 +1873,7 @@ private:
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (std::uint32_t index = 8; index < 11; ++index) {
+    for (std::uint32_t index = 8; index < 13; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = index == 8
                                            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -1823,19 +1881,21 @@ private:
       bindings[index].descriptorCount = 1;
       bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    const VkDescriptorBindingFlags binding_flags[11] = {0, 0, 0,
+    const VkDescriptorBindingFlags binding_flags[13] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 11;
+    flags.bindingCount = 13;
     flags.pBindingFlags = binding_flags;
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 11;
+    layout.bindingCount = 13;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -1847,7 +1907,7 @@ private:
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 6;
@@ -1887,7 +1947,7 @@ private:
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &ray_timestamps_),
               "vkCreateQueryPool(primary ray)", detail))
         return false;
-      query.queryCount = 2;
+      query.queryCount = 4;
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &temporal_timestamps_),
               "vkCreateQueryPool(temporal surface)", detail))
         return false;
@@ -2538,12 +2598,15 @@ private:
   VkPipeline radiance_pipeline_ = VK_NULL_HANDLE;
   VkPipeline resolve_pipeline_ = VK_NULL_HANDLE;
   VkPipeline temporal_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline temporal_validity_pipeline_ = VK_NULL_HANDLE;
   VkQueryPool temporal_timestamps_ = VK_NULL_HANDLE;
   TemporalHistory temporal_history_;
   vulkan_internal::TemporalIdentities temporal_identities_;
   std::shared_ptr<const LotusScene> uploaded_scene_;
   std::array<TemporalBuffer, 2> temporal_surfaces_{};
   TemporalBuffer temporal_readback_;
+  TemporalBuffer temporal_validity_;
+  TemporalBuffer temporal_validity_readback_;
   TemporalBuffer temporal_constants_;
   TemporalBuffer temporal_instances_;
   std::uint32_t temporal_width_ = 0;

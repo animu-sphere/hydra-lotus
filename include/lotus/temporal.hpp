@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 #include <lotus/render_world.hpp>
@@ -21,6 +22,13 @@ enum class TemporalResetReason {
   HistoryKeyChanged,
 };
 
+struct TemporalValidationSettings {
+  float absolute_depth_tolerance = 0.01F;
+  float relative_depth_tolerance = 0.01F;
+  float minimum_normal_cosine = 0.9F;
+  float max_motion_pixels = 32.0F;
+};
+
 struct TemporalFrameSettings {
   // A rendered frame's identity, independent of scene revisions and spp.
   std::uint64_t frame_index = 0;
@@ -33,6 +41,7 @@ struct TemporalFrameSettings {
   bool camera_cut = false;
   std::array<float, 4> display_window{};
   std::array<std::int32_t, 4> data_window{};
+  TemporalValidationSettings validation;
 };
 
 struct TemporalFrame {
@@ -103,14 +112,8 @@ struct TemporalSurface {
   std::array<float, 3> normal{};
 };
 
-struct TemporalValidationSettings {
-  float absolute_depth_tolerance = 0.01F;
-  float relative_depth_tolerance = 0.01F;
-  float minimum_normal_cosine = 0.9F;
-  float max_motion_pixels = 32.0F;
-};
-
-enum class TemporalRejection {
+// Numeric values are also the GPU debug AOV's rejection codes.
+enum class TemporalRejection : std::uint32_t {
   None,
   Miss,
   InvalidData,
@@ -119,6 +122,9 @@ enum class TemporalRejection {
   LargeMotion,
   DepthDiscontinuity,
   NormalDiscontinuity,
+  HistoryUnavailable,
+  CorrespondenceMissing,
+  ReprojectionOutside,
 };
 
 // Shared history validity: compare the fetched previous surface's depth with
@@ -128,6 +134,36 @@ enum class TemporalRejection {
 [[nodiscard]] TemporalRejection ValidateTemporalHistory(
     const TemporalReprojection& reprojection, const TemporalSurface& current,
     const TemporalSurface& previous,
+    const TemporalValidationSettings& settings = {});
+
+// Tightly packed top-left primary-surface products, one per pixel.
+struct TemporalPixel {
+  // Unit world geometric normal facing the camera; w: positive view depth.
+  std::array<float, 4> normal_depth{};
+  // xy: backward motion; z: expected previous depth; w: valid projection.
+  std::array<float, 4> motion_depth{};
+  std::uint64_t instance_id = 0;
+  std::uint64_t material_id = 0;
+  // bit 0: hit; bit 1: rigid correspondence; bit 2: unchanged material.
+  std::uint32_t flags = 0;
+  std::array<std::uint32_t, 3> reserved{};
+};
+
+struct TemporalValidityPixel {
+  std::uint32_t valid = 0;
+  TemporalRejection rejection = TemporalRejection::Miss;
+  // Row-major history sample, or UINT32_MAX when no fetch took place.
+  std::uint32_t previous_index = UINT32_MAX;
+  std::uint32_t reserved = 0;
+};
+
+// CPU oracle for the GPU's nearest-pixel backward fetch (floor of the
+// continuous previous pixel). History must contain width*height records,
+// or be empty after a reset. No radiance/reservoir/denoiser state is needed.
+[[nodiscard]] TemporalValidityPixel ReprojectTemporalHistory(
+    const TemporalPixel& current, std::uint32_t x, std::uint32_t y,
+    std::uint32_t width, std::uint32_t height,
+    std::span<const TemporalPixel> previous,
     const TemporalValidationSettings& settings = {});
 
 } // namespace Lotus
