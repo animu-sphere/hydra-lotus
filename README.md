@@ -63,6 +63,9 @@ is [PROJECT_LAYOUT.md](docs/architecture/PROJECT_LAYOUT.md).
 [roadmap](docs/roadmap/README.md), [building](docs/guides/BUILDING.md),
 [changelog](CHANGELOG.md).
 
+[Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) ·
+[Security policy](SECURITY.md).
+
 ## Build
 
 The project is built with [OpenStrata](https://github.com/animu-sphere/open-strata)

@@ -8,6 +8,50 @@ integrator, reservoir or denoiser. The
 owns its intended scope; the [roadmap](../roadmap/README.md#status-at-a-glance)
 owns delivery status.
 
+## Hydra controls and debug AOVs
+
+`hdLotus` exposes the same backend through render settings:
+
+| Setting | Type/default | Behavior |
+| --- | --- | --- |
+| `lotus:temporal` | bool, false | True selects bounded temporal radiance, one fresh sample per pass under either integrator; false selects deterministic progressive transport |
+| `lotus:historySamples` | int, 32 | Effective history cap, clamped to [1, 65536] |
+| `lotus:historyKey` | int, 0 | Caller compatibility token, clamped to nonnegative; a change resets history |
+| `lotus:historyReset` | int, 0 | Change this counter to declare one camera cut; the new value is consumed only by a successful temporal frame |
+
+Temporal colour and the render pass remain unconverged so hosts keep drawing
+fresh batches. `convergedSamplesPerPixel` continues to control progressive
+convergence when temporal radiance is disabled. The sample seed, integrator
+and light-sampling settings retain their existing meanings. Radiance mode
+requires colour clears and ray queries; unsupported bindings/capabilities
+report errors rather than producing temporal bootstrap data.
+
+Binding any [temporal debug AOV](AOVS.md#temporal-hydra-channels) requests the
+GPU metadata/validity passes even when radiance reuse is disabled. This
+metadata-only mode keeps progressive convergence and writes zero history
+length. Debug AOVs finish after one pass and are overwritten over the full
+extent, regardless of their clear value (including an empty clear).
+Their records use the backend's top-left motion convention even though the
+adapter flips storage rows for Hydra. Binding debug channels is optional;
+temporal colour works by itself. AOV validation errors do not consume a
+rendered frame index or a pending reset counter.
+
+One delegate retains one GPU view. Render-pass identity is retained with a
+token; switching passes conservatively cuts temporal history, including
+when cameras and extents happen to match. Alternating views do not retain
+independent histories. Successful ordinary renders interrupt the stream;
+failed submissions recreate the renderer on the next pass. Camera/rigid
+motion, scene/settings classification and same-count instancer reordering
+follow the backend contracts below. There is no automatic camera-cut
+heuristic: increment `lotus:historyReset` or change `lotus:historyKey` when
+the host knows a cut or incompatible edit occurred.
+
+`LOTUS_HYDRA_EVIDENCE` optionally appends per-frame availability, reset code,
+batch seed, valid/moving pixel counts and maximum effective history count
+alongside the existing render evidence. The
+[Hydra measurement and exit review](../reports/2026-10-13-temporal-hydra-exit.md)
+checks moving USD stages and the installed usdview host.
+
 ## Frame lifecycle
 
 One `TemporalHistory` belongs to one rendered view. `Advance(snapshot,

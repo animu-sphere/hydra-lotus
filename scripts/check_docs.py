@@ -100,7 +100,8 @@ def check_docs(root: Path) -> list[str]:
     errors: list[str] = []
     docs = root / "docs"
     sources = {p.resolve(): p.read_text(encoding="utf-8-sig") for p in docs.rglob("*.md")}
-    for name in ("README.md", "CHANGELOG.md"):
+    for name in ("README.md", "CHANGELOG.md", "CONTRIBUTING.md",
+                 "CODE_OF_CONDUCT.md", "SECURITY.md", ".github/PULL_REQUEST_TEMPLATE.md"):
         p = root / name
         if p.is_file():
             sources[p.resolve()] = p.read_text(encoding="utf-8-sig")
@@ -177,6 +178,7 @@ def check_docs(root: Path) -> list[str]:
 
     canonical = docs / "roadmap" / "README.md"
     current = docs / "roadmap" / "current.md"
+    pr_template = root / ".github" / "PULL_REQUEST_TEMPLATE.md"
     tasks: dict[str, Path] = {}
     canonical_rows: dict[str, str] = {}
     in_status_table = False
@@ -218,7 +220,10 @@ def check_docs(root: Path) -> list[str]:
                     error(path, number, "release target belongs only in the canonical status table")
             if line.startswith("#") and re.search(r"(?<!Renderer )\bPhase \d", line):
                 error(path, number, "qualify phase headings as Renderer Phase")
-            if re.match(r"\s*[-*] \[[ xX]\]", line):
+            # PR review prompts are not roadmap tasks; named tasks still are.
+            if re.match(r"\s*[-*] \[[ xX]\]", line) and (
+                path != pr_template or TASK.match(line)
+            ):
                 task = TASK.match(line)
                 if path != current:
                     error(path, number, "active task checklists belong only in roadmap/current.md")

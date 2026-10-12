@@ -1,0 +1,30 @@
+name: Documentation issue
+description: Report incorrect, missing or unclear documentation.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation has one owner per subject; see the [documentation index](https://github.com/animu-sphere/hydra-lotus/blob/main/docs/README.md).
+        Follow the [Code of Conduct](https://github.com/animu-sphere/hydra-lotus/blob/main/CODE_OF_CONDUCT.md).
+        Suspected vulnerabilities use the [security policy](https://github.com/animu-sphere/hydra-lotus/blob/main/SECURITY.md).
+  - type: input
+    id: location
+    attributes:
+      label: Page or file
+      description: Include a path or URL and the affected heading or passage.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is incorrect or missing?
+      description: For failed command examples, include the command, revision, environment and sanitized error output.
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+      description: Explain the expected guidance and link supporting implementation or evidence when available.
+    validations:
+      required: false

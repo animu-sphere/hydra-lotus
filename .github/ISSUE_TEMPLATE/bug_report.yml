@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible problem in Hydra Lotus.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check existing issues and follow the [Code of Conduct](https://github.com/animu-sphere/hydra-lotus/blob/main/CODE_OF_CONDUCT.md).
+        For suspected vulnerabilities, follow the [security policy](https://github.com/animu-sphere/hydra-lotus/blob/main/SECURITY.md).
+        Remove credentials and private scene data from logs and attachments.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Core scene / extraction
+        - Vulkan / shaders / headless
+        - Hydra adapter / USD host
+        - Viewport
+        - Build / packaging / CI
+        - Other or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the release or commit, OS, compiler, ost version, build profile/intent and relevant GPU/driver, Vulkan/Slang or OpenUSD versions. Mark unavailable or inapplicable components.
+      placeholder: |
+        Release or commit:
+        OS and compiler:
+        ost version and build command:
+        GPU, driver and Vulkan/Slang (if relevant):
+        OpenUSD runtime (if relevant):
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include exact commands, build options and a minimal scene or input you may share. For rendering, include integrator, light sampling, temporal mode, sample count and seed when known.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened, including errors or unexpected fallback behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and evidence
+      description: Attach sanitized CTest output, renderer-report.json, validation messages, images or benchmark results. Identify tests that failed, skipped or could not run.
+    validations:
+      required: false

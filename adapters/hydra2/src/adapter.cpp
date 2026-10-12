@@ -121,6 +121,16 @@ void AppendHostEvidence(std::uint64_t frame_index,
     TF_WARN("Could not append Lotus Hydra evidence to %s", path);
     return;
   }
+  std::size_t valid_pixels = 0, motion_pixels = 0;
+  std::uint32_t history_samples = 0;
+  for (const auto& pixel : frame.temporal.validity)
+    valid_pixels += pixel.valid != 0;
+  for (const auto& pixel : frame.temporal.current)
+    motion_pixels += pixel.motion_depth[3] != 0 &&
+        (std::abs(pixel.motion_depth[0]) > 0.01F ||
+            std::abs(pixel.motion_depth[1]) > 0.01F);
+  for (const auto& pixel : frame.temporal.radiance)
+    history_samples = std::max(history_samples, pixel.sample_count);
   output << "frame=" << frame_index
          << " completion=" << frame.completion
          << " scene_revision=" << scene_revision
@@ -150,6 +160,14 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " analytic_lights=" << scene.analytic_lights
          << " sample_index=" << settings.sample_index
          << " samples=" << frame.samples_per_pixel
+         << " temporal=" << (frame.temporal.available ? 1 : 0)
+         << " temporal_radiance=" << (frame.temporal.radiance_available ? 1 : 0)
+         << " temporal_history=" << (frame.temporal.history_available ? 1 : 0)
+         << " temporal_reset=" << static_cast<int>(frame.temporal.reset_reason)
+         << " temporal_sample_index=" << frame.temporal.batch_sample_index
+         << " temporal_valid_pixels=" << valid_pixels
+         << " temporal_motion_pixels=" << motion_pixels
+         << " temporal_history_samples=" << history_samples
          << " converged=" << (converged ? 1 : 0)
          << " synchronization_validation="
          << (frame.synchronization_validation_available ? 1 : 0)
@@ -217,6 +235,19 @@ const TfToken kWavefrontSetting("lotus:wavefront");
 // a flag: true (the default) adds next event estimation with multiple
 // importance sampling, false leaves BSDF sampling alone.
 const TfToken kLightSamplingSetting("lotus:lightSampling");
+const TfToken kTemporalSetting("lotus:temporal");
+const TfToken kHistorySamplesSetting("lotus:historySamples");
+const TfToken kHistoryKeySetting("lotus:historyKey");
+const TfToken kHistoryResetSetting("lotus:historyReset");
+const TfToken kMotionAov("lotus:motion");
+const TfToken kHistoryLengthAov("lotus:historyLength");
+const TfToken kHistoryValidityAov("lotus:historyValidity");
+const TfToken kHistoryRejectionAov("lotus:historyRejection");
+
+bool IsTemporalAov(const TfToken& name) {
+  return name == kMotionAov || name == kHistoryLengthAov ||
+      name == kHistoryValidityAov || name == kHistoryRejectionAov;
+}
 
 HdAovDescriptor AovDescriptor(const TfToken& name) {
   if (name == HdAovTokens->color) {
@@ -224,6 +255,13 @@ HdAovDescriptor AovDescriptor(const TfToken& name) {
   }
   if (name == HdAovTokens->depth) {
     return {HdFormatFloat32, false, VtValue(1.0F)};
+  }
+  if (name == kMotionAov) {
+    return {HdFormatFloat32Vec4, false, VtValue(GfVec4f(0.0F))};
+  }
+  if (name == kHistoryLengthAov || name == kHistoryValidityAov ||
+      name == kHistoryRejectionAov) {
+    return {HdFormatInt32, false, VtValue(0)};
   }
   if (name == HdAovTokens->primId || name == HdAovTokens->instanceId ||
       name == HdAovTokens->elementId) {
@@ -285,6 +323,11 @@ bool ConfigureTarget(const HdRenderPassAovBindingVector& bindings,
           target.clear_depth <= 1.0F) {
         continue;
       }
+    } else if (binding.aovName == kMotionAov && clear.IsHolding<GfVec4f>()) {
+      const auto& value = clear.UncheckedGet<GfVec4f>();
+      if (std::all_of(value.data(), value.data() + 4,
+              [](float component) { return std::isfinite(component); }))
+        continue;
     } else if (descriptor.format == HdFormatInt32 && clear.IsHolding<int>()) {
       continue;
     }
@@ -616,6 +659,8 @@ public:
   // `exclusion` are not traced.
   void Render(const HdRenderPassState& state,
       const Lotus::PathTracingSettings& settings,
+      Lotus::TemporalFrameSettings temporal, int history_reset,
+      const std::shared_ptr<const int>& view,
       const std::shared_ptr<const MeshExclusion>& exclusion) {
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
@@ -634,6 +679,14 @@ public:
       return;
     }
     ApplyFraming(state, target);
+    const bool temporal_products = temporal.accumulate_radiance ||
+        std::any_of(bindings.begin(), bindings.end(), [](const auto& binding) {
+          return IsTemporalAov(binding.aovName);
+        });
+    if (temporal.accumulate_radiance && !target.clear_color_enabled) {
+      TF_RUNTIME_ERROR("Lotus temporal accumulation requires a colour clear");
+      return;
+    }
 
     // The bound CPU buffer owns its contents, including host writes and
     // reallocation. Never use a different buffer's retained GPU attachment.
@@ -680,8 +733,17 @@ public:
       return;
     }
     const bool trace = renderer_->RayQueryCapability().available;
+    if (temporal_products && !trace) {
+      TF_RUNTIME_ERROR("Lotus temporal products require ray queries");
+      return;
+    }
+    temporal.frame_index = frame_index_;
+    temporal.camera_cut = (history_reset_ && *history_reset_ != history_reset) ||
+        (temporal_view_ && temporal_view_ != view);
     const Lotus::GpuFrameEvidence frame =
-        trace ? renderer_->RenderScene(draw, target, 1, settings)
+        temporal_products ? renderer_->RenderTemporalScene(
+                                snapshot, target, 1, temporal, settings)
+        : trace ? renderer_->RenderScene(draw, target, 1, settings)
               : renderer_->Render(draw, target, 1);
     frame_evidence_ = frame;
     frame_evidence_.color.payload = {};
@@ -694,7 +756,12 @@ public:
       return;
     }
 
-    converged_ = !trace || frame.samples_per_pixel >= settings.max_samples;
+    if (temporal_products) {
+      history_reset_ = history_reset;
+      temporal_view_ = view;
+    }
+    converged_ = !temporal.accumulate_radiance &&
+        (!trace || frame.samples_per_pixel >= settings.max_samples);
     std::size_t buffers_written{};
     for (const HdRenderPassAovBinding& binding : bindings) {
       auto* buffer =
@@ -712,6 +779,9 @@ public:
       } else if (binding.aovName == HdAovTokens->depth) {
         wrote = buffer->WriteDepth(frame.depth.payload, frame.depth.width,
             frame.depth.height);
+      } else if (IsTemporalAov(binding.aovName)) {
+        wrote = buffer->WriteTemporal(binding.aovName, frame.temporal,
+            target.width, target.height);
       } else if (binding.aovName == HdAovTokens->primId ||
                  binding.aovName == HdAovTokens->instanceId ||
                  binding.aovName == HdAovTokens->elementId) {
@@ -876,6 +946,10 @@ private:
   Lotus::GpuFrameEvidence frame_evidence_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
+  std::optional<int> history_reset_;
+  // One retained GPU view per delegate. Switching passes cuts its stream;
+  // retaining the token prevents identity reuse when a pass is destroyed.
+  std::shared_ptr<const int> temporal_view_;
   bool converged_ = true;
 };
 
@@ -1683,7 +1757,18 @@ public:
 private:
   void _Execute(const HdRenderPassStateSharedPtr& render_pass_state,
       const TfTokenVector& render_tags) override {
-    state_->Render(*render_pass_state, Settings(), Exclusion(render_tags));
+    const HdRenderDelegate& delegate = *GetRenderIndex()->GetRenderDelegate();
+    Lotus::TemporalFrameSettings temporal;
+    temporal.accumulate_radiance =
+        delegate.GetRenderSetting<bool>(kTemporalSetting, false);
+    temporal.max_history_samples = static_cast<std::uint32_t>(std::clamp(
+        delegate.GetRenderSetting<int>(kHistorySamplesSetting, 32), 1, 65536));
+    temporal.history_key = static_cast<std::uint64_t>(std::max(
+        delegate.GetRenderSetting<int>(kHistoryKeySetting, 0), 0));
+    state_->Render(*render_pass_state, Settings(), temporal,
+        delegate.GetRenderSetting<int>(kHistoryResetSetting, 0),
+        temporal_view_,
+        Exclusion(render_tags));
   }
 
   // Deterministic mode: with the camera and the AOVs, these settings fix
@@ -1753,6 +1838,7 @@ private:
   }
 
   std::shared_ptr<AdapterState> state_;
+  std::shared_ptr<const int> temporal_view_ = std::make_shared<const int>(0);
   // Cached until _MarkCollectionDirty or a change Exclusion detects.
   std::shared_ptr<const MeshExclusion> exclusion_;
   TfTokenVector render_tags_;
@@ -1903,6 +1989,41 @@ bool HdLotusRenderBuffer::WriteDepth(const std::vector<float>& depth,
       reinterpret_cast<const std::uint8_t*>(depth.data()),
       depth.size() * sizeof(float), source_width, source_height,
       HdFormatFloat32);
+}
+
+bool HdLotusRenderBuffer::WriteTemporal(const TfToken& name,
+    const Lotus::TemporalProducts& products, std::uint32_t source_width,
+    std::uint32_t source_height) {
+  std::scoped_lock lock(mutex_);
+  const std::size_t count = std::size_t{source_width} * source_height;
+  if (!IsTemporalAov(name) || !products.available ||
+      products.width != source_width || products.height != source_height ||
+      products.current.size() != count || products.validity.size() != count ||
+      (products.radiance_available && products.radiance.size() != count))
+    return false;
+  if (name == kMotionAov) {
+    std::vector<std::array<float, 4>> motion(count);
+    for (std::size_t i = 0; i < count; ++i)
+      motion[i] = products.current[i].motion_depth;
+    return WriteRowsFlippedLocked(
+        reinterpret_cast<const std::uint8_t*>(motion.data()),
+        motion.size() * sizeof(motion[0]), source_width, source_height,
+        HdFormatFloat32Vec4);
+  }
+  std::vector<std::int32_t> values(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    if (name == kHistoryLengthAov)
+      values[i] = products.radiance_available
+          ? static_cast<std::int32_t>(products.radiance[i].sample_count) : 0;
+    else if (name == kHistoryValidityAov)
+      values[i] = static_cast<std::int32_t>(products.validity[i].valid);
+    else
+      values[i] = static_cast<std::int32_t>(products.validity[i].rejection);
+  }
+  return WriteRowsFlippedLocked(
+      reinterpret_cast<const std::uint8_t*>(values.data()),
+      values.size() * sizeof(values[0]), source_width, source_height,
+      HdFormatInt32);
 }
 
 bool HdLotusRenderBuffer::ReadColor(std::vector<float>& color) const {
@@ -2133,7 +2254,11 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
                VtValue(kDefaultConvergedSamples)},
       {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)},
       {"Wavefront integrator", kWavefrontSetting, VtValue(false)},
-      {"Light sampling (NEE + MIS)", kLightSamplingSetting, VtValue(true)}};
+      {"Light sampling (NEE + MIS)", kLightSamplingSetting, VtValue(true)},
+      {"Temporal radiance accumulation", kTemporalSetting, VtValue(false)},
+      {"Temporal history samples", kHistorySamplesSetting, VtValue(32)},
+      {"Temporal history compatibility key", kHistoryKeySetting, VtValue(0)},
+      {"Temporal history reset counter", kHistoryResetSetting, VtValue(0)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {

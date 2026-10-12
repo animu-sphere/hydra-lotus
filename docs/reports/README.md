@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-13-temporal-hydra-exit.md](2026-10-13-temporal-hydra-exit.md) | Hydra temporal settings, motion/history AOVs, moving USD stages and installed usdview, reset controls, regression checks and Renderer Phase 4 scope review. |
 | [2026-10-12-temporal-radiance.md](2026-10-12-temporal-radiance.md) | Opt-in bounded temporal radiance, static progressive equivalence, independent moving references and per-pixel batch/blend checks, disocclusion, reset policy, memory, GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-gpu-validity.md](2026-10-12-temporal-gpu-validity.md) | GPU backward history fetch and shared validity under both integrators, per-pixel CPU-oracle comparison of every rejection code, self-disocclusion and moving occluders, debug products, separate GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-primary-surfaces.md](2026-10-12-temporal-primary-surfaces.md) | GPU primary-surface history, depth, geometric normals, stable identities and backward motion in both integrators; independent moving-frame projections, window/resize and resource-churn checks, GPU timestamps and regression evidence. |

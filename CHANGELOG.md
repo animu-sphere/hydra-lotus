@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Hydra temporal radiance selection, bounded history controls, compatibility
+  keys and one-shot reset counters; motion, history length, shared validity
+  and rejection AOVs, with moving USD-stage and installed usdview coverage
+  under both integrators. Progressive deterministic rendering remains selectable.
+
 - Opt-in temporal radiance accumulation under both integrators, with fresh
   disjoint sample batches, bounded per-pixel colour/count history, automatic
   scene/lighting/settings resets, camera/rigid-motion reuse, history debug
