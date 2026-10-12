@@ -394,6 +394,7 @@ fresh batches, static convergence with progressive transport, and moving
 sequences with 256-sample reference images, including cap saturation,
 disocclusion, global resets and failed-call recovery
 ([radiance evidence](../reports/2026-10-12-temporal-radiance.md)).
-History filtering and Hydra temporal settings/AOV bindings remain outside
-this implementation. Geometry deformation is conservatively rejected.
+History filtering remains outside this implementation. Hydra controls and
+AOV bindings are described [above](#hydra-controls-and-debug-aovs).
+Geometry deformation is conservatively rejected.
 No ReSTIR or denoiser state is introduced.

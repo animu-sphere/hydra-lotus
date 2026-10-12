@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-13-v0.4.0-release-gate.md](2026-10-13-v0.4.0-release-gate.md) | v0.4.0 release verification: physical-GPU temporal/core/Hydra and installed-host checks, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging. |
 | [2026-10-13-temporal-hydra-exit.md](2026-10-13-temporal-hydra-exit.md) | Hydra temporal settings, motion/history AOVs, moving USD stages and installed usdview, reset controls, regression checks and Renderer Phase 4 scope review. |
 | [2026-10-12-temporal-radiance.md](2026-10-12-temporal-radiance.md) | Opt-in bounded temporal radiance, static progressive equivalence, independent moving references and per-pixel batch/blend checks, disocclusion, reset policy, memory, GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-gpu-validity.md](2026-10-12-temporal-gpu-validity.md) | GPU backward history fetch and shared validity under both integrators, per-pixel CPU-oracle comparison of every rejection code, self-disocclusion and moving occluders, debug products, separate GPU timestamps and regression evidence. |
