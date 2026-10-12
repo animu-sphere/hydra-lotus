@@ -7,6 +7,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- The CPU temporal foundation in `lotus/temporal.hpp`, available through
+  `Lotus::Vulkan` even without a Vulkan SDK: immutable current/previous
+  snapshots, frame-index and compatibility resets, rigid placement pairing
+  by mesh key and ordinal, full-frame backward pixel reprojection with
+  expected previous-camera depth, and shared depth/normal/identity/motion
+  validity. `lotus-renderer-temporal` validates lifecycle, resource edits,
+  independent pinhole projections and rejection boundaries. The render
+  paths do not yet consume it; progressive rendering behavior is unchanged
+  ([contract](docs/reference/TEMPORAL.md),
+  [evidence](docs/reports/2026-10-12-temporal-foundation.md)).
+
 ## [0.3.0] - 2026-10-12
 
 The direct lighting release adds Renderer Phase 3: next event estimation

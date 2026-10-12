@@ -1,4 +1,5 @@
 add_library(lotus-render-vulkan STATIC
+  temporal.cpp
   vulkan_backend.cpp
   vulkan_present.cpp)
 if(LOTUS_WITH_VULKAN)

@@ -28,6 +28,10 @@ add_executable(lotus-scene-update-test scene-update-test.cpp)
 target_link_libraries(lotus-scene-update-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-renderer-scene-update COMMAND lotus-scene-update-test)
 
+add_executable(lotus-temporal-test temporal-test.cpp)
+target_link_libraries(lotus-temporal-test PRIVATE Lotus::Vulkan)
+add_test(NAME lotus-renderer-temporal COMMAND lotus-temporal-test)
+
 # The committed third-party validation assets match their manifest.
 add_test(NAME lotus-validation-assets
   COMMAND "${CMAKE_COMMAND}"

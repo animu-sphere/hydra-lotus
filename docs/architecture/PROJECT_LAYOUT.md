@@ -53,6 +53,13 @@ backend target. The Vulkan-only `lotus-memory-ranges-test` and
 placement and GPU allocation lifecycle; `lotus-renderer-memory-pool-no-driver`
 checks the latter's explained SKIP using the missing-driver script.
 
+Temporal metadata and shared validity also stay in `backend/vulkan/`, in
+`temporal.cpp` within `lotus-render-vulkan`. Their plain-C++ public boundary
+is `include/lotus/temporal.hpp`; this source and the uninstalled
+`lotus-temporal-test` validation executable build even without Vulkan. The
+[temporal reference](../reference/TEMPORAL.md) owns behavior and integration
+limits.
+
 The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its
 `lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained
