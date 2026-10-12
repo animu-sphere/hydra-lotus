@@ -7,69 +7,59 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-Renderer Phase 3's first slice, LOTUS-LIGHT-01, adds
-next event estimation towards emissive triangles with power-heuristic MIS
-in both integrators, selected by `PathTracingSettings::light_sampling` and
-the `lotus:lightSampling` Hydra flag
-([evidence](../reports/2026-10-11-emissive-nee-mis.md)): in the Cornell box it shortens
-the time to equal quality 2.61×. The constant environment stays with BSDF
-sampling until environment importance sampling
-([measurement](../reports/2026-10-11-emissive-nee-mis.md#the-constant-environment)).
-LOTUS-LIGHT-02 adds UsdLux sphere, rect, disk and distant lights as
-analytic lights of the core scene, translated by the Hydra adapter and
-sampled in the same light table, with the radiance a sampled direction
-crosses weighed by MIS ([evidence](../reports/2026-10-11-analytic-lights.md)).
-LOTUS-LIGHT-03 reads dome textures into a latitude-longitude environment
-image and samples it in proportion to its radiance in the same light
-table: under OpenUSD's Stinson Beach image a Lambert floor's per-sample
-variance falls over a thousandfold
-([evidence](../reports/2026-10-11-environment-importance-sampling.md)).
-Renderer Phase 3 is complete
-([exit review](../reports/2026-10-12-renderer-phase3-exit.md#renderer-phase-3-exit)):
-light sampling shortens the time to equal quality 2.6–3.0× in the Cornell
-box and by three orders of magnitude or more in the lit workloads, under
-both integrators. The wavefront shadow rays stay inline; acceleration for
-many analytic lights is [deferred](#deferred-adapter-work).
+Renderer Phase 3's [exit review](../reports/2026-10-12-renderer-phase3-exit.md#renderer-phase-3-exit)
+provides the NEE / MIS baseline for the temporal cycle. The release target
+and phase status belong to the [canonical table](README.md#status-at-a-glance).
 
-Renderer Phase 2 is complete
-([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)).
+LOTUS-TEMPORAL-01 provides CPU frame history, rigid-placement correspondence,
+full-frame backward reprojection and shared validity
+([evidence](../reports/2026-10-12-temporal-foundation.md),
+[contract and limits](../reference/TEMPORAL.md)). The next slices connect
+that metadata to the GPU. Work proceeds in this order:
 
-The wavefront integrator reproduces the reference transport
-([equivalence evidence](../reports/2026-10-10-wavefront-equivalence.md));
-the [scheduling](../reports/2026-10-10-wavefront-scheduling.md),
-[path-state](../reports/2026-10-10-wavefront-path-state.md) and
-[camera and resolve](../reports/2026-10-11-wavefront-camera-resolve.md)
-reports record its cost against the reference integrator after queue
-bookkeeping, round scheduling, per-path state traffic and the generate
-and accumulate kernels. Hydra selects either integrator
-([integrator selection](../reports/2026-10-11-hydra-integrator-selection.md)).
-Path classification is assigned to Renderer Phase 8 (LOTUS-MATERIAL-01).
+- [ ] **LOTUS-TEMPORAL-02 — Primary-surface temporal AOVs and GPU history.**
+  Retain previous camera/placement transforms for successfully rendered
+  frames, with stable instance/material identities independent of GPU table
+  slots. Add unjittered primary depth, normal, identity and backward motion
+  products to both integrators. Cover display/data windows and resizing;
+  check stationary, camera-motion and rigid-object-motion sequences against
+  independent projections, including instancer churn. Preserve progressive
+  reference output. Carry GPU timestamps and debug AOVs with each new pass.
+- [ ] **LOTUS-TEMPORAL-03 — GPU reprojection and shared validity.**
+  Fetch the preceding frame's surface metadata and implement the shared
+  rejection contract on the GPU, checked against the CPU oracle. Exercise
+  disocclusion, depth/normal discontinuity, changed material/texture/instance,
+  missing history, large motion and camera cuts. Expose rejection reasons
+  and history validity as debug AOVs, with per-pass GPU timestamps. Keep
+  all validity code independent of ReSTIR and denoiser state.
+- [ ] **LOTUS-TEMPORAL-04 — Opt-in temporal radiance accumulation.**
+  Accumulate reprojected radiance and per-pixel sample counts with a bounded
+  history. Define reset handling for lighting, render settings, scene edits,
+  target/framing changes and explicit cuts, preserving history on supported
+  camera/rigid motion. Compare static convergence with progressive reference
+  transport and moving sequences with independently rendered references;
+  report rejection behavior, ghosting, GPU time and history memory.
+- [ ] **LOTUS-TEMPORAL-05 — Hydra integration and temporal exit review.**
+  Expose temporal selection and reset controls through Hydra, add hosted
+  moving-scene validation and motion/history AOV coverage, and keep the
+  deterministic progressive mode selectable. Review every temporal scope
+  item and its evidence, then run core, runtime-free and Hydra release checks
+  before preparing the next release record.
 
-The [fixed performance baseline](../reports/2026-10-10-performance-baseline.md)
-records four repeatable workloads and metric availability. The
-[foundation review](../reports/2026-10-10-foundation-closure.md) records
-closure dispositions and hosted capability evidence; the
-[memory-pool report](../reports/2026-10-10-gpu-memory-pools.md) records backend
-suballocation and reuse. The
-[release-gate evidence](../reports/2026-10-10-release-gate.md) records the
-foundation verification that precedes the Wavefront transition.
-
-Backend update classification and the compaction disposition are measured in
-the [BLAS refit/compaction report](../reports/2026-10-10-blas-refit-compaction.md).
-
-The release target is owned by the [status table](README.md#status-at-a-glance).
-The Wavefront cycle excludes ReSTIR, denoising, spectral research,
-production material coverage and broad platform/backend expansion. Their
-scope remains in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
+The exit review must demonstrate frame history, previous transforms, motion,
+reprojection, disocclusion and shared validity, temporal accumulation and a
+measured reset policy on static, camera-motion and object-motion sequences.
+The temporal cycle excludes ReSTIR, denoising, spectral research, production
+material expansion and broad platform/backend expansion; their scope remains
+in the [phase policy](../design/ROADMAP_POLICY.md#4-roadmap).
 
 ## Performance baseline and foundation release
 
 The [fixed baseline](../reports/2026-10-10-performance-baseline.md),
-[scope dispositions](../reports/2026-10-10-foundation-closure.md) and
-[release-gate evidence](../reports/2026-10-10-release-gate.md) are retained
-as the reference for subsequent transport changes. Shipped scope belongs
-in the [release records](../releases/README.md); known limitations remain
-in the reference documentation.
+[foundation dispositions](../reports/2026-10-10-foundation-closure.md) and
+[foundation release gate](../reports/2026-10-10-release-gate.md) remain the
+reference for later transport changes. Shipped scope is retained in the
+[release records](../releases/README.md).
 
 ## Deferred adapter work
 
