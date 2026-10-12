@@ -9,6 +9,7 @@ physical-GPU rendering.
 
 | OS | Compiler | Build | Runtime | GPU | Result | Report |
 | --- | --- | --- | --- | --- | --- | --- |
+| Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release; runtime-free `ci-core` | no OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 / none | NVIDIA RTX A5000; Vulkan disabled in `ci-core` | v0.3.0 release gate: light sampling under both integrators, deterministic references, six benchmark workloads, repeatable Hydra package; core 20/20, Hydra 43/43, runtime-free 12/12 and strict GPU evidence passed | [v0.3.0 release gate](../reports/2026-10-12-v0.3.0-release-gate.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release; runtime-free `ci-core` | no OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 / none | NVIDIA RTX A5000; Vulkan disabled in `ci-core` | Fixed benchmark baseline, deterministic images, schema/CLI and capability regression; core 17/17, Hydra 34/34, runtime-free 9/9 and strict GPU evidence passed | [Performance baseline](../reports/2026-10-10-performance-baseline.md) |
 | Windows 11 x86_64 | MSVC 14.51 | `core` / `hydra`, Release | `core` without OpenUSD / OpenUSD 26.08 lookdev, Python 3.13 | NVIDIA RTX A5000 | Memory pool/readback/churn, synchronization, deterministic references; core 13/13, Hydra 30/30 and strict evidence passed | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
 | Windows 11 x86_64 | MSVC 14.51 | runtime-free `ci-core`, Release | none | Vulkan disabled | 8/8 tests; explained scene-memory and synchronization SKIPs | [GPU memory pools](../reports/2026-10-10-gpu-memory-pools.md) |
@@ -93,8 +94,9 @@ Linux, macOS, AMD and Intel GPUs are not measured.
   the required products are color and depth. Additional debug channels are
   introduced with their producing passes; temporal outputs belong to
   Renderer Phase 4.
-- Broader light sampling and production material/scene coverage are assigned
-  to Renderer Phase 3 and Renderer Phase 8 respectively in the
+- Acceleration for many analytic lights and production material/scene
+  coverage are assigned to Renderer Phase 9 and Renderer Phase 8
+  respectively in the
   [deferred adapter work](../roadmap/current.md#deferred-adapter-work).
   Platform/backend expansion remains outside the measured configuration
   set. These limitations do not weaken deterministic reference, validation
