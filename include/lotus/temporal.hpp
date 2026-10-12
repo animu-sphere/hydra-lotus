@@ -24,13 +24,15 @@ enum class TemporalResetReason {
 struct TemporalFrameSettings {
   // A rendered frame's identity, independent of scene revisions and spp.
   std::uint64_t frame_index = 0;
-  // Full-frame extent; cropped display/data windows are not supported yet.
+  // Image extent. Empty windows mean the whole image, with a top-left origin.
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   // Caller-owned compatibility token: change it for lighting, estimator or
   // other edits that make every pixel's radiance history incompatible.
   std::uint64_t history_key = 0;
   bool camera_cut = false;
+  std::array<float, 4> display_window{};
+  std::array<std::int32_t, 4> data_window{};
 };
 
 struct TemporalFrame {

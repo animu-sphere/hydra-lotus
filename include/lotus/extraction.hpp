@@ -82,6 +82,8 @@ struct SceneGeometryReplacement {
 // resident; every texture in the scene is.
 struct SceneUpdate {
   std::uint64_t source_revision = 0;
+  // Snapshot identity for consumers pairing GPU instances with host keys.
+  std::shared_ptr<const LotusScene> source_scene;
   // Resident buffers the scene no longer references, in the previous scene's
   // key order. Applied before the uploads.
   std::vector<const MeshGeometry*> geometry_releases;

@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-12-temporal-primary-surfaces.md](2026-10-12-temporal-primary-surfaces.md) | GPU primary-surface history, depth, geometric normals, stable identities and backward motion in both integrators; independent moving-frame projections, window/resize and resource-churn checks, GPU timestamps and regression evidence. |
 | [2026-10-12-temporal-foundation.md](2026-10-12-temporal-foundation.md) | CPU temporal frame lifecycle and resource retention, stable rigid-placement correspondence, independent pinhole reprojection and shared history rejection, with core and runtime-free regression evidence. |
 | [2026-10-12-v0.3.0-release-gate.md](2026-10-12-v0.3.0-release-gate.md) | v0.3.0 release verification: physical-GPU core/Hydra with both estimators and integrators, deterministic references, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging with the validation assets. |
 | [2026-10-12-renderer-phase3-exit.md](2026-10-12-renderer-phase3-exit.md) | Renderer Phase 3 exit review: two lit benchmark workloads and per-sample variance in the benchmark, time to equal quality against BSDF sampling on all six workloads under both integrators, the wavefront shade kernel's shadow-ray cost against a queue's per-round cost, analytic-light cost by light count, and the phase's scope dispositions. |

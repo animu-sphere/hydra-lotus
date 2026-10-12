@@ -21,6 +21,12 @@ the ID channels supports picking. These are CPU placeholders, not GPU ID
 attachments or additional headless render products. The required headless
 products remain `color` and `depth`.
 
+The opt-in backend `RenderTemporalScene` additionally exposes primary linear
+depth, geometric normal, stable identities and backward motion in
+`GpuFrameEvidence::temporal` ([temporal product contract](TEMPORAL.md#gpu-primary-surface-products)).
+These debug products are separate from the Hydra channels above; temporal
+Hydra descriptors and bindings are not implemented yet.
+
 All other names have an invalid default descriptor. Normal, albedo,
 roughness, path depth, throughput and the other debug channels are introduced
 with the renderer passes that produce them. Each Hydra pass adds one

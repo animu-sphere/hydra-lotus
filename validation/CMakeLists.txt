@@ -32,6 +32,24 @@ add_executable(lotus-temporal-test temporal-test.cpp)
 target_link_libraries(lotus-temporal-test PRIVATE Lotus::Vulkan)
 add_test(NAME lotus-renderer-temporal COMMAND lotus-temporal-test)
 
+add_executable(lotus-temporal-gpu-test temporal-gpu-test.cpp)
+target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan)
+if(LOTUS_WITH_VULKAN)
+  add_dependencies(lotus-temporal-gpu-test lotus-renderer-shaders)
+  add_test(NAME lotus-renderer-temporal-gpu COMMAND lotus-temporal-gpu-test
+    "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
+    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}" "${LOTUS_WAVEFRONT_SPV}")
+  add_test(NAME lotus-renderer-temporal-gpu-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-temporal-gpu-test>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/temporal-no-driver"
+      "-DARGUMENTS=${LOTUS_VERTEX_SPV};${LOTUS_FRAGMENT_SPV};${LOTUS_RAY_VERTEX_SPV};${LOTUS_RAY_FRAGMENT_SPV};${LOTUS_WAVEFRONT_SPV}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
+else()
+  add_test(NAME lotus-renderer-temporal-gpu COMMAND lotus-temporal-gpu-test)
+endif()
+set_tests_properties(lotus-renderer-temporal-gpu PROPERTIES SKIP_RETURN_CODE 77)
+
 # The committed third-party validation assets match their manifest.
 add_test(NAME lotus-validation-assets
   COMMAND "${CMAKE_COMMAND}"

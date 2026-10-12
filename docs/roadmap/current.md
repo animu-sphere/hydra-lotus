@@ -15,16 +15,12 @@ LOTUS-TEMPORAL-01 provides CPU frame history, rigid-placement correspondence,
 full-frame backward reprojection and shared validity
 ([evidence](../reports/2026-10-12-temporal-foundation.md),
 [contract and limits](../reference/TEMPORAL.md)). The next slices connect
-that metadata to the GPU. Work proceeds in this order:
+that metadata to the GPU. LOTUS-TEMPORAL-02 now supplies primary-surface depth,
+normal, stable identities and motion with retained GPU buffers for both
+integrators ([evidence](../reports/2026-10-12-temporal-primary-surfaces.md),
+[contract](../reference/TEMPORAL.md#gpu-primary-surface-products)). Work
+proceeds in this order:
 
-- [ ] **LOTUS-TEMPORAL-02 — Primary-surface temporal AOVs and GPU history.**
-  Retain previous camera/placement transforms for successfully rendered
-  frames, with stable instance/material identities independent of GPU table
-  slots. Add unjittered primary depth, normal, identity and backward motion
-  products to both integrators. Cover display/data windows and resizing;
-  check stationary, camera-motion and rigid-object-motion sequences against
-  independent projections, including instancer churn. Preserve progressive
-  reference output. Carry GPU timestamps and debug AOVs with each new pass.
 - [ ] **LOTUS-TEMPORAL-03 — GPU reprojection and shared validity.**
   Fetch the preceding frame's surface metadata and implement the shared
   rejection contract on the GPU, checked against the CPU oracle. Exercise

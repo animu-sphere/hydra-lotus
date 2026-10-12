@@ -70,6 +70,8 @@ inline bool VulkanOk(VkResult result, const char* operation,
   }
   std::ostringstream message;
   message << operation << " failed with VkResult " << result;
+  if (result == VK_ERROR_INCOMPATIBLE_DRIVER)
+    message << " (VK_ERROR_INCOMPATIBLE_DRIVER)";
   detail = message.str();
   return false;
 }
