@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/temporal.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -47,13 +48,25 @@ std::optional<Projection> Project(const Camera& camera, const Matrix4& placement
   const double y = clip[1] / clip[3];
   const double z = clip[2] / clip[3];
   const double depth = -view[2] / view[3];
-  // Top/left edges are included; bottom/right edges are outside the image.
   if (x < -1.0 || x >= 1.0 || y <= -1.0 || y > 1.0 ||
       z < -1.0 || z > 1.0 || depth <= 0.0) {
     return std::nullopt;
   }
-  Projection result{{static_cast<float>((x * 0.5 + 0.5) * settings.width),
-                        static_cast<float>((0.5 - y * 0.5) * settings.height)},
+  const auto& window = settings.display_window;
+  const bool full = window[2] <= 0 || window[3] <= 0;
+  const double px = (full ? 0 : window[0]) +
+                    (x * 0.5 + 0.5) * (full ? settings.width : window[2]);
+  const double py = (full ? 0 : window[1]) +
+                    (0.5 - y * 0.5) * (full ? settings.height : window[3]);
+  const auto& data = settings.data_window;
+  const bool all = data[2] <= 0 || data[3] <= 0;
+  const double left = all ? 0 : static_cast<double>(std::max<std::int64_t>(0, data[0]));
+  const double top = all ? 0 : static_cast<double>(std::max<std::int64_t>(0, data[1]));
+  const double right = all ? settings.width : static_cast<double>(std::min<std::int64_t>(settings.width, std::int64_t{data[0]} + data[2]));
+  const double bottom = all ? settings.height : static_cast<double>(std::min<std::int64_t>(settings.height, std::int64_t{data[1]} + data[3]));
+  if (px < left || py < top || px >= right || py >= bottom)
+    return std::nullopt;
+  Projection result{{static_cast<float>(px), static_cast<float>(py)},
       static_cast<float>(depth)};
   if (!Finite(result.pixel) || !std::isfinite(result.depth) ||
       result.pixel[0] >= settings.width || result.pixel[1] >= settings.height) {
@@ -99,7 +112,8 @@ double Length(const std::array<float, 3>& normal) {
 
 TemporalFrame TemporalHistory::Advance(
     const FrameSnapshot& snapshot, const TemporalFrameSettings& settings) {
-  if (settings.width == 0 || settings.height == 0) {
+  if (settings.width == 0 || settings.height == 0 ||
+      !Finite(settings.display_window)) {
     throw std::invalid_argument("temporal frame extent must be nonempty");
   }
   if (last_ && settings.frame_index <= last_settings_.frame_index) {
@@ -114,7 +128,9 @@ TemporalFrame TemporalHistory::Advance(
   } else if (settings.frame_index - last_settings_.frame_index != 1) {
     frame.reset_reason = TemporalResetReason::FrameGap;
   } else if (settings.width != last_settings_.width ||
-             settings.height != last_settings_.height) {
+             settings.height != last_settings_.height ||
+             settings.display_window != last_settings_.display_window ||
+             settings.data_window != last_settings_.data_window) {
     frame.reset_reason = TemporalResetReason::TargetChanged;
   } else if (settings.history_key != last_settings_.history_key) {
     frame.reset_reason = TemporalResetReason::HistoryKeyChanged;
@@ -153,13 +169,19 @@ std::optional<TemporalPlacement> FindTemporalPlacement(
           previous.instance.instancer_transforms.has_value()) {
     return std::nullopt;
   }
-  const auto current_transforms = PlacementTransforms(current.instance);
-  const auto previous_transforms = PlacementTransforms(previous.instance);
-  if (current_transforms.size() != previous_transforms.size() ||
-      placement >= current_transforms.size())
+  const auto count = [](const MeshInstance& instance) {
+    return instance.instancer_transforms ? instance.instancer_transforms->size() : std::size_t{1};
+  };
+  if (count(current.instance) != count(previous.instance) ||
+      placement >= count(current.instance))
     return std::nullopt;
-  return TemporalPlacement{current_transforms[placement],
-      previous_transforms[placement], SameMaterial(*frame.current.scene, current, *frame.previous->scene, previous)};
+  const auto transform = [placement](const MeshInstance& instance) {
+    return instance.instancer_transforms
+               ? Multiply((*instance.instancer_transforms)[placement], instance.world_from_object)
+               : instance.world_from_object;
+  };
+  return TemporalPlacement{transform(current.instance),
+      transform(previous.instance), SameMaterial(*frame.current.scene, current, *frame.previous->scene, previous)};
 }
 
 std::optional<TemporalReprojection> ReprojectTemporalPoint(

@@ -11,6 +11,7 @@
 // in the pixel's slot (common/path_state.slang).
 import common.path_state;
 import common.scene;
+import common.temporal;
 import sampling.sampling;
 import common.spectrum;
 import common.transport;
@@ -126,6 +127,13 @@ FragmentOutput RadiancePass(VertexOutput input) {
 
 [shader("fragment")]
 FragmentOutput fragment_main(VertexOutput input) {
+  if (kPass == 4) {
+    WriteTemporalSurface(input.ndc, input.position.xy);
+    FragmentOutput output;
+    output.color = float4(0.0);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == kRadiancePass || kPass == kResolvePass) {
     return RadiancePass(input);
   }

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <lotus/extraction.hpp>
+#include <lotus/temporal.hpp>
 
 namespace Lotus {
 
@@ -64,6 +65,40 @@ struct WavefrontTimings {
   double tail_gpu_ms = 0.0;
 };
 
+// Tightly packed top-left primary-surface debug products, one per pixel.
+// Zero means a miss/outside data window. Fixed pixel-centre products are
+// independent of jittered radiance and attachment preservation.
+struct TemporalPixel {
+  // Unit world-space geometric normal facing the camera; w: linear depth.
+  std::array<float, 4> normal_depth{};
+  // xy: backward motion in pixels; z: expected previous-camera depth;
+  // w: 1 only for reprojection within both data windows.
+  std::array<float, 4> motion_depth{};
+  std::uint64_t instance_id = 0;
+  std::uint64_t material_id = 0;
+  // bit 0: hit; bit 1: placement correspondence; bit 2: unchanged material.
+  std::uint32_t flags = 0;
+  std::array<std::uint32_t, 3> reserved{};
+};
+
+struct TemporalProducts {
+  bool available = false;
+  bool history_available = false;
+  TemporalResetReason reset_reason = TemporalResetReason::FirstFrame;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t row_pitch = 0;
+  std::vector<TemporalPixel> current;
+  // Retained GPU metadata from the last successful temporal call. Empty
+  // on a reset; it is not reprojected or filtered yet.
+  std::vector<TemporalPixel> previous;
+  bool timestamp_available = false;
+  double primary_surface_gpu_ms = 0.0;
+  // Two device surface buffers and their persistent host readback mirror.
+  std::uint64_t surface_bytes = 0;
+  std::uint64_t metadata_bytes = 0;
+};
+
 struct GpuFrameEvidence {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
@@ -108,6 +143,7 @@ struct GpuFrameEvidence {
   // wavefront_path_counts is empty.
   std::uint32_t wavefront_rounds = 0;
   WavefrontTimings wavefront_timings;
+  TemporalProducts temporal;
 };
 
 // The image an offscreen frame renders into. Rectangles are {x, y, width,
@@ -456,6 +492,16 @@ public:
   // with `max_bounces` above kMaxWavefrontBounces.
   [[nodiscard]] virtual GpuFrameEvidence RenderScene(const DrawSummary& draw,
       const OffscreenTarget& target, std::uint32_t frame_count,
+      const PathTracingSettings& settings = {}) = 0;
+
+  // Apply the snapshot's SceneExtraction update first. One call is one
+  // temporal frame; frame_count controls progressive samples. Extent/windows
+  // come from target; frame_index/history_key/camera_cut are caller-owned.
+  // Only success advances history. Ordinary Render/RenderScene calls break
+  // this stream. Same-count instancer reordering requires a cut/key change.
+  [[nodiscard]] virtual GpuFrameEvidence RenderTemporalScene(
+      const FrameSnapshot& snapshot, const OffscreenTarget& target,
+      std::uint32_t frame_count, const TemporalFrameSettings& temporal,
       const PathTracingSettings& settings = {}) = 0;
 
   // Apply one SceneExtraction plan; plans are applied in order. Returns after

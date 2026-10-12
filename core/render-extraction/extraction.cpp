@@ -29,6 +29,7 @@ bool SceneUpdate::Empty() const {
 SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
   SceneUpdate update;
   update.source_revision = snapshot.revision;
+  update.source_scene = snapshot.scene;
   if (!reset_ && snapshot.scene == scene_) {
     return update;
   }

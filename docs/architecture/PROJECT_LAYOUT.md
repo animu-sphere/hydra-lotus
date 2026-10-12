@@ -60,6 +60,14 @@ is `include/lotus/temporal.hpp`; this source and the uninstalled
 [temporal reference](../reference/TEMPORAL.md) owns behavior and integration
 limits.
 
+`temporal_metadata.cpp` and its private header maintain stable placement and
+material identities without GPU dependencies in the same backend target.
+`vulkan_backend.cpp` owns the primary-surface pass, its persistent history
+buffers and timestamps; `shaders/common/temporal.slang` generates the surface
+products through the shared scene shader. The uninstalled
+`lotus-temporal-gpu-test` validates both integrators and reports a capability
+SKIP without Vulkan; its missing-driver regression is Vulkan-only.
+
 The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its
 `lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained

@@ -9,6 +9,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in `OffscreenRenderer::RenderTemporalScene` for both integrators:
+  pixel-centre linear depth/geometric normals, stable placement/material
+  identities, backward motion and expected previous depth, retained GPU
+  surface buffers and a separate primary-surface timestamp. Frame history
+  advances only on successful calls, with display/data-window and resize
+  support. Progressive transport is preserved; GPU history rejection,
+  temporal radiance accumulation and Hydra temporal controls remain pending
+  ([contract](docs/reference/TEMPORAL.md),
+  [evidence](docs/reports/2026-10-12-temporal-primary-surfaces.md)).
 - The CPU temporal foundation in `lotus/temporal.hpp`, available through
   `Lotus::Vulkan` even without a Vulkan SDK: immutable current/previous
   snapshots, frame-index and compatibility resets, rigid placement pairing
@@ -16,7 +25,7 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   expected previous-camera depth, and shared depth/normal/identity/motion
   validity. `lotus-renderer-temporal` validates lifecycle, resource edits,
   independent pinhole projections and rejection boundaries. The render
-  paths do not yet consume it; progressive rendering behavior is unchanged
+  paths now optionally consume it through `RenderTemporalScene`; progressive rendering behavior is unchanged
   ([contract](docs/reference/TEMPORAL.md),
   [evidence](docs/reports/2026-10-12-temporal-foundation.md)).
 

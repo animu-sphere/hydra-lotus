@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/temporal.hpp>
+#include "../backend/vulkan/temporal_metadata.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -362,12 +363,89 @@ void Validity(const Lotus::TemporalReprojection& reprojection) {
       "invalid validation settings reused history");
 }
 
+void WindowsAndIdentities() {
+  using namespace Lotus;
+  RenderWorld world;
+  world.SetCamera(Perspective());
+  world.SetMesh("/mesh", kTriangle, {});
+  TemporalHistory history;
+  TemporalFrameSettings settings{0, 128, 64};
+  settings.display_window = {-16, 8, 160, 48};
+  settings.data_window = {10, 12, 100, 40};
+  auto frame = history.Advance(world.Commit(), settings);
+  vulkan_internal::TemporalIdentities identities;
+  const auto first = identities.Build(frame);
+  ++settings.frame_index;
+  frame = history.Advance(world.Commit(), settings);
+  const auto placement = FindTemporalPlacement(frame, "/mesh");
+  Check(placement.has_value(), "window frame placement missing");
+  const auto point = ReprojectTemporalPoint(frame, *placement, {1, 0.5F, -4});
+  Check(point.has_value(), "window projection missing");
+  Near(point->current_pixel[0], 84, "offset display projection x");
+  Near(point->current_pixel[1], 29, "offset display projection y");
+  Check(!ReprojectTemporalPoint(frame, *placement, {-4, 0, -4}),
+      "point outside cropped data window accepted");
+  world.SetMesh("/a", kTriangle, {});
+  world.SetMaterial("/a", {});
+  ++settings.frame_index;
+  frame = history.Advance(world.Commit(), settings);
+  const auto shifted = identities.Build(frame);
+  Check(shifted.size() == 2 && shifted[1].instance_id == first[0].instance_id &&
+            shifted[1].material_id == first[0].material_id,
+      "table insertion changed identities");
+  settings.camera_cut = true;
+  ++settings.frame_index;
+  frame = history.Advance(world.Commit(), settings);
+  const auto cut = identities.Build(frame);
+  Check(cut[1].instance_id == shifted[1].instance_id && cut[1].flags == 0,
+      "camera cut changed identity or retained correspondence");
+  settings.camera_cut = false;
+  settings.display_window[0] += 1;
+  ++settings.frame_index;
+  Check(history.Advance(world.Commit(), settings).reset_reason == TemporalResetReason::TargetChanged,
+      "display-window change retained history");
+
+  Material material;
+  material.base_color_texture = TextureInput{};
+  material.base_color_texture->texture = "/used";
+  world.SetMaterial("/bound", material);
+  world.BindMaterial("/mesh", "/bound");
+  ++settings.frame_index;
+  frame = history.Advance(world.Commit(), settings);
+  const auto bound = identities.Build(frame);
+  Check(bound[1].material_id != cut[1].material_id, "material binding reused identity");
+  Texture texture{1, 1, TextureFormat::Rgba8Unorm, {64, 64, 64, 255}};
+  world.SetTexture("/unused", texture);
+  ++settings.frame_index;
+  const auto unused = identities.Build(history.Advance(world.Commit(), settings));
+  Check(unused[1].material_id == bound[1].material_id, "unused texture invalidated identity");
+  world.SetTexture("/used", texture);
+  ++settings.frame_index;
+  const auto inserted = identities.Build(history.Advance(world.Commit(), settings));
+  Check(inserted[1].material_id != unused[1].material_id && inserted[1].flags == 2,
+      "used texture insertion retained identity");
+  texture.texels[0] = 128;
+  world.SetTexture("/used", texture);
+  ++settings.frame_index;
+  const auto replaced = identities.Build(history.Advance(world.Commit(), settings));
+  Check(replaced[1].material_id != inserted[1].material_id, "texture replacement retained identity");
+  world.RemoveMesh("/mesh");
+  ++settings.frame_index;
+  (void)identities.Build(history.Advance(world.Commit(), settings));
+  world.SetMesh("/mesh", kTriangle, {});
+  ++settings.frame_index;
+  const auto reinserted = identities.Build(history.Advance(world.Commit(), settings));
+  Check(reinserted[1].instance_id != first[0].instance_id && reinserted[1].flags == 0,
+      "mesh reinsertion reused instance incarnation");
+}
+
 } // namespace
 
 int main() try {
   Lifecycle();
   Correspondence();
   Validity(Reprojection());
+  WindowsAndIdentities();
   std::cout << "temporal lifecycle, correspondence, reprojection and rejection PASS\n";
   return 0;
 } catch (const std::exception& error) {

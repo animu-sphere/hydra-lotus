@@ -1,5 +1,6 @@
 add_library(lotus-render-vulkan STATIC
   temporal.cpp
+  temporal_metadata.cpp
   vulkan_backend.cpp
   vulkan_present.cpp)
 if(LOTUS_WITH_VULKAN)
@@ -32,6 +33,7 @@ if(LOTUS_WITH_VULKAN)
   set(_scene_modules
     shaders/bsdf/bsdf.slang
     shaders/common/path_state.slang
+    shaders/common/temporal.slang
     shaders/common/scene.slang
     shaders/common/spectrum.slang
     shaders/common/transport.slang

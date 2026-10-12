@@ -13,7 +13,7 @@ endif()
 set(ENV{VK_DRIVER_FILES} "${manifest}")
 set(ENV{VK_ICD_FILENAMES} "${manifest}")
 execute_process(
-  COMMAND "${EXECUTABLE}"
+  COMMAND "${EXECUTABLE}" ${ARGUMENTS}
   RESULT_VARIABLE result
   OUTPUT_VARIABLE output
   ERROR_VARIABLE error
