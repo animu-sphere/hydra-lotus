@@ -15,6 +15,7 @@ import common.temporal;
 import sampling.sampling;
 import common.spectrum;
 import common.transport;
+import common.restir;
 
 // Which pass a pipeline runs: kCameraPass, kRadiancePass, kSurfacePass or
 // kResolvePass.
@@ -127,6 +128,20 @@ FragmentOutput RadiancePass(VertexOutput input) {
 
 [shader("fragment")]
 FragmentOutput fragment_main(VertexOutput input) {
+  if (kPass == 7) {
+    const uint2 pixel = uint2(input.position.xy);
+    if (path_constants.add_sample != 0) {
+      PathState path = StartPath(pixel);
+      const uint4 rect = path_constants.data_rect;
+      const bool active = path_constants.restir_candidates != 0 &&
+          all(pixel >= rect.xy) && all(pixel < rect.xy + rect.zw);
+      WriteInitialReservoir(pixel, path.ray, path.rngState, active);
+    }
+    FragmentOutput output;
+    output.color = float4(0.0);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == 6) {
     FragmentOutput output;
     output.color = AccumulateTemporalRadiance(input.position.xy);

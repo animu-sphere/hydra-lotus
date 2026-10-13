@@ -14,9 +14,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   normalization, including zero-target draw counts and transactional input/
   overflow rejection. CTest `lotus-renderer-reservoir` checks independent
   discrete RGB integrals, visibility and weighted selection frequencies
-  without Vulkan or OpenUSD. GPU light sampling and reuse are not yet wired
-  into rendering ([contract](docs/reference/RESTIR.md),
+  without Vulkan or OpenUSD ([contract](docs/reference/RESTIR.md),
   [evidence](docs/reports/2026-10-13-restir-reservoir.md)).
+- Opt-in initial-only GPU reservoir direct lighting at primary surfaces under
+  both integrators, with reconstructible emissive/analytic/environment samples,
+  selected-sample visibility and BSDF-emission accounting. Separate timestamps,
+  reservoir debug products and retained memory accounting accompany the pass.
+  CPU/GPU selection checks, independent light integrals, NEE/MIS image comparisons,
+  lifecycle and overflow checks run in `lotus-renderer-restir-gpu`
+  ([contract](docs/reference/RESTIR.md#initial-gpu-lighting),
+  [evidence](docs/reports/2026-10-13-restir-initial.md)).
 
 ## [0.4.0] - 2026-10-13
 

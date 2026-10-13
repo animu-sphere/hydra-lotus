@@ -54,6 +54,25 @@ else()
 endif()
 set_tests_properties(lotus-renderer-temporal-gpu PROPERTIES SKIP_RETURN_CODE 77)
 
+add_executable(lotus-restir-gpu-test restir-gpu-test.cpp ../adapters/headless/reference.cpp)
+target_link_libraries(lotus-restir-gpu-test PRIVATE Lotus::Vulkan)
+if(LOTUS_WITH_VULKAN)
+  add_dependencies(lotus-restir-gpu-test lotus-renderer-shaders)
+  add_test(NAME lotus-renderer-restir-gpu COMMAND lotus-restir-gpu-test
+    "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
+    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}" "${LOTUS_WAVEFRONT_SPV}"
+    "${CMAKE_BINARY_DIR}/restir-initial-images")
+  add_test(NAME lotus-renderer-restir-gpu-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-restir-gpu-test>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-no-driver"
+      "-DARGUMENTS=${LOTUS_VERTEX_SPV};${LOTUS_FRAGMENT_SPV};${LOTUS_RAY_VERTEX_SPV};${LOTUS_RAY_FRAGMENT_SPV};${LOTUS_WAVEFRONT_SPV}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
+else()
+  add_test(NAME lotus-renderer-restir-gpu COMMAND lotus-restir-gpu-test)
+endif()
+set_tests_properties(lotus-renderer-restir-gpu PROPERTIES SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+
 # The committed third-party validation assets match their manifest.
 add_test(NAME lotus-validation-assets
   COMMAND "${CMAKE_COMMAND}"

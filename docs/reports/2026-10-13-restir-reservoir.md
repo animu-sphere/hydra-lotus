@@ -1,5 +1,7 @@
 # CPU direct-light reservoir foundation
 
+Follow-up: [GPU initial candidates and lighting evidence](2026-10-13-restir-initial.md).
+
 Measured on 2026-10-13 against `c1f59ab` plus LOTUS-RESTIR-01, with MSVC
 Release in the existing OpenStrata core and runtime-free/Vulkan-disabled
 configurations. The physical-GPU regression configuration uses the Windows

@@ -34,11 +34,13 @@ if(LOTUS_WITH_VULKAN)
   set(_scene_modules
     shaders/bsdf/bsdf.slang
     shaders/common/path_state.slang
+    shaders/common/restir.slang
     shaders/common/temporal.slang
     shaders/common/scene.slang
     shaders/common/spectrum.slang
     shaders/common/transport.slang
-    shaders/sampling/sampling.slang)
+    shaders/sampling/sampling.slang
+    shaders/sampling/reservoir.slang)
   set(_path_trace_sources shaders/path_trace.slang ${_scene_modules})
   # Texture sampling needs Slang's sm_5_0 capability set and the texture
   # table's non-uniform indexing spvShaderNonUniformEXT; declaring them keeps

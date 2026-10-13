@@ -170,10 +170,11 @@ public struct PathConstants {
   // and the probability with which the light table chooses the image.
   public uint64_t environment_map;
   public float environment_selection;
-  public uint reserved;
+  public uint restir_candidates;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
+public static const uint kRestirInitialSampling = 2;
 [[vk::binding(0, 0)]] public RaytracingAccelerationStructure scene;
 [[vk::binding(1, 0)]] public ConstantBuffer<PathConstants> path_constants;
 // Per pixel: the sum of the radiance of the samples that hit the scene, and
@@ -738,6 +739,47 @@ public LightSample SampleLight(float4 u, float3 origin) {
         chosen.pdf, u.zw, origin);
   }
   return SampleTriangle(light, chosen, u.zw, origin);
+}
+
+// Reconstructible candidate domain: a light-table slot and two independent
+// unit-square coordinates. Area lights use fixed surface points; sphere
+// candidates cover the whole area, with back-facing points contributing zero.
+// Environment inverse-CDF and distant cone maps are independent of receiver.
+public uint ChooseReservoirLight(float2 u) {
+  const uint column = min(uint(u.x * float(path_constants.light_count)),
+      path_constants.light_count - 1);
+  const LightRecord record = path_constants.lights[column];
+  return u.y < record.threshold ? column : record.alias;
+}
+
+public LightSample ReconstructReservoirLight(uint index, float2 u, float3 origin) {
+  const LightRecord chosen = path_constants.lights[index];
+  if (chosen.instance == kEnvironmentLight)
+    return SampleEnvironment(chosen.pdf, u);
+  if ((chosen.instance & kAnalyticLight) == 0)
+    return SampleTriangle(index, chosen, u, origin);
+  const AnalyticLightRecord light =
+      path_constants.analytic_lights[chosen.instance & ~kAnalyticLight];
+  if (light.shape.x != kSphereLight)
+    return SampleAnalytic(light, chosen.pdf, u, origin);
+  const float z = 1.0 - 2.0 * u.x;
+  const float radius_xy = sqrt(max(0.0, 1.0 - z * z));
+  const float phi = 2.0 * kPi * u.y;
+  const float3 normal = float3(radius_xy * cos(phi), radius_xy * sin(phi), z);
+  const float3 toward = light.position.xyz + light.position.w * normal - origin;
+  const float distance2 = dot(toward, toward);
+  if (!(distance2 > 0.0))
+    return NoLight();
+  LightSample sample = NoLight();
+  sample.distance = sqrt(distance2);
+  sample.direction = toward / sample.distance;
+  const float cosine = -dot(normal, sample.direction);
+  if (!(cosine > 0.0))
+    return NoLight();
+  sample.radiance = SpectrumFromRgb(light.radiance.xyz);
+  sample.pdf = chosen.pdf * distance2 /
+      (cosine * 4.0 * kPi * light.position.w * light.position.w);
+  return sample;
 }
 
 // The parallel light `index` of the analytic lights: its direction and

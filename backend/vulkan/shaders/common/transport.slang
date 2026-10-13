@@ -15,6 +15,7 @@ import bsdf.bsdf;
 import sampling.sampling;
 import common.spectrum;
 import common.scene;
+import common.restir;
 
 // Bounces before Russian roulette may end a path.
 static const uint kRouletteBounces = 3;
@@ -57,7 +58,15 @@ public PathState StartPath(uint2 pixel) {
 }
 
 public bool SampleLights() {
-  return path_constants.light_sampling == kMisLightSampling;
+  return path_constants.light_sampling != kBsdfSampling;
+}
+
+public bool ReservoirPrimary(uint depth) {
+  return path_constants.light_sampling == kRestirInitialSampling && depth == 0;
+}
+
+bool ReservoirContinuation(uint depth) {
+  return path_constants.light_sampling == kRestirInitialSampling && depth == 1;
 }
 
 // The light a sample carries to a surface through a shadow ray, weighed
@@ -143,13 +152,15 @@ float EmissionWeight(PathState path, Hit hit, SurfaceHit surface) {
 public bool ScatterPath(inout PathState path, Hit hit) {
   const SurfaceHit surface = ReconstructHit(hit, path.ray.Direction);
   Spectrum emission = surface.emission;
+  if (ReservoirContinuation(path.depth) && EmitterPdf(hit, surface.area) > 0.0)
+    emission = SpectrumConstant(0.0);
   if (SampleLights() && path.depth != 0 && MaxComponent(emission) > 0.0) {
     emission = emission * EmissionWeight(path, hit, surface);
   }
   path.radiance = path.radiance + path.throughput * emission;
   // The analytic lights the continuation ray crossed before the hit. Camera
   // rays do not see them.
-  if (path.depth != 0 && path_constants.analytic_count != 0) {
+  if (path.depth != 0 && !ReservoirContinuation(path.depth) && path_constants.analytic_count != 0) {
     path.radiance = path.radiance + path.throughput *
         CrossedLights(path.ray.Origin, path.ray.Direction,
             dot(surface.position - path.ray.Origin, path.ray.Direction),
@@ -167,7 +178,9 @@ public bool ScatterPath(inout PathState path, Hit hit) {
   }
   const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
   const float3 wo = basis.ToLocal(-path.ray.Direction);
-  if (SampleLights()) {
+  if (ReservoirPrimary(path.depth)) {
+    path.radiance = path.radiance + path.throughput * InitialDirectLight(path.pixelIndex);
+  } else if (SampleLights()) {
     path.radiance = path.radiance +
         path.throughput * DirectLight(surface, basis, wo, path.rngState);
   } else if (path_constants.analytic_count != 0) {
@@ -203,12 +216,13 @@ public bool ScatterPath(inout PathState path, Hit hit) {
 // that of the analytic lights it crossed.
 public void MissPath(inout PathState path) {
   Spectrum environment = SpectrumFromRgb(path_constants.environment.xyz);
-  if (path_constants.environment_map != 0) {
+  if (path_constants.environment_map != 0 &&
+      !(ReservoirContinuation(path.depth) && path_constants.environment_selection > 0.0)) {
     environment = environment + EnvironmentRadiance(
         path.ray.Direction, SampleLights(), path.lastPdf);
   }
   path.radiance = path.radiance + path.throughput * environment;
-  if (path_constants.analytic_count != 0) {
+  if (path_constants.analytic_count != 0 && !ReservoirContinuation(path.depth)) {
     path.radiance = path.radiance + path.throughput *
         CrossedLights(path.ray.Origin, path.ray.Direction, kFloatMax, true,
             SampleLights(), path.lastPdf);
