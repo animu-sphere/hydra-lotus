@@ -24,9 +24,10 @@ Implement the remaining work in this order:
 
 - [ ] **LOTUS-RESTIR-03 — Temporal reservoir reuse.**
   Use shared reprojection/validity without putting reservoir state into the
-  temporal infrastructure. Reevaluate the previous selected sample at the
-  receiving surface; validate support-aware normalization, candidate-count
-  limits, light/sample identity, resets and failed-frame publication. Compare
+  temporal infrastructure. Integrate the
+  [CPU reevaluation/support-normalization oracle](../reference/RESTIR.md#differing-target-cpu-combination)
+  with GPU history; validate candidate-count limits, light/sample identity,
+  resets and failed-frame publication. Compare
   static and moving sequences, disocclusion and lighting edits with NEE/MIS.
 - [ ] **LOTUS-RESTIR-04 — Spatial reservoir reuse.**
   Read immutable source reservoirs into separate destination storage.

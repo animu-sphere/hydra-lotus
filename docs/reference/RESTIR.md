@@ -73,9 +73,67 @@ selection frequencies ([measurement](../reports/2026-10-13-restir-reservoir.md))
 It runs without Vulkan or OpenUSD.
 
 The CPU helper's opaque sample key is valid only inside its caller's unchanged
-domain. Same-target combination must not be used as cross-surface reuse:
-changing the target or support needs reevaluation and appropriate normalization.
-GPU integration and its limits are described below.
+domain. Same-target combination must not be used as cross-surface reuse.
+The CPU differing-target operations below provide the arithmetic oracle;
+GPU integration and its limits are described afterward.
+
+## Differing-target CPU combination
+
+`MergeReevaluatedReservoir` streams a source's selected sample after the caller
+reevaluates its target at the receiving surface. Its resampling weight is
+`receiver_target * source_normalization * m`, where
+`m = min(source.candidate_count, max_source_candidates)`. It adds `m` to the
+destination's represented count even if the sample has zero receiving target
+or the observed source stream is all-zero. An empty source adds zero. The
+cap is nonzero; scaling both count and merge weight preserves the source's
+resolved weight. The source is not modified, and self-merge is supported.
+
+The caller supplies the source's resolved normalization `W`. For initial
+streams this is `ReservoirNormalization(source)`; after differing-target reuse
+it must be the previously resolved, support-corrected weight, stored separately
+from the raw 16-byte record. Reconstructing it from the raw sum and total count
+would lose that correction. This CPU API accepts double `W`, including values
+outside float range when the receiving merge weight remains representable.
+
+After selection finishes, evaluate the **final selected sample** at every
+participating source surface. Sum the capped represented counts only where
+that source target is positive, and supply this count to
+`ReservoirReuseNormalization`. Its result is
+`destination.weight_sum / (supporting_candidate_count * destination.selected_target)`.
+An all-zero observed source still participates in this support evaluation:
+its draws could have produced a different sample. The denominator is neither
+the number of source reservoirs nor the total represented count when source
+supports differ. A positive result requires a supporting count in
+`[1, destination.candidate_count]`; zero records return zero. With identical
+support it reduces to ordinary total-count normalization.
+
+These primitives implement count-weighted support correction over a fixed
+sample domain and measure. Each source's resolved estimator must be valid on
+its declared target support, proposals must cover that support, and the union
+of participating supports must cover the receiving contribution. The caller
+owns reconstructible sample identity, source target evaluation and the
+associated payload. Visibility may multiply the final receiving contribution;
+an unshadowed source target must not be replaced with a visibility test for
+the support count. Correlated copies do not add independent information.
+For general target-weighted MIS alternatives, see the
+[ReSTIR supplemental algorithms](https://benedikt-bitterli.me/restir/bitterli20restir-supplemental.pdf).
+
+Invalid reevaluations, normalizations, caps or records throw
+`std::invalid_argument`; unrepresentable receiving weights/sums or total count
+overflow throw `std::overflow_error`. Failed merges preserve the destination,
+including when it aliases the source. An empty/all-zero source requires zero
+receiving target and zero resolved weight. A positive source requires finite,
+positive resolved weight. The CPU helpers contain no temporal state and do
+not validate the caller's scene identity, target functions or support union.
+
+`lotus-renderer-reservoir` exhaustively compares differing-target RGB and
+visibility expectations with independent discrete integrals, including
+unequal streams, count caps, complementary support, zero observed streams,
+receiving zero targets and reversed merge order. It also checks preservation
+of previously corrected weights and numerical failure
+([evidence](../reports/2026-10-13-restir-reuse-arithmetic.md)).
+This establishes a CPU arithmetic oracle, not GPU temporal/spatial reuse or
+unbiased moving-frame history selection.
 
 ## Initial GPU lighting
 
@@ -175,7 +233,7 @@ overflow failure under both integrators
 ([GPU evidence](../reports/2026-10-13-restir-initial.md)).
 Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 
-Temporal/spatial reuse, support-aware combination, persistent light/sample
+GPU temporal/spatial reuse, support-aware combination, persistent light/sample
 identity, candidate strategy evaluation and Hydra reservoir settings/AOVs
 remain outside this implementation. Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.

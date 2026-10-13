@@ -44,10 +44,37 @@ bool StreamReservoirCandidate(Reservoir& reservoir, std::uint32_t sample,
 bool MergeSameTargetReservoir(Reservoir& destination,
     const Reservoir& source, float random);
 
+// Stream a source sample reevaluated at the receiver, with weight
+// receiver_target * source_normalization * min(source.M, max_source_candidates).
+// source_normalization is the source's resolved W, including any earlier
+// support correction; it must NOT be reconstructed from a reused raw sum/M.
+// The cap changes represented count and merge weight together, preserving W.
+// Zero-weight sources/reevaluations still carry the capped count. A source
+// without a sample requires zero receiver_target and zero normalization.
+// Shares the streaming failure/alias contract. Positive source weights require
+// finite positive normalization; the cap must be nonzero.
+bool MergeReevaluatedReservoir(Reservoir& destination, const Reservoir& source,
+    double source_normalization, float receiver_target,
+    std::uint32_t max_source_candidates, float random);
+
+// Resolve a differing-target merge after evaluating the FINAL selected sample
+// at every participating source surface. supporting_candidate_count is the
+// sum of their capped M where that source's target at the sample is positive,
+// including all-zero observed streams. It is not the number of reservoirs or
+// the sum of counts whose selected samples survived receiver reevaluation.
+// Returns sum/(supporting M * receiver target). Positive records require
+// supporting M in [1, record.M]; zero records return zero. Keep this W beside
+// the raw record when reusing again. Targets/proposals must share a fixed
+// candidate domain/measure, cover their respective contributions, and the
+// source support union must cover the receiver integral.
+[[nodiscard]] double ReservoirReuseNormalization(const Reservoir& reservoir,
+    std::uint32_t supporting_candidate_count);
+
 // W = weight_sum / (M * selected_target), evaluated in double precision so
 // the denominator cannot overflow in float. The estimated contribution is
 // W * f(sample), with visibility applied to f, not to W. Empty/all-zero
 // streams return zero. Invalid records throw invalid_argument.
+// Differing-support reuse must use ReservoirReuseNormalization instead.
 [[nodiscard]] double ReservoirNormalization(const Reservoir& reservoir);
 
 } // namespace Lotus::vulkan_internal

@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- CPU differing-target reservoir combination with receiving-surface
+  reevaluation, bounded represented counts and support-aware normalization.
+  Exhaustive discrete RGB/visibility checks cover differing supports and
+  count caps; resolved weights remain explicit for subsequent reuse
+  ([contract](docs/reference/RESTIR.md#differing-target-cpu-combination),
+  [evidence](docs/reports/2026-10-13-restir-reuse-arithmetic.md)).
 - Internal CPU reservoir arithmetic for direct-light sampling: a 16-byte
   record, weighted candidate updates, same-target stream combination and
   normalization, including zero-target draw counts and transactional input/
