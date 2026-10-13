@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "reservoir.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -76,6 +77,38 @@ bool MergeSameTargetReservoir(Reservoir& destination,
   // Copy the arguments before publishing the update, including for self-merge.
   return StreamWeighted(destination, source.sample, source.selected_target,
       source.weight_sum, source.candidate_count, random);
+}
+
+bool MergeReevaluatedReservoir(Reservoir& destination, const Reservoir& source,
+    double source_normalization, float receiver_target,
+    std::uint32_t max_source_candidates, float random) {
+  Validate(destination);
+  Validate(source);
+  ValidateRandom(random);
+  if (!std::isfinite(source_normalization) || source_normalization < 0 ||
+      !std::isfinite(receiver_target) || receiver_target < 0 ||
+      max_source_candidates == 0 ||
+      (source.weight_sum == 0 && (source_normalization != 0 || receiver_target != 0)) ||
+      (source.weight_sum > 0 && source_normalization == 0))
+    throw std::invalid_argument("invalid reevaluated reservoir target, normalization or cap");
+  const auto count = std::min(source.candidate_count, max_source_candidates);
+  // Recombine in double; source W may exceed float range even when
+  // this receiving weight is representable. Raw sums remain float records.
+  const float weight = RepresentableWeight(
+      static_cast<double>(receiver_target) * source_normalization * count);
+  return StreamWeighted(destination, source.sample, receiver_target, weight, count, random);
+}
+
+double ReservoirReuseNormalization(const Reservoir& reservoir,
+    std::uint32_t supporting_candidate_count) {
+  Validate(reservoir);
+  if (supporting_candidate_count > reservoir.candidate_count ||
+      (reservoir.weight_sum > 0 && supporting_candidate_count == 0))
+    throw std::invalid_argument("invalid reservoir supporting candidate count");
+  if (reservoir.weight_sum == 0)
+    return 0;
+  return static_cast<double>(reservoir.weight_sum) /
+         supporting_candidate_count / reservoir.selected_target;
 }
 
 double ReservoirNormalization(const Reservoir& reservoir) {

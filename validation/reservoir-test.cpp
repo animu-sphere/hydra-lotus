@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../backend/vulkan/reservoir.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -295,6 +296,243 @@ void ExactExpectations() {
   std::cout << "exact RGB integrals, visibility and unequal-stream merges PASS\n";
 }
 
+void ReuseBoundaries() {
+  const Reservoir source{17, 24, 3, 8};
+  const double source_w = ReservoirNormalization(source); // one
+  Reservoir merged;
+  Check(MergeReevaluatedReservoir(merged, source, source_w, 2, 3, 0),
+      "reevaluated source not selected");
+  Check(merged.sample == 17 && merged.weight_sum == 6 &&
+            merged.selected_target == 2 && merged.candidate_count == 3,
+      "reevaluation/cap did not scale weight and count together");
+  Near(ReservoirReuseNormalization(merged, 3), 1, 0, "cap changed source W");
+  Near(ReservoirReuseNormalization(merged, 1), 3, 0, "support correction omitted");
+
+  const auto retained = merged;
+  Check(!MergeReevaluatedReservoir(merged, source, source_w, 0, 2, 0),
+      "unsupported receiving candidate replaced sample");
+  Check(merged.candidate_count == 5 && merged.weight_sum == retained.weight_sum &&
+            merged.sample == retained.sample && merged.selected_target == retained.selected_target,
+      "unsupported receiving candidate lost count or changed sample");
+  const Reservoir zeros{kNoReservoirSample, 0, 0, 20};
+  Check(!MergeReevaluatedReservoir(merged, zeros, 0, 0, 4, 0) &&
+            merged.candidate_count == 9,
+      "all-zero stream did not carry capped draws");
+  Check(!MergeReevaluatedReservoir(merged, {}, 0, 0, 4, 0) &&
+            merged.candidate_count == 9,
+      "empty stream changed count");
+  Near(ReservoirReuseNormalization(zeros, 0), 0, 0, "all-zero reuse is nonzero");
+  Near(ReservoirReuseNormalization({}, 0), 0, 0, "empty reuse is nonzero");
+  Reservoir unsupported;
+  Check(!MergeReevaluatedReservoir(unsupported, source, source_w, 0, 8, 0) &&
+            unsupported.candidate_count == 8 && unsupported.sample == kNoReservoirSample,
+      "all-zero receiving merge selected a sample or lost represented draws");
+  Near(ReservoirReuseNormalization(unsupported, 0), 0, 0,
+      "all-zero receiving merge has nonzero normalization");
+
+  // Reuse an already support-corrected record. Recomputing sum/(M*target)
+  // here would discard its resolved weight of 3 and produce a third as much.
+  Reservoir next;
+  Check(MergeReevaluatedReservoir(next, retained,
+            ReservoirReuseNormalization(retained, 1), 4, 2, 0),
+      "resolved source not reusable");
+  Check(next.weight_sum == 24 && next.candidate_count == 2,
+      "reuse discarded the source support correction");
+  Near(ReservoirReuseNormalization(next, 2), 3, 0, "resolved source W changed");
+
+  // Correlated duplication carries count but is not new independent evidence.
+  auto alias = source;
+  Check(!MergeReevaluatedReservoir(alias, alias, source_w, 3, 8, 0.5F),
+      "reevaluated replacement boundary must be strict");
+  Check(alias.weight_sum == 48 && alias.candidate_count == 16,
+      "alias merge changed inputs before reading them");
+  Near(ReservoirReuseNormalization(alias, 16), 1, 0, "alias merge changed W");
+
+  const float tiny = std::numeric_limits<float>::denorm_min();
+  const Reservoir extreme{1, 1, tiny, 1};
+  Reservoir scaled;
+  Check(MergeReevaluatedReservoir(scaled, extreme, ReservoirNormalization(extreme), tiny, 1, 0),
+      "large double W with representable receiving weight rejected");
+  Check(scaled.weight_sum == 1, "source W prematurely rounded to float");
+}
+
+void InvalidReuseInputs() {
+  const Reservoir source{7, 8, 2, 4};
+  const Reservoir zeros{kNoReservoirSample, 0, 0, 4};
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  Reservoir destination = source;
+  for (double w : {-1.0, 0.0, std::numeric_limits<double>::quiet_NaN(),
+           std::numeric_limits<double>::infinity()})
+    RejectUnchanged<std::invalid_argument>(destination, [&] {
+      (void)MergeReevaluatedReservoir(destination, source, w, 2, 4, 0);
+    });
+  for (float target : {-1.0F, nan, infinity})
+    RejectUnchanged<std::invalid_argument>(destination, [&] {
+      (void)MergeReevaluatedReservoir(destination, source, 1, target, 4, 0);
+    });
+  for (float random : {-1.0F, 1.0F, nan, infinity})
+    RejectUnchanged<std::invalid_argument>(destination, [&] {
+      (void)MergeReevaluatedReservoir(destination, source, 1, 2, 4, random);
+    });
+  RejectUnchanged<std::invalid_argument>(destination, [&] {
+    (void)MergeReevaluatedReservoir(destination, source, 1, 2, 0, 0);
+  });
+  RejectUnchanged<std::invalid_argument>(destination, [&] {
+    (void)MergeReevaluatedReservoir(destination, zeros, 1, 0, 4, 0);
+  });
+  RejectUnchanged<std::invalid_argument>(destination, [&] {
+    (void)MergeReevaluatedReservoir(destination, zeros, 0, 1, 4, 0);
+  });
+  for (const Reservoir malformed : {Reservoir{1, 0, 0, 1}, Reservoir{1, 1, 0, 1},
+           Reservoir{kNoReservoirSample, 1, 1, 1}, Reservoir{1, 1, 1, 0}}) {
+    RejectUnchanged<std::invalid_argument>(destination, [&] {
+      (void)MergeReevaluatedReservoir(destination, malformed, 1, 2, 4, 0);
+    });
+    auto invalid = malformed;
+    RejectUnchanged<std::invalid_argument>(invalid, [&] {
+      (void)MergeReevaluatedReservoir(invalid, source, 1, 2, 4, 0);
+    });
+  }
+  const float maximum = std::numeric_limits<float>::max();
+  for (const auto [w, target] : std::array<std::array<double, 2>, 3>{{
+           {1, maximum}, {std::numeric_limits<double>::max(), 1},
+           {std::numeric_limits<double>::denorm_min(), 1}}})
+    RejectUnchanged<std::overflow_error>(destination, [&] {
+      (void)MergeReevaluatedReservoir(destination, source, w,
+          static_cast<float>(target), 4, 0);
+    });
+  Reservoir large{1, maximum, 1, 1};
+  RejectUnchanged<std::overflow_error>(large, [&] {
+    (void)MergeReevaluatedReservoir(large, large, maximum, 1, 1, 0);
+  });
+  Reservoir full{1, 1, 1, std::numeric_limits<std::uint32_t>::max()};
+  RejectUnchanged<std::overflow_error>(full, [&] {
+    (void)MergeReevaluatedReservoir(full, zeros, 0, 0, 1, 0);
+  });
+  for (std::uint32_t count : {0U, 5U}) {
+    bool rejected = false;
+    try {
+      (void)ReservoirReuseNormalization(source, count);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    Check(rejected, "invalid support count accepted");
+  }
+  bool rejected = false;
+  try {
+    (void)ReservoirReuseNormalization(zeros, 5);
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  Check(rejected, "all-zero record accepted support beyond represented count");
+}
+
+// Exhaust the draw/selection outcomes of two initial source streams, then
+// exhaust both branches of each receiving merge. The oracle computes branch
+// probabilities from the original draws' sums and source targets, not the
+// helper's merged weights or normalization. Zero observed streams remain
+// participants when evaluating support at the final selected sample.
+void ReuseExpectations() {
+  const Triple proposal_a{0.25, 0.25, 0.5};
+  const Triple proposal_b{0.5, 0.25, 0.25};
+  std::size_t cases = 0;
+  double naive_bias = 0;
+  for (const Triple receiving : {Triple{2, 1, 4}, Triple{2, 0, 4}}) {
+    Contributions visible{{{2, 1, 0.5}, {1, 4, 2}, {3, 0.5, 1}}};
+    Contributions shadowed{{{0, 0, 0}, {0.25, 1, 0.5}, {3, 0.5, 1}}};
+    if (receiving[1] == 0) {
+      visible[1] = {};
+      shadowed[1] = {};
+    }
+    for (const auto& targets : std::array<std::array<Triple, 2>, 4>{{
+             {{{1, 3, 2}, {4, 2, 1}}}, // full, different targets
+             {{{1, 0, 2}, {0, 2, 1}}}, // complementary support
+             {{{1, 3, 2}, {0, 0, 0}}}, // whole zero-support source
+             {{{1, 3, 2}, {0, 2, 0}}}}}) { // one source can observe all zeros
+      const std::array streams{Enumerate(targets[0], proposal_a, 2),
+          Enumerate(targets[1], proposal_b, 3)};
+      for (std::uint32_t cap : {1U, 2U, 3U, 8U}) {
+        for (bool reverse : {false, true}) {
+          Triple actual{}, shadow_actual{};
+          double probability = 0, naive_red = 0;
+          const std::array<std::uint32_t, 2> count{std::min(2U, cap), std::min(3U, cap)};
+          for (const auto& a : streams[0]) {
+            for (const auto& b : streams[1]) {
+              const std::array sources{a.reservoir, b.reservoir};
+              const auto visit = [&](auto&& self, Reservoir output, double prefix,
+                                     double chance, int step) -> void {
+                if (step == 2) {
+                  probability += chance;
+                  Check(output.candidate_count == count[0] + count[1],
+                      "reuse lost capped source counts");
+                  if (output.sample == kNoReservoirSample) {
+                    Near(ReservoirReuseNormalization(output, 0), 0, 0,
+                        "all-zero receiving merge has nonzero W");
+                    return;
+                  }
+                  const auto sample = output.sample;
+                  std::uint32_t support = 0;
+                  for (std::size_t i = 0; i < 2; ++i)
+                    if (targets[i][sample] > 0)
+                      support += count[i];
+                  const double expected_w = prefix / support / receiving[sample];
+                  const double w = ReservoirReuseNormalization(output, support);
+                  Near(w, expected_w, 2e-7 * std::max(1.0, expected_w),
+                      "support normalization disagrees with oracle");
+                  for (std::size_t channel = 0; channel < 3; ++channel) {
+                    actual[channel] += chance * w * visible[sample][channel];
+                    shadow_actual[channel] += chance * w * shadowed[sample][channel];
+                  }
+                  naive_red += chance * ReservoirNormalization(output) * visible[sample][0];
+                  return;
+                }
+                const std::size_t i = reverse ? 1 - step : step;
+                const Reservoir& source = sources[i];
+                const bool positive = source.sample != kNoReservoirSample;
+                const double w = positive ? double(source.weight_sum) /
+                    source.candidate_count / targets[i][source.sample] : 0;
+                const float target = positive ? static_cast<float>(receiving[source.sample]) : 0;
+                const double weight = target * w * count[i];
+                const double sum = prefix + weight;
+                const double replace = weight > 0 ? weight / sum : 0;
+                const auto branch = [&](bool selected, double branch_chance) {
+                  auto next = output;
+                  Check(MergeReevaluatedReservoir(next, source, w, target, cap,
+                            selected ? 0.0F : std::nextafter(1.0F, 0.0F)) == selected,
+                      "reevaluated selection disagrees with independent oracle");
+                  self(self, next, sum, chance * branch_chance, step + 1);
+                };
+                if (replace > 0)
+                  branch(true, replace);
+                if (replace < 1)
+                  branch(false, 1 - replace);
+              };
+              visit(visit, {}, 0, a.probability * b.probability, 0);
+            }
+          }
+          Near(probability, 1, 2e-12, "reuse branch probabilities do not sum to one");
+          for (std::size_t channel = 0; channel < 3; ++channel) {
+            double integral = 0, shadow_integral = 0;
+            for (std::size_t sample = 0; sample < 3; ++sample) {
+              integral += visible[sample][channel];
+              shadow_integral += shadowed[sample][channel];
+            }
+            Near(actual[channel], integral, 2e-6, "differing-target RGB integral is biased");
+            Near(shadow_actual[channel], shadow_integral, 2e-6, "reuse visibility integral is biased");
+          }
+          const double red_integral = visible[0][0] + visible[1][0] + visible[2][0];
+          naive_bias = std::max(naive_bias, std::abs(naive_red - red_integral));
+          ++cases;
+        }
+      }
+    }
+  }
+  Check(naive_bias > 1, "fixtures cannot detect total-M normalization bias");
+  std::cout << "support-aware RGB/visibility integrals: " << cases
+            << " cases PASS; naive total-M red bias up to " << naive_bias << '\n';
+}
+
 struct Random {
   std::uint32_t state = 0x6A09E667U;
   float Next() {
@@ -331,6 +569,9 @@ int main() try {
   Boundaries();
   InvalidInputs();
   ExactExpectations();
+  ReuseBoundaries();
+  InvalidReuseInputs();
+  ReuseExpectations();
   SelectionFrequencies();
   std::cout << "reservoir boundaries, normalization and transactional rejection PASS\n";
   return 0;
