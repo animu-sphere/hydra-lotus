@@ -11,3 +11,4 @@ and the [roadmap](../roadmap/README.md) owns phase and release status.
 | [AOVS.md](AOVS.md) | Foundation AOV formats, storage, clears and preservation limits. |
 | [SCENE.md](SCENE.md) | Scene extraction, updates, GPU storage, acceleration structures, materials, textures, lighting and reference transport. |
 | [TEMPORAL.md](TEMPORAL.md) | CPU frame history, previous placement correspondence, reprojection conventions, shared validity, GPU primary-surface history/products and integration limits. |
+| [RESTIR.md](RESTIR.md) | Internal CPU direct-light reservoir record, weighted updates, same-target combination, normalization, validation and integration limits. |

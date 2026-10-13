@@ -32,6 +32,10 @@ add_executable(lotus-temporal-test temporal-test.cpp)
 target_link_libraries(lotus-temporal-test PRIVATE Lotus::Vulkan)
 add_test(NAME lotus-renderer-temporal COMMAND lotus-temporal-test)
 
+add_executable(lotus-reservoir-test reservoir-test.cpp)
+target_link_libraries(lotus-reservoir-test PRIVATE Lotus::Vulkan)
+add_test(NAME lotus-renderer-reservoir COMMAND lotus-reservoir-test)
+
 add_executable(lotus-temporal-gpu-test temporal-gpu-test.cpp)
 target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan)
 if(LOTUS_WITH_VULKAN)

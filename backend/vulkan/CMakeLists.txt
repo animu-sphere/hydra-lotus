@@ -1,4 +1,5 @@
 add_library(lotus-render-vulkan STATIC
+  reservoir.cpp
   temporal.cpp
   temporal_metadata.cpp
   vulkan_backend.cpp

@@ -33,6 +33,7 @@ and the document is a bug. When a summary disagrees with
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/README.md) |
 | Foundation AOV set, formats, storage and clear behaviour | [reference/AOVS.md](reference/AOVS.md) |
 | CPU mesh geometry, placement, snapshots, Hydra extraction, the scene update plan, the GPU scene and its acceleration structures | [reference/SCENE.md](reference/SCENE.md) |
+| Internal direct-light reservoir arithmetic and integration limits | [reference/RESTIR.md](reference/RESTIR.md) |
 | Phase status and release targets | [roadmap/README.md](roadmap/README.md#status-at-a-glance) |
 | Incomplete tasks and execution order | [roadmap/current.md](roadmap/current.md) |
 | Measured evidence and benchmark numbers | [reports/README.md](reports/README.md) |

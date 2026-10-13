@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Internal CPU reservoir arithmetic for direct-light sampling: a 16-byte
+  record, weighted candidate updates, same-target stream combination and
+  normalization, including zero-target draw counts and transactional input/
+  overflow rejection. CTest `lotus-renderer-reservoir` checks independent
+  discrete RGB integrals, visibility and weighted selection frequencies
+  without Vulkan or OpenUSD. GPU light sampling and reuse are not yet wired
+  into rendering ([contract](docs/reference/RESTIR.md),
+  [evidence](docs/reports/2026-10-13-restir-reservoir.md)).
+
 ## [0.4.0] - 2026-10-13
 
 The temporal infrastructure release adds Renderer Phase 4: frame history,
