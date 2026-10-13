@@ -13,22 +13,15 @@ The temporal release snapshot and verification are recorded in the
 Phase and release status belong to the
 [canonical table](README.md#status-at-a-glance).
 
-Continue with direct-light reservoirs under the
+Continue with direct-light reservoir reuse under the
 [ReSTIR DI scope](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di).
 The CPU arithmetic and same-target combination are checked against independent
 discrete integrals ([evidence](../reports/2026-10-13-restir-reservoir.md));
-the [reservoir reference](../reference/RESTIR.md) owns their limits.
+GPU initial-only lighting is checked against independent integrals and NEE/MIS
+images under both integrators ([evidence](../reports/2026-10-13-restir-initial.md)).
+The [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
 Implement the remaining work in this order:
 
-- [ ] **LOTUS-RESTIR-02 — GPU initial candidates and direct-light resolve.**
-  Define reconstructible light samples and their measures for emissive,
-  analytic and environment lights. Port reservoir updates to Slang, validate
-  them against the CPU oracle, and add opt-in primary-surface direct lighting
-  under both integrators. Apply visibility to the selected contribution and
-  account for BSDF-found emission without double counting. Preserve the
-  NEE/MIS mode; carry a separate timestamp, reservoir debug products and
-  memory accounting. Compare initial-only estimates with independent lighting
-  oracles and converged NEE/MIS images, including zero-target/occluded samples.
 - [ ] **LOTUS-RESTIR-03 — Temporal reservoir reuse.**
   Use shared reprojection/validity without putting reservoir state into the
   temporal infrastructure. Reevaluate the previous selected sample at the

@@ -243,6 +243,7 @@ void Intersect(uint index) {
       const uint4 throughput = LoadSection(kThroughputSection, slot);
       path.throughput = UnpackSpectrum(throughput);
       path.lastPdf = asfloat(throughput.w);
+      path.depth = bounce;
       MissPath(path);
       StoreSample(slot, path.radiance);
     }

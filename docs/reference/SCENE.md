@@ -854,6 +854,11 @@ and that the bounce limit fails cleanly
 
 ### Light sampling
 
+The backend also offers opt-in `LightSampling::RestirInitial` at the primary
+surface, retaining NEE/MIS at later bounces. Its candidate measures, emission
+partition, diagnostics and limits are owned by the
+[reservoir reference](RESTIR.md#initial-gpu-lighting).
+
 `PathTracingSettings::light_sampling` selects the Renderer Phase 3
 estimator ([roadmap policy](../design/ROADMAP_POLICY.md#renderer-phase-3--direct-lighting--nee--mis)).
 `LightSampling::Bsdf` is brute force: emission counts only where a camera

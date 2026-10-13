@@ -1,9 +1,10 @@
-# Direct-light reservoir arithmetic
+# Direct-light reservoirs
 
 `backend/vulkan/reservoir.hpp` and `reservoir.cpp` implement an internal CPU
 reference in `Lotus::vulkan_internal`, built by `Lotus::Vulkan` even with
-Vulkan disabled. The header is not installed and introduces no public API,
-render mode or GPU pass. The [roadmap](../roadmap/README.md#status-at-a-glance)
+Vulkan disabled. The header is not installed. GPU float arithmetic and
+initial-only direct lighting are in `shaders/sampling/reservoir.slang` and
+`shaders/common/restir.slang`. The [roadmap](../roadmap/README.md#status-at-a-glance)
 owns delivery status; the [phase policy](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 owns the intended transport scope.
 
@@ -58,8 +59,10 @@ before publishing and leave the destination unchanged on failure.
 Weights are stored as floats with ordinary rounding. Ratios, replacement
 probabilities, sum range checks and normalization use double intermediates
 in this CPU reference. The sum is never reused as a cached normalized weight;
-normalization is computed from the current count/selected target. GPU float
-precision and subnormal behavior have not been validated by these CPU checks.
+normalization is computed from the current count/selected target. The GPU
+implementation uses float intermediates; its near-boundary decisions can
+differ. GPU subnormal flush behavior and extreme dynamic-range robustness
+are not established by ordinary lighting comparisons.
 
 ## Validation and integration limits
 
@@ -69,11 +72,110 @@ independently enumerated RGB integrals and visibility, and fixed-seed weighted
 selection frequencies ([measurement](../reports/2026-10-13-restir-reservoir.md)).
 It runs without Vulkan or OpenUSD.
 
-No scene light identity, reconstructible light payload, candidate generator,
-GPU reservoir allocation, reuse, visibility query, MIS integration, timestamp,
-debug AOV or Hydra setting is implemented here. The opaque sample key is valid
-only inside its caller's unchanged candidate domain and is not a persistent
-light-table index. Same-target combination must not be used as cross-surface
-temporal/spatial reuse: changing the target or its support needs reevaluation
-and the appropriate normalization. CPU discrete-integral checks establish
-arithmetic behavior, not rendered convergence, speed or temporal stability.
+The CPU helper's opaque sample key is valid only inside its caller's unchanged
+domain. Same-target combination must not be used as cross-surface reuse:
+changing the target or support needs reevaluation and appropriate normalization.
+GPU integration and its limits are described below.
+
+## Initial GPU lighting
+
+Set `PathTracingSettings::light_sampling = LightSampling::RestirInitial` for
+opt-in primary-surface direct lighting under either integrator.
+`restir_candidates` defaults to 8 and accepts 1–64. `Mis` remains the default.
+The headless benchmark CLI and Hydra controls still expose `Mis` and `Bsdf`
+only. Later bounces retain NEE/MIS.
+
+A separate fullscreen pass traces the same jittered camera ray and primary
+opacity realization as transport. It streams candidates, reconstructs the
+selected sample, queries its shadow transmittance and stores normalized RGB.
+Both integrators read this result at their first scattering event.
+
+The payload is a light-table slot plus two unit-square variates. The existing
+power alias table selects the light. Its probability is proposal `q` in the
+light's **unit-square parameter measure**, with unit conditional density:
+
+| Light | Fixed mapping and Jacobian |
+| --- | --- |
+| Emissive triangle | Uniform barycentrics; world area times emitter cosine / distance squared, with textured emission and coverage, two-sided |
+| Rect / disk | Uniform world area with the same area-to-solid-angle conversion and emitting-side cosine |
+| Sphere | Uniform whole surface, area `4πr²`; back-facing points have zero target |
+| Positive-angle distant | Fixed cone map; Jacobian is its solid angle |
+| Parallel distant | Discrete direction carrying irradiance; Jacobian one |
+| Environment image | Fixed inverse row/column CDF map; Jacobian is inverse conditional solid-angle density |
+
+The parameter-space RGB integrand is
+`BSDF_eval_cos * radiance * (selection / sample.pdf)`; target is maximum RGB,
+covering every positive channel. Weight is target divided by selection
+probability. Zero-target/back-facing draws count toward M. Visibility is
+applied only after selection, including fractional opacity transmittance.
+Sphere candidates use fixed area points, avoiding a receiver-dependent cone
+payload. These mappings can be reevaluated at another receiver, but no
+cross-surface normalization or reuse is implemented.
+
+Candidate RNG uses `SeedRandom(pixel, sample_index ^ 0xD1B54A35)` and five
+variates per draw (alias selection, payload, replacement). Primary coverage
+and continuation BSDF draws retain their own sequence.
+
+### Emission accounting
+
+Primary camera-visible emission is unchanged. At depth one, transport suppresses
+BSDF-found emission from table-backed triangles, analytic crossings and the
+sampled environment image: the reservoir already estimates those direct-light
+integrals. This partitions estimators without assuming a reservoir PDF for MIS.
+Unsampled surface emission and the constant environment remain BSDF sampled.
+Later bounces use existing NEE/MIS emission weights. `max_bounces = 0` adds only
+camera-visible emission and generates no candidates.
+
+### Products, memory and lifecycle
+
+`GpuFrameEvidence::restir` is available on a successful Radiance call adding
+at least one sample. It contains the last fresh sample's tightly packed,
+top-left rows of 48-byte `RestirPixel` records:
+
+| Fields | Meaning |
+| --- | --- |
+| `light`, `weight_sum`, `selected_target`, `candidate_count` | Same first 16-byte layout as CPU Reservoir |
+| `uv`, `proposal` | Selected reconstruction variates and selection probability |
+| `flags` | Bit 0: camera surface; bit 1: invalid/unrepresentable arithmetic |
+| `contribution.xyz` | Selected, normalized, shadowed RGB direct light |
+| `contribution.w` | Selected transmittance, zero for no selected sample |
+
+Misses, empty scenes and pixels outside the data window overwrite records with
+the sentinel and zero count/weights/contribution. A hit with no lights represents
+zero draws; an all-zero stream with lights retains the requested count. Calls
+adding no sample publish no reservoir products or timing. There is no reservoir
+history.
+
+`scene_generation` accompanies the products. Slots are valid only for that
+unchanged table, never a persistent light identity. Scene, camera, target,
+integrator, estimator and candidate-count changes restart progressive radiance.
+Candidate-count changes also reset temporal radiance compatibility. Reservoir
+state stays outside shared temporal metadata/validity.
+
+Persistent device storage and its host readback mirror initially total 96 bytes
+per pixel. Capacity is retained across smaller targets and mode switches;
+`reservoir_bytes` reports it separately from scene-memory stats. Storage-range
+limits reject before dispatch. A separate timestamp pair reports
+`initial_gpu_ms`, covering primary tracing, candidates and selected visibility,
+excluding readback. It is included in total scene duration; do not add it to
+that total. Unavailable timestamps report false/zero.
+
+GPU updates reject invalid/unrepresentable arithmetic without changing the
+reservoir state. Candidate, normalization or resolved-RGB failure flags make
+the call fail, with errors latched across a progressive batch. Failed GPU calls
+publish no successful reservoir product or temporal history and leave the
+renderer failed.
+
+### GPU validation and limits
+
+`lotus-renderer-restir-gpu` checks CPU/GPU records and payloads, independent
+lighting integrals, fractional/opaque visibility, converged NEE/MIS images,
+multibounce transport, candidate limits, resets, crops, empty scenes and
+overflow failure under both integrators
+([GPU evidence](../reports/2026-10-13-restir-initial.md)).
+Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
+
+Temporal/spatial reuse, support-aware combination, persistent light/sample
+identity, candidate strategy evaluation and Hydra reservoir settings/AOVs
+remain outside this implementation. Initial-only correctness checks establish
+no many-light speedup, temporal stability or reuse bias result.

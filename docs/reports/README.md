@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-13-restir-initial.md](2026-10-13-restir-initial.md) | GPU initial-only direct-light reservoirs under both integrators: CPU arithmetic/payload comparison, independent light integrals, selected visibility, NEE/MIS images, memory/timestamps, lifecycle and numerical failure. |
 | [2026-10-13-restir-reservoir.md](2026-10-13-restir-reservoir.md) | CPU reservoir arithmetic: independent discrete RGB integrals, selected-sample visibility, zero-target/count normalization, same-target combination, weighted selection frequencies, transactional invalid/overflow checks and core/runtime-free regressions. |
 | [2026-10-13-v0.4.0-release-gate.md](2026-10-13-v0.4.0-release-gate.md) | v0.4.0 release verification: physical-GPU temporal/core/Hydra and installed-host checks, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging. |
 | [2026-10-13-temporal-hydra-exit.md](2026-10-13-temporal-hydra-exit.md) | Hydra temporal settings, motion/history AOVs, moving USD stages and installed usdview, reset controls, regression checks and Renderer Phase 4 scope review. |

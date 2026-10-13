@@ -74,6 +74,17 @@ colour/count history, automatic reset classification and third timestamp
 pair. The same GPU validation executable compares fresh batches and moving
 references ([radiance contract](../reference/TEMPORAL.md#temporal-radiance-accumulation)).
 
+Direct-light reservoir arithmetic stays in the same backend target:
+`reservoir.cpp` is a Vulkan-independent CPU oracle with a private header.
+`shaders/sampling/reservoir.slang` ports its streaming arithmetic;
+`shaders/common/restir.slang` owns initial candidates and selected visibility,
+with persistent resources and timestamps in `vulkan_backend.cpp`.
+The public settings and packed debug products are in `vulkan_backend.hpp`.
+The uninstalled `lotus-restir-gpu-test` compares both integrators with the
+CPU oracle and independent lighting integrals; without Vulkan it explains a
+SKIP, with a Vulkan-only missing-driver regression. The
+[reservoir reference](../reference/RESTIR.md) owns behavior and limits.
+
 The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its
 `lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained

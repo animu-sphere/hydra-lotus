@@ -99,6 +99,37 @@ struct TemporalProducts {
   std::uint32_t batch_samples = 0;
 };
 
+// Last fresh sample's initial-only direct-light reservoir, top-left rows.
+// light is a slot in this scene generation's light table; uv reconstructs
+// the sample in that light's unit-square domain. Never a persistent identity.
+struct RestirPixel {
+  std::uint32_t light = 0xFFFFFFFFU;
+  float weight_sum = 0;
+  float selected_target = 0;
+  std::uint32_t candidate_count = 0;
+  std::array<float, 2> uv{};
+  float proposal = 0;
+  // Bit 0: camera surface; bit 1: unrepresentable/invalid arithmetic.
+  std::uint32_t flags = 0;
+  // Selected, normalized RGB contribution; w is shadow transmittance.
+  std::array<float, 4> contribution{};
+};
+static_assert(sizeof(RestirPixel) == 48);
+
+struct RestirProducts {
+  bool available = false;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t row_pitch = 0;
+  std::uint64_t scene_generation = 0;
+  std::vector<RestirPixel> initial;
+  bool timestamp_available = false;
+  // Primary ray, candidates and selected-sample visibility, excluding readback.
+  double initial_gpu_ms = 0;
+  // Allocated device reservoir storage plus its host mirror, outside scene stats.
+  std::uint64_t reservoir_bytes = 0;
+};
+
 struct GpuFrameEvidence {
   FrameStatus status = FrameStatus::Skip;
   std::string detail;
@@ -144,6 +175,7 @@ struct GpuFrameEvidence {
   std::uint32_t wavefront_rounds = 0;
   WavefrontTimings wavefront_timings;
   TemporalProducts temporal;
+  RestirProducts restir;
 };
 
 // The image an offscreen frame renders into. Rectangles are {x, y, width,
@@ -397,8 +429,8 @@ enum class Integrator {
   Wavefront,
 };
 
-// How Radiance finds the scene's lights (Renderer Phase 3). Both estimators
-// converge to the same image; neither changes which surfaces emit.
+// How Radiance finds the scene's lights. The estimators converge to the same
+// image and preserve surface emission; reservoir reuse is not enabled here.
 enum class LightSampling {
   // Brute force: emission counts only where a camera ray or a sampled BSDF
   // direction happens to find it. Parallel light, which no direction finds,
@@ -414,6 +446,9 @@ enum class LightSampling {
   // emission BSDF sampling finds. The constant environment is left to BSDF
   // sampling alone.
   Mis,
+  // Initial-only reservoir direct lighting at the jittered camera surface.
+  // Later bounces retain NEE/MIS. Constant environment remains BSDF sampled.
+  RestirInitial,
 };
 
 // The bounces the wavefront integrator records per sample; a larger
@@ -439,6 +474,9 @@ struct PathTracingSettings {
   // frames write the same image. 0 means no limit. Changing it does not
   // restart the accumulation.
   std::uint32_t max_samples = 0;
+  // Initial light draws per primary surface, 1..64; changing it resets
+  // progressive and temporal radiance. No temporal/spatial reservoir reuse.
+  std::uint32_t restir_candidates = 8;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
