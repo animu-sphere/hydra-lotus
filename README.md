@@ -1,5 +1,8 @@
 # Hydra Lotus
 
+[![CI](https://github.com/animu-sphere/hydra-lotus/actions/workflows/renderer-ci.yml/badge.svg?branch=main)](https://github.com/animu-sphere/hydra-lotus/actions/workflows/renderer-ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 > A GPU light transport research renderer for OpenUSD / Hydra: physically
 > based path tracing, built on a reference path tracer that every faster mode
 > is checked against.

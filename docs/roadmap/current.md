@@ -20,15 +20,11 @@ discrete integrals ([evidence](../reports/2026-10-13-restir-reservoir.md));
 GPU initial-only lighting is checked against independent integrals and NEE/MIS
 images under both integrators ([evidence](../reports/2026-10-13-restir-initial.md)).
 The [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
+Temporal GPU reuse now carries explicit corrected weights and exact source
+shading, using shared reprojection and bounded history counts
+([evidence](../reports/2026-10-13-restir-temporal.md)).
 Implement the remaining work in this order:
 
-- [ ] **LOTUS-RESTIR-03 — Temporal reservoir reuse.**
-  Use shared reprojection/validity without putting reservoir state into the
-  temporal infrastructure. Integrate the
-  [CPU reevaluation/support-normalization oracle](../reference/RESTIR.md#differing-target-cpu-combination)
-  with GPU history; validate candidate-count limits, light/sample identity,
-  resets and failed-frame publication. Compare
-  static and moving sequences, disocclusion and lighting edits with NEE/MIS.
 - [ ] **LOTUS-RESTIR-04 — Spatial reservoir reuse.**
   Read immutable source reservoirs into separate destination storage.
   Reevaluate samples and normalize across differing surface support;

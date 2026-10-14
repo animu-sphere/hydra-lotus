@@ -55,3 +55,44 @@ public float ReservoirNormalization(Reservoir r) {
   return r.weight_sum > 0.0
       ? (r.weight_sum / float(r.candidate_count)) / r.selected_target : 0.0;
 }
+
+public bool MergeReevaluatedReservoir(inout Reservoir destination,
+    Reservoir source, float normalization, float target, uint cap,
+    float random, out bool selected) {
+  selected = false;
+  const uint count = min(source.candidate_count, cap);
+  const bool zero = source.weight_sum == 0.0 &&
+      source.sample == kNoReservoirSample && source.selected_target == 0.0 &&
+      normalization == 0.0 && target == 0.0;
+  const bool positive = source.weight_sum > 0.0 && source.selected_target > 0.0 &&
+      source.sample != kNoReservoirSample && source.candidate_count != 0 && normalization > 0.0;
+  const bool valid_destination = destination.weight_sum == 0.0
+      ? destination.sample == kNoReservoirSample && destination.selected_target == 0.0
+      : destination.weight_sum > 0.0 && destination.selected_target > 0.0 &&
+        destination.sample != kNoReservoirSample && destination.candidate_count != 0;
+  if (!valid_destination || !isfinite(destination.weight_sum) ||
+      !isfinite(destination.selected_target) || !isfinite(source.weight_sum) ||
+      !isfinite(source.selected_target) || !(zero || positive) ||
+      !isfinite(normalization) || !isfinite(target) || target < 0.0 || cap == 0 ||
+      !isfinite(random) || random < 0.0 || random >= 1.0 ||
+      count > 0xFFFFFFFFu - destination.candidate_count)
+    return false;
+  // Match the CPU oracle's receiver_target * W * capped M contract.
+  const float weight = (target * normalization) * float(count);
+  const float sum = destination.weight_sum + weight;
+  if (!isfinite(weight) || !isfinite(sum) || (target > 0.0 && weight == 0.0))
+    return false;
+  selected = weight > 0.0 && random < weight / sum;
+  destination.weight_sum = sum;
+  destination.candidate_count += count;
+  if (selected) {
+    destination.sample = source.sample;
+    destination.selected_target = target;
+  }
+  return true;
+}
+
+public float ReservoirReuseNormalization(Reservoir r, uint supporting_count) {
+  return r.weight_sum > 0.0
+      ? (r.weight_sum / float(supporting_count)) / r.selected_target : 0.0;
+}

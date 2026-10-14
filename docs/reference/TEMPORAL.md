@@ -291,6 +291,10 @@ initialization; fixed extents reuse buffers and resize replaces them.
 History is published only after both passes, readbacks and timestamps succeed.
 No transport, reservoir or denoiser state enters validity.
 
+The reservoir consumer can run this same metadata/validity before transport.
+Its sample payloads, history, compatibility policy and normalization remain
+outside shared temporal state; see [temporal reservoir reuse](RESTIR.md#temporal-gpu-reuse).
+
 ## Temporal radiance accumulation
 
 Set `TemporalFrameSettings::accumulate_radiance = true` in

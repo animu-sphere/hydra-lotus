@@ -105,6 +105,14 @@ struct TemporalBuffer {
   VkDeviceSize bytes = 0;
 };
 
+struct RestirHistoryRecord {
+  RestirReusePixel resolved;
+  std::array<float, 4> origin, normal, shading_normal, outgoing;
+  std::array<float, 4> base_alpha, dielectric_metallic, fresnel;
+  std::uint64_t instance_id, material_id;
+};
+static_assert(sizeof(RestirHistoryRecord) == 192);
+
 // The scene passes' uniform block, std140; mirrored in path_trace.slang.
 struct PathConstants {
   float environment[4];
@@ -137,8 +145,12 @@ struct PathConstants {
   std::uint64_t environment_map;
   float environment_selection;
   std::uint32_t restir_candidates;
+  std::uint32_t restir_temporal;
+  std::uint32_t restir_history;
+  std::uint32_t restir_max_history_candidates;
+  std::uint32_t restir_reserved;
 };
-static_assert(sizeof(PathConstants) == 160 &&
+static_assert(sizeof(PathConstants) == 176 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
               offsetof(PathConstants, environment_map) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
@@ -161,6 +173,7 @@ constexpr std::uint32_t kTemporalPass = 4;
 constexpr std::uint32_t kTemporalValidityPass = 5;
 constexpr std::uint32_t kTemporalAccumulationPass = 6;
 constexpr std::uint32_t kRestirInitialPass = 7;
+constexpr std::uint32_t kRestirTemporalPass = 8;
 
 // Rigid placements and cameras may move; edits that can alter illumination
 // anywhere reset radiance globally, including indirect/emissive changes.
@@ -185,16 +198,19 @@ bool TemporalSceneCompatible(const LotusScene& a, const LotusScene& b) {
   return true;
 }
 
-struct TemporalRadianceKey {
+struct TemporalTransportKey {
   Integrator integrator;
   LightSampling light_sampling;
   std::uint32_t restir_candidates;
+  bool restir_temporal;
+  std::uint32_t restir_max_history_candidates;
+  bool accumulate_radiance;
   std::uint32_t sample_index;
   std::uint32_t max_bounces;
   std::uint32_t max_samples;
   std::uint32_t max_history_samples;
   std::array<float, 4> background;
-  bool operator==(const TemporalRadianceKey&) const = default;
+  bool operator==(const TemporalTransportKey&) const = default;
 };
 
 // The wavefront kernels' kKernel specialization constant, in
@@ -592,6 +608,9 @@ public:
       DestroyTemporalBuffers();
       DestroyTemporalBuffer(restir_initial_);
       DestroyTemporalBuffer(restir_readback_);
+      for (auto& buffer : restir_history_buffers_)
+        DestroyTemporalBuffer(buffer);
+      DestroyTemporalBuffer(restir_history_readback_);
       scene_.Destroy();
       vkDestroyFence(device_, fence_, nullptr);
       vkDestroyPipeline(device_, pipeline_, nullptr);
@@ -605,6 +624,7 @@ public:
       vkDestroyPipeline(device_, temporal_validity_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_accumulation_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_pipeline_, nullptr);
+      vkDestroyPipeline(device_, restir_temporal_pipeline_, nullptr);
       vkDestroyQueryPool(device_, restir_timestamps_, nullptr);
       vkDestroyQueryPool(device_, temporal_timestamps_, nullptr);
       for (VkPipeline pipeline : wavefront_pipelines_)
@@ -691,7 +711,10 @@ public:
         return false;
       if (!CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRestirInitialPass, false, false},
-              restir_pipeline_, detail))
+              restir_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kRestirTemporalPass, false, false},
+              restir_temporal_pipeline_, detail))
         return false;
       if (!ray_shaders.wavefront.empty()) {
         std::vector<std::uint32_t> compute_words;
@@ -717,36 +740,36 @@ public:
     return ray_query_;
   }
 
-  GpuFrameEvidence RenderScene(const DrawSummary& draw,
-      const OffscreenTarget& target, std::uint32_t frame_count,
-      const PathTracingSettings& settings) override {
-    if (!failure_.empty())
-      return Evidence(FrameStatus::Fail, "the renderer failed earlier: " + failure_);
-    if (!ray_query_.available)
-      return Evidence(FrameStatus::Skip, ray_query_.detail);
+  bool ValidateSceneSettings(const PathTracingSettings& settings,
+      std::uint32_t frame_count, bool temporal_call, FramePass& pass,
+      std::string& detail) const {
+    auto Reject = [&](std::string message) { detail = std::move(message); return false; };
     if (camera_pipeline_ == VK_NULL_HANDLE)
-      return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
-    FramePass pass = FramePass::Radiance;
+      return Reject("ray-query shader paths were not supplied");
+    pass = FramePass::Radiance;
     switch (settings.output) {
     case SceneOutput::Radiance:
       if (settings.integrator == Integrator::Wavefront) {
         if (wavefront_pipelines_[0] == VK_NULL_HANDLE)
-          return Evidence(FrameStatus::Fail,
-              "the wavefront shader path was not supplied");
+          return Reject("the wavefront shader path was not supplied");
         if (settings.max_bounces > kMaxWavefrontBounces)
-          return Evidence(FrameStatus::Fail,
-              "the wavefront integrator traces at most " +
+          return Reject("the wavefront integrator traces at most " +
                   std::to_string(kMaxWavefrontBounces) + " bounces");
       } else if (settings.integrator != Integrator::Reference) {
-        return Evidence(FrameStatus::Fail, "unknown integrator");
+        return Reject("unknown integrator");
       }
       if (settings.light_sampling != LightSampling::Bsdf &&
           settings.light_sampling != LightSampling::Mis &&
           settings.light_sampling != LightSampling::RestirInitial)
-        return Evidence(FrameStatus::Fail, "unknown light sampling");
+        return Reject("unknown light sampling");
       if (settings.light_sampling == LightSampling::RestirInitial &&
           (settings.restir_candidates == 0 || settings.restir_candidates > 64))
-        return Evidence(FrameStatus::Fail, "initial reservoir candidates must be in [1, 64]");
+        return Reject("initial reservoir candidates must be in [1, 64]");
+      if (settings.restir_temporal &&
+          (settings.light_sampling != LightSampling::RestirInitial || !(temporal_call || rendering_temporal_) ||
+              frame_count != 1 || settings.restir_max_history_candidates == 0 ||
+              settings.restir_max_history_candidates > 65536))
+        return Reject("temporal reservoirs require RenderTemporalScene, RestirInitial, one sample and history candidates in [1, 65536]");
       break;
     case SceneOutput::Barycentrics:
       pass = FramePass::Barycentrics;
@@ -757,12 +780,68 @@ public:
       pass = FramePass::Surface;
       break;
     default:
-      return Evidence(FrameStatus::Fail, "unknown scene output");
+      return Reject("unknown scene output");
     }
+    return true;
+  }
+
+  GpuFrameEvidence RenderScene(const DrawSummary& draw,
+      const OffscreenTarget& target, std::uint32_t frame_count,
+      const PathTracingSettings& settings) override {
+    if (!failure_.empty())
+      return Evidence(FrameStatus::Fail, "the renderer failed earlier: " + failure_);
+    if (!ray_query_.available)
+      return Evidence(FrameStatus::Skip, ray_query_.detail);
+    if (camera_pipeline_ == VK_NULL_HANDLE)
+      return Evidence(FrameStatus::Fail, "ray-query shader paths were not supplied");
+    FramePass pass;
+    std::string settings_error;
+    if (!ValidateSceneSettings(settings, frame_count, false, pass, settings_error))
+      return Evidence(FrameStatus::Fail, settings_error);
     ray_constants_.world_to_clip = VulkanWorldToClip(draw.world_to_clip);
     if (!Invert(ray_constants_.world_to_clip, ray_constants_.clip_to_world))
       return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
     return RenderFrame(draw, target, frame_count, pass, settings);
+  }
+
+  bool ValidateFrameTarget(const OffscreenTarget& target, std::uint32_t frame_count,
+      std::string& detail) const {
+    if (!std::isfinite(target.clear_depth) || target.clear_depth < 0.0F ||
+        target.clear_depth > 1.0F ||
+        !std::all_of(target.clear_color.begin(), target.clear_color.end(),
+            [](float value) { return std::isfinite(value); })) {
+      detail = "invalid offscreen clear values";
+      return false;
+    }
+    if (frame_count == 0) {
+      detail = "frame_count must be at least 1";
+      return false;
+    }
+    if (target.width == 0 || target.height == 0) {
+      detail = "the offscreen target is empty";
+      return false;
+    }
+    const VkPhysicalDeviceLimits& limits = device_properties_.limits;
+    if (target.width > std::min(limits.maxImageDimension2D,
+                           limits.maxFramebufferWidth) ||
+        target.height > std::min(limits.maxImageDimension2D,
+                            limits.maxFramebufferHeight)) {
+      std::ostringstream message;
+      message << "the offscreen target " << target.width << 'x'
+              << target.height << " exceeds the device's framebuffer limits";
+      detail = message.str();
+      return false;
+    }
+
+    const std::size_t pixels = std::size_t{target.width} * target.height;
+    if ((!target.preserved_color.empty() &&
+            target.preserved_color.size() != pixels * 4) ||
+        (!target.preserved_depth.empty() &&
+            target.preserved_depth.size() != pixels)) {
+      detail = "invalid preserved attachment extent";
+      return false;
+    }
+    return true;
   }
 
   GpuFrameEvidence RenderFrame(const DrawSummary& draw,
@@ -778,37 +857,10 @@ public:
       return Evidence(FrameStatus::Fail,
           "bootstrap extraction must be empty or produce one triangle draw");
     }
-    if (!std::isfinite(target.clear_depth) || target.clear_depth < 0.0F ||
-        target.clear_depth > 1.0F ||
-        !std::all_of(target.clear_color.begin(), target.clear_color.end(),
-            [](float value) { return std::isfinite(value); })) {
-      return Evidence(FrameStatus::Fail, "invalid offscreen clear values");
-    }
-    if (frame_count == 0) {
-      return Evidence(FrameStatus::Fail, "frame_count must be at least 1");
-    }
-    if (target.width == 0 || target.height == 0) {
-      return Evidence(FrameStatus::Fail, "the offscreen target is empty");
-    }
-    const VkPhysicalDeviceLimits& limits = device_properties_.limits;
-    if (target.width > std::min(limits.maxImageDimension2D,
-                           limits.maxFramebufferWidth) ||
-        target.height > std::min(limits.maxImageDimension2D,
-                            limits.maxFramebufferHeight)) {
-      std::ostringstream message;
-      message << "the offscreen target " << target.width << 'x'
-              << target.height << " exceeds the device's framebuffer limits";
-      return Evidence(FrameStatus::Fail, message.str());
-    }
-
+    std::string target_error;
+    if (!ValidateFrameTarget(target, frame_count, target_error))
+      return Evidence(FrameStatus::Fail, target_error);
     Targets& targets = trace ? scene_targets_ : targets_;
-    const std::size_t pixels = std::size_t{target.width} * target.height;
-    if ((!target.preserved_color.empty() &&
-            target.preserved_color.size() != pixels * 4) ||
-        (!target.preserved_depth.empty() &&
-            target.preserved_depth.size() != pixels)) {
-      return Evidence(FrameStatus::Fail, "invalid preserved attachment extent");
-    }
     std::string detail;
     if (!EnsureTargets(targets, target.width, target.height, detail)) {
       return Evidence(FrameStatus::Fail, detail);
@@ -854,6 +906,7 @@ public:
     }
     const bool restir = pass == FramePass::Radiance &&
                         settings.light_sampling == LightSampling::RestirInitial;
+    restir_temporal_active_ = restir && settings.restir_temporal;
     if (restir && !EnsureRestir(target, detail))
       return Evidence(FrameStatus::Fail, detail);
     if (trace) {
@@ -1079,6 +1132,35 @@ public:
     return true;
   }
 
+  bool EnsureRestirHistory(const OffscreenTarget& target, std::string& detail) {
+    const VkDeviceSize bytes = VkDeviceSize{target.width} * target.height * sizeof(RestirHistoryRecord);
+    if (bytes > device_properties_.limits.maxStorageBufferRange) {
+      detail = "temporal reservoir exceeds the device's storage buffer range";
+      return false;
+    }
+    constexpr auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    for (auto& buffer : restir_history_buffers_)
+      if (!EnsureTemporalBuffer(buffer, bytes, usage, false, detail))
+        return false;
+    if (!EnsureTemporalBuffer(restir_history_readback_, bytes * 2,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail))
+      return false;
+    const VkDescriptorBufferInfo buffers[2] = {
+        {restir_history_buffers_[temporal_write_].buffer, 0, bytes},
+        {restir_history_buffers_[1 - temporal_write_].buffer, 0, bytes}};
+    VkWriteDescriptorSet writes[2]{};
+    for (unsigned i = 0; i < 2; ++i) {
+      writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      writes[i].dstSet = ray_descriptor_;
+      writes[i].dstBinding = 17 + i;
+      writes[i].descriptorCount = 1;
+      writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      writes[i].pBufferInfo = &buffers[i];
+    }
+    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+    return true;
+  }
+
   void RecordRestir(const OffscreenTarget& target,
       const VkRenderPassBeginInfo& render) {
     VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -1089,7 +1171,7 @@ public:
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     if (restir_timestamps_ != VK_NULL_HANDLE) {
-      vkCmdResetQueryPool(command_, restir_timestamps_, 0, 2);
+      vkCmdResetQueryPool(command_, restir_timestamps_, 0, 4);
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, restir_timestamps_, 0);
     }
     vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
@@ -1110,6 +1192,24 @@ public:
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 1, &barrier, 0, nullptr, 0, nullptr);
+    if (restir_temporal_active_) {
+      if (restir_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, restir_timestamps_, 2);
+      vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
+      vkCmdSetViewport(command_, 0, 1, &viewport);
+      vkCmdSetScissor(command_, 0, 1, &scissor);
+      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, restir_temporal_pipeline_);
+      vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+          ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+      vkCmdPushConstants(command_, ray_layout_, kRayStages, 0, sizeof(RayConstants), &ray_constants_);
+      vkCmdDraw(command_, 3, 1, 0, 0);
+      vkCmdEndRenderPass(command_);
+      if (restir_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, restir_timestamps_, 3);
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
   }
 
   bool ReadRestir(const OffscreenTarget& target, RestirProducts& products,
@@ -1130,9 +1230,33 @@ public:
       detail = "initial reservoir arithmetic is invalid or exceeds GPU float storage";
       return false;
     }
+    if (restir_temporal_active_) {
+      if (!InvalidateIfNeeded(device_, restir_history_readback_.memory,
+              restir_history_readback_.coherent, detail))
+        return false;
+      products.history_available = restir_history_available_;
+      products.temporal_row_pitch = target.width * sizeof(RestirReusePixel);
+      products.temporal.resize(products.initial.size());
+      if (restir_history_available_)
+        products.previous.resize(products.initial.size());
+      const auto* records = static_cast<const RestirHistoryRecord*>(restir_history_readback_.mapped);
+      for (std::size_t i = 0; i < products.initial.size(); ++i) {
+        products.temporal[i] = records[i].resolved;
+        if ((products.temporal[i].reservoir.flags & 2) != 0) {
+          detail = "temporal reservoir arithmetic is invalid or exceeds GPU float storage";
+          return false;
+        }
+        if (restir_history_available_)
+          products.previous[i] = records[products.initial.size() + i].resolved;
+      }
+    }
+    for (const auto& buffer : restir_history_buffers_)
+      products.reservoir_bytes += buffer.bytes;
+    products.reservoir_bytes += restir_history_readback_.bytes;
     if (restir_timestamps_ != VK_NULL_HANDLE) {
-      std::uint64_t ticks[2]{};
-      if (!VulkanOk(vkGetQueryPoolResults(device_, restir_timestamps_, 0, 2,
+      std::uint64_t ticks[4]{};
+      const unsigned queries = restir_temporal_active_ ? 4u : 2u;
+      if (!VulkanOk(vkGetQueryPoolResults(device_, restir_timestamps_, 0, queries,
               sizeof(ticks), ticks, sizeof(std::uint64_t),
               VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
               "vkGetQueryPoolResults(initial reservoir)", detail))
@@ -1142,6 +1266,9 @@ public:
       products.timestamp_available = true;
       products.initial_gpu_ms = static_cast<double>((ticks[1] - ticks[0]) & mask) *
           device_properties_.limits.timestampPeriod / 1'000'000.0;
+      if (restir_temporal_active_)
+        products.temporal_gpu_ms = static_cast<double>((ticks[3] - ticks[2]) & mask) *
+            device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     products.available = true;
     return true;
@@ -1158,7 +1285,25 @@ public:
     if (snapshot.scene != uploaded_scene_)
       return Evidence(FrameStatus::Fail,
           "apply this snapshot's SceneExtraction update before temporal rendering");
+    std::string request_error;
+    if (!ValidateFrameTarget(target, frame_count, request_error))
+      return Evidence(FrameStatus::Fail, request_error);
+    FramePass requested_pass;
+    if (!ValidateSceneSettings(settings, frame_count, true, requested_pass, request_error))
+      return Evidence(FrameStatus::Fail, request_error);
+    Matrix4 inverse;
+    if (!Invert(VulkanWorldToClip(ExtractDrawSummary(snapshot).world_to_clip), inverse))
+      return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
     const bool accumulate = requested.accumulate_radiance;
+    const bool reuse = settings.restir_temporal;
+    const bool fresh_batch = accumulate || reuse;
+    if (reuse && (frame_count != 1 || settings.output != SceneOutput::Radiance ||
+                     settings.light_sampling != LightSampling::RestirInitial ||
+                     settings.restir_candidates == 0 || settings.restir_candidates > 64 ||
+                     settings.restir_max_history_candidates == 0 ||
+                     settings.restir_max_history_candidates > 65536))
+      return Evidence(FrameStatus::Fail,
+          "temporal reservoirs require Radiance, RestirInitial, one fresh sample, candidates in [1, 64] and history candidates in [1, 65536]");
     if (accumulate && (requested.max_history_samples == 0 || requested.max_history_samples > 65536 ||
                           settings.output != SceneOutput::Radiance || !target.clear_color_enabled))
       return Evidence(FrameStatus::Fail,
@@ -1176,16 +1321,18 @@ public:
     } catch (const std::invalid_argument& error) {
       return Evidence(FrameStatus::Fail, error.what());
     }
-    const TemporalRadianceKey radiance_key{settings.integrator, settings.light_sampling,
-        settings.restir_candidates, settings.sample_index, settings.max_bounces, settings.max_samples,
+    const TemporalTransportKey radiance_key{settings.integrator, settings.light_sampling,
+        settings.restir_candidates, settings.restir_temporal, settings.restir_max_history_candidates,
+        accumulate, settings.sample_index, settings.max_bounces, settings.max_samples,
         requested.max_history_samples, target.clear_color};
-    if (accumulate && frame.previous) {
-      if (!temporal_radiance_key_ || *temporal_radiance_key_ != radiance_key) {
+    if (fresh_batch && frame.previous) {
+      if (!temporal_transport_key_ || *temporal_transport_key_ != radiance_key) {
         frame.previous.reset();
         frame.reset_reason = TemporalResetReason::RenderSettingsChanged;
       } else if (snapshot.scene != frame.previous->scene &&
                  (!snapshot.scene || !frame.previous->scene ||
-                     !TemporalSceneCompatible(*snapshot.scene, *frame.previous->scene))) {
+                     !TemporalSceneCompatible(*snapshot.scene, *frame.previous->scene) ||
+                     (reuse && scene_.Stats().emissive_triangles != 0))) {
         frame.previous.reset();
         frame.reset_reason = TemporalResetReason::SceneChanged;
       }
@@ -1199,18 +1346,12 @@ public:
       return Evidence(FrameStatus::Fail, "temporal metadata exceeds the device's storage buffer range");
     auto batch_settings = settings;
     const auto sample_offset = frame.previous ? temporal_sample_offset_ : 0u;
-    if (accumulate) {
+    if (fresh_batch) {
       // A fresh estimator batch: never feed a cumulative progressive mean
       // back into history. Advance the RNG even on a moving view.
       accumulated_samples_ = 0;
       batch_settings.sample_index += sample_offset;
     }
-    rendering_temporal_ = true;
-    auto evidence = RenderScene(ExtractDrawSummary(snapshot), target, frame_count, batch_settings);
-    rendering_temporal_ = false;
-    if (evidence.status != FrameStatus::Pass)
-      return evidence;
-
     std::string detail;
     const VkDeviceSize bytes = VkDeviceSize{target.width} * target.height * sizeof(TemporalPixel);
     const VkDeviceSize validity_bytes = VkDeviceSize{target.width} * target.height * sizeof(TemporalValidityPixel);
@@ -1265,7 +1406,7 @@ public:
         requested.validation.relative_depth_tolerance, requested.validation.minimum_normal_cosine,
         requested.validation.max_motion_pixels};
     constants.history = {frame.previous ? 1u : 0u, target.width, target.height, 0u};
-    constants.radiance = {accumulate ? 1u : 0u, evidence.samples_per_pixel,
+    constants.radiance = {accumulate ? 1u : 0u, frame_count,
         requested.max_history_samples, 0u};
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail) ||
         (!instances.empty() && !WriteTemporalBuffer(temporal_instances_, instances.data(),
@@ -1305,6 +1446,26 @@ public:
         radiance_writes[i].pBufferInfo = &radiance_buffers[i];
       }
       vkUpdateDescriptorSets(device_, 3, radiance_writes, 0, nullptr);
+    }
+    restir_history_available_ = reuse && frame.previous.has_value();
+    if (reuse && !EnsureRestirHistory(target, detail)) {
+      failure_ = detail;
+      return Evidence(FrameStatus::Fail, detail);
+    }
+    rendering_temporal_ = true;
+    auto evidence = RenderScene(ExtractDrawSummary(snapshot), target, frame_count, batch_settings);
+    rendering_temporal_ = false;
+    if (evidence.status != FrameStatus::Pass) {
+      // Input was validated before histories were prepared. A later failure
+      // may have replaced GPU buffers; do not permit reuse of old snapshots.
+      failure_ = evidence.detail;
+      return evidence;
+    }
+
+    constants.radiance[1] = evidence.samples_per_pixel;
+    if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail)) {
+      failure_ = detail;
+      return Evidence(FrameStatus::Fail, detail);
     }
     if (!RecordTemporal(target, frame.previous.has_value(), accumulate, bytes, detail)) {
       failure_ = detail;
@@ -1388,8 +1549,8 @@ public:
     // Publish only after submission, readback and timestamps all succeeded.
     temporal_history_ = std::move(next_history);
     temporal_identities_ = std::move(next_identities);
-    temporal_radiance_key_ = accumulate ? std::optional{radiance_key} : std::nullopt;
-    temporal_sample_offset_ = accumulate ? sample_offset + evidence.samples_per_pixel : 0u;
+    temporal_transport_key_ = fresh_batch ? std::optional{radiance_key} : std::nullopt;
+    temporal_sample_offset_ = fresh_batch ? sample_offset + evidence.samples_per_pixel : 0u;
     temporal_write_ = 1 - temporal_write_;
     evidence.validation_message_count = validation_.message_count;
     evidence.validation_detail = validation_.first_message.empty()
@@ -1398,17 +1559,13 @@ public:
     return evidence;
   }
 
-  bool RecordTemporal(const OffscreenTarget& target, bool previous,
-      bool accumulate, VkDeviceSize bytes, std::string& detail) {
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    if (!VulkanOk(vkBeginCommandBuffer(command_, &begin),
-            "vkBeginCommandBuffer(temporal)", detail))
-      return false;
+  void RecordTemporalSurfaces(const OffscreenTarget& target, bool accumulate,
+      VkDeviceSize bytes, VkMemoryBarrier& barrier, VkRenderPassBeginInfo& render) {
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
       vkCmdResetQueryPool(command_, temporal_timestamps_, 0, 6);
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, temporal_timestamps_, 0);
     }
-    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -1425,7 +1582,7 @@ public:
     barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
-    VkRenderPassBeginInfo render{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    render = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     render.renderPass = scene_render_pass_;
     render.framebuffer = scene_targets_.framebuffer;
     render.renderArea.extent = {target.width, target.height};
@@ -1469,6 +1626,44 @@ public:
     vkCmdEndRenderPass(command_);
     if (temporal_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 3);
+  }
+
+  bool RecordTemporal(const OffscreenTarget& target, bool previous,
+      bool accumulate, VkDeviceSize bytes, std::string& detail) {
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    if (!VulkanOk(vkBeginCommandBuffer(command_, &begin),
+            "vkBeginCommandBuffer(temporal)", detail))
+      return false;
+    VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    VkRenderPassBeginInfo render{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    if (!restir_temporal_active_)
+      RecordTemporalSurfaces(target, accumulate, bytes, barrier, render);
+    else {
+      // Reuse already ran the shared metadata before transport. Retain its
+      // timestamps and validity; only stage the fresh radiance batch here.
+      render.renderPass = scene_render_pass_;
+      render.framebuffer = scene_targets_.framebuffer;
+      render.renderArea.extent = {target.width, target.height};
+      if (accumulate) {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        VkBufferImageCopy batch{};
+        batch.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        batch.imageExtent = {target.width, target.height, 1};
+        vkCmdCopyImageToBuffer(command_, scene_targets_.color_image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, temporal_batch_.buffer, 1, &batch);
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+      }
+    }
+    const VkViewport full_viewport{0, 0, static_cast<float>(target.width), static_cast<float>(target.height), 0, 1};
+    const VkRect2D full_scissor{{0, 0}, {target.width, target.height}};
     if (accumulate) {
       barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
       barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -1586,6 +1781,9 @@ public:
                                : settings.light_sampling == LightSampling::RestirInitial
                                    ? kRestirInitialSampling : kBsdfSampling;
     constants.restir_candidates = scene_.Tlas() == VK_NULL_HANDLE ? 0 : settings.restir_candidates;
+    constants.restir_temporal = settings.restir_temporal ? 1u : 0u;
+    constants.restir_history = settings.restir_temporal && restir_history_available_ ? 1u : 0u;
+    constants.restir_max_history_candidates = settings.restir_max_history_candidates;
     constants.light_offsets = scene_.LightOffsetAddress();
     constants.lights = scene_.LightAddress();
     constants.light_count = scene_.LightCount();
@@ -2126,7 +2324,7 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[17]{};
+    VkDescriptorSetLayoutBinding bindings[19]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -2160,7 +2358,7 @@ private:
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (std::uint32_t index = 8; index < 17; ++index) {
+    for (std::uint32_t index = 8; index < 19; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = index == 8
                                            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -2168,26 +2366,19 @@ private:
       bindings[index].descriptorCount = 1;
       bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    bindings[16].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-    const VkDescriptorBindingFlags binding_flags[17] = {VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0, 0, 0,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+    for (unsigned index = 16; index < 19; ++index)
+      bindings[index].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    std::array<VkDescriptorBindingFlags, 19> binding_flags{};
+    for (unsigned index = 0; index < binding_flags.size(); ++index)
+      if (index == 0 || index == 3 || index >= 7)
+        binding_flags[index] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 17;
-    flags.pBindingFlags = binding_flags;
+    flags.bindingCount = 19;
+    flags.pBindingFlags = binding_flags.data();
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 17;
+    layout.bindingCount = 19;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -2199,7 +2390,7 @@ private:
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 6;
@@ -2243,7 +2434,7 @@ private:
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &temporal_timestamps_),
               "vkCreateQueryPool(temporal surface)", detail))
         return false;
-      query.queryCount = 2;
+      query.queryCount = 4;
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &restir_timestamps_),
               "vkCreateQueryPool(initial reservoir)", detail))
         return false;
@@ -2648,6 +2839,13 @@ private:
     // The wavefront kernels add the frame's sample before the render pass,
     // whose resolve pass writes the mean.
     recorded_wavefront_ = {};
+    if (restir_temporal_active_) {
+      VkMemoryBarrier metadata_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      VkRenderPassBeginInfo metadata_render{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+      RecordTemporalSurfaces(target, false,
+          VkDeviceSize{target.width} * target.height * sizeof(TemporalPixel),
+          metadata_barrier, metadata_render);
+    }
     if (restir)
       RecordRestir(target, render_begin);
     if (drawn && wavefront.bounces != 0) {
@@ -2718,6 +2916,17 @@ private:
           0, 1, &barrier, 0, nullptr, 0, nullptr);
       const VkBufferCopy copy{0, 0, VkDeviceSize{target.width} * target.height * sizeof(RestirPixel)};
       vkCmdCopyBuffer(command_, restir_initial_.buffer, restir_readback_.buffer, 1, &copy);
+      if (restir_temporal_active_) {
+        VkBufferCopy history_copy{0, 0,
+            VkDeviceSize{target.width} * target.height * sizeof(RestirHistoryRecord)};
+        vkCmdCopyBuffer(command_, restir_history_buffers_[temporal_write_].buffer,
+            restir_history_readback_.buffer, 1, &history_copy);
+        if (restir_history_available_) {
+          history_copy.dstOffset = history_copy.size;
+          vkCmdCopyBuffer(command_, restir_history_buffers_[1 - temporal_write_].buffer,
+              restir_history_readback_.buffer, 1, &history_copy);
+        }
+      }
       barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
       barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
       vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -2915,12 +3124,17 @@ private:
   VkPipeline temporal_accumulation_pipeline_ = VK_NULL_HANDLE;
   VkQueryPool temporal_timestamps_ = VK_NULL_HANDLE;
   VkPipeline restir_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline restir_temporal_pipeline_ = VK_NULL_HANDLE;
+  std::array<TemporalBuffer, 2> restir_history_buffers_{};
+  TemporalBuffer restir_history_readback_;
+  bool restir_history_available_ = false;
+  bool restir_temporal_active_ = false;
   VkQueryPool restir_timestamps_ = VK_NULL_HANDLE;
   TemporalBuffer restir_initial_;
   TemporalBuffer restir_readback_;
   TemporalHistory temporal_history_;
   vulkan_internal::TemporalIdentities temporal_identities_;
-  std::optional<TemporalRadianceKey> temporal_radiance_key_;
+  std::optional<TemporalTransportKey> temporal_transport_key_;
   std::uint32_t temporal_sample_offset_ = 0;
   std::shared_ptr<const LotusScene> uploaded_scene_;
   std::array<TemporalBuffer, 2> temporal_surfaces_{};

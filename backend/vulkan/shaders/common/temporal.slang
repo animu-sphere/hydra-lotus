@@ -52,6 +52,22 @@ struct TemporalValidityPixel {
 };
 [[vk::binding(12, 0)]] RWStructuredBuffer<TemporalValidityPixel> temporal_validity;
 
+// Shared correspondence for consumers with jittered primary samples. The
+// sample must belong to the centre metadata's instance/material too.
+public void TemporalInstanceIdentity(uint instance, out uint64_t instance_id,
+    out uint64_t material_id) {
+  instance_id = temporal_instances[instance].instance_id;
+  material_id = temporal_instances[instance].material_id;
+}
+
+public bool TemporalSampleHistory(uint index, uint64_t instance_id,
+    uint64_t material_id, out uint previous_index) {
+  previous_index = temporal_validity[index].previous_index;
+  return temporal_validity[index].valid != 0 &&
+      temporal_surface[index].instance_id == instance_id &&
+      temporal_surface[index].material_id == material_id;
+}
+
 struct TemporalRadiancePixel {
   float4 color;
   uint sample_count;

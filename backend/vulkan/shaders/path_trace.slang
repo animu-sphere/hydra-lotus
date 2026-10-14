@@ -128,14 +128,17 @@ FragmentOutput RadiancePass(VertexOutput input) {
 
 [shader("fragment")]
 FragmentOutput fragment_main(VertexOutput input) {
-  if (kPass == 7) {
+  if (kPass == 7 || kPass == 8) {
     const uint2 pixel = uint2(input.position.xy);
     if (path_constants.add_sample != 0) {
       PathState path = StartPath(pixel);
       const uint4 rect = path_constants.data_rect;
       const bool active = path_constants.restir_candidates != 0 &&
           all(pixel >= rect.xy) && all(pixel < rect.xy + rect.zw);
-      WriteInitialReservoir(pixel, path.ray, path.rngState, active);
+      if (kPass == 7)
+        WriteInitialReservoir(pixel, path.ray, path.rngState, active);
+      else
+        WriteTemporalReservoir(pixel, path.ray, path.rngState, active);
     }
     FragmentOutput output;
     output.color = float4(0.0);

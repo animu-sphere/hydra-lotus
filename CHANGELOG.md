@@ -9,6 +9,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- GitHub CI and Apache-2.0 license badges in the root README.
+- Opt-in GPU temporal direct-light reservoir reuse under both integrators,
+  using shared reprojection, receiving-surface reevaluation, support-corrected
+  normalization and capped history counts. Separate immutable source/destination
+  storage retains resolved weights and exact source shading; debug products,
+  GPU timing, memory accounting, conservative light-domain resets and failed-frame
+  publication checks accompany it. CPU/GPU and moving NEE/MIS comparisons run
+  in `lotus-renderer-restir-gpu`
+  ([contract](docs/reference/RESTIR.md#temporal-gpu-reuse),
+  [evidence](docs/reports/2026-10-13-restir-temporal.md)).
 - CPU differing-target reservoir combination with receiving-surface
   reevaluation, bounded represented counts and support-aware normalization.
   Exhaustive discrete RGB/visibility checks cover differing supports and

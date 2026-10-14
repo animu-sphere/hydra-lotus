@@ -3,7 +3,7 @@
 `backend/vulkan/reservoir.hpp` and `reservoir.cpp` implement an internal CPU
 reference in `Lotus::vulkan_internal`, built by `Lotus::Vulkan` even with
 Vulkan disabled. The header is not installed. GPU float arithmetic and
-initial-only direct lighting are in `shaders/sampling/reservoir.slang` and
+initial and temporal direct lighting are in `shaders/sampling/reservoir.slang` and
 `shaders/common/restir.slang`. The [roadmap](../roadmap/README.md#status-at-a-glance)
 owns delivery status; the [phase policy](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 owns the intended transport scope.
@@ -168,7 +168,7 @@ probability. Zero-target/back-facing draws count toward M. Visibility is
 applied only after selection, including fractional opacity transmittance.
 Sphere candidates use fixed area points, avoiding a receiver-dependent cone
 payload. These mappings can be reevaluated at another receiver, but no
-cross-surface normalization or reuse is implemented.
+cross-surface normalization or reuse occurs in initial-only mode.
 
 Candidate RNG uses `SeedRandom(pixel, sample_index ^ 0xD1B54A35)` and five
 variates per draw (alias selection, payload, replacement). Primary coverage
@@ -233,7 +233,96 @@ overflow failure under both integrators
 ([GPU evidence](../reports/2026-10-13-restir-initial.md)).
 Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 
-GPU temporal/spatial reuse, support-aware combination, persistent light/sample
-identity, candidate strategy evaluation and Hydra reservoir settings/AOVs
+Spatial reuse, candidate strategy evaluation and Hydra reservoir settings/AOVs
 remain outside this implementation. Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.
+
+## Temporal GPU reuse
+
+Set `PathTracingSettings::restir_temporal = true` with `RestirInitial` and call
+`RenderTemporalScene` with `frame_count = 1`. Each successful call traces one
+fresh sample, advancing the RNG independently of retained reservoir count.
+`restir_max_history_candidates` defaults to 32 and accepts 1–65536. The current
+initial stream contributes its full count; the previous stream contributes
+`min(previous.M, cap)` to both merge weight and represented count. The total
+therefore stays at most `restir_candidates + cap`. Ordinary `RenderScene`
+Radiance calls reject reuse requests. Radiance accumulation is independently selectable;
+switching it on/off resets compatibility to avoid reading uninitialized
+radiance history.
+
+The shared primary metadata and validity passes run before reservoir generation
+and transport. The receiving sample must match its pixel-centre metadata's
+instance/material; the reprojected jittered source must have the same identity.
+Misses, disocclusion, excessive motion and shared depth/normal/material/instance
+rejections fall back to the fresh initial estimator. No reservoir state or
+policy enters the shared temporal infrastructure.
+
+A separate fullscreen reuse pass reads immutable preceding history and writes
+separate current storage. It retains each exact jittered surface's world
+origin, geometric/shading normals, outgoing direction and evaluated BSDF.
+The selected old light slot/UV is reevaluated at the current surface. After
+selection, the final sample is evaluated at the old surface too; its capped
+count enters the denominator only when that old target is positive, including
+when the old observed stream was all-zero. The current stream always covers
+the selected receiving target. This implements the CPU oracle's count-weighted
+support correction using GPU floats. The resolved normalization is stored
+separately and carried into later merges. Visibility is queried again at the
+current receiver and never substituted for unshadowed support evaluation.
+
+### Compatibility and publication
+
+Camera and nonemissive rigid-placement motion retain compatible history.
+Geometry, visibility, bindings, materials, textures, constant/environment-map
+lighting and analytic light edits reset it as `SceneChanged`. For now, **any
+scene edit with table-backed emissive triangles** resets reservoir history
+conservatively, including a nonemissive placement edit in that scene. Camera-only
+motion still reuses it. This keeps the light-slot/UV domain and reconstruction
+mapping fixed for every accepted history source: slots are generation-local,
+not persistent light IDs. No light-edit remapping is attempted.
+
+Integrator, estimator, candidate count/cap, base RNG index, bounce/sample limits,
+radiance mode/history cap and background changes reset as
+`RenderSettingsChanged`. Frame gaps, target/window changes, explicit history
+keys, camera cuts and successful ordinary renders retain the shared reset
+policy. Same-count instancer reordering still requires a caller cut/key change.
+Only successful submission, readback and timestamp collection publish the
+current histories and rotate buffers. Invalid requests publish nothing and
+do not consume a frame; GPU arithmetic failure latches renderer failure and
+publishes no reservoir or temporal products.
+
+### Products and costs
+
+`restir.initial` remains the fresh 48-byte candidate product. `restir.temporal`
+and, when available, `restir.previous` carry 64-byte `RestirReusePixel` records:
+the resolved `RestirPixel`, explicit `normalization`, `supporting_candidates`,
+`previous_index` (UINT32_MAX for no participating history) and selected sample
+`age` (bounded at 65536). They use the same tightly packed top-left ordering;
+`temporal_row_pitch` is `width * sizeof(RestirReusePixel)`. `history_available`
+means a compatible preceding frame exists, not that every pixel accepted it.
+
+Private GPU history records are 192 bytes including source shading data.
+Two device buffers and a two-frame readback mirror add 768 bytes/pixel; with
+initial storage/mirror, fresh capacity totals 864 bytes/pixel. Allocated
+capacity remains retained across smaller targets and mode switches and is
+included in `reservoir_bytes`. Shared temporal buffers are reported separately.
+Storage-range limits reject before dispatch. `temporal_gpu_ms` times only the
+reuse pass (primary trace, reevaluation, support and selected visibility),
+excluding readback. Shared metadata runs once per frame; its own timestamps
+remain in `temporal`. These pretransport passes are included in the scene
+duration; do not add them to that total.
+
+### Validation and limits
+
+`lotus-renderer-restir-gpu` checks repeated GPU/CPU merges and corrected weights,
+zero observed streams, caps, complementary support, camera/rigid motion,
+disocclusion and current shadows against NEE/MIS under both integrators. It
+checks resets, rejected requests and GPU merge overflow without history
+publication ([measurement](../reports/2026-10-13-restir-temporal.md)). Existing
+initial lighting, multibounce and temporal-radiance regressions remain active.
+
+These bounded fixtures do not establish unbiased arbitrary moving-history
+selection, many-light speedup or production temporal stability. Correlated
+recursive samples add no independent draws; nearest-pixel reprojection and
+geometric rejection can affect history selection. Visibility is always current,
+but indirect radiance reuse keeps its separate limitations. Spatial reuse,
+general light-domain remapping and Hydra reservoir controls remain later work.
