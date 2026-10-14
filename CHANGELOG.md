@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- ReSTIR benchmark seed selection, per-sequence convergence/time populations
+  and a repeated-report quality-budget reducer with explicit unattained
+  budgets and paired NEE/MIS comparisons
+  ([contract](docs/reference/RESTIR.md#repeated-quality-budgets),
+  [evidence](docs/reports/2026-10-15-restir-budgets.md)).
 - Core ReSTIR candidate proposals for power, uniform and equal-mixture light
   selection, with marginal-density weights and history resets; headless
   `--restir-proposal` comparisons and independent GPU arithmetic/lighting

@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-15-restir-budgets.md](2026-10-15-restir-budgets.md) | Independent repeated static quality budgets under both integrators, per-sequence convergence/time populations, moving local errors and remaining reuse cost/correlation. |
 | [2026-10-15-restir-proposals.md](2026-10-15-restir-proposals.md) | Power, uniform and equal-mixture candidate proposals: CPU/GPU weights, mixed-light integrals, history resets and matched many-light comparisons; [summary data](2026-10-15-restir-proposals.json). |
 | [2026-10-14-restir-comparison.md](2026-10-14-restir-comparison.md) | Reproducible headless static/moving many-light comparisons: candidate counts, independent references, convergence/correlation, timing, memory and finite-sample local errors under both integrators; [summary data](2026-10-14-restir-comparison.json). |
 | [2026-10-14-restir-hydra.md](2026-10-14-restir-hydra.md) | Hydra reservoir settings and final diagnostic AOVs, moving USD stages, installed usdview mode/cut sequences and deterministic progressive restoration under both integrators. |

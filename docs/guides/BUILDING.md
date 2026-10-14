@@ -96,6 +96,25 @@ same and using distinct output paths. Omitting this option keeps `power-alias`.
 The [proposal measurements](../reports/2026-10-15-restir-proposals.md) record
 the three-way comparison under both integrators.
 
+For repeated quality budgets, use distinct measured seeds and output paths,
+keeping all other settings and the build label identical:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-budgets-reference-0.json --benchmark-label "7f0f6ab + repeated quality budgets; core Release; 2026-10-15" --benchmark-integrator reference --benchmark-size 64 --benchmark-frames 64 --benchmark-warmup 4 --restir-sequences 4 --restir-lights 256 --restir-reference-samples 256 --restir-candidates 1,8 --restir-history-cap 32 --restir-seed 17
+```
+
+Repeat with seeds `262165` and `524313`, using output suffixes `-1.json` and
+`-2.json`. Then reduce the three reports:
+
+```sh
+python scripts/restir_budget.py build/restir-budgets-reference-0.json build/restir-budgets-reference-1.json build/restir-budgets-reference-2.json --rmse 0.5 0.35 0.25 --output build/restir-budgets-reference-summary.json
+```
+
+The [budget contract](../reference/RESTIR.md#repeated-quality-budgets) owns
+attainment, missing results and paired timing semantics. Substitute your build
+identity in the shared label. Measure each integrator/proposal/settings group
+separately, without overlapping GPU tests or benchmarks.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

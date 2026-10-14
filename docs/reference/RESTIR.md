@@ -292,6 +292,7 @@ Defaults and accepted CLI ranges:
 | `--benchmark-frames` | 32 | 2–256 |
 | `--benchmark-warmup` | 4 | 0–64 |
 | `--restir-sequences` | 4 | 2–64 independent sequences |
+| `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
@@ -302,7 +303,10 @@ Defaults and accepted CLI ranges:
 Each measured case owns a fresh renderer, so retained reservoir capacity from
 other modes cannot contaminate its memory measurement. Warmup has a separate
 RNG range and no measured history is inherited. Each sequence starts at
-`17 + sequence * 65537`; its frame `f` uses the next sample index. Reuse modes
+`seed + sequence * 65537`; its frame `f` uses the next sample index. Measured
+indices must be below `2^23`, where the warmup range begins; overlapping
+settings reject before writing outputs. Reference indices begin at `2^24`.
+Reuse modes
 carry a fixed base index through `RenderTemporalScene`, with a cut at sequence
 start; fresh NEE/MIS and initial-only frames use `RenderScene` with explicit
 indices. Successful calls must expose one fresh sample, zero validation
@@ -320,7 +324,11 @@ update/render wall time, and frame-difference RMS after subtracting the matched
 reference's motion. Differences exclude sequence boundaries. Static cases
 record power-of-two/final prefix convergence: RMS over independent sequences
 of each CPU-averaged prefix's error to the integral, with its mean cumulative
-GPU time. Moving cases have no static convergence curve. Both modes retain
+GPU time. Each checkpoint also retains `rmse_raw` and
+`cumulative_gpu_ms_raw`, one entry per independent sequence (GPU populations
+are null without timestamps). The RMS of the raw errors equals the aggregate
+RMS, while the arithmetic mean of the raw times equals cumulative GPU time.
+Moving cases have no static convergence curve. Both modes retain
 the final fresh image and an ensemble image: all samples/sequences for static,
 only the final pose across sequences for moving. Ensemble RMS, signed channel
 mean error and maximum absolute 8x8 tile mean error help inspect bias/artifacts,
@@ -347,6 +355,39 @@ workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The Vulkan-only
 `lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. Measured
 evidence belongs in [reports](../reports/README.md).
+
+### Repeated quality budgets
+
+`scripts/restir_budget.py` consumes at least two successful comparison reports
+with identical build, device, procedure and workloads, except for the measured
+seed. Measured sample intervals must be disjoint both within and between
+reports. Run it separately for each integrator/proposal/settings group.
+For four sequences, spacing invocation seeds by `4 * 65537` gives disjoint
+ranges. Keep the label identical and use distinct report/image paths.
+
+The `--rmse` argument accepts one or more positive static RMS thresholds;
+`--output` selects a `lotus-restir-budget-v1` JSON report. Each budget uses the
+first observed checkpoint at or below the threshold that remains below at
+all subsequent measured checkpoints. It performs no interpolation, and makes
+no assertion between checkpoints or after the measured horizon. This avoids
+using an early crossing followed by a measured regression as attainment.
+
+The reducer retains each invocation's attained sample count and cumulative
+scene GPU time, with null for unattained budgets or unavailable timestamps.
+Paired speedup is the same invocation's NEE/MIS time divided by the case time
+at the same threshold. Summary populations (mean, median, min, max) are emitted
+only when every invocation supplies a value; partial attainment remains visible
+without a successful-subset average. Thresholds are applied to each invocation's
+RMS over independent sequences, not to an ensemble formed by pooling runs.
+Raw checkpoint population/aggregate consistency is checked before reduction.
+
+Moving scenes retain across-invocation fresh/residual-delta RMS, final-pose
+ensemble and tile error summaries and signed channel means, with no static
+quality budget. Repeated references use the same independent NEE/MIS ranges;
+these shared noisy references do not provide new independent bias evidence.
+Dynamic clocks, validation overhead, checkpoint spacing, finite sampling and
+recursive temporal correlation still constrain interpretation. This tool
+measures budgets; it does not declare renderer exit or release readiness.
 
 ## Temporal GPU reuse
 

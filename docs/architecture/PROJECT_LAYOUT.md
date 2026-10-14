@@ -112,6 +112,12 @@ regression. Proposal selection and marginal densities live in
 `shaders/common/scene.slang`; the plain-C++ `RestirProposal` selector stays in
 `PathTracingSettings`. No new library target is introduced.
 
+`scripts/restir_budget.py` reduces repeated headless comparison reports into
+observed static quality budgets and moving error summaries. It uses Python's
+standard library and introduces no installed target or renderer dependency.
+`scripts/test_restir_budget.py` checks independent reducer fixtures, including
+overlapping seeds, missing budgets/timestamps and temporal recrossings.
+
 ## 3. Where new code goes
 
 The design policy's components map onto this layout as follows. A row is a
