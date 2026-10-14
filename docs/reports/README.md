@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-14-restir-hydra.md](2026-10-14-restir-hydra.md) | Hydra reservoir settings and final diagnostic AOVs, moving USD stages, installed usdview mode/cut sequences and deterministic progressive restoration under both integrators. |
 | [2026-10-14-restir-spatial.md](2026-10-14-restir-spatial.md) | GPU spatial reservoirs: immutable current inputs, CPU/GPU corrected arithmetic, differing support, surface boundaries, current visibility, history/lifecycle/overflow checks and four-mode moving many-light error, correlation, timing and memory measurements. |
 | [2026-10-13-restir-temporal.md](2026-10-13-restir-temporal.md) | GPU temporal reservoirs: CPU/GPU recursive arithmetic, bounded counts, differing support, shared reprojection, current visibility/disocclusion, NEE/MIS comparisons, resets and failed-merge publication under both integrators. |
 | [2026-10-13-restir-reuse-arithmetic.md](2026-10-13-restir-reuse-arithmetic.md) | CPU differing-target reservoir arithmetic: support-aware discrete RGB/visibility integrals, capped unequal streams, zero observed streams, corrected source weights and transactional numerical rejection. |

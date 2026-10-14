@@ -30,9 +30,10 @@ and four-mode moving many-light comparisons are recorded in its
 Implement the remaining work in this order:
 
 - [ ] **LOTUS-RESTIR-05 — Hydra controls and exit evidence.**
-  Expose estimator/reuse controls and reservoir diagnostics through Hydra,
-  retaining deterministic progressive NEE/MIS selection. Validate installed
-  moving USD-stage/usdview sequences under both integrators. Measure many-light
+  Hydra controls/diagnostics and moving USD-stage/installed usdview sequences
+  under both integrators are recorded in the
+  [adapter evidence](../reports/2026-10-14-restir-hydra.md), including
+  deterministic progressive NEE/MIS restoration. Remaining: measure many-light
   convergence, GPU time, temporal stability, memory and bias/artifacts against
   the NEE/MIS baseline; evaluate candidate strategies and record the scope
   review and release gate.

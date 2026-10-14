@@ -140,8 +140,9 @@ unbiased moving-frame history selection.
 Set `PathTracingSettings::light_sampling = LightSampling::RestirInitial` for
 opt-in primary-surface direct lighting under either integrator.
 `restir_candidates` defaults to 8 and accepts 1–64. `Mis` remains the default.
-The headless benchmark CLI and Hydra controls still expose `Mis` and `Bsdf`
-only. Later bounces retain NEE/MIS.
+The headless benchmark CLI exposes `Mis` and `Bsdf` only; the
+[Hydra controls](#hydra-controls-and-diagnostics) also expose reservoirs.
+Later bounces retain NEE/MIS.
 
 A separate fullscreen pass traces the same jittered camera ray and primary
 opacity realization as transport. It streams candidates, reconstructs the
@@ -233,8 +234,8 @@ overflow failure under both integrators
 ([GPU evidence](../reports/2026-10-13-restir-initial.md)).
 Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 
-Candidate strategy evaluation and Hydra reservoir settings/AOVs
-remain outside this implementation. Initial-only correctness checks establish
+Candidate strategy evaluation remains outside this implementation.
+Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.
 
 ## Temporal GPU reuse
@@ -325,7 +326,7 @@ selection, many-light speedup or production temporal stability. Correlated
 recursive samples add no independent draws; nearest-pixel reprojection and
 geometric rejection can affect history selection. Visibility is always current,
 but indirect radiance reuse keeps its separate limitations. General light-domain
-remapping and Hydra reservoir controls remain later work.
+remapping remains later work.
 
 ## Spatial GPU reuse
 
@@ -402,4 +403,47 @@ The stencil, geometry thresholds and candidate strategy are deliberately fixed
 for this first pass. These bounded comparisons establish no general many-light
 speedup or production artifact/stability guarantee. Reservoir correlations,
 nearest-pixel temporal selection and geometric rejection retain the limits
-above; Hydra controls and broader phase-exit evaluation remain later work.
+above; broader phase-exit evaluation remains later work.
+
+## Hydra controls and diagnostics
+
+`hdLotus` exposes primary direct-light reservoirs under either integrator:
+
+| Setting | Type/default | Behavior |
+| --- | --- | --- |
+| `lotus:restir` | bool, false | Select `RestirInitial`, overriding `lotus:lightSampling`; disabling restores that flag's NEE/MIS or BSDF selection |
+| `lotus:restirCandidates` | int, 8 | Fresh initial draws, clamped to [1, 64] |
+| `lotus:restirTemporal` | bool, false | Reuse compatible preceding reservoirs while `lotus:restir` is enabled |
+| `lotus:restirSpatial` | bool, false | One immutable spatial pass while `lotus:restir` is enabled |
+| `lotus:restirHistoryCandidates` | int, 32 | Temporal/neighbour source cap, clamped to [1, 65536] |
+| `lotus:restirSpatialRadius` | int, 1 | Four-axis pixel radius, clamped to [1, 32] |
+
+The three bool settings are checkable usdview menu items. Reuse selects
+`RenderTemporalScene`, one fresh sample per pass, and keeps colour/the render
+pass unconverged. It requires ray queries and colour clears. Initial-only
+reservoirs remain deterministic progressive transport, converging at
+`convergedSamplesPerPixel`. Reuse flags are inactive with `lotus:restir` off.
+`lotus:temporal` independently enables bounded radiance accumulation; turning
+it off while reservoir reuse is active still produces fresh colour batches.
+The shared `lotus:historyKey`, `lotus:historyReset` and single-view reset policy
+retain their [temporal meanings](TEMPORAL.md#hydra-controls-and-debug-aovs).
+
+The [reservoir AOVs](AOVS.md#reservoir-hydra-channels) expose the final spatial,
+otherwise temporal, otherwise initial record. Binding them does not select
+an estimator or enable reuse. They finish after one pass. In progressive
+mode the delegate retains the last fresh diagnostic records so newly bound
+buffers can read them after convergence, when the backend publishes no new
+reservoirs. This CPU cache adds 48 bytes/pixel for initial-only records or
+64 for resolved records, outside backend `reservoir_bytes`; intermediate
+and preceding histories are not cached for these AOVs. Disabling reservoirs
+writes empty sentinels/zero diagnostics, including with empty AOV clears.
+
+`LOTUS_HYDRA_EVIDENCE` reports estimator, reservoir availability, requested
+candidate count, effective reuse flags, compatible history and allocated
+backend reservoir bytes. `lotus-renderer-hydra-restir-contract` checks defaults,
+synthetic final-stage priority, row layout and invalid writes without a GPU.
+`lotus-renderer-hydra-restir-gpu` checks moving USD stages, controls, resets,
+diagnostics and deterministic NEE/MIS restoration under both integrators.
+Installed usdview also exercises all four reservoir modes and moving/cut
+sequences ([measurement](../reports/2026-10-14-restir-hydra.md)). These
+adapter checks do not establish many-light speedup or phase-exit quality.

@@ -87,6 +87,11 @@ CPU oracle and independent lighting integrals; without Vulkan it explains a
 SKIP, with a Vulkan-only missing-driver regression. The
 [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
 
+The same Hydra runtime translates reservoir settings and final diagnostic
+AOVs. The uninstalled `lotus-hydra2-restir-test` exercises synthetic contracts
+and moving UsdImaging stages; GPU mode explains unavailable capabilities.
+The existing installed usdview host test also exercises these controls.
+
 The Vulkan-only `lotus-acceleration-compaction-test` is an uninstalled
 size/copy experiment, separate from production scene storage. Its
 `lotus-renderer-acceleration-compaction-no-driver` CTest checks an explained

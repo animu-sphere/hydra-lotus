@@ -1331,6 +1331,9 @@ sphere, rect, disk and distant lights and a textured dome's image are
 what the light table samples; an untextured dome is left to BSDF
 sampling.
 
+The opt-in [Hydra reservoir setting](RESTIR.md#hydra-controls-and-diagnostics)
+overrides this flag while enabled; disabling it restores the flag's selection.
+
 CTest `lotus-renderer-hydra-light-sampling` (GPU-gated) converges a
 UsdImaging stage lit by an emissive panel at 16 spp under each estimator
 and checks the flag's descriptor, the panel's two light-table triangles,
