@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in spatial direct-light reservoir reuse under both integrators, with
+  immutable input/destination storage, surface rejection, support-corrected
+  weights, current visibility, capped neighbour counts and final history
+  retention. Reservoir/source diagnostics, separate GPU timing, memory
+  accounting and CPU/GPU, boundary, lifecycle, correlation and moving-camera
+  comparisons accompany it ([contract](docs/reference/RESTIR.md#spatial-gpu-reuse),
+  [evidence](docs/reports/2026-10-14-restir-spatial.md)).
 - GitHub CI and Apache-2.0 license badges in the root README.
 - Opt-in GPU temporal direct-light reservoir reuse under both integrators,
   using shared reprojection, receiving-surface reevaluation, support-corrected

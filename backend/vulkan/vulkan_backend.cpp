@@ -148,9 +148,10 @@ struct PathConstants {
   std::uint32_t restir_temporal;
   std::uint32_t restir_history;
   std::uint32_t restir_max_history_candidates;
-  std::uint32_t restir_reserved;
+  std::uint32_t restir_spatial;
+  std::uint32_t restir_spatial_radius;
 };
-static_assert(sizeof(PathConstants) == 176 &&
+static_assert(sizeof(PathConstants) == 184 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
               offsetof(PathConstants, environment_map) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
@@ -174,6 +175,7 @@ constexpr std::uint32_t kTemporalValidityPass = 5;
 constexpr std::uint32_t kTemporalAccumulationPass = 6;
 constexpr std::uint32_t kRestirInitialPass = 7;
 constexpr std::uint32_t kRestirTemporalPass = 8;
+constexpr std::uint32_t kRestirSpatialPass = 9;
 
 // Rigid placements and cameras may move; edits that can alter illumination
 // anywhere reset radiance globally, including indirect/emissive changes.
@@ -204,6 +206,8 @@ struct TemporalTransportKey {
   std::uint32_t restir_candidates;
   bool restir_temporal;
   std::uint32_t restir_max_history_candidates;
+  bool restir_spatial;
+  std::uint32_t restir_spatial_radius;
   bool accumulate_radiance;
   std::uint32_t sample_index;
   std::uint32_t max_bounces;
@@ -611,6 +615,10 @@ public:
       for (auto& buffer : restir_history_buffers_)
         DestroyTemporalBuffer(buffer);
       DestroyTemporalBuffer(restir_history_readback_);
+      DestroyTemporalBuffer(restir_spatial_input_);
+      DestroyTemporalBuffer(restir_spatial_input_readback_);
+      DestroyTemporalBuffer(restir_spatial_sources_);
+      DestroyTemporalBuffer(restir_spatial_sources_readback_);
       scene_.Destroy();
       vkDestroyFence(device_, fence_, nullptr);
       vkDestroyPipeline(device_, pipeline_, nullptr);
@@ -625,6 +633,7 @@ public:
       vkDestroyPipeline(device_, temporal_accumulation_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_temporal_pipeline_, nullptr);
+      vkDestroyPipeline(device_, restir_spatial_pipeline_, nullptr);
       vkDestroyQueryPool(device_, restir_timestamps_, nullptr);
       vkDestroyQueryPool(device_, temporal_timestamps_, nullptr);
       for (VkPipeline pipeline : wavefront_pipelines_)
@@ -714,7 +723,10 @@ public:
               restir_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRestirTemporalPass, false, false},
-              restir_temporal_pipeline_, detail))
+              restir_temporal_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kRestirSpatialPass, false, false},
+              restir_spatial_pipeline_, detail))
         return false;
       if (!ray_shaders.wavefront.empty()) {
         std::vector<std::uint32_t> compute_words;
@@ -770,6 +782,12 @@ public:
               frame_count != 1 || settings.restir_max_history_candidates == 0 ||
               settings.restir_max_history_candidates > 65536))
         return Reject("temporal reservoirs require RenderTemporalScene, RestirInitial, one sample and history candidates in [1, 65536]");
+      if (settings.restir_spatial &&
+          (settings.light_sampling != LightSampling::RestirInitial || !(temporal_call || rendering_temporal_) ||
+              frame_count != 1 || settings.restir_max_history_candidates == 0 ||
+              settings.restir_max_history_candidates > 65536 ||
+              settings.restir_spatial_radius == 0 || settings.restir_spatial_radius > 32))
+        return Reject("spatial reservoirs require RenderTemporalScene, RestirInitial, one sample, history candidates in [1, 65536] and radius in [1, 32]");
       break;
     case SceneOutput::Barycentrics:
       pass = FramePass::Barycentrics;
@@ -906,7 +924,8 @@ public:
     }
     const bool restir = pass == FramePass::Radiance &&
                         settings.light_sampling == LightSampling::RestirInitial;
-    restir_temporal_active_ = restir && settings.restir_temporal;
+    restir_spatial_active_ = restir && settings.restir_spatial;
+    restir_temporal_active_ = restir && (settings.restir_temporal || settings.restir_spatial);
     if (restir && !EnsureRestir(target, detail))
       return Evidence(FrameStatus::Fail, detail);
     if (trace) {
@@ -1145,11 +1164,23 @@ public:
     if (!EnsureTemporalBuffer(restir_history_readback_, bytes * 2,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail))
       return false;
-    const VkDescriptorBufferInfo buffers[2] = {
+    const VkDeviceSize source_bytes = VkDeviceSize{target.width} * target.height * 16;
+    if (restir_spatial_active_ &&
+        (!EnsureTemporalBuffer(restir_spatial_input_, bytes, usage, false, detail) ||
+            !EnsureTemporalBuffer(restir_spatial_input_readback_, bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+            !EnsureTemporalBuffer(restir_spatial_sources_, source_bytes, usage, false, detail) ||
+            !EnsureTemporalBuffer(restir_spatial_sources_readback_, source_bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)))
+      return false;
+    const VkDescriptorBufferInfo buffers[4] = {
+        {restir_spatial_active_ ? restir_spatial_input_.buffer : restir_history_buffers_[temporal_write_].buffer, 0, bytes},
+        {restir_history_buffers_[1 - temporal_write_].buffer, 0, bytes},
         {restir_history_buffers_[temporal_write_].buffer, 0, bytes},
-        {restir_history_buffers_[1 - temporal_write_].buffer, 0, bytes}};
-    VkWriteDescriptorSet writes[2]{};
-    for (unsigned i = 0; i < 2; ++i) {
+        {restir_spatial_sources_.buffer, 0, source_bytes}};
+    VkWriteDescriptorSet writes[4]{};
+    const unsigned count = restir_spatial_active_ ? 4u : 2u;
+    for (unsigned i = 0; i < count; ++i) {
       writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
       writes[i].dstSet = ray_descriptor_;
       writes[i].dstBinding = 17 + i;
@@ -1157,7 +1188,7 @@ public:
       writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       writes[i].pBufferInfo = &buffers[i];
     }
-    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device_, count, writes, 0, nullptr);
     return true;
   }
 
@@ -1171,7 +1202,7 @@ public:
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     if (restir_timestamps_ != VK_NULL_HANDLE) {
-      vkCmdResetQueryPool(command_, restir_timestamps_, 0, 4);
+      vkCmdResetQueryPool(command_, restir_timestamps_, 0, 6);
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, restir_timestamps_, 0);
     }
     vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
@@ -1210,6 +1241,24 @@ public:
           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
           0, 1, &barrier, 0, nullptr, 0, nullptr);
     }
+    if (restir_spatial_active_) {
+      if (restir_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, restir_timestamps_, 4);
+      vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
+      vkCmdSetViewport(command_, 0, 1, &viewport);
+      vkCmdSetScissor(command_, 0, 1, &scissor);
+      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, restir_spatial_pipeline_);
+      vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+          ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+      vkCmdPushConstants(command_, ray_layout_, kRayStages, 0, sizeof(RayConstants), &ray_constants_);
+      vkCmdDraw(command_, 3, 1, 0, 0);
+      vkCmdEndRenderPass(command_);
+      if (restir_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, restir_timestamps_, 5);
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          0, 1, &barrier, 0, nullptr, 0, nullptr);
+    }
   }
 
   bool ReadRestir(const OffscreenTarget& target, RestirProducts& products,
@@ -1240,11 +1289,32 @@ public:
       if (restir_history_available_)
         products.previous.resize(products.initial.size());
       const auto* records = static_cast<const RestirHistoryRecord*>(restir_history_readback_.mapped);
+      const auto* temporal_records = records;
+      if (restir_spatial_active_) {
+        if (!InvalidateIfNeeded(device_, restir_spatial_input_readback_.memory,
+                restir_spatial_input_readback_.coherent, detail) ||
+            !InvalidateIfNeeded(device_, restir_spatial_sources_readback_.memory,
+                restir_spatial_sources_readback_.coherent, detail))
+          return false;
+        temporal_records = static_cast<const RestirHistoryRecord*>(restir_spatial_input_readback_.mapped);
+        products.spatial_row_pitch = products.temporal_row_pitch;
+        products.spatial.resize(products.initial.size());
+        products.spatial_sources.resize(products.initial.size());
+        std::memcpy(products.spatial_sources.data(), restir_spatial_sources_readback_.mapped,
+            products.spatial_sources.size() * sizeof(products.spatial_sources[0]));
+      }
       for (std::size_t i = 0; i < products.initial.size(); ++i) {
-        products.temporal[i] = records[i].resolved;
+        products.temporal[i] = temporal_records[i].resolved;
         if ((products.temporal[i].reservoir.flags & 2) != 0) {
           detail = "temporal reservoir arithmetic is invalid or exceeds GPU float storage";
           return false;
+        }
+        if (restir_spatial_active_) {
+          products.spatial[i] = records[i].resolved;
+          if ((products.spatial[i].reservoir.flags & 2) != 0) {
+            detail = "spatial reservoir arithmetic is invalid or exceeds GPU float storage";
+            return false;
+          }
         }
         if (restir_history_available_)
           products.previous[i] = records[products.initial.size() + i].resolved;
@@ -1253,9 +1323,11 @@ public:
     for (const auto& buffer : restir_history_buffers_)
       products.reservoir_bytes += buffer.bytes;
     products.reservoir_bytes += restir_history_readback_.bytes;
+    products.reservoir_bytes += restir_spatial_input_.bytes + restir_spatial_input_readback_.bytes +
+        restir_spatial_sources_.bytes + restir_spatial_sources_readback_.bytes;
     if (restir_timestamps_ != VK_NULL_HANDLE) {
-      std::uint64_t ticks[4]{};
-      const unsigned queries = restir_temporal_active_ ? 4u : 2u;
+      std::uint64_t ticks[6]{};
+      const unsigned queries = restir_spatial_active_ ? 6u : restir_temporal_active_ ? 4u : 2u;
       if (!VulkanOk(vkGetQueryPoolResults(device_, restir_timestamps_, 0, queries,
               sizeof(ticks), ticks, sizeof(std::uint64_t),
               VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
@@ -1268,6 +1340,9 @@ public:
           device_properties_.limits.timestampPeriod / 1'000'000.0;
       if (restir_temporal_active_)
         products.temporal_gpu_ms = static_cast<double>((ticks[3] - ticks[2]) & mask) *
+            device_properties_.limits.timestampPeriod / 1'000'000.0;
+      if (restir_spatial_active_)
+        products.spatial_gpu_ms = static_cast<double>((ticks[5] - ticks[4]) & mask) *
             device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     products.available = true;
@@ -1296,8 +1371,9 @@ public:
       return Evidence(FrameStatus::Fail, "ray-query camera is singular or non-finite");
     const bool accumulate = requested.accumulate_radiance;
     const bool reuse = settings.restir_temporal;
-    const bool fresh_batch = accumulate || reuse;
-    if (reuse && (frame_count != 1 || settings.output != SceneOutput::Radiance ||
+    const bool reservoirs = reuse || settings.restir_spatial;
+    const bool fresh_batch = accumulate || reservoirs;
+    if (reservoirs && (frame_count != 1 || settings.output != SceneOutput::Radiance ||
                      settings.light_sampling != LightSampling::RestirInitial ||
                      settings.restir_candidates == 0 || settings.restir_candidates > 64 ||
                      settings.restir_max_history_candidates == 0 ||
@@ -1323,6 +1399,7 @@ public:
     }
     const TemporalTransportKey radiance_key{settings.integrator, settings.light_sampling,
         settings.restir_candidates, settings.restir_temporal, settings.restir_max_history_candidates,
+        settings.restir_spatial, settings.restir_spatial_radius,
         accumulate, settings.sample_index, settings.max_bounces, settings.max_samples,
         requested.max_history_samples, target.clear_color};
     if (fresh_batch && frame.previous) {
@@ -1342,7 +1419,8 @@ public:
       return Evidence(FrameStatus::Fail, "temporal instance order/scene mismatch");
     const auto max_range = device_properties_.limits.maxStorageBufferRange;
     if (std::uint64_t{target.width} * target.height > max_range / sizeof(TemporalPixel) ||
-        instances.size() > max_range / sizeof(vulkan_internal::TemporalInstanceRecord))
+        instances.size() > max_range / sizeof(vulkan_internal::TemporalInstanceRecord) ||
+        (reservoirs && std::uint64_t{target.width} * target.height > max_range / sizeof(RestirHistoryRecord)))
       return Evidence(FrameStatus::Fail, "temporal metadata exceeds the device's storage buffer range");
     auto batch_settings = settings;
     const auto sample_offset = frame.previous ? temporal_sample_offset_ : 0u;
@@ -1448,7 +1526,8 @@ public:
       vkUpdateDescriptorSets(device_, 3, radiance_writes, 0, nullptr);
     }
     restir_history_available_ = reuse && frame.previous.has_value();
-    if (reuse && !EnsureRestirHistory(target, detail)) {
+    restir_spatial_active_ = settings.restir_spatial;
+    if (reservoirs && !EnsureRestirHistory(target, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1781,9 +1860,11 @@ public:
                                : settings.light_sampling == LightSampling::RestirInitial
                                    ? kRestirInitialSampling : kBsdfSampling;
     constants.restir_candidates = scene_.Tlas() == VK_NULL_HANDLE ? 0 : settings.restir_candidates;
-    constants.restir_temporal = settings.restir_temporal ? 1u : 0u;
+    constants.restir_temporal = settings.restir_temporal || settings.restir_spatial ? 1u : 0u;
     constants.restir_history = settings.restir_temporal && restir_history_available_ ? 1u : 0u;
     constants.restir_max_history_candidates = settings.restir_max_history_candidates;
+    constants.restir_spatial = settings.restir_spatial ? 1u : 0u;
+    constants.restir_spatial_radius = settings.restir_spatial_radius;
     constants.light_offsets = scene_.LightOffsetAddress();
     constants.lights = scene_.LightAddress();
     constants.light_count = scene_.LightCount();
@@ -2324,7 +2405,7 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[19]{};
+    VkDescriptorSetLayoutBinding bindings[21]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -2358,7 +2439,7 @@ private:
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (std::uint32_t index = 8; index < 19; ++index) {
+    for (std::uint32_t index = 8; index < 21; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = index == 8
                                            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -2366,19 +2447,19 @@ private:
       bindings[index].descriptorCount = 1;
       bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (unsigned index = 16; index < 19; ++index)
+    for (unsigned index = 16; index < 21; ++index)
       bindings[index].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-    std::array<VkDescriptorBindingFlags, 19> binding_flags{};
+    std::array<VkDescriptorBindingFlags, 21> binding_flags{};
     for (unsigned index = 0; index < binding_flags.size(); ++index)
       if (index == 0 || index == 3 || index >= 7)
         binding_flags[index] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 19;
+    flags.bindingCount = 21;
     flags.pBindingFlags = binding_flags.data();
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 19;
+    layout.bindingCount = 21;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -2390,7 +2471,7 @@ private:
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 15}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 6;
@@ -2434,7 +2515,7 @@ private:
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &temporal_timestamps_),
               "vkCreateQueryPool(temporal surface)", detail))
         return false;
-      query.queryCount = 4;
+      query.queryCount = 6;
       if (!VulkanOk(vkCreateQueryPool(device_, &query, nullptr, &restir_timestamps_),
               "vkCreateQueryPool(initial reservoir)", detail))
         return false;
@@ -2921,6 +3002,13 @@ private:
             VkDeviceSize{target.width} * target.height * sizeof(RestirHistoryRecord)};
         vkCmdCopyBuffer(command_, restir_history_buffers_[temporal_write_].buffer,
             restir_history_readback_.buffer, 1, &history_copy);
+        if (restir_spatial_active_) {
+          vkCmdCopyBuffer(command_, restir_spatial_input_.buffer,
+              restir_spatial_input_readback_.buffer, 1, &history_copy);
+          const VkBufferCopy sources_copy{0, 0, VkDeviceSize{target.width} * target.height * 16};
+          vkCmdCopyBuffer(command_, restir_spatial_sources_.buffer,
+              restir_spatial_sources_readback_.buffer, 1, &sources_copy);
+        }
         if (restir_history_available_) {
           history_copy.dstOffset = history_copy.size;
           vkCmdCopyBuffer(command_, restir_history_buffers_[1 - temporal_write_].buffer,
@@ -3125,10 +3213,16 @@ private:
   VkQueryPool temporal_timestamps_ = VK_NULL_HANDLE;
   VkPipeline restir_pipeline_ = VK_NULL_HANDLE;
   VkPipeline restir_temporal_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline restir_spatial_pipeline_ = VK_NULL_HANDLE;
+  TemporalBuffer restir_spatial_input_;
+  TemporalBuffer restir_spatial_input_readback_;
+  TemporalBuffer restir_spatial_sources_;
+  TemporalBuffer restir_spatial_sources_readback_;
   std::array<TemporalBuffer, 2> restir_history_buffers_{};
   TemporalBuffer restir_history_readback_;
   bool restir_history_available_ = false;
   bool restir_temporal_active_ = false;
+  bool restir_spatial_active_ = false;
   VkQueryPool restir_timestamps_ = VK_NULL_HANDLE;
   TemporalBuffer restir_initial_;
   TemporalBuffer restir_readback_;

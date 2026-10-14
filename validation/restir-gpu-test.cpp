@@ -105,8 +105,8 @@ struct Fixture {
     Check(frame.validation_message_count == 0, frame.validation_detail.c_str());
     return frame;
   }
-  GpuFrameEvidence Temporal(TemporalFrameSettings temporal = {}) {
-    settings.restir_temporal = true;
+  GpuFrameEvidence Temporal(TemporalFrameSettings temporal = {}, bool reuse = true) {
+    settings.restir_temporal = reuse;
     temporal.frame_index = frame_index;
     auto snapshot = world.Commit();
     const auto upload = renderer.UpdateScene(extraction.Update(snapshot));
@@ -118,6 +118,314 @@ struct Fixture {
     return frame;
   }
 };
+
+void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 64); PlaneWorld(f.world);
+  const std::array<std::array<float, 3>, 3> colors{{{2, 0.5F, 1}, {0.2F, 2, 1.5F}, {1, 1, 1}}};
+  for (unsigned i = 0; i < 3; ++i) {
+    Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = colors[i];
+    if (i == 2) light.world_from_light[10] = -1;
+    f.world.SetLight(std::to_string(i), light);
+  }
+  f.settings.restir_candidates = 2;
+  f.settings.restir_max_history_candidates = 3;
+  f.settings.restir_spatial = true;
+  unsigned zero_sources = 0;
+  for (bool temporal : {false, true}) {
+    GpuFrameEvidence previous;
+    for (unsigned frame = 0; frame < 6; ++frame) {
+      const auto actual = f.Temporal({}, temporal);
+      Check(actual.restir.spatial.size() == 4096 && actual.restir.spatial_sources.size() == 4096 &&
+          actual.restir.spatial_row_pitch == 64 * sizeof(RestirReusePixel), "spatial debug extent");
+      Check(actual.restir.reservoir_bytes == 1280 * 4096, "spatial memory accounting");
+      if (actual.restir.timestamp_available)
+        Check(actual.restir.spatial_gpu_ms > 0, "spatial timestamp missing");
+      Check(actual.restir.history_available == (temporal && frame != 0), "spatial temporal availability");
+      if (temporal && frame != 0)
+        Check(std::memcmp(actual.restir.previous.data(), previous.restir.spatial.data(),
+            4096 * sizeof(RestirReusePixel)) == 0, "spatial output not retained as immutable history");
+      for (unsigned slot = 0; slot < 4096; ++slot) {
+        const auto& centre = actual.restir.temporal[slot];
+        auto expected = vulkan_internal::Reservoir{};
+        auto uv = centre.reservoir.uv;
+        auto Merge = [&](const RestirReusePixel& source, unsigned cap, float random) {
+          const auto& p = source.reservoir;
+          const float target = p.light == 0 ? 1.0F / float(kPi) : p.light == 1 ? 1.5F / float(kPi) : 0;
+          if (p.weight_sum == 0) ++zero_sources;
+          if (vulkan_internal::MergeReevaluatedReservoir(expected,
+                  {p.light, p.weight_sum, p.selected_target, p.candidate_count},
+                  source.normalization, target, cap, random)) uv = p.uv;
+        };
+        Merge(centre, UINT32_MAX, 0);
+        auto rng = Hash(slot ^ Hash((f.settings.sample_index + frame) ^ 0x369DEA0FU));
+        unsigned supporting = centre.reservoir.candidate_count;
+        const unsigned x = slot % 64, y = slot / 64;
+        const std::array<unsigned, 4> neighbours{x != 0 ? slot - 1 : UINT32_MAX,
+            x != 63 ? slot + 1 : UINT32_MAX, y != 0 ? slot - 64 : UINT32_MAX,
+            y != 63 ? slot + 64 : UINT32_MAX};
+        if (actual.restir.spatial_sources[slot] != neighbours) {
+          std::cerr << "spatial slot=" << slot << " flags=" << centre.reservoir.flags << " actual=";
+          for (auto s : actual.restir.spatial_sources[slot]) std::cerr << s << ',';
+          std::cerr << " expected="; for (auto s : neighbours) std::cerr << s << ',';
+          std::cerr << '\n';
+        }
+        Check(actual.restir.spatial_sources[slot] == neighbours, "spatial stencil/edge sources");
+        for (auto source : neighbours) if (source != UINT32_MAX) {
+          Merge(actual.restir.temporal[source], 3, Random(rng));
+          supporting += std::min(actual.restir.temporal[source].reservoir.candidate_count, 3U);
+        }
+        if (expected.weight_sum == 0) supporting = 0;
+        const auto& r = actual.restir.spatial[slot];
+        Check(r.reservoir.light == expected.sample && r.reservoir.uv == uv &&
+            r.reservoir.candidate_count == expected.candidate_count && r.supporting_candidates == supporting,
+            "spatial CPU/GPU selection/count/support");
+        Near(r.reservoir.weight_sum, expected.weight_sum, 2e-5, "spatial CPU/GPU weights");
+        const auto w = vulkan_internal::ReservoirReuseNormalization(expected, supporting);
+        Near(r.normalization, w, 8e-6, "spatial corrected normalization");
+        if (expected.weight_sum > 0) for (int c = 0; c < 3; ++c)
+          Near(r.reservoir.contribution[c], Diffuse().base_color[c] * colors[expected.sample][c] / kPi * w,
+              1e-5, "spatial independent RGB");
+        Check(r.reservoir.candidate_count <= (temporal ? 17U : 10U), "spatial counts uncapped");
+      }
+      previous = actual;
+    }
+    const auto mean = Mean(previous);
+    for (int c = 0; c < 3; ++c)
+      Near(mean[c], Diffuse().base_color[c] * (colors[0][c] + colors[1][c]) / kPi, 0.03,
+          "spatial independent discrete integral");
+    std::cout << "spatial CPU/GPU: temporal=" << temporal << " 6 x 4096; spatial_ms="
+              << previous.restir.spatial_gpu_ms << " mean_R=" << mean[0] << '\n';
+  }
+  Check(zero_sources != 0, "spatial all-zero sources not covered");
+}
+
+void SpatialBoundaries(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 32);
+  f.world.SetCamera(Perspective(100));
+  f.world.SetMaterial("/diffuse", Diffuse());
+  Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = {2, 1, 0.5F};
+  f.world.SetLight("/light", light);
+  f.settings.restir_spatial = true;
+  auto Panels = [&](float depth, float normal_x, bool material_boundary) {
+    auto left = Panel(-12, 0, -12, 12, -4);
+    auto right = Panel(0, 12, -12, 12, depth);
+    right.normals.assign(6, {normal_x, 0, std::sqrt(1 - normal_x * normal_x)});
+    f.world.SetMesh("/left", left, {}); f.world.SetMesh("/right", right, {});
+    f.world.BindMaterial("/left", "/diffuse");
+    f.world.SetMaterial("/other", Diffuse());
+    f.world.BindMaterial("/right", material_boundary ? "/other" : "/diffuse");
+  };
+  for (unsigned boundary = 0; boundary < 5; ++boundary) {
+    Panels(boundary == 1 ? -6.0F : -4.0F, boundary == 2 ? 0.6F : 0.0F, boundary == 3);
+    if (boundary == 4) {
+      auto right = Panel(0, 12, -12, 12, -4);
+      for (auto& position : right.positions) position[2] -= 0.6F * position[0];
+      right.normals.assign(6, {0, 0, 1});
+      f.world.SetMesh("/right", right, {});
+      f.world.BindMaterial("/right", "/diffuse");
+    }
+    const auto frame = f.Temporal({}, false);
+    for (unsigned y = 1; y < 31; ++y) {
+      const unsigned left = y * 32 + 15, right = left + 1;
+      Check((frame.restir.spatial_sources[left][1] != UINT32_MAX) == (boundary == 0) &&
+          (frame.restir.spatial_sources[right][0] != UINT32_MAX) == (boundary == 0),
+          "spatial depth/normal/material boundary acceptance");
+    }
+    f.settings.restir_spatial = false; f.settings.light_sampling = LightSampling::Mis;
+    const auto baseline = f.Render();
+    for (unsigned i = 0; i < frame.color.payload.size() / sizeof(float); ++i) {
+      float a, b;
+      std::memcpy(&a, frame.color.payload.data() + sizeof(float) * i, sizeof(float));
+      std::memcpy(&b, baseline.color.payload.data() + sizeof(float) * i, sizeof(float));
+      Near(a, b, 4e-6, "spatial boundary image vs NEE/MIS");
+    }
+    f.settings.restir_spatial = true; f.settings.light_sampling = LightSampling::RestirInitial;
+  }
+  // Cropped source records must be overwritten and rejected by neighbours.
+  f.target.data_window = {8, 8, 16, 16};
+  const auto crop = f.Temporal({}, false);
+  for (unsigned i = 0; i < 1024; ++i) {
+    if (i % 32 < 8 || i % 32 >= 24 || i / 32 < 8 || i / 32 >= 24) {
+      Check(crop.restir.spatial[i].reservoir.flags == 0 &&
+          crop.restir.spatial[i].reservoir.candidate_count == 0, "spatial crop stale records");
+    }
+    for (auto source : crop.restir.spatial_sources[i]) if (source != UINT32_MAX)
+      Check(source % 32 >= 8 && source % 32 < 24 && source / 32 >= 8 && source / 32 < 24,
+          "spatial neighbour read outside data window");
+  }
+  std::cout << "spatial boundaries: depth, geometric/shading normal, material, cross-instance support and crop PASS\n";
+}
+
+void SpatialSupport(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 64);
+  f.world.SetCamera(Perspective()); f.world.SetMaterial("/diffuse", Diffuse());
+  for (unsigned i = 0; i < 2; ++i) {
+    auto panel = Panel(i == 0 ? -12.0F : 0.0F, i == 0 ? 0.0F : 12.0F, -12, 12, -4);
+    panel.normals.assign(6, {i == 0 ? -0.2F : 0.2F, 0, std::sqrt(0.96F)});
+    f.world.SetMesh(std::to_string(i), panel, {}); f.world.BindMaterial(std::to_string(i), "/diffuse");
+    Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = {2, 1, 0.5F};
+    light.world_from_light[8] = i == 0 ? -std::sqrt(0.9975F) : std::sqrt(0.9975F);
+    light.world_from_light[10] = 0.05F;
+    f.world.SetLight(std::to_string(i), light);
+  }
+  f.settings.restir_spatial = true; f.settings.restir_candidates = 1;
+  f.settings.restir_max_history_candidates = 1;
+  unsigned corrected = 0, zero_sources = 0;
+  for (unsigned frame = 0; frame < 16; ++frame) {
+    const auto actual = f.Temporal({}, false);
+    for (unsigned y = 1; y < 63; ++y) for (unsigned x : {31U, 32U}) {
+      const unsigned slot = y * 64 + x;
+      const auto& p = actual.restir.spatial[slot];
+      Check(actual.restir.spatial_sources[slot][x == 31 ? 1 : 0] != UINT32_MAX,
+          "complementary support neighbours rejected");
+      Check(p.reservoir.candidate_count == 5, "complementary support count");
+      if (p.reservoir.weight_sum > 0) {
+        Check(p.supporting_candidates == 4, "spatial normalized by total count across complementary support");
+        ++corrected;
+      }
+      for (auto source : actual.restir.spatial_sources[slot])
+        zero_sources += actual.restir.temporal[source].reservoir.weight_sum == 0;
+    }
+  }
+  Check(corrected > 1000 && zero_sources > 0, "spatial differing/zero support coverage");
+  const auto estimate = Mean(f.Temporal({}, false));
+  f.settings.restir_spatial = false; f.settings.light_sampling = LightSampling::Mis;
+  const auto baseline = Mean(f.Render(1024));
+  for (int c = 0; c < 3; ++c) Near(estimate[c], baseline[c], 0.008,
+      "spatial differing support vs NEE/MIS");
+  std::cout << "spatial support: corrected=" << corrected << " zero_sources=" << zero_sources
+            << " mean_R=" << estimate[0] << " mis_R=" << baseline[0] << '\n';
+}
+
+void SpatialLifecycle(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 8); PlaneWorld(f.world);
+  Light light; light.shape = LightShape::Distant; light.angle = 0;
+  f.world.SetLight("/light", light); f.settings.restir_spatial = true;
+  (void)f.Temporal();
+  const auto previous = f.Temporal();
+  auto snapshot = f.world.Commit();
+  TemporalFrameSettings temporal; temporal.frame_index = f.frame_index;
+  for (unsigned test = 0; test < 6; ++test) {
+    auto bad = f.settings;
+    if (test == 0) bad.restir_spatial_radius = 0;
+    if (test == 1) bad.restir_spatial_radius = 33;
+    if (test == 2) bad.restir_max_history_candidates = 0;
+    if (test == 3) bad.restir_max_history_candidates = 65537;
+    if (test == 4) bad.light_sampling = LightSampling::Mis;
+    if (test == 5) bad.output = SceneOutput::Albedo;
+    const auto rejected = renderer.RenderTemporalScene(snapshot, f.target, 1, temporal, bad);
+    Check(rejected.status == FrameStatus::Fail && !rejected.restir.available && !rejected.temporal.available,
+        "invalid spatial request published products");
+  }
+  Check(renderer.RenderScene(ExtractDrawSummary(snapshot), f.target, 1, f.settings).status == FrameStatus::Fail,
+      "ordinary RenderScene accepted spatial reuse");
+  Check(renderer.RenderTemporalScene(snapshot, f.target, 2, temporal, f.settings).status == FrameStatus::Fail,
+      "spatial reuse accepted multiple samples");
+  const auto resumed = f.Temporal();
+  Check(resumed.restir.history_available && std::memcmp(resumed.restir.previous.data(),
+      previous.restir.spatial.data(), 64 * sizeof(RestirReusePixel)) == 0,
+      "rejected spatial request consumed history");
+  f.settings.restir_spatial_radius = 32;
+  const auto isolated = f.Temporal();
+  Check(!isolated.restir.history_available &&
+      isolated.temporal.reset_reason == TemporalResetReason::RenderSettingsChanged,
+      "spatial radius change did not reset history");
+  Check(std::memcmp(isolated.restir.spatial.data(), isolated.restir.temporal.data(),
+      64 * sizeof(RestirReusePixel)) == 0, "no-neighbour spatial result changed estimator");
+  f.settings.restir_spatial = false;
+  const auto disabled = f.Temporal();
+  Check(!disabled.restir.history_available && disabled.restir.spatial.empty() &&
+      disabled.restir.reservoir_bytes == isolated.restir.reservoir_bytes,
+      "spatial switch failed reset or discarded retained capacity");
+  std::cout << "spatial lifecycle: rejected requests preserve history; radius/mode resets; isolated passthrough PASS\n";
+}
+
+void SpatialOverflow(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 8); PlaneWorld(f.world);
+  auto material = Diffuse(); material.base_color = {1, 1, 1}; f.world.SetMaterial("/diffuse", material);
+  Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance.fill(2.4e38F);
+  f.world.SetLight("/light", light);
+  f.settings.restir_candidates = 1; f.settings.restir_spatial = true;
+  auto snapshot = f.world.Commit();
+  Check(renderer.UpdateScene(f.extraction.Update(snapshot)).status == FrameStatus::Pass, "spatial overflow upload");
+  TemporalFrameSettings temporal;
+  const auto failed = renderer.RenderTemporalScene(snapshot, f.target, 1, temporal, f.settings);
+  Check(failed.status == FrameStatus::Fail && !failed.restir.available && !failed.temporal.available &&
+      failed.detail.find("spatial reservoir arithmetic") != std::string::npos,
+      "spatial overflow published a frame or failed before spatial pass");
+  Check(renderer.RenderTemporalScene(snapshot, f.target, 1, temporal, f.settings).status == FrameStatus::Fail,
+      "spatial GPU arithmetic failure did not latch");
+  std::cout << "spatial overflow: finite input streams, failed merge, no products PASS\n";
+}
+
+void SpatialMeasurements(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 32); PlaneWorld(f.world);
+  std::array<double, 3> integral{};
+  for (unsigned i = 0; i < 32; ++i) {
+    Light light; light.shape = LightShape::Distant; light.angle = 0;
+    light.radiance = {0.2F + float(i % 7) * 0.2F, 0.1F + float(i % 5) * 0.3F,
+        0.3F + float(i % 3) * 0.4F};
+    f.world.SetLight(std::to_string(i), light);
+    for (int c = 0; c < 3; ++c) integral[c] += Diffuse().base_color[c] * light.radiance[c] / kPi;
+  }
+  f.settings.restir_candidates = 2; f.settings.restir_max_history_candidates = 8;
+  for (unsigned mode = 0; mode < 4; ++mode) {
+    f.settings.restir_spatial = (mode & 2) != 0;
+    f.settings.restir_temporal = (mode & 1) != 0;
+    f.settings.sample_index = 17; f.settings.light_sampling = LightSampling::RestirInitial;
+    std::array<double, 3> mean{};
+    double squared_error = 0, squared_delta = 0, gpu_ms = 0, initial_ms = 0, temporal_ms = 0, spatial_ms = 0;
+    GpuFrameEvidence previous;
+    // Four independent 16-frame sequences bound recursive correlations.
+    constexpr unsigned frames = 64;
+    for (unsigned frame = 0; frame < frames; ++frame) {
+      auto camera = Perspective(); camera.view[12] = 0.02F * float(frame);
+      f.world.SetCamera(camera);
+      GpuFrameEvidence actual;
+      if (mode == 0) {
+        f.settings.sample_index = 17 + (frame / 16) * 4099 + frame % 16;
+        actual = f.Render();
+      }
+      else {
+        f.settings.sample_index = 17 + (frame / 16) * 4099;
+        actual = f.Temporal({}, (mode & 1) != 0);
+      }
+      const auto rgb = Mean(actual);
+      for (int c = 0; c < 3; ++c) mean[c] += rgb[c] / frames;
+      for (unsigned slot = 0; slot < 1024; ++slot) for (int c = 0; c < 3; ++c) {
+        float value; std::memcpy(&value, actual.color.payload.data() + slot * 16 + c * 4, 4);
+        squared_error += std::pow(value - integral[c], 2);
+        if (frame % 16 != 0) {
+          float old; std::memcpy(&old, previous.color.payload.data() + slot * 16 + c * 4, 4);
+          squared_delta += std::pow(value - old, 2);
+        }
+      }
+      gpu_ms += actual.primary_ray_gpu_ms / frames;
+      initial_ms += actual.restir.initial_gpu_ms / frames;
+      temporal_ms += actual.restir.temporal_gpu_ms / frames;
+      spatial_ms += actual.restir.spatial_gpu_ms / frames;
+      previous = actual;
+    }
+    for (int c = 0; c < 3; ++c) Near(mean[c], integral[c], 0.025 * integral[c],
+        "moving many-light mode against independent integral");
+    const std::string prefix = integrator == Integrator::Reference ? "spatial-reference-" : "spatial-wavefront-";
+    Save(previous, prefix + "mode" + std::to_string(mode));
+    std::cout << "spatial measurement: integrator=" << (integrator == Integrator::Reference ? "reference" : "wavefront")
+              << " mode=" << mode << " mean_RGB=" << mean[0] << ',' << mean[1] << ',' << mean[2]
+              << " RMSE=" << std::sqrt(squared_error / (64 * 1024 * 3))
+              << " frame_delta=" << std::sqrt(squared_delta / (60 * 1024 * 3))
+              << " gpu_ms=" << gpu_ms << " initial_ms=" << initial_ms << " temporal_ms=" << temporal_ms
+              << " spatial_ms=" << spatial_ms << " bytes=" << previous.restir.reservoir_bytes << '\n';
+  }
+  f.settings.restir_temporal = false; f.settings.restir_spatial = false;
+  f.settings.light_sampling = LightSampling::Mis;
+  const auto baseline = f.Render(512);
+  const auto mean = Mean(baseline);
+  for (int c = 0; c < 3; ++c) Near(mean[c], integral[c], 0.01 * integral[c], "many-light NEE/MIS integral");
+  Save(baseline, integrator == Integrator::Reference ? "spatial-reference-mis" : "spatial-wavefront-mis");
+  std::cout << "many-light independent RGB=" << integral[0] << ',' << integral[1] << ',' << integral[2]
+            << " NEE/MIS=" << mean[0] << ',' << mean[1] << ',' << mean[2] << '\n';
+}
 
 void TemporalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
   Fixture f(renderer, integrator, 64);
@@ -284,8 +592,9 @@ void TemporalLifecycle(OffscreenRenderer& renderer, Integrator integrator) {
   std::cout << "temporal lifecycle: camera/rigid motion, settings/light/cut/gap/target/ordinary resets PASS\n";
 }
 
-void TemporalSupport(OffscreenRenderer& renderer, Integrator integrator) {
+void TemporalSupport(OffscreenRenderer& renderer, Integrator integrator, bool spatial = false) {
   Fixture f(renderer, integrator, 64); PlaneWorld(f.world, 100);
+  f.settings.restir_spatial = spatial;
   f.settings.restir_candidates = 1;
   f.settings.restir_max_history_candidates = 1;
   for (unsigned i = 0; i < 2; ++i) {
@@ -330,7 +639,8 @@ void TemporalSupport(OffscreenRenderer& renderer, Integrator integrator) {
   Check(covered > 1000 && zero_source > 0 && receiving_zero > 0,
       "complementary source support fixture did not exercise both streams");
   const auto estimate = Mean(received);
-  f.settings.restir_temporal = false; f.settings.light_sampling = LightSampling::Mis;
+  f.settings.restir_temporal = false; f.settings.restir_spatial = false;
+  f.settings.light_sampling = LightSampling::Mis;
   const auto baseline = Mean(f.Render(1024));
   for (int c = 0; c < 3; ++c)
     Near(estimate[c], baseline[c], 0.025, "moving differing-support temporal vs NEE/MIS");
@@ -338,8 +648,9 @@ void TemporalSupport(OffscreenRenderer& renderer, Integrator integrator) {
             << " temporal_R=" << estimate[0] << " mis_R=" << baseline[0] << '\n';
 }
 
-void TemporalDisocclusion(OffscreenRenderer& renderer, Integrator integrator) {
+void TemporalDisocclusion(OffscreenRenderer& renderer, Integrator integrator, bool spatial = false) {
   Fixture f(renderer, integrator, 32); PlaneWorld(f.world);
+  f.settings.restir_spatial = spatial;
   f.world.SetMesh("/front", Panel(-1, 1, -1, 1, -3), {});
   auto front = Diffuse(); front.base_color = {0.9F, 0.2F, 0.1F};
   f.world.SetMaterial("/front", front); f.world.BindMaterial("/front", "/front");
@@ -362,7 +673,8 @@ void TemporalDisocclusion(OffscreenRenderer& renderer, Integrator integrator) {
     } else reused += p.previous_index != UINT32_MAX;
   }
   Check(rejected != 0 && reused != 0, "moving occluder did not exercise validity boundary");
-  f.settings.restir_temporal = false; f.settings.light_sampling = LightSampling::Mis;
+  f.settings.restir_temporal = false; f.settings.restir_spatial = false;
+  f.settings.light_sampling = LightSampling::Mis;
   f.settings.sample_index += 2;
   const auto baseline = f.Render();
   // One discrete parallel light makes both estimators exact, including the
@@ -439,8 +751,9 @@ void Arithmetic(OffscreenRenderer& renderer, Integrator integrator) {
         p.contribution == std::array<float, 4>{}, "all-zero target normalization");
 }
 
-void Visibility(OffscreenRenderer& renderer, Integrator integrator) {
+void Visibility(OffscreenRenderer& renderer, Integrator integrator, bool spatial = false) {
   Fixture f(renderer, integrator, 16);
+  f.settings.restir_spatial = spatial;
   PlaneWorld(f.world);
   Light light; light.shape = LightShape::Distant; light.angle = 0;
   const float x = std::sqrt(25.0F / 26.0F), z = std::sqrt(1.0F / 26.0F);
@@ -451,9 +764,11 @@ void Visibility(OffscreenRenderer& renderer, Integrator integrator) {
   f.world.BindMaterial("/blocker", "/blocker");
   for (float opacity : {0.0F, 0.75F, 1.0F}) {
     blocker.opacity = opacity; f.world.SetMaterial("/blocker", blocker);
-    const auto frame = f.Render();
-    for (const auto& p : frame.restir.initial) {
-      Check(p.flags == 1 && p.candidate_count == 8 && p.light == 0, "shadow affected candidate stream");
+    const auto frame = spatial ? f.Temporal({}, false) : f.Render();
+    for (unsigned i = 0; i < frame.restir.initial.size(); ++i) {
+      const auto& p = spatial ? frame.restir.spatial[i].reservoir : frame.restir.initial[i];
+      Check(p.flags == 1 && (spatial ? p.candidate_count >= 8 : p.candidate_count == 8) &&
+          p.light == 0, "shadow affected candidate stream");
       Near(p.contribution[3], 1 - opacity, 1e-6, "selected transmittance");
     }
     const auto mean = Mean(frame);
@@ -707,7 +1022,8 @@ int main(int argc, char** argv) try {
   }
   for (auto integrator : {Integrator::Reference, Integrator::Wavefront}) {
     // Fresh scene extraction and renderer ownership for each independent fixture.
-    for (unsigned test = 0; test < 11; ++test) {
+    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
+    for (unsigned test = first_test; test < 20; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -721,9 +1037,18 @@ int main(int argc, char** argv) try {
       if (test == 8) TemporalSupport(*renderer, integrator);
       if (test == 9) TemporalOverflow(*renderer, integrator);
       if (test == 10) TemporalDisocclusion(*renderer, integrator);
+      if (test == 11) SpatialArithmetic(*renderer, integrator);
+      if (test == 12) SpatialBoundaries(*renderer, integrator);
+      if (test == 13) SpatialSupport(*renderer, integrator);
+      if (test == 14) TemporalDisocclusion(*renderer, integrator, true);
+      if (test == 15) SpatialLifecycle(*renderer, integrator);
+      if (test == 16) SpatialOverflow(*renderer, integrator);
+      if (test == 17) SpatialMeasurements(*renderer, integrator);
+      if (test == 18) Visibility(*renderer, integrator, true);
+      if (test == 19) TemporalSupport(*renderer, integrator, true);
     }
   }
-  std::cout << "PASS: initial and temporal reservoirs under both integrators\n";
+  std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << "FAIL: " << error.what() << '\n'; return 1;

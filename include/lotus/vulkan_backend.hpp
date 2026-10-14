@@ -116,9 +116,9 @@ struct RestirPixel {
 };
 static_assert(sizeof(RestirPixel) == 48);
 
-// Resolved temporal reservoir. Keep normalization separately: raw sum/M
-// cannot recover differing-support correction. previous_index is UINT32_MAX
-// when no history source participated; age counts successful recursive reuse.
+// Resolved reuse record. Keep normalization separately: raw sum/M cannot
+// recover differing-support correction. previous_index is the receiver's
+// temporal correspondence, UINT32_MAX if absent; age advances in temporal reuse.
 struct RestirReusePixel {
   RestirPixel reservoir;
   float normalization = 0;
@@ -139,10 +139,15 @@ struct RestirProducts {
   bool history_available = false;
   std::vector<RestirReusePixel> temporal;
   std::vector<RestirReusePixel> previous;
+  std::uint32_t spatial_row_pitch = 0;
+  std::vector<RestirReusePixel> spatial;
+  // Left, right, up, down immutable source slots; UINT32_MAX if rejected.
+  std::vector<std::array<std::uint32_t, 4>> spatial_sources;
   bool timestamp_available = false;
   // Primary ray, candidates and selected-sample visibility, excluding readback.
   double initial_gpu_ms = 0;
   double temporal_gpu_ms = 0;
+  double spatial_gpu_ms = 0;
   // Allocated device reservoir storage plus its host mirror, outside scene stats.
   std::uint64_t reservoir_bytes = 0;
 };
@@ -497,9 +502,15 @@ struct PathTracingSettings {
   // Opt-in reservoir reuse through RenderTemporalScene, one fresh sample
   // per call. Requires RestirInitial; independent of radiance accumulation.
   bool restir_temporal = false;
-  // Cap the preceding source's represented draws, 1..65536. Both count and
-  // merge weight are capped; its resolved normalization is preserved.
+  // Cap preceding/neighbor sources' represented draws, 1..65536. Both count
+  // and merge weight are capped; resolved normalization is preserved.
   std::uint32_t restir_max_history_candidates = 32;
+  // One spatial pass over immutable current temporal/initial reservoirs.
+  // Requires RenderTemporalScene and one fresh sample; temporal is optional.
+  bool restir_spatial = false;
+  // Four axis neighbours at this pixel distance, 1..32. Neighbour counts
+  // use restir_max_history_candidates; geometry/material rejection is fixed.
+  std::uint32_t restir_spatial_radius = 1;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
