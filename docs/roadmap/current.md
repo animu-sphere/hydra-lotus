@@ -33,10 +33,15 @@ Implement the remaining work in this order:
   Hydra controls/diagnostics and moving USD-stage/installed usdview sequences
   under both integrators are recorded in the
   [adapter evidence](../reports/2026-10-14-restir-hydra.md), including
-  deterministic progressive NEE/MIS restoration. Remaining: measure many-light
-  convergence, GPU time, temporal stability, memory and bias/artifacts against
-  the NEE/MIS baseline; evaluate candidate strategies and record the scope
-  review and release gate.
+  deterministic progressive NEE/MIS restoration. A reproducible headless
+  candidate-count sweep now measures static/moving many-light convergence,
+  GPU time, temporal differences, memory and finite-sample local error against
+  independent Lambert/NEE/MIS references
+  ([comparison evidence](../reports/2026-10-14-restir-comparison.md)). Remaining:
+  evaluate alternative candidate proposals; measure broader/repeated
+  equal-quality budgets and artifact/bias behavior; address the measured
+  reuse cost and temporal correlation before recording the scope review and
+  release gate.
 
 Denoising, spectral research, production material expansion and broad
 platform/backend expansion retain their separate phase assignments.
