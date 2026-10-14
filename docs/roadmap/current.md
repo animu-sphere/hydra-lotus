@@ -44,8 +44,10 @@ Implement the remaining work in this order:
   Three independent repetitions per integrator now measure observed
   equal-quality budgets at a longer horizon and higher light count
   ([budget evidence](../reports/2026-10-15-restir-budgets.md)).
-  Remaining: broaden equal-quality budgets and artifact/bias coverage to
-  area/environment lighting and stronger material/surface boundaries;
+  Mixed area/environment lighting with material/depth boundaries now has
+  static/moving headless workloads, explicit finite NEE/MIS references and
+  regional errors ([boundary evidence](../reports/2026-10-15-restir-boundaries.md)).
+  Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
   address the reproduced
   reuse cost and temporal correlation before recording the scope review and
   release gate.

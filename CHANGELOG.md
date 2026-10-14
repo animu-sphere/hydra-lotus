@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in mixed area/environment ReSTIR comparison workloads with material,
+  depth and normal boundaries, static/moving sequences, explicit finite-spp
+  reference labels and regional error populations in repeated quality budgets
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-15-restir-boundaries.md)).
 - ReSTIR benchmark seed selection, per-sequence convergence/time populations
   and a repeated-report quality-budget reducer with explicit unattained
   budgets and paired NEE/MIS comparisons

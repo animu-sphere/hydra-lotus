@@ -34,6 +34,7 @@ struct Options {
   std::vector<unsigned> candidates{1, 2, 8};
   Integrator integrator = Integrator::Reference;
   RestirProposal proposal = RestirProposal::Power;
+  std::string workload = "distant";
 };
 
 const char* ProposalName(RestirProposal proposal) {
@@ -107,6 +108,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-size <16..256>] [--benchmark-frames <2..256>] "
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
+                                "[--restir-workload <distant|mixed-boundaries>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -136,6 +138,10 @@ Options Parse(int argc, char** argv) {
         options.proposal = RestirProposal::PowerUniform;
       else
         throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
+    } else if (option == "--restir-workload") {
+      if (value != "distant" && value != "mixed-boundaries")
+        throw std::invalid_argument("invalid reservoir workload: " + std::string(value));
+      options.workload = value;
     } else if (option == "--benchmark-size")
       options.size = Number(value, 16, 256);
     else if (option == "--benchmark-frames")
@@ -186,11 +192,91 @@ Matrix4 Translation(float x, float z = 0) {
 struct Workload {
   std::string id;
   bool moving = false;
+  bool exact_integral = true;
   std::vector<FrameSnapshot> snapshots;
   std::array<double, 3> integral{};
 };
 
+Workload MakeMixedWorkload(const Options& options, bool moving) {
+  Workload result;
+  result.moving = moving;
+  result.exact_integral = false;
+  result.id = moving ? "mixed-area-environment-moving-boundaries-v1"
+                     : "mixed-area-environment-boundaries-v1";
+  RenderWorld world;
+  Material diffuse;
+  diffuse.ior = 1;
+  diffuse.base_color = {0.8F, 0.12F, 0.04F};
+  world.SetMaterial("/diffuse", diffuse);
+  Material metal;
+  metal.base_color = {0.06F, 0.3F, 0.85F};
+  metal.metallic = 1;
+  metal.roughness = 0.35F;
+  world.SetMaterial("/metal", metal);
+  // Adjacent materials meet at X=0 with a depth and geometric-normal step.
+  world.SetMesh("/left", {{{-12, -12, -4}, {0, -12, -4}, {0, 12, -4}, {-12, 12, -4}},
+                            {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
+  world.BindMaterial("/left", "/diffuse");
+  world.SetMesh("/right", {{{0, -12, -3.6F}, {12, -12, -6.6F}, {12, 12, -6.6F}, {0, 12, -3.6F}},
+                             {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
+  world.BindMaterial("/right", "/metal");
+  if (moving) {
+    world.SetMesh("/blocker", {{{-0.45F, -1.4F, -2.5F}, {0.45F, -1.4F, -2.5F},
+                                 {0.45F, 1.4F, -2.5F}, {-0.45F, 1.4F, -2.5F}},
+                                {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
+    world.BindMaterial("/blocker", "/diffuse");
+  }
+  for (unsigned i = 0; i < options.lights; ++i) {
+    const double phi = i * 2.399963229728653;
+    const double radius = 3 * std::sqrt((i + 0.5) / options.lights);
+    Light light;
+    light.shape = i % 2 ? LightShape::Disk : LightShape::Rect;
+    light.radius = 0.3F;
+    light.width = light.height = 0.6F;
+    light.world_from_light = Translation(static_cast<float>(radius * std::cos(phi)), -1);
+    light.world_from_light[13] = static_cast<float>(radius * std::sin(phi));
+    const float scale = 96.0F / options.lights;
+    light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
+        scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
+    world.SetLight("/light/" + std::to_string(i), light);
+  }
+  // Procedural HDR lat-long image: broad colour variation plus a bright patch.
+  // No external asset, filtering or licence dependency enters this fixture.
+  Texture environment;
+  environment.width = 16;
+  environment.height = 8;
+  environment.format = TextureFormat::Rgba32Float;
+  environment.texels.resize(16 * 8 * 16);
+  for (unsigned y = 0; y < 8; ++y)
+    for (unsigned x = 0; x < 16; ++x) {
+      const float bright = (x == 7 || x == 8) && (y == 2 || y == 3) ? 3.0F : 0.0F;
+      const float rgba[4]{0.04F + bright, 0.08F + 0.01F * y + bright * 0.5F,
+          0.16F + 0.005F * x + bright * 0.2F, 1};
+      std::memcpy(environment.texels.data() + (y * 16 + x) * 16, rgba, 16);
+    }
+  world.SetTexture("/environment", std::move(environment));
+  EnvironmentMap map;
+  map.texture = "/environment";
+  world.SetEnvironmentMap(map);
+  for (unsigned f = 0; f < options.frames; ++f) {
+    Camera camera;
+    camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
+    if (moving) {
+      const float phase = static_cast<float>(2 * kPi * f / options.frames);
+      camera.view[12] = 0.12F * std::sin(phase);
+      MeshInstance instance;
+      instance.world_from_object = Translation(0.7F * std::sin(phase + 0.3F));
+      world.SetMeshInstance("/blocker", instance);
+    }
+    world.SetCamera(camera);
+    result.snapshots.push_back(world.Commit());
+  }
+  return result;
+}
+
 Workload MakeWorkload(const Options& options, bool moving) {
+  if (options.workload == "mixed-boundaries")
+    return MakeMixedWorkload(options, moving);
   Workload result;
   result.moving = moving;
   result.id = moving ? "many-distant-moving-shadow-v1" : "many-distant-plane-v1";
@@ -327,13 +413,14 @@ Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const 
         "cannot save reference image");
     result.images.push_back(std::move(mean));
   }
-  if (!work.moving) {
+  if (work.exact_integral && !work.moving) {
     std::vector<double> exact(result.images[0].values.size());
     for (std::size_t i = 0; i < exact.size(); ++i)
       exact[i] = work.integral[i % 3];
     result.integral_rmse = std::sqrt(Mse(result.images[0].values, exact));
-    result.images.resize(options.frames, result.images.front());
   }
+  if (!work.moving)
+    result.images.resize(options.frames, result.images.front());
   return result;
 }
 
@@ -405,11 +492,11 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
           reused_pixels += record.previous_index != UINT32_MAX;
         }
       }
-      // The unoccluded Lambert fixture has an independent exact integral.
-      // Moving shadows use the matched finite-spp NEE/MIS image instead.
+      // Only the unoccluded distant Lambert fixture has an exact integral.
+      // All other workloads use the matched finite-spp NEE/MIS image.
       std::vector<double> reference(ensemble.size());
       for (std::size_t i = 0; i < reference.size(); ++i)
-        reference[i] = work.moving ? baseline.images[f].values[i] : work.integral[i % 3];
+        reference[i] = work.exact_integral && !work.moving ? work.integral[i % 3] : baseline.images[f].values[i];
       error.push_back(std::sqrt(Mse(last.values, reference)));
       if (f != 0) {
         std::vector<double> residual_delta(ensemble.size()), zero(ensemble.size());
@@ -466,7 +553,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   std::vector<double> reference(ensemble.size());
   std::array<double, 3> mean{}, bias{};
   for (std::size_t i = 0; i < ensemble.size(); ++i) {
-    reference[i] = work.moving ? baseline.images.back().values[i] : work.integral[i % 3];
+    reference[i] = work.exact_integral && !work.moving ? work.integral[i % 3] : baseline.images.back().values[i];
     mean[i % 3] += ensemble[i] / (ensemble.size() / 3);
     bias[i % 3] += (ensemble[i] - reference[i]) / (ensemble.size() / 3);
   }
@@ -501,7 +588,31 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   Array(out, bias);
   out << ",\"ensemble_rmse\":" << std::sqrt(Mse(ensemble, reference))
       << ",\"max_abs_tile_mean_error\":" << max_tile_bias
-      << ",\"fresh_rmse\":";
+      << ",\"regions\":[";
+  if (!work.exact_integral) {
+    double squared = 0;
+    std::array<double, 3> signed_error{};
+    unsigned pixels = 0;
+    // Fixed central quarter: material/depth step and moving disocclusion.
+    for (unsigned y = 0; y < options.size; ++y)
+      for (unsigned x = 3 * options.size / 8; x < 5 * options.size / 8; ++x) {
+        ++pixels;
+        for (unsigned c = 0; c < 3; ++c) {
+          const auto i = (std::size_t{y} * options.size + x) * 3 + c;
+          const double residual = ensemble[i] - reference[i];
+          squared += residual * residual;
+          signed_error[c] += residual;
+        }
+      }
+    for (auto& value : signed_error)
+      value /= pixels;
+    out << "{\"id\":\"center-boundary-band-v1\",\"pixels\":" << pixels
+        << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
+        << ",\"signed_mean_error_rgb\":";
+    Array(out, signed_error);
+    out << '}';
+  }
+  out << "],\"fresh_rmse\":";
   Series(out, error);
   out << ",\"residual_frame_delta_rmse\":";
   Series(out, delta);
@@ -590,16 +701,18 @@ int RestirBenchmarkMain(int argc, char** argv) {
                 << ",\"reference_split_rmse\":";
           Array(scene, baseline.split_rmse);
           scene << ",\"reference_integral_rmse\":";
-          if (moving)
+          if (moving || !work.exact_integral)
             scene << "null";
           else
             scene << baseline.integral_rmse;
           scene << ",\"independent_integral_rgb\":";
-          if (moving)
+          if (moving || !work.exact_integral)
             scene << "null";
           else
             Array(scene, work.integral);
-          scene << ",\"cases\":[" << Measure(work, baseline, {"mis"}, options, executable, image_root);
+          scene << ",\"error_reference\":"
+                << Quote(work.exact_integral && !moving ? "independent-lambert-integral" : "finite-spp-nee-mis")
+                << ",\"cases\":[" << Measure(work, baseline, {"mis"}, options, executable, image_root);
           for (auto candidates : options.candidates)
             for (unsigned mode = 0; mode < 4; ++mode) {
               const char* name = mode == 0 ? "initial" : mode == 1 ? "temporal"
@@ -628,6 +741,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
         << ",\"system\":" << Quote(LOTUS_BENCHMARK_SYSTEM) << "},\"device\":" << device
         << ",\"procedure\":{\"integrator\":" << Quote(options.integrator == Integrator::Reference ? "reference" : "wavefront")
         << ",\"reference_integrator\":\"reference\",\"candidate_proposal\":" << Quote(ProposalName(options.proposal))
+        << ",\"workload_suite\":" << Quote(options.workload)
         << ",\"width\":" << options.size
         << ",\"height\":" << options.size << ",\"frames\":" << options.frames << ",\"warmup_frames\":" << options.warmup
         << ",\"sequences\":" << options.sequences << ",\"analytic_lights\":" << options.lights
@@ -641,7 +755,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
         << ",\"metric_notes\":{"
            "\"scene_gpu_ms\":\"Includes metadata and reservoir passes; excludes readback and scene updates. Do not add component times.\","
            "\"render_update_wall_ms\":\"Blocking update and render, including waits, readback and products.\","
-           "\"convergence\":\"Static: RMS across sequences of each prefix mean's error to the independent integral. CPU averaging only. Moving: null.\","
+           "\"convergence\":\"Static: RMS across sequences of each prefix mean's error to the scene error_reference. CPU averaging only. Moving: null. Finite-spp reference noise is retained.\","
            "\"ensemble\":\"Static averages all frames and sequences; moving averages only the final frame across independent sequences. Finite-sample errors are not proof of bias.\","
            "\"residual_frame_delta_rmse\":\"Fresh frame difference minus matching reference difference; excludes sequence boundaries. Temporal correlation can reduce it without improving convergence.\","
            "\"reference_split_rmse\":\"Difference of disjoint equal-spp NEE/MIS halves; the stored reference is their mean. Reference noise is not subtracted.\","

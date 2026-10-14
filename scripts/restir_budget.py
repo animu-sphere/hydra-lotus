@@ -109,6 +109,22 @@ def summarize(reports, targets):
         require(type(moving) is bool and all(s["moving"] == moving for s in scene_runs),
                 "inconsistent moving workload identity")
         static = not moving
+        # Older v1 reports predate the explicit reference label and regions.
+        default_reference = "independent-lambert-integral" if static else "finite-spp-nee-mis"
+        reference = scene_runs[0].get("error_reference", default_reference)
+        require(reference in ("independent-lambert-integral", "finite-spp-nee-mis") and
+                (static or reference == "finite-spp-nee-mis") and
+                all(s.get("error_reference", default_reference) == reference for s in scene_runs),
+                "inconsistent error reference")
+        splits = [s.get("reference_split_rmse") for s in scene_runs]
+        require(not any("error_reference" in s for s in scene_runs) or all(s is not None for s in splits),
+                "explicit error reference requires split measurements")
+        if any(s is not None for s in splits):
+            require(all(s is not None and len(s) == (procedure["frames"] if moving else 1)
+                        for s in splits), "wrong reference split population")
+            for split in splits:
+                for value in split:
+                    number(value)
         for scene in scene_runs:
             for case in scene["cases"]:
                 require((case["convergence"] is not None) == static, "inconsistent static/moving curves")
@@ -130,6 +146,23 @@ def summarize(reports, targets):
                       "max_abs_tile_mean_error": population([r["max_abs_tile_mean_error"] for r in runs]),
                       "signed_mean_error_rgb": [r["signed_mean_error_rgb"] for r in runs],
                       "quality_budgets": None}
+            region_keys = [(r["id"], r["pixels"]) for r in runs[0].get("regions", [])]
+            require(len(set(k[0] for k in region_keys)) == len(region_keys) and
+                    all(isinstance(k[0], str) and k[0] and type(k[1]) is int and k[1] > 0
+                        for k in region_keys), "invalid region identities")
+            require(all([(r["id"], r["pixels"]) for r in run.get("regions", [])] == region_keys
+                        for run in runs), "regions must match")
+            regions = []
+            for region_index, (region_id, pixels) in enumerate(region_keys):
+                region_runs = [r["regions"][region_index] for r in runs]
+                for region in region_runs:
+                    rgb = region["signed_mean_error_rgb"]
+                    require(len(rgb) == 3 and all(type(x) in (int, float) and math.isfinite(x) for x in rgb),
+                            "invalid region signed RGB mean error")
+                regions.append({"id": region_id, "pixels": pixels,
+                                "ensemble_rmse": population([r["ensemble_rmse"] for r in region_runs]),
+                                "signed_mean_error_rgb": [r["signed_mean_error_rgb"] for r in region_runs]})
+            result["regions"] = regions
             if static:
                 budgets = []
                 for target in targets:
@@ -147,10 +180,12 @@ def summarize(reports, targets):
                                     "speedup_summary": population(ratios) if all(r is not None for r in ratios) else None})
                 result["quality_budgets"] = budgets
             cases.append(result)
-        scenes.append({"id": scene_id, "cases": cases})
+        scenes.append({"id": scene_id, "error_reference": reference,
+                       "reference_split_rmse": splits if splits[0] is not None else None, "cases": cases})
     return {"schema": "lotus-restir-budget-v1", "build": first["build"], "device": first["device"],
             "procedure": procedure, "run_seeds": [r["procedure"]["sample_index"] for r in reports],
             "notes": {"quality": "First observed checkpoint at/below target that stays below through the final checkpoint. No interpolation; no claim beyond the measured horizon.",
+                      "reference": "Budgets use each scene's error_reference. Finite-spp NEE/MIS noise is retained, with split discrepancies reported separately; repeated references share seeds.",
                       "replication": "Populations are across separate invocations. Frames within a reused sequence are correlated. Shared references are not independent replications.",
                       "missing": "Unreached budgets or unavailable GPU timestamps are null. Aggregate times/ratios require every run; no successful-subset averages.",
                       "timing": "Scene GPU time includes reservoir/metadata passes and excludes updates/readback. Dynamic clocks and validation limit inference.",

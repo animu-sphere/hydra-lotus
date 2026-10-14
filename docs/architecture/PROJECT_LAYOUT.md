@@ -106,6 +106,8 @@ keep benchmark data separate from renderer correctness evidence.
 `adapters/headless/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,
 metrics and CLI are owned by the [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison).
+The same module owns the opt-in mixed area/environment and material/depth
+boundary workload pair and its regional error metrics.
 `validation/restir-benchmark-test.cmake` checks both integrators, all three
 candidate proposals and capability handling, with a Vulkan-only missing-driver
 regression. Proposal selection and marginal densities live in
@@ -115,6 +117,8 @@ regression. Proposal selection and marginal densities live in
 `scripts/restir_budget.py` reduces repeated headless comparison reports into
 observed static quality budgets and moving error summaries. It uses Python's
 standard library and introduces no installed target or renderer dependency.
+It retains exact/finite reference identities, reference split discrepancies
+and boundary-region error populations.
 `scripts/test_restir_budget.py` checks independent reducer fixtures, including
 overlapping seeds, missing budgets/timestamps and temporal recrossings.
 

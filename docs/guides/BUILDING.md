@@ -115,6 +115,26 @@ attainment, missing results and paired timing semantics. Substitute your build
 identity in the shared label. Measure each integrator/proposal/settings group
 separately, without overlapping GPU tests or benchmarks.
 
+For mixed area/environment lighting and material/depth boundaries, select the
+alternate workload pair explicitly:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-boundaries-reference-0.json --benchmark-label "0aeeb5d + mixed boundary workloads; core Release; 2026-10-15" --benchmark-integrator reference --benchmark-size 32 --benchmark-frames 32 --benchmark-warmup 4 --restir-sequences 4 --restir-lights 64 --restir-reference-samples 512 --restir-candidates 1,8 --restir-history-cap 32 --restir-seed 17 --restir-workload mixed-boundaries
+```
+
+Repeat with seeds `262165` and `524313` and output suffixes `-1.json` and
+`-2.json`, then repeat the group using `wavefront` and distinct output paths.
+Use your measured build identity in the label. Reduce each integrator's group:
+
+```sh
+python scripts/restir_budget.py build/restir-boundaries-reference-0.json build/restir-boundaries-reference-1.json build/restir-boundaries-reference-2.json --rmse 0.2 0.1 0.05 --output build/restir-boundaries-reference-summary.json
+```
+
+These budgets use finite NEE/MIS references, with reference split discrepancies
+and central-boundary errors retained in the summary. The
+[boundary measurement](../reports/2026-10-15-restir-boundaries.md) records the
+runs and their limits.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

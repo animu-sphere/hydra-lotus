@@ -13,6 +13,9 @@ endif()
 if(NOT DEFINED PROPOSAL)
   set(PROPOSAL power-alias)
 endif()
+if(NOT DEFINED WORKLOAD)
+  set(WORKLOAD distant)
+endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 if(NO_DRIVER)
   set(manifest "${TEST_ROOT}/unavailable-manifest.json")
@@ -28,7 +31,7 @@ execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${report}"
   --benchmark-size 16 --benchmark-frames 4 --benchmark-warmup 1
   --restir-sequences 2 --restir-reference-samples 32 --restir-lights 32
   --restir-candidates 1,8 --restir-history-cap 8
-  --restir-proposal "${PROPOSAL}" --restir-seed 262165
+  --restir-proposal "${PROPOSAL}" --restir-seed 262165 --restir-workload "${WORKLOAD}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "ReSTIR benchmark failed (${result}):\n${output}\n${error}")
@@ -41,12 +44,13 @@ string(JSON integrator GET "${json}" procedure integrator)
 string(JSON reference_integrator GET "${json}" procedure reference_integrator)
 string(JSON proposal GET "${json}" procedure candidate_proposal)
 string(JSON seed GET "${json}" procedure sample_index)
+string(JSON workload GET "${json}" procedure workload_suite)
 string(JSON radiance GET "${json}" procedure radiance_reuse)
 string(JSON count LENGTH "${json}" scenes)
 if(NOT schema STREQUAL "lotus-restir-benchmark-v1" OR
    NOT label STREQUAL "CTest quoted \"label\"" OR NOT integrator STREQUAL INTEGRATOR OR
    NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL PROPOSAL OR
-   NOT seed EQUAL 262165 OR radiance)
+   NOT seed EQUAL 262165 OR NOT workload STREQUAL WORKLOAD OR radiance)
   message(FATAL_ERROR "Wrong schema/build/estimator procedure")
 endif()
 if(result STREQUAL "77")
@@ -61,12 +65,24 @@ else()
   endif()
   string(JSON image_directory GET "${json}" image_directory)
   set(ids many-distant-plane-v1 many-distant-moving-shadow-v1)
+  if(WORKLOAD STREQUAL "mixed-boundaries")
+    set(ids mixed-area-environment-boundaries-v1 mixed-area-environment-moving-boundaries-v1)
+  endif()
   set(modes mis initial temporal spatial spatiotemporal initial temporal spatial spatiotemporal)
   foreach(s RANGE 0 1)
     list(GET ids ${s} expected_id)
     string(JSON id GET "${json}" scenes ${s} id)
     string(JSON cases LENGTH "${json}" scenes ${s} cases)
     string(JSON reference_count LENGTH "${json}" scenes ${s} reference_split_rmse)
+    string(JSON reference_kind GET "${json}" scenes ${s} error_reference)
+    string(JSON integral TYPE "${json}" scenes ${s} independent_integral_rgb)
+    if(s EQUAL 0 AND WORKLOAD STREQUAL "distant")
+      if(NOT reference_kind STREQUAL "independent-lambert-integral" OR NOT integral STREQUAL "ARRAY")
+        message(FATAL_ERROR "Missing exact Lambert reference")
+      endif()
+    elseif(NOT reference_kind STREQUAL "finite-spp-nee-mis" OR NOT integral STREQUAL "NULL")
+      message(FATAL_ERROR "Finite NEE/MIS reference must not claim an exact integral")
+    endif()
     if(NOT id STREQUAL expected_id OR NOT cases EQUAL 9 OR
        (s EQUAL 0 AND NOT reference_count EQUAL 1) OR (s EQUAL 1 AND NOT reference_count EQUAL 4))
       message(FATAL_ERROR "Wrong workloads, candidates or independent reference population")
@@ -98,6 +114,18 @@ else()
       string(JSON ensemble_image GET "${json}" scenes ${s} cases ${c} ensemble_image)
       string(JSON convergence TYPE "${json}" scenes ${s} cases ${c} convergence)
       string(JSON rmse GET "${json}" scenes ${s} cases ${c} ensemble_rmse)
+      string(JSON regions LENGTH "${json}" scenes ${s} cases ${c} regions)
+      if(WORKLOAD STREQUAL "mixed-boundaries")
+        string(JSON region GET "${json}" scenes ${s} cases ${c} regions 0 id)
+        string(JSON pixels GET "${json}" scenes ${s} cases ${c} regions 0 pixels)
+        string(JSON region_rmse GET "${json}" scenes ${s} cases ${c} regions 0 ensemble_rmse)
+        if(NOT regions EQUAL 1 OR NOT region STREQUAL "center-boundary-band-v1" OR
+           NOT pixels EQUAL 64 OR region_rmse LESS 0)
+          message(FATAL_ERROR "Missing boundary error measurements")
+        endif()
+      elseif(NOT regions EQUAL 0)
+        message(FATAL_ERROR "Unexpected boundary region")
+      endif()
       if(NOT mode STREQUAL expected_mode OR NOT candidates EQUAL expected_candidates OR
          NOT memory EQUAL expected_bytes OR NOT vram STREQUAL "NULL" OR rmse LESS 0 OR
          NOT EXISTS "${TEST_ROOT}/${image_directory}/${final_image}" OR
@@ -126,13 +154,15 @@ else()
             endif()
           endif()
         endforeach()
-        foreach(channel RANGE 0 2)
-          string(JSON bias GET "${json}" scenes ${s} cases ${c} signed_mean_error_rgb ${channel})
-          # Independent Lambert integral gate; broad for this small smoke run.
-          if(bias LESS -0.15 OR bias GREATER 0.15)
-            message(FATAL_ERROR "Static ensemble fails independent integral: ${mode} ${bias}")
-          endif()
-        endforeach()
+        if(WORKLOAD STREQUAL "distant")
+          foreach(channel RANGE 0 2)
+            string(JSON bias GET "${json}" scenes ${s} cases ${c} signed_mean_error_rgb ${channel})
+            # Independent Lambert integral gate; broad for this small smoke run.
+            if(bias LESS -0.15 OR bias GREATER 0.15)
+              message(FATAL_ERROR "Static ensemble fails independent integral: ${mode} ${bias}")
+            endif()
+          endforeach()
+        endif()
       elseif(NOT convergence STREQUAL "NULL")
         message(FATAL_ERROR "Moving frames must not be treated as static convergence")
       endif()
@@ -181,6 +211,7 @@ set(invalid_options
   "--restir-candidates|1," "--restir-candidates|1junk" "--restir-candidates|"
   "--restir-history-cap|0" "--restir-radius|33" "--benchmark-integrator|unknown"
   "--restir-proposal|unknown" "--restir-proposal|" "--restir-proposal|Power"
+  "--restir-workload|unknown" "--restir-workload|" "--restir-workload|Mixed-boundaries"
   "--restir-seed|-1" "--restir-seed|8388608" "--restir-seed|8388607" "--restir-seed|17junk"
   "--report|renderer-report.json" "--benchmark|other.json")
 foreach(pair IN LISTS invalid_options)
