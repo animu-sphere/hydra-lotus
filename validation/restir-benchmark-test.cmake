@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
+cmake_minimum_required(VERSION 3.24)
+# Script mode does not inherit the parent project's policies. In particular,
+# CMP0007 must retain the empty value in the rejected "--restir-candidates|"
+# case on CMake 3.x as well as CMake 4.x.
 # Small report/measurement regression. Timing is observed, never a pass threshold.
 if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "EXECUTABLE and TEST_ROOT are required")
