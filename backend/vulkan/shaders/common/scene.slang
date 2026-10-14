@@ -171,6 +171,10 @@ public struct PathConstants {
   public uint64_t environment_map;
   public float environment_selection;
   public uint restir_candidates;
+  public uint restir_temporal;
+  public uint restir_history;
+  public uint restir_max_history_candidates;
+  public uint restir_reserved;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;

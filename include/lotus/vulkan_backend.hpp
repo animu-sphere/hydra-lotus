@@ -99,7 +99,7 @@ struct TemporalProducts {
   std::uint32_t batch_samples = 0;
 };
 
-// Last fresh sample's initial-only direct-light reservoir, top-left rows.
+// Last fresh sample's initial direct-light reservoir, top-left rows.
 // light is a slot in this scene generation's light table; uv reconstructs
 // the sample in that light's unit-square domain. Never a persistent identity.
 struct RestirPixel {
@@ -116,16 +116,33 @@ struct RestirPixel {
 };
 static_assert(sizeof(RestirPixel) == 48);
 
+// Resolved temporal reservoir. Keep normalization separately: raw sum/M
+// cannot recover differing-support correction. previous_index is UINT32_MAX
+// when no history source participated; age counts successful recursive reuse.
+struct RestirReusePixel {
+  RestirPixel reservoir;
+  float normalization = 0;
+  std::uint32_t supporting_candidates = 0;
+  std::uint32_t previous_index = 0xFFFFFFFFU;
+  std::uint32_t age = 0;
+};
+static_assert(sizeof(RestirReusePixel) == 64);
+
 struct RestirProducts {
   bool available = false;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   std::uint32_t row_pitch = 0;
+  std::uint32_t temporal_row_pitch = 0;
   std::uint64_t scene_generation = 0;
   std::vector<RestirPixel> initial;
+  bool history_available = false;
+  std::vector<RestirReusePixel> temporal;
+  std::vector<RestirReusePixel> previous;
   bool timestamp_available = false;
   // Primary ray, candidates and selected-sample visibility, excluding readback.
   double initial_gpu_ms = 0;
+  double temporal_gpu_ms = 0;
   // Allocated device reservoir storage plus its host mirror, outside scene stats.
   std::uint64_t reservoir_bytes = 0;
 };
@@ -430,7 +447,7 @@ enum class Integrator {
 };
 
 // How Radiance finds the scene's lights. The estimators converge to the same
-// image and preserve surface emission; reservoir reuse is not enabled here.
+// image and preserve surface emission. Reservoir reuse is a separate opt-in.
 enum class LightSampling {
   // Brute force: emission counts only where a camera ray or a sampled BSDF
   // direction happens to find it. Parallel light, which no direction finds,
@@ -475,8 +492,14 @@ struct PathTracingSettings {
   // restart the accumulation.
   std::uint32_t max_samples = 0;
   // Initial light draws per primary surface, 1..64; changing it resets
-  // progressive and temporal radiance. No temporal/spatial reservoir reuse.
+  // progressive and temporal radiance.
   std::uint32_t restir_candidates = 8;
+  // Opt-in reservoir reuse through RenderTemporalScene, one fresh sample
+  // per call. Requires RestirInitial; independent of radiance accumulation.
+  bool restir_temporal = false;
+  // Cap the preceding source's represented draws, 1..65536. Both count and
+  // merge weight are capped; its resolved normalization is preserved.
+  std::uint32_t restir_max_history_candidates = 32;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
