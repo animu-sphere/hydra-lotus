@@ -30,6 +30,7 @@ struct Options {
   std::string label;
   unsigned size = 64, frames = 32, warmup = 4, sequences = 4;
   unsigned lights = 128, reference_samples = 256, cap = 32, radius = 1;
+  unsigned seed = kSeed;
   std::vector<unsigned> candidates{1, 2, 8};
   Integrator integrator = Integrator::Reference;
   RestirProposal proposal = RestirProposal::Power;
@@ -105,6 +106,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-label <identity>] [--benchmark-integrator <reference|wavefront>] "
                                 "[--benchmark-size <16..256>] [--benchmark-frames <2..256>] "
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
+                                "[--restir-seed <0..8388607>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -142,6 +144,8 @@ Options Parse(int argc, char** argv) {
       options.warmup = Number(value, 0, 64);
     else if (option == "--restir-sequences")
       options.sequences = Number(value, 2, 64);
+    else if (option == "--restir-seed")
+      options.seed = Number(value, 0, (1U << 23) - 1);
     else if (option == "--restir-lights")
       options.lights = Number(value, 2, 4096);
     else if (option == "--restir-reference-samples")
@@ -166,6 +170,9 @@ Options Parse(int argc, char** argv) {
     } else
       throw std::invalid_argument("unknown benchmark option: " + std::string(option));
   }
+  // Measured samples must stay below the separate warmup/reference ranges.
+  if (options.seed + (options.sequences - 1) * kSequenceStride + options.frames > (1U << 23))
+    throw std::invalid_argument("measured sample range overlaps warmup range");
   return options;
 }
 
@@ -373,6 +380,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
 
   std::vector<double> error, delta, wall, gpu, initial, temporal, spatial, surface, reprojection;
   std::vector<double> convergence_mse(options.frames), convergence_gpu(options.frames);
+  std::vector<std::vector<double>> convergence_rmse_raw(options.frames), convergence_gpu_raw(options.frames);
   std::vector<double> ensemble(std::size_t{options.size} * options.size * 3), previous;
   std::uint64_t reservoir_bytes = 0, metadata_bytes = 0, scene_pool_bytes = 0;
   std::uint64_t reused_pixels = 0, surface_pixels = 0;
@@ -383,7 +391,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
     double elapsed_gpu = 0;
     for (unsigned f = 0; f < options.frames; ++f) {
       const auto start = Clock::now();
-      auto frame = render(work.snapshots[f], kSeed + sequence * kSequenceStride, f, f == 0);
+      auto frame = render(work.snapshots[f], options.seed + sequence * kSequenceStride, f, f == 0);
       wall.push_back(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
       last = Image(frame, options.size, 1);
       Require(frame.frames_rendered == 1, "measurement did not submit one sample");
@@ -421,7 +429,9 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
         auto progressive = accumulated;
         for (auto& value : progressive)
           value /= f + 1;
-        convergence_mse[f] += Mse(progressive, reference) / options.sequences;
+        const auto mse = Mse(progressive, reference);
+        convergence_mse[f] += mse / options.sequences;
+        convergence_rmse_raw[f].push_back(std::sqrt(mse));
       }
       if (sequence == 0 && f == 0)
         timestamps = frame.primary_ray_timestamp_available;
@@ -431,6 +441,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
         gpu.push_back(frame.primary_ray_gpu_ms);
         elapsed_gpu += frame.primary_ray_gpu_ms;
         convergence_gpu[f] += elapsed_gpu / options.sequences;
+        convergence_gpu_raw[f].push_back(elapsed_gpu);
         if (mode.candidates) {
           Require(frame.restir.timestamp_available, "missing reservoir timestamps");
           initial.push_back(frame.restir.initial_gpu_ms);
@@ -527,6 +538,13 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
           out << convergence_gpu[f];
         else
           out << "null";
+        out << ",\"rmse_raw\":";
+        Array(out, convergence_rmse_raw[f]);
+        out << ",\"cumulative_gpu_ms_raw\":";
+        if (timestamps)
+          Array(out, convergence_gpu_raw[f]);
+        else
+          out << "null";
         out << '}';
         first = false;
       }
@@ -615,7 +633,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
         << ",\"sequences\":" << options.sequences << ",\"analytic_lights\":" << options.lights
         << ",\"reference_samples_per_half\":" << options.reference_samples
         << ",\"reference_halves\":2,\"reference_seed\":" << kReferenceSeed
-        << ",\"sample_index\":" << kSeed << ",\"sequence_stride\":" << kSequenceStride
+        << ",\"sample_index\":" << options.seed << ",\"sequence_stride\":" << kSequenceStride
         << ",\"max_bounces\":1,\"fresh_samples_per_frame\":1,\"radiance_reuse\":false,\"history_cap\":" << options.cap
         << ",\"spatial_radius\":" << options.radius << ",\"candidate_counts\":";
     Array(out, options.candidates);

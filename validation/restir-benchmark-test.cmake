@@ -28,7 +28,7 @@ execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${report}"
   --benchmark-size 16 --benchmark-frames 4 --benchmark-warmup 1
   --restir-sequences 2 --restir-reference-samples 32 --restir-lights 32
   --restir-candidates 1,8 --restir-history-cap 8
-  --restir-proposal "${PROPOSAL}"
+  --restir-proposal "${PROPOSAL}" --restir-seed 262165
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "ReSTIR benchmark failed (${result}):\n${output}\n${error}")
@@ -40,11 +40,13 @@ string(JSON label GET "${json}" build label)
 string(JSON integrator GET "${json}" procedure integrator)
 string(JSON reference_integrator GET "${json}" procedure reference_integrator)
 string(JSON proposal GET "${json}" procedure candidate_proposal)
+string(JSON seed GET "${json}" procedure sample_index)
 string(JSON radiance GET "${json}" procedure radiance_reuse)
 string(JSON count LENGTH "${json}" scenes)
 if(NOT schema STREQUAL "lotus-restir-benchmark-v1" OR
    NOT label STREQUAL "CTest quoted \"label\"" OR NOT integrator STREQUAL INTEGRATOR OR
-   NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL PROPOSAL OR radiance)
+   NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL PROPOSAL OR
+   NOT seed EQUAL 262165 OR radiance)
   message(FATAL_ERROR "Wrong schema/build/estimator procedure")
 endif()
 if(result STREQUAL "77")
@@ -111,6 +113,19 @@ else()
         if(NOT convergence STREQUAL "ARRAY" OR NOT checkpoints EQUAL 3 OR NOT samples EQUAL 4)
           message(FATAL_ERROR "Missing static convergence curve")
         endif()
+        foreach(checkpoint RANGE 0 2)
+          string(JSON population LENGTH "${json}" scenes ${s} cases ${c} convergence ${checkpoint} rmse_raw)
+          if(NOT population EQUAL 2)
+            message(FATAL_ERROR "Missing independent convergence population")
+          endif()
+          string(JSON gpu_population TYPE "${json}" scenes ${s} cases ${c} convergence ${checkpoint} cumulative_gpu_ms_raw)
+          if(NOT gpu_population STREQUAL "NULL")
+            string(JSON population LENGTH "${json}" scenes ${s} cases ${c} convergence ${checkpoint} cumulative_gpu_ms_raw)
+            if(NOT population EQUAL 2)
+              message(FATAL_ERROR "Missing cumulative GPU population")
+            endif()
+          endif()
+        endforeach()
         foreach(channel RANGE 0 2)
           string(JSON bias GET "${json}" scenes ${s} cases ${c} signed_mean_error_rgb ${channel})
           # Independent Lambert integral gate; broad for this small smoke run.
@@ -166,6 +181,7 @@ set(invalid_options
   "--restir-candidates|1," "--restir-candidates|1junk" "--restir-candidates|"
   "--restir-history-cap|0" "--restir-radius|33" "--benchmark-integrator|unknown"
   "--restir-proposal|unknown" "--restir-proposal|" "--restir-proposal|Power"
+  "--restir-seed|-1" "--restir-seed|8388608" "--restir-seed|8388607" "--restir-seed|17junk"
   "--report|renderer-report.json" "--benchmark|other.json")
 foreach(pair IN LISTS invalid_options)
   string(REPLACE "|" ";" args "${pair}")

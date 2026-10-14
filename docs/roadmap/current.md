@@ -41,8 +41,12 @@ Implement the remaining work in this order:
   uniform and equal-mixture proposals are implemented and checked against
   CPU/GPU arithmetic, independent mixed-light integrals and matched many-light
   comparisons ([proposal evidence](../reports/2026-10-15-restir-proposals.md)).
-  Remaining: measure broader/repeated
-  equal-quality budgets and artifact/bias behavior; address the measured
+  Three independent repetitions per integrator now measure observed
+  equal-quality budgets at a longer horizon and higher light count
+  ([budget evidence](../reports/2026-10-15-restir-budgets.md)).
+  Remaining: broaden equal-quality budgets and artifact/bias coverage to
+  area/environment lighting and stronger material/surface boundaries;
+  address the reproduced
   reuse cost and temporal correlation before recording the scope review and
   release gate.
 
