@@ -128,6 +128,14 @@ FragmentOutput RadiancePass(VertexOutput input) {
 
 [shader("fragment")]
 FragmentOutput fragment_main(VertexOutput input) {
+  if (kPass == 9) {
+    if (path_constants.add_sample != 0)
+      WriteSpatialReservoir(uint2(input.position.xy));
+    FragmentOutput output;
+    output.color = float4(0.0);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == 7 || kPass == 8) {
     const uint2 pixel = uint2(input.position.xy);
     if (path_constants.add_sample != 0) {

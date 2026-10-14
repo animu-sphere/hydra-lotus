@@ -77,8 +77,10 @@ references ([radiance contract](../reference/TEMPORAL.md#temporal-radiance-accum
 Direct-light reservoir arithmetic stays in the same backend target:
 `reservoir.cpp` is a Vulkan-independent CPU oracle with a private header.
 `shaders/sampling/reservoir.slang` ports its streaming arithmetic;
-`shaders/common/restir.slang` owns initial candidates and selected visibility,
-with persistent resources and timestamps in `vulkan_backend.cpp`.
+`shaders/common/restir.slang` owns initial candidates, selected visibility and
+temporal/spatial reuse with private exact-shading records. Persistent resources,
+separate current input/destination storage and timestamps live in
+`vulkan_backend.cpp`; shared temporal metadata stays in its existing module.
 The public settings and packed debug products are in `vulkan_backend.hpp`.
 The uninstalled `lotus-restir-gpu-test` compares both integrators with the
 CPU oracle and independent lighting integrals; without Vulkan it explains a

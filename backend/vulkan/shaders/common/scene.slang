@@ -174,7 +174,8 @@ public struct PathConstants {
   public uint restir_temporal;
   public uint restir_history;
   public uint restir_max_history_candidates;
-  public uint restir_reserved;
+  public uint restir_spatial;
+  public uint restir_spatial_radius;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;

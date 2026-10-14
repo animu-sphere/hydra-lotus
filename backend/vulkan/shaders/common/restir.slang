@@ -38,6 +38,8 @@ struct RestirHistory {
 };
 [[vk::binding(17, 0)]] RWStructuredBuffer<RestirHistory> temporal_reservoirs;
 [[vk::binding(18, 0)]] StructuredBuffer<RestirHistory> previous_reservoirs;
+[[vk::binding(19, 0)]] RWStructuredBuffer<RestirHistory> spatial_reservoirs;
+[[vk::binding(20, 0)]] RWStructuredBuffer<uint4> spatial_sources;
 
 // f in the light's unit-square parameter measure. The conditional mapping's
 // Jacobian is selection / sample.pdf (area or solid angle); q is selection.
@@ -120,6 +122,8 @@ public void WriteInitialReservoir(uint2 pixel, RayDesc ray, inout uint camera_rn
 }
 
 public Spectrum InitialDirectLight(uint pixel) {
+  if (path_constants.restir_spatial != 0)
+    return SpectrumFromRgb(spatial_reservoirs[pixel].pixel.contribution.xyz);
   if (path_constants.restir_temporal != 0)
     return SpectrumFromRgb(temporal_reservoirs[pixel].pixel.contribution.xyz);
   return SpectrumFromRgb(initial_reservoirs[pixel].contribution.xyz);
@@ -156,7 +160,7 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
     const float3 wo = basis.ToLocal(-ray.Direction);
     const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
-    result.origin = float4(origin, 0.0);
+    result.origin = float4(origin, CurrentViewDepth(surface.position));
     result.normal = float4(surface.normal, surface.bsdf.dielectric_f90);
     result.shading_normal = float4(surface.shading_normal, 0.0);
     result.outgoing = float4(wo, 0.0);
@@ -229,4 +233,110 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     }
   }
   temporal_reservoirs[slot] = result;
+}
+
+// Geometry-only acceptance is independent of the random light selection.
+// Do not gate on selected visibility or target: even all-zero observed
+// streams can support the final selection and belong in its denominator.
+bool SpatialCompatible(RestirHistory receiver, RestirHistory source) {
+  return (source.pixel.flags & 3u) == 1u &&
+      receiver.origin.w > 0.0 && source.origin.w > 0.0 &&
+      receiver.material_id == source.material_id &&
+      abs(receiver.origin.w - source.origin.w) <=
+          0.01 + 0.02 * max(receiver.origin.w, source.origin.w) &&
+      dot(receiver.normal.xyz, source.normal.xyz) >= 0.9 &&
+      dot(receiver.shading_normal.xyz, source.shading_normal.xyz) >= 0.9;
+}
+
+public void WriteSpatialReservoir(uint2 pixel) {
+  const uint slot = pixel.y * path_constants.width + pixel.x;
+  const RestirHistory centre = temporal_reservoirs[slot];
+  RestirHistory result = centre;
+  uint4 sources = uint4(0xffffffffu);
+  const int radius = int(path_constants.restir_spatial_radius);
+  const int2 offsets[4] = {int2(-radius, 0), int2(radius, 0),
+      int2(0, -radius), int2(0, radius)};
+  if ((centre.pixel.flags & 3u) == 1u) {
+    uint accepted = 0;
+    for (uint i = 0; i < 4; ++i) {
+      const int2 neighbour = int2(pixel) + offsets[i];
+      if (any(neighbour < int2(0)) ||
+          any(neighbour >= int2(path_constants.width,
+              path_constants.path_capacity / path_constants.width)))
+        continue;
+      const uint index = uint(neighbour.y) * path_constants.width + uint(neighbour.x);
+      if (SpatialCompatible(centre, temporal_reservoirs[index])) {
+        sources[i] = index;
+        ++accepted;
+      }
+    }
+    if (accepted != 0) {
+      // Re-stream the centre's RESOLVED estimator; its raw sum can contain
+      // a different support correction from the preceding temporal pass.
+      result.pixel.reservoir = EmptyReservoir();
+      bool selected;
+      if (!MergeReevaluatedReservoir(result.pixel.reservoir, centre.pixel.reservoir,
+              centre.normalization, centre.pixel.reservoir.selected_target,
+              0xffffffffu, 0.0, selected))
+        result.pixel.flags |= 2u;
+      uint rng = SeedRandom(slot, path_constants.sample_index ^ 0x369DEA0Fu);
+      for (uint i = 0; i < 4; ++i) {
+        if (sources[i] == 0xffffffffu)
+          continue;
+        const RestirHistory source = temporal_reservoirs[sources[i]];
+        Spectrum received = SpectrumConstant(0.0);
+        if (source.pixel.reservoir.weight_sum > 0.0)
+          received = HistoryContribution(centre, source.pixel.reservoir.sample, source.pixel.uv);
+        if (!IsFinite(received) || !MergeReevaluatedReservoir(result.pixel.reservoir,
+                source.pixel.reservoir, source.normalization, MaxComponent(received),
+                path_constants.restir_max_history_candidates, NextRandom(rng), selected)) {
+          result.pixel.flags |= 2u;
+          break;
+        }
+        if (selected) {
+          result.pixel.uv = source.pixel.uv;
+          result.pixel.proposal = source.pixel.proposal;
+          result.age = source.age; // spatial reuse does not advance frame age
+        }
+      }
+      result.supporting_candidates = 0;
+      result.pixel.contribution = float4(0.0);
+      if ((result.pixel.flags & 2u) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
+        result.supporting_candidates = centre.pixel.reservoir.candidate_count;
+        for (uint i = 0; i < 4; ++i) {
+          if (sources[i] == 0xffffffffu)
+            continue;
+          const RestirHistory source = temporal_reservoirs[sources[i]];
+          const Spectrum support = HistoryContribution(source,
+              result.pixel.reservoir.sample, result.pixel.uv);
+          if (!IsFinite(support))
+            result.pixel.flags |= 2u;
+          if (MaxComponent(support) > 0.0)
+            result.supporting_candidates += min(source.pixel.reservoir.candidate_count,
+                path_constants.restir_max_history_candidates);
+        }
+      }
+      result.normalization = ReservoirReuseNormalization(
+          result.pixel.reservoir, result.supporting_candidates);
+      if ((result.pixel.flags & 2u) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
+        const LightSample sample = ReconstructReservoirLight(
+            result.pixel.reservoir.sample, result.pixel.uv, result.origin.xyz);
+        RayDesc shadow;
+        shadow.Origin = result.origin.xyz;
+        shadow.Direction = sample.direction;
+        shadow.TMin = 0.0;
+        shadow.TMax = sample.distance;
+        const float visibility = ShadowTransmittance(shadow);
+        const Spectrum estimate = HistoryContribution(result,
+            result.pixel.reservoir.sample, result.pixel.uv) * (visibility * result.normalization);
+        if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
+          result.pixel.flags |= 2u;
+        else
+          result.pixel.contribution = float4(SpectrumToRgb(estimate), visibility);
+      }
+    }
+  }
+  // Destination is never read by another pixel in this pass.
+  spatial_reservoirs[slot] = result;
+  spatial_sources[slot] = sources;
 }

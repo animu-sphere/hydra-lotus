@@ -3,7 +3,7 @@
 `backend/vulkan/reservoir.hpp` and `reservoir.cpp` implement an internal CPU
 reference in `Lotus::vulkan_internal`, built by `Lotus::Vulkan` even with
 Vulkan disabled. The header is not installed. GPU float arithmetic and
-initial and temporal direct lighting are in `shaders/sampling/reservoir.slang` and
+initial, temporal and spatial direct lighting are in `shaders/sampling/reservoir.slang` and
 `shaders/common/restir.slang`. The [roadmap](../roadmap/README.md#status-at-a-glance)
 owns delivery status; the [phase policy](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 owns the intended transport scope.
@@ -233,7 +233,7 @@ overflow failure under both integrators
 ([GPU evidence](../reports/2026-10-13-restir-initial.md)).
 Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 
-Spatial reuse, candidate strategy evaluation and Hydra reservoir settings/AOVs
+Candidate strategy evaluation and Hydra reservoir settings/AOVs
 remain outside this implementation. Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.
 
@@ -324,5 +324,82 @@ These bounded fixtures do not establish unbiased arbitrary moving-history
 selection, many-light speedup or production temporal stability. Correlated
 recursive samples add no independent draws; nearest-pixel reprojection and
 geometric rejection can affect history selection. Visibility is always current,
-but indirect radiance reuse keeps its separate limitations. Spatial reuse,
-general light-domain remapping and Hydra reservoir controls remain later work.
+but indirect radiance reuse keeps its separate limitations. General light-domain
+remapping and Hydra reservoir controls remain later work.
+
+## Spatial GPU reuse
+
+Set `PathTracingSettings::restir_spatial = true` with `RestirInitial` and call
+`RenderTemporalScene` with one fresh sample. `restir_temporal` is independently
+selectable: the spatial input is this frame's temporal result when enabled,
+or fresh initial reservoirs with their exact primary shading otherwise.
+Ordinary `RenderScene` Radiance calls reject spatial requests. The default is off.
+
+One fullscreen pass reads immutable current input records and writes separate
+destination history. It visits left, right, up and down at
+`restir_spatial_radius` pixels (default 1, range 1–32), without duplicate or
+clamped edge samples. Misses and pixels outside the data window are rejected.
+Acceptance requires equal material identity, geometric and shading normal
+cosines at least 0.9, and exact jittered view depths differing by at most
+`0.01 + 0.02 * max(depths)`, with both depths positive. Different instances can participate. Acceptance
+depends only on surfaces, never selected sample target or visibility.
+
+The centre is streamed using its explicit resolved normalization and full
+represented count; each accepted neighbour uses its resolved normalization
+and `min(M, restir_max_history_candidates)`. This preserves preceding temporal
+support correction instead of reconstructing it from raw sum/M. The final
+selection is reevaluated at every participating surface; only counts whose
+unshadowed target is positive enter the support denominator. Observed all-zero
+neighbours participate too. Current visibility/transmittance is traced at the
+receiver after selection, with the same emission accounting as initial lighting.
+With no accepted neighbours the input record is copied unchanged. Spatial
+selection preserves the selected source's age; only temporal reuse advances it.
+The spatial result retains the receiver's exact shading and becomes next
+frame's history when temporal reuse is enabled.
+
+The represented count is bounded by `restir_candidates + 5 * cap` with temporal
+reuse, or `restir_candidates + 4 * min(restir_candidates, cap)` without it.
+These counts describe represented streams, not independent information:
+neighbours and repeated frames can share underlying draws. Spatial selection
+uses `SeedRandom(pixel, sample_index ^ 0x369DEA0F)` and one variate per accepted
+neighbour in left/right/up/down order. Mode and radius changes reset transport
+compatibility as `RenderSettingsChanged`; other temporal resets and the fixed
+light-domain restrictions remain as described above. Failed GPU arithmetic
+latches renderer failure and publishes neither reservoir nor temporal products.
+
+### Products and costs
+
+`restir.initial` and `restir.temporal` expose the two preceding stages;
+`restir.spatial` exposes 64-byte resolved output records with
+`spatial_row_pitch = width * sizeof(RestirReusePixel)`. `spatial_sources` has
+four uint32 indices per pixel in stencil order, UINT32_MAX for rejected sources.
+`previous` contains the preceding frame's final spatial output when compatible
+temporal history is available. `previous_index` in a spatial record identifies
+the receiver's participating temporal correspondence; it does not identify a
+selected spatial source. The source-index diagnostic records all participants.
+
+The immutable input buffer and its readback add 384 bytes/pixel; source-index
+storage and readback add 32. With initial and two-frame history allocations,
+fresh spatial capacity totals 1280 bytes/pixel, excluding shared temporal
+metadata. Capacities remain retained after smaller targets and mode switches.
+`spatial_gpu_ms` times only the spatial pass, including target/support evaluation
+and selected visibility, excluding readback. `temporal_gpu_ms` still includes
+the exact shading preparation pass when temporal reuse is off. All three
+pretransport passes are included in the scene duration.
+
+### Validation and limits
+
+`lotus-renderer-restir-gpu` checks CPU/GPU selection, corrected weights/counts,
+immutable input/output history, all-zero streams, differing support (including
+previously corrected temporal weights), depth/geometric-normal/shading-normal/
+material boundaries, crop and screen edges, current fractional/opaque visibility,
+moving disocclusion, rejected requests, mode/radius resets and spatial overflow
+under both integrators. A 32-light moving-camera fixture compares four reuse
+modes with an independent integral and NEE/MIS; it records frame variation,
+error, GPU costs and memory ([measurement](../reports/2026-10-14-restir-spatial.md)).
+
+The stencil, geometry thresholds and candidate strategy are deliberately fixed
+for this first pass. These bounded comparisons establish no general many-light
+speedup or production artifact/stability guarantee. Reservoir correlations,
+nearest-pixel temporal selection and geometric rejection retain the limits
+above; Hydra controls and broader phase-exit evaluation remain later work.

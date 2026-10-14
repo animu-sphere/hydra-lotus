@@ -23,14 +23,12 @@ The [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
 Temporal GPU reuse now carries explicit corrected weights and exact source
 shading, using shared reprojection and bounded history counts
 ([evidence](../reports/2026-10-13-restir-temporal.md)).
+Spatial reuse reads immutable current reservoirs, rejects surface boundaries
+and retains explicit support-corrected weights. CPU/GPU, visibility, lifecycle
+and four-mode moving many-light comparisons are recorded in its
+[evidence](../reports/2026-10-14-restir-spatial.md).
 Implement the remaining work in this order:
 
-- [ ] **LOTUS-RESTIR-04 — Spatial reservoir reuse.**
-  Read immutable source reservoirs into separate destination storage.
-  Reevaluate samples and normalize across differing surface support;
-  test depth/normal/material boundaries, visibility changes and correlations.
-  Measure bias/artifacts and temporal stability against temporal-only and
-  initial-only modes, with each reuse pass timed and inspectable.
 - [ ] **LOTUS-RESTIR-05 — Hydra controls and exit evidence.**
   Expose estimator/reuse controls and reservoir diagnostics through Hydra,
   retaining deterministic progressive NEE/MIS selection. Validate installed

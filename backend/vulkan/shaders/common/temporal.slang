@@ -19,6 +19,11 @@ struct TemporalConstants {
 };
 [[vk::binding(8, 0)]] ConstantBuffer<TemporalConstants> temporal_frame;
 
+public float CurrentViewDepth(float3 position) {
+  const float4 view = mul(temporal_frame.current_view, float4(position, 1.0));
+  return -view.z / view.w;
+}
+
 struct TemporalInstance {
   float4x4 previous_world_from_object;
   uint64_t instance_id;
