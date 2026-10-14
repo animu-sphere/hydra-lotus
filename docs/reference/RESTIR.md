@@ -151,9 +151,20 @@ opacity realization as transport. It streams candidates, reconstructs the
 selected sample, queries its shadow transmittance and stores normalized RGB.
 Both integrators read this result at their first scattering event.
 
-The payload is a light-table slot plus two unit-square variates. The existing
-power alias table selects the light. Its probability is proposal `q` in the
-light's **unit-square parameter measure**, with unit conditional density:
+The payload is a light-table slot plus two unit-square variates. The core
+`PathTracingSettings::restir_proposal` selects `RestirProposal::Power` (default),
+`Uniform`, or `PowerUniform` (an equal mixture). For N table slots with existing
+power probability p, the marginal proposal q is respectively p, 1/N, or
+`0.5 * (p + 1/N)`. Uniform selection covers the existing table, including
+zero-power slots retained for emissive-triangle indexing; it does not add lights
+excluded during table construction. Invalid enum values reject before dispatch.
+Hydra retains the default power proposal; alternatives are exposed through the
+core and headless comparison.
+
+Proposal q is in the light's **unit-square parameter measure**, with unit
+conditional density. Reconstruction keeps the existing power-selection factor
+p in `sample.pdf`; cancelling p yields the same mapping Jacobian and target
+under every proposal:
 
 | Light | Fixed mapping and Jacobian |
 | --- | --- |
@@ -165,9 +176,10 @@ light's **unit-square parameter measure**, with unit conditional density:
 | Environment image | Fixed inverse row/column CDF map; Jacobian is inverse conditional solid-angle density |
 
 The parameter-space RGB integrand is
-`BSDF_eval_cos * radiance * (selection / sample.pdf)`; target is maximum RGB,
+`BSDF_eval_cos * radiance * (p / sample.pdf)`; target is maximum RGB,
 covering every positive channel. Weight is target divided by selection
-probability. Zero-target/back-facing draws count toward M. Visibility is
+probability q. Mixture draws use the full marginal density, irrespective of
+which component selected the light. Zero-target/back-facing draws count toward M. Visibility is
 applied only after selection, including fractional opacity transmittance.
 Sphere candidates use fixed area points, avoiding a receiver-dependent cone
 payload. These mappings can be reevaluated at another receiver, but no
@@ -176,6 +188,9 @@ cross-surface normalization or reuse occurs in initial-only mode.
 Candidate RNG uses `SeedRandom(pixel, sample_index ^ 0xD1B54A35)` and five
 variates per draw (alias selection, payload, replacement). Primary coverage
 and continuation BSDF draws retain their own sequence.
+Uniform and mixture selection consume the same five variates. The mixture
+uses the second selection variate to choose its component, remapping its upper
+half for the power alias threshold. Default power draws remain unchanged.
 
 ### Emission accounting
 
@@ -209,8 +224,9 @@ history.
 
 `scene_generation` accompanies the products. Slots are valid only for that
 unchanged table, never a persistent light identity. Scene, camera, target,
-integrator, estimator and candidate-count changes restart progressive radiance.
-Candidate-count changes also reset temporal radiance compatibility. Reservoir
+integrator, estimator, proposal and candidate-count changes restart progressive radiance.
+Proposal and candidate-count changes also reset temporal radiance and reservoir
+history compatibility. Reservoir
 state stays outside shared temporal metadata/validity.
 
 Persistent device storage and its host readback mirror initially total 96 bytes
@@ -236,7 +252,9 @@ overflow failure under both integrators
 ([GPU evidence](../reports/2026-10-13-restir-initial.md)).
 Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 
-Candidate strategy evaluation remains outside this implementation.
+CPU/GPU proposal weights, mixed-light Jacobians, independent integrals and
+spatial/temporal reuse are checked under all three proposals
+([proposal evidence](../reports/2026-10-15-restir-proposals.md)).
 Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.
 
@@ -277,6 +295,7 @@ Defaults and accepted CLI ranges:
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
+| `--restir-proposal` | `power-alias` | `power-alias`, `uniform`, `power-uniform` |
 | `--restir-history-cap` | 32 | 1–65536 |
 | `--restir-radius` | 1 | 1–32 |
 
@@ -313,8 +332,10 @@ both. Reservoir and metadata bytes include device storage and host mirrors;
 scene-pool reserved bytes exclude renderer targets. Total VRAM remains null.
 GPU series/cumulative times are null when unsupported or inapplicable.
 
-The candidate sweep evaluates counts under the existing power-alias proposal;
-it does not compare alternative proposal distributions. Parallel lights do not
+Each invocation sweeps counts under one proposal, identified in
+`procedure.candidate_proposal`; compare separate reports with matched settings
+to evaluate alternatives. NEE/MIS references and cases retain their existing
+power selection regardless of the reservoir proposal. Parallel lights do not
 establish area-light/environment or multibounce production performance. The
 reference split discrepancy and finite number of independent sequences limit
 moving bias/artifact conclusions. Reduced frame differences alone do not

@@ -176,6 +176,7 @@ public struct PathConstants {
   public uint restir_max_history_candidates;
   public uint restir_spatial;
   public uint restir_spatial_radius;
+  public uint restir_proposal;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -753,8 +754,25 @@ public LightSample SampleLight(float4 u, float3 origin) {
 public uint ChooseReservoirLight(float2 u) {
   const uint column = min(uint(u.x * float(path_constants.light_count)),
       path_constants.light_count - 1);
+  if (path_constants.restir_proposal == 1)
+    return column;
+  if (path_constants.restir_proposal == 2) {
+    if (u.y < 0.5)
+      return column;
+    u.y = (u.y - 0.5) * 2.0;
+  }
   const LightRecord record = path_constants.lights[column];
   return u.y < record.threshold ? column : record.alias;
+}
+
+public float ReservoirProposalPdf(uint index) {
+  const float power = path_constants.lights[index].pdf;
+  const float uniform = 1.0 / float(path_constants.light_count);
+  if (path_constants.restir_proposal == 1)
+    return uniform;
+  if (path_constants.restir_proposal == 2)
+    return 0.5 * (power + uniform);
+  return power;
 }
 
 public LightSample ReconstructReservoirLight(uint index, float2 u, float3 origin) {

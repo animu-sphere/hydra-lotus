@@ -119,8 +119,10 @@ struct Fixture {
   }
 };
 
-void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
+void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator,
+    RestirProposal proposal = RestirProposal::Power) {
   Fixture f(renderer, integrator, 64); PlaneWorld(f.world);
+  f.settings.restir_proposal = proposal;
   const std::array<std::array<float, 3>, 3> colors{{{2, 0.5F, 1}, {0.2F, 2, 1.5F}, {1, 1, 1}}};
   for (unsigned i = 0; i < 3; ++i) {
     Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = colors[i];
@@ -779,6 +781,88 @@ void Visibility(OffscreenRenderer& renderer, Integrator integrator, bool spatial
   std::cout << "visibility: transparent, fractional and opaque PASS\n";
 }
 
+void ProposalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator, 64); PlaneWorld(f.world);
+  // Powers 1:3 give probabilities 1/4 and 3/4, and alias column zero
+  // has threshold 1/2. This oracle enumerates the two-light integral without
+  // consuming backend light-table records or shader sampling functions.
+  for (unsigned i = 0; i < 2; ++i) {
+    Light light; light.shape = LightShape::Distant; light.angle = 0;
+    const float scale = i == 0 ? 1.0F : 3.0F;
+    light.radiance = {scale, scale * 0.5F, scale * 0.25F};
+    f.world.SetLight(std::to_string(i), light);
+  }
+  for (auto proposal : {RestirProposal::Power, RestirProposal::Uniform, RestirProposal::PowerUniform}) {
+    f.settings.restir_proposal = proposal;
+    const auto frame = f.Render();
+    Check(frame.samples_per_pixel == 1, "proposal retained progressive accumulation");
+    unsigned first_light = 0;
+    for (unsigned slot = 0; slot < 4096; ++slot) {
+      auto rng = Hash(slot ^ Hash(f.settings.sample_index ^ 0xD1B54A35U));
+      vulkan_internal::Reservoir expected;
+      std::array<float, 2> selected_uv{};
+      float selected_q = 0;
+      for (unsigned draw = 0; draw < f.settings.restir_candidates; ++draw) {
+        const auto column = std::min(unsigned(Random(rng) * 2.0F), 1U);
+        float choice = Random(rng);
+        bool uniform = proposal == RestirProposal::Uniform;
+        if (proposal == RestirProposal::PowerUniform) {
+          uniform = choice < 0.5F;
+          choice = (choice - 0.5F) * 2.0F;
+        }
+        const unsigned light = uniform || column == 1 || choice < 0.5F ? column : 1U;
+        const float power = light == 0 ? 0.25F : 0.75F;
+        const float q = proposal == RestirProposal::Uniform ? 0.5F :
+            proposal == RestirProposal::PowerUniform ? 0.5F * (power + 0.5F) : power;
+        const std::array<float, 2> uv{Random(rng), Random(rng)};
+        const float random = Random(rng);
+        const float target = (light == 0 ? 0.5F : 1.5F) / float(kPi);
+        if (vulkan_internal::StreamReservoirCandidate(expected, light, target, q, random)) {
+          selected_uv = uv;
+          selected_q = q;
+        }
+      }
+      const auto& actual = frame.restir.initial[slot];
+      Check(actual.flags == 1 && actual.light == expected.sample && actual.uv == selected_uv &&
+          actual.candidate_count == expected.candidate_count, "proposal CPU/GPU payload/count");
+      Near(actual.proposal, selected_q, 1e-7, "selected marginal proposal density");
+      Near(actual.selected_target, expected.selected_target, 2e-7, "proposal changed target measure");
+      Near(actual.weight_sum, expected.weight_sum, 3e-6, "proposal CPU/GPU streaming weight");
+      const double w = vulkan_internal::ReservoirNormalization(expected);
+      for (unsigned c = 0; c < 3; ++c) {
+        const double radiance = (expected.sample == 0 ? 1.0 : 3.0) * std::pow(0.5, c);
+        Near(actual.contribution[c], Diffuse().base_color[c] * radiance / kPi * w,
+            3e-6, "proposal independent selected RGB");
+      }
+      first_light += actual.light == 0;
+    }
+    Check(first_light > 0 && first_light < 4096, "proposal failed to select both lights");
+    const auto converged = f.Render(255);
+    Check(converged.samples_per_pixel == 256, "proposal progressive continuation");
+    for (unsigned c = 0; c < 3; ++c)
+      Near(Mean(converged)[c], Diffuse().base_color[c] * 4.0 * std::pow(0.5, c) / kPi,
+          0.002, "proposal independent discrete integral");
+  }
+  auto snapshot = f.world.Commit();
+  auto invalid = f.settings; invalid.restir_proposal = static_cast<RestirProposal>(99);
+  Check(renderer.RenderScene(ExtractDrawSummary(snapshot), f.target, 1, invalid).status == FrameStatus::Fail,
+      "unknown reservoir proposal accepted");
+  Check(f.Render().samples_per_pixel == 257, "invalid proposal mutated accumulation");
+  f.settings.restir_spatial = true;
+  TemporalFrameSettings temporal; temporal.accumulate_radiance = true;
+  for (auto proposal : {RestirProposal::Power, RestirProposal::Uniform, RestirProposal::PowerUniform}) {
+    f.settings.restir_proposal = proposal;
+    const auto first = f.Temporal(temporal);
+    Check(!first.restir.history_available && !first.temporal.history_available &&
+        (f.frame_index == 1 || first.temporal.reset_reason == TemporalResetReason::RenderSettingsChanged),
+        "proposal retained incompatible reservoir/radiance history");
+    const auto second = f.Temporal(temporal);
+    Check(second.restir.history_available && second.temporal.history_available,
+        "unchanged proposal lost reservoir/radiance history");
+  }
+  std::cout << "proposals: power/uniform/mixture CPU/GPU weights, integrals and history resets PASS\n";
+}
+
 // Double midpoint quadrature, independent of shader sampling and densities.
 double PanelIntegral(bool disk) {
   double sum = 0;
@@ -797,10 +881,12 @@ double PanelIntegral(bool disk) {
   }
   return sum / (steps * steps * kPi);
 }
-void Lighting(OffscreenRenderer& renderer, Integrator integrator) {
+void Lighting(OffscreenRenderer& renderer, Integrator integrator,
+    RestirProposal proposal = RestirProposal::Power) {
   SceneExtraction extraction;
   for (const char* name : {"rect", "disk", "sphere", "distant", "emissive", "environment", "constant"}) {
     Fixture f(renderer, integrator);
+    f.settings.restir_proposal = proposal;
     f.extraction = std::move(extraction);
     PlaneWorld(f.world, 100);
     const std::array<float, 3> radiance{4, 2, 1};
@@ -828,16 +914,27 @@ void Lighting(OffscreenRenderer& renderer, Integrator integrator) {
       if (kind == "distant") { light.shape = LightShape::Distant; light.angle = 60; factor = 0.25; }
       f.world.SetLight("/light", light);
     }
+    // Alternative proposals need multiple unequal table probabilities to
+    // detect accidental mixing of proposal q with area/environment Jacobians.
+    const bool mixed = proposal != RestirProposal::Power;
+    if (mixed) {
+      Light parallel; parallel.shape = LightShape::Distant; parallel.angle = 0;
+      parallel.radiance = {0.25F, 0.125F, 0.0625F};
+      f.world.SetLight("/parallel", parallel);
+    }
     const auto initial = f.Render(1024);
     const auto mean = Mean(initial);
     f.settings.light_sampling = LightSampling::Mis;
     const auto mis = f.Render(1024);
     const auto baseline = Mean(mis);
-    const std::string prefix = integrator == Integrator::Reference ? "reference-" : "wavefront-";
+    const std::string prefix = std::string(integrator == Integrator::Reference ? "reference-" : "wavefront-") +
+        (proposal == RestirProposal::Uniform ? "uniform-" :
+            proposal == RestirProposal::PowerUniform ? "mixture-" : "");
     Save(initial, prefix + kind + "-initial");
     Save(mis, prefix + kind + "-mis");
     for (int c = 0; c < 3; ++c) {
-      const double expected = Diffuse().base_color[c] * radiance[c] * factor;
+      const double expected = Diffuse().base_color[c] *
+          (radiance[c] * factor + (mixed ? 0.25 * std::pow(0.5, c) / kPi : 0.0));
       const double tolerance = expected * 0.02 + 0.0001;
       Near(mean[c], expected, tolerance, "initial-only independent lighting integral");
       Near(baseline[c], expected, tolerance, "NEE/MIS independent lighting integral");
@@ -1023,7 +1120,7 @@ int main(int argc, char** argv) try {
   for (auto integrator : {Integrator::Reference, Integrator::Wavefront}) {
     // Fresh scene extraction and renderer ownership for each independent fixture.
     const unsigned first_test = argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
-    for (unsigned test = first_test; test < 20; ++test) {
+    for (unsigned test = first_test; test < 25; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -1046,6 +1143,11 @@ int main(int argc, char** argv) try {
       if (test == 17) SpatialMeasurements(*renderer, integrator);
       if (test == 18) Visibility(*renderer, integrator, true);
       if (test == 19) TemporalSupport(*renderer, integrator, true);
+      if (test == 20) ProposalArithmetic(*renderer, integrator);
+      if (test == 21) SpatialArithmetic(*renderer, integrator, RestirProposal::Uniform);
+      if (test == 22) SpatialArithmetic(*renderer, integrator, RestirProposal::PowerUniform);
+      if (test == 23) Lighting(*renderer, integrator, RestirProposal::Uniform);
+      if (test == 24) Lighting(*renderer, integrator, RestirProposal::PowerUniform);
     }
   }
   std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";

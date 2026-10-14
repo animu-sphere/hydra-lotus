@@ -10,6 +10,9 @@ endif()
 if(NOT DEFINED INTEGRATOR)
   set(INTEGRATOR reference)
 endif()
+if(NOT DEFINED PROPOSAL)
+  set(PROPOSAL power-alias)
+endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 if(NO_DRIVER)
   set(manifest "${TEST_ROOT}/unavailable-manifest.json")
@@ -25,6 +28,7 @@ execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${report}"
   --benchmark-size 16 --benchmark-frames 4 --benchmark-warmup 1
   --restir-sequences 2 --restir-reference-samples 32 --restir-lights 32
   --restir-candidates 1,8 --restir-history-cap 8
+  --restir-proposal "${PROPOSAL}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "ReSTIR benchmark failed (${result}):\n${output}\n${error}")
@@ -40,7 +44,7 @@ string(JSON radiance GET "${json}" procedure radiance_reuse)
 string(JSON count LENGTH "${json}" scenes)
 if(NOT schema STREQUAL "lotus-restir-benchmark-v1" OR
    NOT label STREQUAL "CTest quoted \"label\"" OR NOT integrator STREQUAL INTEGRATOR OR
-   NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL "power-alias" OR radiance)
+   NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL PROPOSAL OR radiance)
   message(FATAL_ERROR "Wrong schema/build/estimator procedure")
 endif()
 if(result STREQUAL "77")
@@ -161,6 +165,7 @@ set(invalid_options
   "--restir-candidates|0" "--restir-candidates|65" "--restir-candidates|1,1"
   "--restir-candidates|1," "--restir-candidates|1junk" "--restir-candidates|"
   "--restir-history-cap|0" "--restir-radius|33" "--benchmark-integrator|unknown"
+  "--restir-proposal|unknown" "--restir-proposal|" "--restir-proposal|Power"
   "--report|renderer-report.json" "--benchmark|other.json")
 foreach(pair IN LISTS invalid_options)
   string(REPLACE "|" ";" args "${pair}")

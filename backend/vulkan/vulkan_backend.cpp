@@ -150,8 +150,10 @@ struct PathConstants {
   std::uint32_t restir_max_history_candidates;
   std::uint32_t restir_spatial;
   std::uint32_t restir_spatial_radius;
+  std::uint32_t restir_proposal;
 };
 static_assert(sizeof(PathConstants) == 184 &&
+              offsetof(PathConstants, restir_proposal) == 180 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
               offsetof(PathConstants, environment_map) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
@@ -203,6 +205,7 @@ bool TemporalSceneCompatible(const LotusScene& a, const LotusScene& b) {
 struct TemporalTransportKey {
   Integrator integrator;
   LightSampling light_sampling;
+  RestirProposal restir_proposal;
   std::uint32_t restir_candidates;
   bool restir_temporal;
   std::uint32_t restir_max_history_candidates;
@@ -332,6 +335,7 @@ struct AccumulationKey {
   std::array<std::int32_t, 4> data_window{};
   Integrator integrator = Integrator::Reference;
   LightSampling light_sampling = LightSampling::Mis;
+  RestirProposal restir_proposal = RestirProposal::Power;
   std::uint32_t restir_candidates = 8;
   std::uint32_t sample_index = 0;
   std::uint32_t max_bounces = 0;
@@ -777,6 +781,10 @@ public:
       if (settings.light_sampling == LightSampling::RestirInitial &&
           (settings.restir_candidates == 0 || settings.restir_candidates > 64))
         return Reject("initial reservoir candidates must be in [1, 64]");
+      if (settings.restir_proposal != RestirProposal::Power &&
+          settings.restir_proposal != RestirProposal::Uniform &&
+          settings.restir_proposal != RestirProposal::PowerUniform)
+        return Reject("unknown reservoir proposal");
       if (settings.restir_temporal &&
           (settings.light_sampling != LightSampling::RestirInitial || !(temporal_call || rendering_temporal_) ||
               frame_count != 1 || settings.restir_max_history_candidates == 0 ||
@@ -894,7 +902,8 @@ public:
     if (pass == FramePass::Radiance) {
       const AccumulationKey key{ray_constants_.world_to_clip, target.width,
           target.height, target.display_window, target.data_window,
-          settings.integrator, settings.light_sampling, settings.restir_candidates, settings.sample_index,
+          settings.integrator, settings.light_sampling, settings.restir_proposal,
+          settings.restir_candidates, settings.sample_index,
           settings.max_bounces, scene_generation_};
       if (accumulation_key_ != key) {
         accumulation_key_ = key;
@@ -1398,6 +1407,7 @@ public:
       return Evidence(FrameStatus::Fail, error.what());
     }
     const TemporalTransportKey radiance_key{settings.integrator, settings.light_sampling,
+        settings.restir_proposal,
         settings.restir_candidates, settings.restir_temporal, settings.restir_max_history_candidates,
         settings.restir_spatial, settings.restir_spatial_radius,
         accumulate, settings.sample_index, settings.max_bounces, settings.max_samples,
@@ -1865,6 +1875,7 @@ public:
     constants.restir_max_history_candidates = settings.restir_max_history_candidates;
     constants.restir_spatial = settings.restir_spatial ? 1u : 0u;
     constants.restir_spatial_radius = settings.restir_spatial_radius;
+    constants.restir_proposal = static_cast<std::uint32_t>(settings.restir_proposal);
     constants.light_offsets = scene_.LightOffsetAddress();
     constants.lights = scene_.LightAddress();
     constants.light_count = scene_.LightCount();

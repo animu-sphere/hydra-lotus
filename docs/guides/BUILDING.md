@@ -90,6 +90,12 @@ owns workloads, settings, metric scopes and limits; the
 runs. JSON raw populations and sibling PFM directories remain separate from
 OpenStrata's renderer correctness report.
 
+For matched candidate-proposal comparisons, add `--restir-proposal uniform`
+or `--restir-proposal power-uniform`, keeping other settings and seeds the
+same and using distinct output paths. Omitting this option keeps `power-alias`.
+The [proposal measurements](../reports/2026-10-15-restir-proposals.md) record
+the three-way comparison under both integrators.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured
