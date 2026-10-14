@@ -29,7 +29,7 @@ accumulation is enabled, linear RGBA and per-pixel bounded history counts
 ([radiance contract](TEMPORAL.md#temporal-radiance-accumulation)).
 The adapter exposes selected records through the temporal channels below.
 
-Names outside the foundation and temporal channels have an invalid default
+Names outside the foundation, temporal and reservoir channels have an invalid default
 descriptor. Normal, albedo,
 roughness, path depth, throughput and the other debug channels are introduced
 with the renderer passes that produce them. Each Hydra pass adds one
@@ -41,9 +41,10 @@ the `lotus:wavefront` flag selects the integrator that traces them
 ([integrator selection](SCENE.md#integrator-selection-through-hydra)), and
 the `lotus:lightSampling` flag the estimator
 ([light sampling](SCENE.md#light-sampling-through-hydra)). The render pass's `IsConverged` follows the colour, so a host
-that waits for convergence redraws until then. Temporal radiance mode instead
-remains unconverged, as described in the
-[Hydra temporal contract](TEMPORAL.md#hydra-controls-and-debug-aovs).
+that waits for convergence redraws until then. Temporal radiance and
+reservoir reuse instead remain unconverged, as described in the
+[Hydra temporal contract](TEMPORAL.md#hydra-controls-and-debug-aovs) and
+[reservoir controls](RESTIR.md#hydra-controls-and-diagnostics).
 
 ## Temporal Hydra channels
 
@@ -62,6 +63,31 @@ Motion components retain the backend convention while storage rows flip
 to Hydra's bottom-up order. The validity flag is distinct from the motion
 W projection flag. These buffers finish after one pass; colour and the
 render pass follow the selected temporal/progressive mode.
+
+## Reservoir Hydra channels
+
+These describe the last fresh sample's final reservoir, as defined in the
+[Hydra reservoir contract](RESTIR.md#hydra-controls-and-diagnostics).
+Rows flip to Hydra storage order; vectors keep their backend conventions.
+
+| Hydra name | Format | Default clear | Product |
+| --- | --- | --- | --- |
+| `lotus:restirLight` | `HdFormatInt32` | `-1` | Generation-local selected light-table slot; -1 for no sample, unrelated to picking IDs |
+| `lotus:restirCandidates` | `HdFormatInt32` | `0` | Represented draws, including zero-target draws and capped reuse sources |
+| `lotus:restirSupport` | `HdFormatInt32` | `0` | Supporting count used for corrected normalization; initial-only uses represented count |
+| `lotus:restirAge` | `HdFormatInt32` | `0` | Selected temporal sample age; initial-only has age zero |
+| `lotus:restirWeight` | `HdFormatFloat32Vec4` | `(0, 0, 0, 0)` | Raw weight sum, selected target, resolved normalization, selected proposal probability |
+| `lotus:restirDirect` | `HdFormatFloat32Vec4` | `(0, 0, 0, 0)` | Selected normalized shadowed RGB and current transmittance W |
+
+These AOVs overwrite the full frame, including outside the data window,
+regardless of clear values. They do not enable reservoirs: NEE/MIS and BSDF
+write zero values and the empty light sentinel. Progressive convergence
+retains the last fresh reservoir rather than clearing diagnostics. The
+weight vector carries the explicitly corrected normalization after reuse;
+it is not reconstructed from the raw sum and total count. Direct light is
+the fresh selected contribution, separate from accumulated colour/indirect
+transport. Generation-local light slots cannot track identity across scene
+edits. Correlated represented counts are not independent sample counts.
 
 ## Storage and binding
 

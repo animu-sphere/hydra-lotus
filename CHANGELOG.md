@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Hydra ReSTIR controls for initial candidates, temporal/spatial reuse,
+  source caps and neighbour radius; six final-reservoir diagnostic AOVs.
+  Moving USD-stage and installed usdview checks cover both integrators and
+  return to deterministic progressive NEE/MIS
+  ([contract](docs/reference/RESTIR.md#hydra-controls-and-diagnostics),
+  [evidence](docs/reports/2026-10-14-restir-hydra.md)).
 - Opt-in spatial direct-light reservoir reuse under both integrators, with
   immutable input/destination storage, surface rejection, support-corrected
   weights, current visibility, capped neighbour counts and final history

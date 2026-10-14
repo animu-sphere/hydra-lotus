@@ -51,7 +51,7 @@ execute_process(
   RESULT_VARIABLE usdview_result
   OUTPUT_VARIABLE usdview_output
   ERROR_VARIABLE usdview_error
-  TIMEOUT 100)
+    TIMEOUT 180)
 if(NOT usdview_result EQUAL 0)
   message(FATAL_ERROR
     "usdview smoke failed (${usdview_result}):\n${usdview_output}\n${usdview_error}")

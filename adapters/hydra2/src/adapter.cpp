@@ -155,7 +155,15 @@ void AppendHostEvidence(std::uint64_t frame_index,
                                                                  : "reference")
          << " wavefront_rounds=" << frame.wavefront_rounds
          << " light_sampling="
-         << (settings.light_sampling == Lotus::LightSampling::Mis ? "mis" : "bsdf")
+         << (settings.light_sampling == Lotus::LightSampling::RestirInitial ? "restir"
+                : settings.light_sampling == Lotus::LightSampling::Mis      ? "mis"
+                                                                            : "bsdf")
+         << " restir=" << (frame.restir.available ? 1 : 0)
+         << " restir_candidates=" << settings.restir_candidates
+         << " restir_temporal=" << (settings.restir_temporal ? 1 : 0)
+         << " restir_spatial=" << (settings.restir_spatial ? 1 : 0)
+         << " restir_history=" << (frame.restir.history_available ? 1 : 0)
+         << " restir_bytes=" << frame.restir.reservoir_bytes
          << " emissive_triangles=" << scene.emissive_triangles
          << " analytic_lights=" << scene.analytic_lights
          << " sample_index=" << settings.sample_index
@@ -235,6 +243,24 @@ const TfToken kWavefrontSetting("lotus:wavefront");
 // a flag: true (the default) adds next event estimation with multiple
 // importance sampling, false leaves BSDF sampling alone.
 const TfToken kLightSamplingSetting("lotus:lightSampling");
+const TfToken kRestirSetting("lotus:restir");
+const TfToken kRestirCandidatesSetting("lotus:restirCandidates");
+const TfToken kRestirTemporalSetting("lotus:restirTemporal");
+const TfToken kRestirSpatialSetting("lotus:restirSpatial");
+const TfToken kRestirHistorySetting("lotus:restirHistoryCandidates");
+const TfToken kRestirRadiusSetting("lotus:restirSpatialRadius");
+const TfToken kRestirLightAov("lotus:restirLight");
+const TfToken kRestirCountAov("lotus:restirCandidates");
+const TfToken kRestirSupportAov("lotus:restirSupport");
+const TfToken kRestirAgeAov("lotus:restirAge");
+const TfToken kRestirWeightAov("lotus:restirWeight");
+const TfToken kRestirDirectAov("lotus:restirDirect");
+
+bool IsRestirAov(const TfToken& name) {
+  return name == kRestirLightAov || name == kRestirCountAov ||
+         name == kRestirSupportAov || name == kRestirAgeAov ||
+         name == kRestirWeightAov || name == kRestirDirectAov;
+}
 const TfToken kTemporalSetting("lotus:temporal");
 const TfToken kHistorySamplesSetting("lotus:historySamples");
 const TfToken kHistoryKeySetting("lotus:historyKey");
@@ -250,6 +276,10 @@ bool IsTemporalAov(const TfToken& name) {
 }
 
 HdAovDescriptor AovDescriptor(const TfToken& name) {
+  if (name == kRestirWeightAov || name == kRestirDirectAov)
+    return {HdFormatFloat32Vec4, false, VtValue(GfVec4f(0))};
+  if (IsRestirAov(name))
+    return {HdFormatInt32, false, VtValue(name == kRestirLightAov ? -1 : 0)};
   if (name == HdAovTokens->color) {
     return {HdFormatFloat32Vec4, false, VtValue(GfVec4f(0.0F))};
   }
@@ -323,7 +353,7 @@ bool ConfigureTarget(const HdRenderPassAovBindingVector& bindings,
           target.clear_depth <= 1.0F) {
         continue;
       }
-    } else if (binding.aovName == kMotionAov && clear.IsHolding<GfVec4f>()) {
+    } else if (descriptor.format == HdFormatFloat32Vec4 && clear.IsHolding<GfVec4f>()) {
       const auto& value = clear.UncheckedGet<GfVec4f>();
       if (std::all_of(value.data(), value.data() + 4,
               [](float component) { return std::isfinite(component); }))
@@ -679,12 +709,13 @@ public:
       return;
     }
     ApplyFraming(state, target);
-    const bool temporal_products = temporal.accumulate_radiance ||
-        std::any_of(bindings.begin(), bindings.end(), [](const auto& binding) {
-          return IsTemporalAov(binding.aovName);
-        });
-    if (temporal.accumulate_radiance && !target.clear_color_enabled) {
-      TF_RUNTIME_ERROR("Lotus temporal accumulation requires a colour clear");
+    const bool reservoir_reuse = settings.restir_temporal || settings.restir_spatial;
+    const bool temporal_products = temporal.accumulate_radiance || reservoir_reuse ||
+                                   std::any_of(bindings.begin(), bindings.end(), [](const auto& binding) {
+                                     return IsTemporalAov(binding.aovName);
+                                   });
+    if ((temporal.accumulate_radiance || reservoir_reuse) && !target.clear_color_enabled) {
+      TF_RUNTIME_ERROR("Lotus temporal accumulation/reuse requires a colour clear");
       return;
     }
 
@@ -733,8 +764,8 @@ public:
       return;
     }
     const bool trace = renderer_->RayQueryCapability().available;
-    if (temporal_products && !trace) {
-      TF_RUNTIME_ERROR("Lotus temporal products require ray queries");
+    if ((temporal_products || settings.light_sampling == Lotus::LightSampling::RestirInitial) && !trace) {
+      TF_RUNTIME_ERROR("Lotus temporal/ReSTIR products require ray queries");
       return;
     }
     temporal.frame_index = frame_index_;
@@ -760,8 +791,24 @@ public:
       history_reset_ = history_reset;
       temporal_view_ = view;
     }
-    converged_ = !temporal.accumulate_radiance &&
-        (!trace || frame.samples_per_pixel >= settings.max_samples);
+    if (settings.light_sampling != Lotus::LightSampling::RestirInitial) {
+      restir_diagnostics_ = {};
+    } else if (frame.restir.available) {
+      // Retain only the final diagnostic records, so a newly bound AOV can
+      // read the last fresh sample after progressive convergence.
+      restir_diagnostics_ = {};
+      restir_diagnostics_.available = true;
+      restir_diagnostics_.width = frame.restir.width;
+      restir_diagnostics_.height = frame.restir.height;
+      if (!frame.restir.spatial.empty())
+        restir_diagnostics_.spatial = frame.restir.spatial;
+      else if (!frame.restir.temporal.empty())
+        restir_diagnostics_.temporal = frame.restir.temporal;
+      else
+        restir_diagnostics_.initial = frame.restir.initial;
+    }
+    converged_ = !temporal.accumulate_radiance && !reservoir_reuse &&
+                 (!trace || frame.samples_per_pixel >= settings.max_samples);
     std::size_t buffers_written{};
     for (const HdRenderPassAovBinding& binding : bindings) {
       auto* buffer =
@@ -781,6 +828,9 @@ public:
             frame.depth.height);
       } else if (IsTemporalAov(binding.aovName)) {
         wrote = buffer->WriteTemporal(binding.aovName, frame.temporal,
+            target.width, target.height);
+      } else if (IsRestirAov(binding.aovName)) {
+        wrote = buffer->WriteRestir(binding.aovName, restir_diagnostics_,
             target.width, target.height);
       } else if (binding.aovName == HdAovTokens->primId ||
                  binding.aovName == HdAovTokens->instanceId ||
@@ -942,8 +992,9 @@ private:
   // Plans the renderer's GPU scene updates; reset with each new renderer.
   Lotus::SceneExtraction extraction_;
   Lotus::GpuSceneStats scene_stats_;
-  // The latest frame's evidence without its products.
+  // The latest frame's evidence without colour/depth payloads.
   Lotus::GpuFrameEvidence frame_evidence_;
+  Lotus::RestirProducts restir_diagnostics_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
   std::optional<int> history_reset_;
@@ -1792,6 +1843,17 @@ private:
         delegate.GetRenderSetting<bool>(kLightSamplingSetting, true)
             ? Lotus::LightSampling::Mis
             : Lotus::LightSampling::Bsdf;
+    if (delegate.GetRenderSetting<bool>(kRestirSetting, false)) {
+      settings.light_sampling = Lotus::LightSampling::RestirInitial;
+      settings.restir_temporal = delegate.GetRenderSetting<bool>(kRestirTemporalSetting, false);
+      settings.restir_spatial = delegate.GetRenderSetting<bool>(kRestirSpatialSetting, false);
+    }
+    settings.restir_candidates = static_cast<std::uint32_t>(std::clamp(
+        delegate.GetRenderSetting<int>(kRestirCandidatesSetting, 8), 1, 64));
+    settings.restir_max_history_candidates = static_cast<std::uint32_t>(std::clamp(
+        delegate.GetRenderSetting<int>(kRestirHistorySetting, 32), 1, 65536));
+    settings.restir_spatial_radius = static_cast<std::uint32_t>(std::clamp(
+        delegate.GetRenderSetting<int>(kRestirRadiusSetting, 1), 1, 32));
     return settings;
   }
 
@@ -2026,6 +2088,50 @@ bool HdLotusRenderBuffer::WriteTemporal(const TfToken& name,
       HdFormatInt32);
 }
 
+bool HdLotusRenderBuffer::WriteRestir(const TfToken& name,
+    const Lotus::RestirProducts& products, std::uint32_t source_width,
+    std::uint32_t source_height) {
+  std::scoped_lock lock(mutex_);
+  const std::size_t count = std::size_t{source_width} * source_height;
+  if (!IsRestirAov(name))
+    return false;
+  const auto& resolved = products.spatial.empty() ? products.temporal : products.spatial;
+  if (products.available && (products.width != source_width ||
+                                products.height != source_height ||
+                                (resolved.empty() ? products.initial.size() != count : resolved.size() != count)))
+    return false;
+  const bool vector = name == kRestirWeightAov || name == kRestirDirectAov;
+  std::vector<std::array<float, 4>> vectors(vector ? count : 0);
+  std::vector<std::int32_t> integers(vector ? 0 : count);
+  for (std::size_t i = 0; i < count; ++i) {
+    const Lotus::RestirPixel empty;
+    const auto& r = !products.available ? empty : resolved.empty() ? products.initial[i]
+                                                                   : resolved[i].reservoir;
+    const auto* reuse = products.available && !resolved.empty() ? &resolved[i] : nullptr;
+    if (name == kRestirDirectAov)
+      vectors[i] = r.contribution;
+    else if (name == kRestirWeightAov) {
+      const float normalization = reuse ? reuse->normalization
+                                  : r.candidate_count && r.selected_target > 0
+                                      ? (r.weight_sum / float(r.candidate_count)) / r.selected_target
+                                      : 0;
+      vectors[i] = {r.weight_sum, r.selected_target, normalization, r.proposal};
+    } else if (name == kRestirLightAov)
+      integers[i] = static_cast<std::int32_t>(r.light);
+    else if (name == kRestirCountAov)
+      integers[i] = static_cast<std::int32_t>(r.candidate_count);
+    else if (name == kRestirSupportAov)
+      integers[i] = static_cast<std::int32_t>(reuse ? reuse->supporting_candidates : r.candidate_count);
+    else
+      integers[i] = static_cast<std::int32_t>(reuse ? reuse->age : 0);
+  }
+  return vector ? WriteRowsFlippedLocked(
+                      reinterpret_cast<const std::uint8_t*>(vectors.data()), count * sizeof(vectors[0]),
+                      source_width, source_height, HdFormatFloat32Vec4)
+                : WriteRowsFlippedLocked(reinterpret_cast<const std::uint8_t*>(integers.data()),
+                      count * sizeof(integers[0]), source_width, source_height, HdFormatInt32);
+}
+
 bool HdLotusRenderBuffer::ReadColor(std::vector<float>& color) const {
   std::scoped_lock lock(mutex_);
   if (map_count_ != 0 || dimensions_[2] != 1 || data_.empty() ||
@@ -2250,11 +2356,17 @@ HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
 HdRenderSettingDescriptorList
 HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
   return {{"Converged samples per pixel",
-               HdRenderSettingsTokens->convergedSamplesPerPixel,
-               VtValue(kDefaultConvergedSamples)},
+              HdRenderSettingsTokens->convergedSamplesPerPixel,
+              VtValue(kDefaultConvergedSamples)},
       {"First sample index (random seed)", kSampleIndexSetting, VtValue(0)},
       {"Wavefront integrator", kWavefrontSetting, VtValue(false)},
       {"Light sampling (NEE + MIS)", kLightSamplingSetting, VtValue(true)},
+      {"ReSTIR primary direct lighting", kRestirSetting, VtValue(false)},
+      {"ReSTIR initial candidates", kRestirCandidatesSetting, VtValue(8)},
+      {"ReSTIR temporal reuse", kRestirTemporalSetting, VtValue(false)},
+      {"ReSTIR spatial reuse", kRestirSpatialSetting, VtValue(false)},
+      {"ReSTIR source candidate cap", kRestirHistorySetting, VtValue(32)},
+      {"ReSTIR spatial radius", kRestirRadiusSetting, VtValue(1)},
       {"Temporal radiance accumulation", kTemporalSetting, VtValue(false)},
       {"Temporal history samples", kHistorySamplesSetting, VtValue(32)},
       {"Temporal history compatibility key", kHistoryKeySetting, VtValue(0)},

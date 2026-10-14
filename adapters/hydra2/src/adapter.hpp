@@ -47,6 +47,8 @@ public:
   bool WriteIds(std::int32_t value);
   bool WriteTemporal(const TfToken& name, const Lotus::TemporalProducts& products,
       std::uint32_t source_width, std::uint32_t source_height);
+  bool WriteRestir(const TfToken& name, const Lotus::RestirProducts& products,
+      std::uint32_t source_width, std::uint32_t source_height);
   // Copy unmapped CPU contents to a top-down backend restoration input.
   bool ReadColor(std::vector<float>& color) const;
   bool ReadDepth(std::vector<float>& depth) const;
@@ -107,6 +109,10 @@ public:
   // default); lotus:historySamples bounds its effective sample count.
   // lotus:historyKey changes compatibility; changing lotus:historyReset
   // cuts history once, on the next successful temporal frame.
+  // lotus:restir selects primary direct-light reservoirs, overriding
+  // lotus:lightSampling. Candidate/count/radius settings are bounded;
+  // lotus:restirTemporal and lotus:restirSpatial select continuous reuse
+  // independently of radiance accumulation, only while restir is enabled.
   HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
   // CPU scene inspection uses the same immutable snapshot as rendering.
   [[nodiscard]] Lotus::FrameSnapshot GetFrameSnapshot();

@@ -177,6 +177,14 @@ if(LOTUS_BUILD_TESTS)
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-temporal-test hdLotus)
 
+  add_executable(lotus-hydra2-restir-test tests/restir_test.cpp)
+  target_link_libraries(lotus-hydra2-restir-test
+    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
+      usdImaging usd sdf)
+  target_compile_definitions(lotus-hydra2-restir-test PRIVATE
+    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+  add_dependencies(lotus-hydra2-restir-test hdLotus)
+
   add_executable(lotus-hydra2-light-sampling-test tests/light_sampling_test.cpp)
   target_link_libraries(lotus-hydra2-light-sampling-test
     PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
@@ -250,6 +258,10 @@ if(LOTUS_BUILD_TESTS)
     COMMAND lotus-hydra2-temporal-test --contract)
   add_test(NAME lotus-renderer-hydra-temporal-gpu
     COMMAND lotus-hydra2-temporal-test --gpu)
+  add_test(NAME lotus-renderer-hydra-restir-contract
+    COMMAND lotus-hydra2-restir-test --contract)
+  add_test(NAME lotus-renderer-hydra-restir-gpu
+    COMMAND lotus-hydra2-restir-test --gpu)
   add_test(NAME lotus-renderer-hydra-light-sampling
     COMMAND lotus-hydra2-light-sampling-test)
   add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
@@ -279,6 +291,7 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-deterministic
     lotus-renderer-hydra-integrator
     lotus-renderer-hydra-temporal-gpu
+    lotus-renderer-hydra-restir-gpu
     lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-light-gpu
     lotus-renderer-hydra-analytic-lights-gpu
@@ -298,7 +311,9 @@ if(LOTUS_BUILD_TESTS)
     lotus-renderer-hydra-deterministic
     lotus-renderer-hydra-integrator
     lotus-renderer-hydra-temporal-contract
+    lotus-renderer-hydra-restir-contract
     lotus-renderer-hydra-temporal-gpu
+    lotus-renderer-hydra-restir-gpu
     lotus-renderer-hydra-light-sampling
     lotus-renderer-hydra-material
     lotus-renderer-hydra-light
@@ -339,7 +354,7 @@ if(LOTUS_BUILD_TESTS)
     set_tests_properties(lotus-renderer-usdview-host PROPERTIES
       LABELS "host-smoke;gpu"
       SKIP_REGULAR_EXPRESSION "SKIP usdview smoke:"
-      TIMEOUT 120
+      TIMEOUT 210
       RUN_SERIAL TRUE)
   else()
     message(STATUS

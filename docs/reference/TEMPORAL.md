@@ -14,14 +14,15 @@ owns delivery status.
 
 | Setting | Type/default | Behavior |
 | --- | --- | --- |
-| `lotus:temporal` | bool, false | True selects bounded temporal radiance, one fresh sample per pass under either integrator; false selects deterministic progressive transport |
+| `lotus:temporal` | bool, false | True selects bounded temporal radiance, one fresh sample per pass under either integrator; false disables radiance reuse while preserving the estimator/reuse selection |
 | `lotus:historySamples` | int, 32 | Effective history cap, clamped to [1, 65536] |
 | `lotus:historyKey` | int, 0 | Caller compatibility token, clamped to nonnegative; a change resets history |
 | `lotus:historyReset` | int, 0 | Change this counter to declare one camera cut; the new value is consumed only by a successful temporal frame |
 
 Temporal colour and the render pass remain unconverged so hosts keep drawing
 fresh batches. `convergedSamplesPerPixel` continues to control progressive
-convergence when temporal radiance is disabled. The sample seed, integrator
+convergence when temporal radiance and
+[reservoir reuse](RESTIR.md#hydra-controls-and-diagnostics) are disabled. The sample seed, integrator
 and light-sampling settings retain their existing meanings. Radiance mode
 requires colour clears and ray queries; unsupported bindings/capabilities
 report errors rather than producing temporal bootstrap data.
