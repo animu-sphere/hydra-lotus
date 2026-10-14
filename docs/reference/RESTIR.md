@@ -282,6 +282,34 @@ panel at Z = -2.5: its X translation is `0.7 sin(phase + 0.3)` and camera view
 X translation is `0.12 sin(phase)`, with `phase = 2 pi frame / frames`.
 Both workloads use one scattering bounce to isolate direct lighting.
 
+`--restir-workload mixed-boundaries` selects a second pair:
+`mixed-area-environment-boundaries-v1` and
+`mixed-area-environment-moving-boundaries-v1`. A red Lambert left panel
+at Z = -4 meets a blue GGX metal right panel at X = 0. The right panel
+starts at Z = -3.6 and slopes away with `z = -3.6 - 0.25 x`, providing a
+depth and geometric-normal step as well as a material boundary. The metal
+has roughness 0.35 and RGB F0 0.06/0.3/0.85; the Lambert albedo is
+0.8/0.12/0.04. The moving case adds a 0.9-wide panel and the same camera
+and blocker motion as the distant fixture.
+
+These scenes alternate rect and disk lights in a radius-3 golden-angle
+disk at Z = -1, facing -Z. Rect sides are 0.6 and disk radii 0.3, with the
+same indexed colours scaled by `96 / light_count`. A procedural 16x8 HDR
+lat-long environment adds broad colour variation and a bright four-texel
+patch. It is generated in code and needs no external asset. Both scenes
+retain one scattering bounce; light/camera/material animation and production
+multibounce coverage are outside this fixture.
+
+Each scene identifies its `error_reference`: the static distant plane uses
+`independent-lambert-integral`; moving scenes and both mixed scenes use
+`finite-spp-nee-mis`, with null exact-integral fields. Mixed static convergence
+is measured against the saved reference image, retaining its finite sample
+noise. Mixed cases additionally report `regions` with ensemble RMS, signed
+RGB means and pixel count for `center-boundary-band-v1`: all rows and columns
+`[floor(3 width/8), floor(5 width/8))`. This fixed central quarter covers the
+material/depth step and some moving disocclusion, rather than classifying
+every boundary pixel. Distant cases have an empty region array.
+
 Defaults and accepted CLI ranges:
 
 | Option | Default | Accepted |
@@ -293,6 +321,7 @@ Defaults and accepted CLI ranges:
 | `--benchmark-warmup` | 4 | 0–64 |
 | `--restir-sequences` | 4 | 2–64 independent sequences |
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
+| `--restir-workload` | `distant` | `distant`, `mixed-boundaries` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
@@ -316,14 +345,14 @@ The independent NEE/MIS reference always uses the reference integrator,
 including when wavefront is measured. Each pose uses two disjoint equal-spp
 batches starting at `2^24 + frame * 8192 + half * 4096`. Their mean is saved;
 `reference_split_rmse` records their discrepancy without subtracting reference
-noise. The static reference also reports its error to the independent integral.
+noise. The static distant reference also reports its error to the independent integral.
 
 The JSON retains raw populations and summaries of fresh-frame RGB RMS error,
 GPU scene duration, reservoir and shared metadata pass durations, blocking
 update/render wall time, and frame-difference RMS after subtracting the matched
 reference's motion. Differences exclude sequence boundaries. Static cases
 record power-of-two/final prefix convergence: RMS over independent sequences
-of each CPU-averaged prefix's error to the integral, with its mean cumulative
+of each CPU-averaged prefix's error to the scene's `error_reference`, with its mean cumulative
 GPU time. Each checkpoint also retains `rmse_raw` and
 `cumulative_gpu_ms_raw`, one entry per independent sequence (GPU populations
 are null without timestamps). The RMS of the raw errors equals the aggregate
@@ -343,8 +372,9 @@ GPU series/cumulative times are null when unsupported or inapplicable.
 Each invocation sweeps counts under one proposal, identified in
 `procedure.candidate_proposal`; compare separate reports with matched settings
 to evaluate alternatives. NEE/MIS references and cases retain their existing
-power selection regardless of the reservoir proposal. Parallel lights do not
-establish area-light/environment or multibounce production performance. The
+power selection regardless of the reservoir proposal. The distant fixtures do
+not establish area-light/environment performance; the mixed fixtures add
+bounded one-bounce coverage rather than production scene guarantees. The
 reference split discrepancy and finite number of independent sequences limit
 moving bias/artifact conclusions. Reduced frame differences alone do not
 establish improved convergence or speed. Workload/settings/build identity must
@@ -352,7 +382,9 @@ match before comparing reports.
 
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
-static integral means, output images and CLI preservation. The Vulkan-only
+static integral means, output images and CLI preservation. The `-mixed`
+variants check the alternate scene identities, finite-reference labelling,
+boundary metrics and all reservoir modes under both integrators. The Vulkan-only
 `lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. Measured
 evidence belongs in [reports](../reports/README.md).
 
@@ -380,6 +412,12 @@ only when every invocation supplies a value; partial attainment remains visible
 without a successful-subset average. Thresholds are applied to each invocation's
 RMS over independent sequences, not to an ensemble formed by pooling runs.
 Raw checkpoint population/aggregate consistency is checked before reduction.
+Reference labels and split discrepancies are retained in each scene, and
+boundary-region errors are reduced without dropping their identities or pixel
+counts. Mismatched reference kinds or regions reject. Older v1 distant reports
+without explicit labels/regions remain supported. A budget against a finite
+NEE/MIS image describes agreement with that image, including reference noise;
+it is not a budget against an exact transport solution.
 
 Moving scenes retain across-invocation fresh/residual-delta RMS, final-pose
 ensemble and tile error summaries and signed channel means, with no static

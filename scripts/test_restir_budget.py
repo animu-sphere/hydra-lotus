@@ -31,6 +31,66 @@ def report(seed=17):
 
 
 class BudgetTests(unittest.TestCase):
+    def test_finite_reference_and_boundary_regions_survive_reduction(self):
+        reports = [report(), report(262165)]
+        for run in reports:
+            scene = run["scenes"][0]
+            scene["error_reference"] = "finite-spp-nee-mis"
+            scene["reference_split_rmse"] = [.04]
+            for case in scene["cases"]:
+                case["regions"] = [{"id": "boundary", "pixels": 64, "ensemble_rmse": .3,
+                                    "signed_mean_error_rgb": [-.1, .2, .05]}]
+        scene = summarize(reports, [.25])["scenes"][0]
+        self.assertEqual(scene["error_reference"], "finite-spp-nee-mis")
+        self.assertEqual(scene["reference_split_rmse"], [[.04], [.04]])
+        self.assertEqual(scene["cases"][0]["regions"][0]["ensemble_rmse"]["raw"], [.3, .3])
+        reports[1]["scenes"][0]["cases"][0]["regions"][0]["pixels"] = 32
+        with self.assertRaisesRegex(ValueError, "regions must match"):
+            summarize(reports, [.25])
+
+    def test_rejects_reference_changes_and_invalid_region_errors(self):
+        reports = [report(), report(262165)]
+        reports[1]["scenes"][0]["error_reference"] = "finite-spp-nee-mis"
+        with self.assertRaisesRegex(ValueError, "error reference"):
+            summarize(reports, [.25])
+        for run in reports:
+            scene = run["scenes"][0]
+            scene["error_reference"] = "finite-spp-nee-mis"
+            scene["reference_split_rmse"] = [float("nan")]
+        with self.assertRaisesRegex(ValueError, "finite"):
+            summarize(reports, [.25])
+        for run in reports:
+            scene = run["scenes"][0]
+            scene["reference_split_rmse"] = [.1]
+            scene["cases"][0]["regions"] = [{"id": "boundary", "pixels": 64, "ensemble_rmse": .1,
+                                             "signed_mean_error_rgb": [float("inf"), 0, 0]}]
+        with self.assertRaisesRegex(ValueError, "region signed"):
+            summarize(reports, [.25])
+
+    def test_explicit_reference_requires_matched_split_populations(self):
+        for split in (None, [], [.1, .2]):
+            with self.subTest(split=split):
+                reports = [report(), report(262165)]
+                for run in reports:
+                    scene = run["scenes"][0]
+                    scene["error_reference"] = "finite-spp-nee-mis"
+                    if split is not None:
+                        scene["reference_split_rmse"] = split
+                with self.assertRaisesRegex(ValueError, "split"):
+                    summarize(reports, [.25])
+
+    def test_region_population_rejects_missing_duplicate_or_invalid_values(self):
+        valid = {"id": "boundary", "pixels": 64, "ensemble_rmse": .1,
+                 "signed_mean_error_rgb": [.01, -.02, .03]}
+        for invalid in ([], [valid, valid], [dict(valid, pixels=0)],
+                        [dict(valid, ensemble_rmse=float("nan"))]):
+            with self.subTest(invalid=invalid):
+                reports = [report(), report(262165)]
+                reports[0]["scenes"][0]["cases"][0]["regions"] = [valid]
+                reports[1]["scenes"][0]["cases"][0]["regions"] = invalid
+                with self.assertRaises(ValueError):
+                    summarize(reports, [.25])
+
     def test_observed_paired_budgets(self):
         result = summarize([report(), report(17 + 2 * 65537)], [.25, .1])
         budgets = result["scenes"][0]["cases"][1]["quality_budgets"]
