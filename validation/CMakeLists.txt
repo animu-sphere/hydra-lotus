@@ -171,6 +171,15 @@ foreach(integrator reference wavefront)
       "-DINTEGRATOR=${integrator}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   set_tests_properties(lotus-renderer-restir-benchmark-${integrator} PROPERTIES RUN_SERIAL TRUE)
+  foreach(proposal uniform power-uniform)
+    add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
+      COMMAND "${CMAKE_COMMAND}"
+        "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-${proposal}"
+        "-DINTEGRATOR=${integrator}" "-DPROPOSAL=${proposal}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+    set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-${proposal} PROPERTIES RUN_SERIAL TRUE)
+  endforeach()
 endforeach()
 if(LOTUS_WITH_VULKAN)
   add_test(NAME lotus-renderer-restir-benchmark-no-driver

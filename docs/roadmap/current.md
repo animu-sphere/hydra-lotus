@@ -37,8 +37,11 @@ Implement the remaining work in this order:
   candidate-count sweep now measures static/moving many-light convergence,
   GPU time, temporal differences, memory and finite-sample local error against
   independent Lambert/NEE/MIS references
-  ([comparison evidence](../reports/2026-10-14-restir-comparison.md)). Remaining:
-  evaluate alternative candidate proposals; measure broader/repeated
+  ([comparison evidence](../reports/2026-10-14-restir-comparison.md)). Power,
+  uniform and equal-mixture proposals are implemented and checked against
+  CPU/GPU arithmetic, independent mixed-light integrals and matched many-light
+  comparisons ([proposal evidence](../reports/2026-10-15-restir-proposals.md)).
+  Remaining: measure broader/repeated
   equal-quality budgets and artifact/bias behavior; address the measured
   reuse cost and temporal correlation before recording the scope review and
   release gate.

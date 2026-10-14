@@ -32,7 +32,17 @@ struct Options {
   unsigned lights = 128, reference_samples = 256, cap = 32, radius = 1;
   std::vector<unsigned> candidates{1, 2, 8};
   Integrator integrator = Integrator::Reference;
+  RestirProposal proposal = RestirProposal::Power;
 };
+
+const char* ProposalName(RestirProposal proposal) {
+  switch (proposal) {
+  case RestirProposal::Power: return "power-alias";
+  case RestirProposal::Uniform: return "uniform";
+  case RestirProposal::PowerUniform: return "power-uniform";
+  }
+  throw std::invalid_argument("unknown reservoir proposal");
+}
 
 void Require(bool condition, const std::string& why) {
   if (!condition)
@@ -97,6 +107,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
+                                "[--restir-proposal <power-alias|uniform|power-uniform>] "
                                 "[--restir-history-cap <1..65536>] [--restir-radius <1..32>]");
   Options options;
   options.report = argv[2];
@@ -114,6 +125,15 @@ Options Parse(int argc, char** argv) {
         options.integrator = Integrator::Wavefront;
       else
         throw std::invalid_argument("invalid integrator: " + std::string(value));
+    } else if (option == "--restir-proposal") {
+      if (value == "power-alias")
+        options.proposal = RestirProposal::Power;
+      else if (value == "uniform")
+        options.proposal = RestirProposal::Uniform;
+      else if (value == "power-uniform")
+        options.proposal = RestirProposal::PowerUniform;
+      else
+        throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
     } else if (option == "--benchmark-size")
       options.size = Number(value, 16, 256);
     else if (option == "--benchmark-frames")
@@ -334,6 +354,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   settings.restir_spatial = mode.spatial;
   settings.restir_max_history_candidates = options.cap;
   settings.restir_spatial_radius = options.radius;
+  settings.restir_proposal = options.proposal;
   const bool reuse = mode.temporal || mode.spatial;
   std::uint64_t frame_index = 0;
   auto render = [&](const FrameSnapshot& snapshot, unsigned seed, unsigned f, bool cut) {
@@ -588,7 +609,8 @@ int RestirBenchmarkMain(int argc, char** argv) {
         << ",\"configuration\":" << Quote(LOTUS_BENCHMARK_CONFIG)
         << ",\"system\":" << Quote(LOTUS_BENCHMARK_SYSTEM) << "},\"device\":" << device
         << ",\"procedure\":{\"integrator\":" << Quote(options.integrator == Integrator::Reference ? "reference" : "wavefront")
-        << ",\"reference_integrator\":\"reference\",\"candidate_proposal\":\"power-alias\",\"width\":" << options.size
+        << ",\"reference_integrator\":\"reference\",\"candidate_proposal\":" << Quote(ProposalName(options.proposal))
+        << ",\"width\":" << options.size
         << ",\"height\":" << options.size << ",\"frames\":" << options.frames << ",\"warmup_frames\":" << options.warmup
         << ",\"sequences\":" << options.sequences << ",\"analytic_lights\":" << options.lights
         << ",\"reference_samples_per_half\":" << options.reference_samples

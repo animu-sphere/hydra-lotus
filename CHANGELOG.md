@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Core ReSTIR candidate proposals for power, uniform and equal-mixture light
+  selection, with marginal-density weights and history resets; headless
+  `--restir-proposal` comparisons and independent GPU arithmetic/lighting
+  checks ([contract](docs/reference/RESTIR.md#initial-gpu-lighting),
+  [evidence](docs/reports/2026-10-15-restir-proposals.md)).
 - Separate headless ReSTIR benchmark comparing NEE/MIS and all four reservoir
   modes on static and moving many-light scenes, with a candidate-count sweep,
   independent Lambert/NEE/MIS references, convergence curves, GPU time,

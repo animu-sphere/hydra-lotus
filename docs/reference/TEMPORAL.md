@@ -337,7 +337,7 @@ key/cut reset priorities:
 
 | Change | `reset_reason` |
 | --- | --- |
-| Enabling radiance after metadata-only, integrator, light estimator, reservoir candidate count/reuse mode/spatial radius, base RNG index, bounce limit, per-batch sample limit, history cap or background colour | `RenderSettingsChanged` |
+| Enabling radiance after metadata-only, integrator, light estimator, reservoir proposal/candidate count/reuse mode/spatial radius, base RNG index, bounce limit, per-batch sample limit, history cap or background colour | `RenderSettingsChanged` |
 | Constant environment, environment map, analytic lights, material table, texture resources, mesh insertion/removal, geometry resource, binding, visibility or instancing mode/count | `SceneChanged` |
 | Camera or existing rigid-placement transform only | No global reset; shared validity controls each pixel |
 

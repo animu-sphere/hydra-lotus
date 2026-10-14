@@ -106,9 +106,11 @@ keep benchmark data separate from renderer correctness evidence.
 `adapters/headless/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,
 metrics and CLI are owned by the [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison).
-`validation/restir-benchmark-test.cmake` checks both integrators and capability
-handling, with a Vulkan-only missing-driver regression. No new library or
-public backend boundary is introduced.
+`validation/restir-benchmark-test.cmake` checks both integrators, all three
+candidate proposals and capability handling, with a Vulkan-only missing-driver
+regression. Proposal selection and marginal densities live in
+`shaders/common/scene.slang`; the plain-C++ `RestirProposal` selector stays in
+`PathTracingSettings`. No new library target is introduced.
 
 ## 3. Where new code goes
 

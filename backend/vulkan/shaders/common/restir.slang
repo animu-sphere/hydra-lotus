@@ -41,8 +41,9 @@ struct RestirHistory {
 [[vk::binding(19, 0)]] RWStructuredBuffer<RestirHistory> spatial_reservoirs;
 [[vk::binding(20, 0)]] RWStructuredBuffer<uint4> spatial_sources;
 
-// f in the light's unit-square parameter measure. The conditional mapping's
-// Jacobian is selection / sample.pdf (area or solid angle); q is selection.
+// f in the light's unit-square parameter measure. Reconstruction embeds the
+// power selection p; its Jacobian is p / sample.pdf (area or solid angle).
+// Candidate proposal q is separate and appears only in streaming weights.
 // Max RGB covers every nonzero channel. Visibility is applied after selection.
 Spectrum CandidateContribution(SurfaceHit surface, ShadingFrame basis,
     float3 wo, LightSample sample, float selection) {
@@ -85,9 +86,12 @@ public void WriteInitialReservoir(uint2 pixel, RayDesc ray, inout uint camera_rn
         uv.y = NextRandom(rng);
         const float random = NextRandom(rng);
         const uint light = ChooseReservoirLight(choice);
-        const float proposal = path_constants.lights[light].pdf;
+        const float proposal = ReservoirProposalPdf(light);
         const LightSample sample = ReconstructReservoirLight(light, uv, origin);
-        const Spectrum f = CandidateContribution(surface, basis, wo, sample, proposal);
+        // Reconstruction PDFs include the fixed power-table selection. Cancel
+        // that factor for the target; q belongs only in the streaming weight.
+        const Spectrum f = CandidateContribution(surface, basis, wo, sample,
+            path_constants.lights[light].pdf);
         bool selected;
         if (!isfinite(sample.pdf) || !IsFinite(f) || !StreamReservoirCandidate(result.reservoir,
                 light, MaxComponent(f), proposal, random, selected)) {
@@ -111,7 +115,7 @@ public void WriteInitialReservoir(uint2 pixel, RayDesc ray, inout uint camera_rn
       const float visibility = ShadowTransmittance(shadow);
       const float normalization = ReservoirNormalization(result.reservoir);
       const Spectrum estimate = CandidateContribution(surface, basis, wo,
-          sample, result.proposal) * (visibility * normalization);
+          sample, path_constants.lights[result.reservoir.sample].pdf) * (visibility * normalization);
       if (!isfinite(normalization) || !IsFinite(estimate))
         result.flags |= 2;
       else

@@ -473,6 +473,14 @@ enum class LightSampling {
   RestirInitial,
 };
 
+// Light-table selection for fresh reservoir candidates. The payload mapping
+// and target measure stay fixed; only the proposal probability changes.
+enum class RestirProposal {
+  Power = 0,
+  Uniform = 1,
+  PowerUniform = 2, // Equal mixture of power-alias and uniform selection.
+};
+
 // The bounces the wavefront integrator records per sample; a larger
 // `max_bounces` fails.
 inline constexpr std::uint32_t kMaxWavefrontBounces = 1024;
@@ -511,6 +519,8 @@ struct PathTracingSettings {
   // Four axis neighbours at this pixel distance, 1..32. Neighbour counts
   // use restir_max_history_candidates; geometry/material rejection is fixed.
   std::uint32_t restir_spatial_radius = 1;
+  // Changing the proposal resets progressive and temporal history.
+  RestirProposal restir_proposal = RestirProposal::Power;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source
