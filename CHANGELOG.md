@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Separate headless ReSTIR benchmark comparing NEE/MIS and all four reservoir
+  modes on static and moving many-light scenes, with a candidate-count sweep,
+  independent Lambert/NEE/MIS references, convergence curves, GPU time,
+  temporal differences, memory and inspectable PFM images
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-14-restir-comparison.md)).
 - Hydra ReSTIR controls for initial candidates, temporal/spatial reuse,
   source caps and neighbour radius; six final-reservoir diagnostic AOVs.
   Moving USD-stage and installed usdview checks cover both integrators and

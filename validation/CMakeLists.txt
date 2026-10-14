@@ -162,3 +162,20 @@ if(LOTUS_WITH_VULKAN)
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/synchronization-no-driver"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
 endif()
+
+foreach(integrator reference wavefront)
+  add_test(NAME lotus-renderer-restir-benchmark-${integrator}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}"
+      "-DINTEGRATOR=${integrator}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+  set_tests_properties(lotus-renderer-restir-benchmark-${integrator} PROPERTIES RUN_SERIAL TRUE)
+endforeach()
+if(LOTUS_WITH_VULKAN)
+  add_test(NAME lotus-renderer-restir-benchmark-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-no-driver"
+      -DNO_DRIVER=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+endif()

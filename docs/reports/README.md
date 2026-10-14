@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-14-restir-comparison.md](2026-10-14-restir-comparison.md) | Reproducible headless static/moving many-light comparisons: candidate counts, independent references, convergence/correlation, timing, memory and finite-sample local errors under both integrators; [summary data](2026-10-14-restir-comparison.json). |
 | [2026-10-14-restir-hydra.md](2026-10-14-restir-hydra.md) | Hydra reservoir settings and final diagnostic AOVs, moving USD stages, installed usdview mode/cut sequences and deterministic progressive restoration under both integrators. |
 | [2026-10-14-restir-spatial.md](2026-10-14-restir-spatial.md) | GPU spatial reservoirs: immutable current inputs, CPU/GPU corrected arithmetic, differing support, surface boundaries, current visibility, history/lifecycle/overflow checks and four-mode moving many-light error, correlation, timing and memory measurements. |
 | [2026-10-13-restir-temporal.md](2026-10-13-restir-temporal.md) | GPU temporal reservoirs: CPU/GPU recursive arithmetic, bounded counts, differing support, shared reprojection, current visibility/disocclusion, NEE/MIS comparisons, resets and failed-merge publication under both integrators. |

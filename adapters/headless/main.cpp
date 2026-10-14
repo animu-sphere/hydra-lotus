@@ -5,6 +5,7 @@
 
 #include "reference.hpp"
 #include "benchmark.hpp"
+#include "restir_benchmark.hpp"
 
 #include <algorithm>
 #include <array>
@@ -4907,6 +4908,8 @@ std::string Status(Lotus::FrameStatus status) {
 } // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark-restir")
+    return LotusHeadless::RestirBenchmarkMain(argc, argv);
   if (argc > 1 && std::string_view(argv[1]) == "--benchmark")
     return LotusHeadless::BenchmarkMain(argc, argv);
   Session session;
@@ -4945,7 +4948,8 @@ int main(int argc, char** argv) {
                    "           [--images <directory>]\n"
                    "       lotus-headless --write-reference <directory>\n"
                    "       lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
-                   "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n";
+                   "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n"
+                   "       lotus-headless --benchmark-restir <json-path> [measurement options]\n";
       return 2;
     }
   }

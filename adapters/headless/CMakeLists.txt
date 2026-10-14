@@ -1,4 +1,4 @@
-add_executable(lotus-headless main.cpp reference.cpp benchmark.cpp)
+add_executable(lotus-headless main.cpp reference.cpp benchmark.cpp restir_benchmark.cpp)
 target_link_libraries(lotus-headless PRIVATE
   Lotus::RenderWorld
   Lotus::RenderExtraction

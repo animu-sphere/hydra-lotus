@@ -74,6 +74,22 @@ identities, defaults, metric scopes, capability handling and exit codes.
 CTest uses 16 measured/2 warmup frames for the report regression; the
 performance baseline uses the default 64/8.
 
+## Reservoir comparison
+
+After the default build, run the separate static/moving many-light comparison:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-comparison-reference.json --benchmark-label "49f8d79 + headless reservoir comparison; core Release"
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-comparison-wavefront.json --benchmark-label "49f8d79 + headless reservoir comparison; core Release" --benchmark-integrator wavefront
+```
+
+Use the identity of the build being measured in its label. The
+[reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison)
+owns workloads, settings, metric scopes and limits; the
+[measured comparison](../reports/2026-10-14-restir-comparison.md) records these
+runs. JSON raw populations and sibling PFM directories remain separate from
+OpenStrata's renderer correctness report.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

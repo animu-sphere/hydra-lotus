@@ -140,8 +140,10 @@ unbiased moving-frame history selection.
 Set `PathTracingSettings::light_sampling = LightSampling::RestirInitial` for
 opt-in primary-surface direct lighting under either integrator.
 `restir_candidates` defaults to 8 and accepts 1–64. `Mis` remains the default.
-The headless benchmark CLI exposes `Mis` and `Bsdf` only; the
-[Hydra controls](#hydra-controls-and-diagnostics) also expose reservoirs.
+The fixed headless benchmark CLI exposes `Mis` and `Bsdf`; the separate
+[reservoir comparison](#headless-reservoir-comparison) measures all four
+reservoir modes. The [Hydra controls](#hydra-controls-and-diagnostics) also
+expose reservoirs.
 Later bounces retain NEE/MIS.
 
 A separate fullscreen pass traces the same jittered camera ray and primary
@@ -237,6 +239,93 @@ Vulkan-disabled and missing-driver configurations explain their GPU SKIPs.
 Candidate strategy evaluation remains outside this implementation.
 Initial-only correctness checks establish
 no many-light speedup, temporal stability or reuse bias result.
+
+## Headless reservoir comparison
+
+`lotus-headless --benchmark-restir <json-path>` uses
+`adapters/headless/restir_benchmark.cpp` to compare NEE/MIS, initial-only,
+temporal, spatial and spatiotemporal reservoirs under the selected integrator.
+It writes `lotus-restir-benchmark-v1` JSON and a sibling `<report-stem>-images/`
+directory of linear RGB PFMs. It is separate from the fixed benchmark and
+OpenStrata renderer correctness evidence. Exit codes are 0 for a completed
+measurement, 77 for explained unavailable Vulkan/ray-query capability, 1 for
+measurement/output failures and 2 for invalid CLI input. A completed run
+does not assert a quality or speed threshold. Invalid arguments leave existing
+reports and images untouched. The JSON is published from a complete temporary
+file; measurement failures carry `fail`, with only completed scenes retained.
+
+The versioned workloads have a Lambert material (`ior = 1`, RGB 0.5/0.75/1),
+a perspective view of a two-triangle plane at Z = -4, and parallel distant
+lights distributed over positive-Z directions using golden-angle azimuths.
+Light RGBs vary by index; irradiance scales by `32 / light_count`.
+`many-distant-plane-v1` is static and has an independently enumerated Lambert
+RGB integral. `many-distant-moving-shadow-v1` adds a shaded opaque two-triangle
+panel at Z = -2.5: its X translation is `0.7 sin(phase + 0.3)` and camera view
+X translation is `0.12 sin(phase)`, with `phase = 2 pi frame / frames`.
+Both workloads use one scattering bounce to isolate direct lighting.
+
+Defaults and accepted CLI ranges:
+
+| Option | Default | Accepted |
+| --- | --- | --- |
+| `--benchmark-label` | empty | build identity string |
+| `--benchmark-integrator` | `reference` | `reference`, `wavefront` |
+| `--benchmark-size` | 64 | square side 16–256 |
+| `--benchmark-frames` | 32 | 2–256 |
+| `--benchmark-warmup` | 4 | 0–64 |
+| `--restir-sequences` | 4 | 2–64 independent sequences |
+| `--restir-lights` | 128 | 2–4096 |
+| `--restir-reference-samples` | 256 | 16–4096 per reference half |
+| `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
+| `--restir-history-cap` | 32 | 1–65536 |
+| `--restir-radius` | 1 | 1–32 |
+
+Each measured case owns a fresh renderer, so retained reservoir capacity from
+other modes cannot contaminate its memory measurement. Warmup has a separate
+RNG range and no measured history is inherited. Each sequence starts at
+`17 + sequence * 65537`; its frame `f` uses the next sample index. Reuse modes
+carry a fixed base index through `RenderTemporalScene`, with a cut at sequence
+start; fresh NEE/MIS and initial-only frames use `RenderScene` with explicit
+indices. Successful calls must expose one fresh sample, zero validation
+messages and the expected history availability. Radiance reuse is disabled.
+
+The independent NEE/MIS reference always uses the reference integrator,
+including when wavefront is measured. Each pose uses two disjoint equal-spp
+batches starting at `2^24 + frame * 8192 + half * 4096`. Their mean is saved;
+`reference_split_rmse` records their discrepancy without subtracting reference
+noise. The static reference also reports its error to the independent integral.
+
+The JSON retains raw populations and summaries of fresh-frame RGB RMS error,
+GPU scene duration, reservoir and shared metadata pass durations, blocking
+update/render wall time, and frame-difference RMS after subtracting the matched
+reference's motion. Differences exclude sequence boundaries. Static cases
+record power-of-two/final prefix convergence: RMS over independent sequences
+of each CPU-averaged prefix's error to the integral, with its mean cumulative
+GPU time. Moving cases have no static convergence curve. Both modes retain
+the final fresh image and an ensemble image: all samples/sequences for static,
+only the final pose across sequences for moving. Ensemble RMS, signed channel
+mean error and maximum absolute 8x8 tile mean error help inspect bias/artifacts,
+but finite sampling and recursive correlation prevent a proof of unbiasedness.
+
+`scene_gpu_ms` already includes metadata and reservoir work; components must
+not be added to it. It excludes scene updates and readback. Wall time includes
+both. Reservoir and metadata bytes include device storage and host mirrors;
+scene-pool reserved bytes exclude renderer targets. Total VRAM remains null.
+GPU series/cumulative times are null when unsupported or inapplicable.
+
+The candidate sweep evaluates counts under the existing power-alias proposal;
+it does not compare alternative proposal distributions. Parallel lights do not
+establish area-light/environment or multibounce production performance. The
+reference split discrepancy and finite number of independent sequences limit
+moving bias/artifact conclusions. Reduced frame differences alone do not
+establish improved convergence or speed. Workload/settings/build identity must
+match before comparing reports.
+
+CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
+workloads, candidate/mode populations, fresh memory accounting, history,
+static integral means, output images and CLI preservation. The Vulkan-only
+`lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. Measured
+evidence belongs in [reports](../reports/README.md).
 
 ## Temporal GPU reuse
 
