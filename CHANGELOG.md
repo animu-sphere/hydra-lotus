@@ -9,6 +9,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- ReSTIR support correction uses stored source targets for exact light-slot/UV
+  matches, and final visibility/shading share one reconstructed light sample
+  ([contract](docs/reference/RESTIR.md#temporal-gpu-reuse),
+  [evidence](docs/reports/2026-10-16-restir-evaluation.md)).
 - ReSTIR temporal/spatial passes reuse current receiver transmittance when the
   selected light and both sample coordinates are unchanged, avoiding a repeated
   shadow query while retaining current-frame visibility and support correction

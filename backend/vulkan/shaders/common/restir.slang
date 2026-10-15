@@ -133,7 +133,7 @@ public Spectrum InitialDirectLight(uint pixel) {
   return SpectrumFromRgb(initial_reservoirs[pixel].contribution.xyz);
 }
 
-Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
+Spectrum HistoryContribution(RestirHistory source, uint light, LightSample sample) {
   SurfaceBsdf bsdf;
   bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
   bsdf.alpha = source.base_alpha.w;
@@ -142,7 +142,6 @@ Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
   bsdf.dielectric_f90 = source.normal.w;
   bsdf.f0 = SpectrumFromRgb(source.fresnel.xyz);
   bsdf.f90 = source.fresnel.w;
-  const LightSample sample = ReconstructReservoirLight(light, uv, source.origin.xyz);
   if (!(sample.pdf > 0.0) || dot(sample.direction, source.normal.xyz) <= 0.0)
     return SpectrumConstant(0.0);
   const ShadingFrame basis = MakeShadingFrame(source.shading_normal.xyz);
@@ -150,15 +149,34 @@ Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
       sample.radiance * (path_constants.lights[light].pdf / sample.pdf);
 }
 
+Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
+  return HistoryContribution(source, light,
+      ReconstructReservoirLight(light, uv, source.origin.xyz));
+}
+
+bool SameSample(RestirPixel a, RestirPixel b) {
+  return a.reservoir.sample == b.reservoir.sample && all(a.uv == b.uv);
+}
+
+// The source stores its unshadowed target at its own exact jittered surface.
+// It is valid for this selection only when the full light-slot/UV key matches.
+float HistoryTarget(RestirHistory source, RestirPixel selected, out bool valid) {
+  if (SameSample(source.pixel, selected)) {
+    valid = isfinite(source.pixel.reservoir.selected_target);
+    return source.pixel.reservoir.selected_target;
+  }
+  const Spectrum contribution = HistoryContribution(source, selected.reservoir.sample, selected.uv);
+  valid = IsFinite(contribution);
+  return MaxComponent(contribution);
+}
+
 // The input was resolved at this exact receiver earlier in the SAME frame.
 // Light identity alone is insufficient for area/environment samples: their
 // unit-square variates must match too. Never pass a neighbour or old history.
-float ReceiverVisibility(RestirPixel selected, RestirPixel current, float3 origin) {
-  if (selected.reservoir.sample == current.reservoir.sample &&
-      all(selected.uv == current.uv))
+float ReceiverVisibility(RestirPixel selected, RestirPixel current, float3 origin,
+    LightSample sample) {
+  if (SameSample(selected, current))
     return current.contribution.w;
-  const LightSample sample = ReconstructReservoirLight(
-      selected.reservoir.sample, selected.uv, origin);
   RayDesc shadow;
   shadow.Origin = origin;
   shadow.Direction = sample.direction;
@@ -220,15 +238,15 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
             result.pixel.proposal = source.pixel.proposal;
             result.age = min(source.age, 65535u) + 1u;
           }
-          // Reevaluate the FINAL selection at both participating surfaces.
+          // Resolve the FINAL selection's target at both participating surfaces.
           // Even an all-zero observed source contributes its support count.
           if (result.pixel.reservoir.weight_sum > 0.0) {
-            const Spectrum support = HistoryContribution(source,
-                result.pixel.reservoir.sample, result.pixel.uv);
-            if (!IsFinite(support))
+            bool valid_support;
+            const float support = HistoryTarget(source, result.pixel, valid_support);
+            if (!valid_support)
               result.pixel.flags |= 2;
             result.supporting_candidates = initial_reservoirs[slot].reservoir.candidate_count +
-                (MaxComponent(support) > 0.0 ? count : 0u);
+                (support > 0.0 ? count : 0u);
           } else
             result.supporting_candidates = 0;
           result.normalization = ReservoirReuseNormalization(
@@ -237,9 +255,11 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
       }
     }
     if ((result.pixel.flags & 2) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
-      const float visibility = ReceiverVisibility(result.pixel, initial_reservoirs[slot], origin);
+      const LightSample sample = ReconstructReservoirLight(
+          result.pixel.reservoir.sample, result.pixel.uv, origin);
+      const float visibility = ReceiverVisibility(result.pixel, initial_reservoirs[slot], origin, sample);
       const Spectrum estimate = HistoryContribution(result,
-          result.pixel.reservoir.sample, result.pixel.uv) * (visibility * result.normalization);
+          result.pixel.reservoir.sample, sample) * (visibility * result.normalization);
       if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
         result.pixel.flags |= 2;
       else
@@ -321,11 +341,11 @@ public void WriteSpatialReservoir(uint2 pixel) {
           if (sources[i] == 0xffffffffu)
             continue;
           const RestirHistory source = temporal_reservoirs[sources[i]];
-          const Spectrum support = HistoryContribution(source,
-              result.pixel.reservoir.sample, result.pixel.uv);
-          if (!IsFinite(support))
+          bool valid_support;
+          const float support = HistoryTarget(source, result.pixel, valid_support);
+          if (!valid_support)
             result.pixel.flags |= 2u;
-          if (MaxComponent(support) > 0.0)
+          if (support > 0.0)
             result.supporting_candidates += min(source.pixel.reservoir.candidate_count,
                 path_constants.restir_max_history_candidates);
         }
@@ -333,9 +353,11 @@ public void WriteSpatialReservoir(uint2 pixel) {
       result.normalization = ReservoirReuseNormalization(
           result.pixel.reservoir, result.supporting_candidates);
       if ((result.pixel.flags & 2u) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
-        const float visibility = ReceiverVisibility(result.pixel, centre.pixel, result.origin.xyz);
+        const LightSample sample = ReconstructReservoirLight(
+            result.pixel.reservoir.sample, result.pixel.uv, result.origin.xyz);
+        const float visibility = ReceiverVisibility(result.pixel, centre.pixel, result.origin.xyz, sample);
         const Spectrum estimate = HistoryContribution(result,
-            result.pixel.reservoir.sample, result.pixel.uv) * (visibility * result.normalization);
+            result.pixel.reservoir.sample, sample) * (visibility * result.normalization);
         if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
           result.pixel.flags |= 2u;
         else

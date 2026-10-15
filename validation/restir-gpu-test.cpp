@@ -802,12 +802,29 @@ void VisibilitySampleIdentity(OffscreenRenderer& renderer, Integrator integrator
     for (unsigned slot = 0; slot < 1024; ++slot) {
       auto rng = Hash(slot ^ Hash(f.settings.sample_index + frame_index));
       const double receiver_x = 2.0 * (double(slot % 32) + Random(rng)) / 32 - 1.0;
+      const double receiver_y = 1.0 - 2.0 * (double(slot / 32) + Random(rng)) / 32;
       // Independent ray/plane intersection: receiver z=-4 offset by 256
       // float ULPs towards +Z, rect point x=2+8u, blocker plane z=-2.
       constexpr double origin_z = -4.0 + 256.0 / 4194304.0;
       constexpr double t = (-2.0 - origin_z) / -origin_z;
-      auto Verify = [&](const RestirPixel& p) {
+      auto Verify = [&](const RestirPixel& p, double normalization) {
         Check(p.flags == 1 && p.light == 0, "area visibility fixture missed receiver/light");
+        // Independent Lambert/rect Jacobian in the unit-square measure:
+        // area * cos(receiver) * cos(light) / distance^2. The two cosines
+        // equal -origin_z / distance here. Include both UV coordinates and
+        // the exact current receiver, even when a neighbour/history wins.
+        const double dx = 2.0 + 8.0 * p.uv[0] - receiver_x;
+        const double dy = -2.0 + 4.0 * p.uv[1] - receiver_y;
+        const double distance2 = dx * dx + dy * dy + origin_z * origin_z;
+        const double jacobian = 32.0 * origin_z * origin_z / (distance2 * distance2);
+        Near(p.selected_target, jacobian / kPi, 3e-6,
+            "selected area target at current jittered receiver");
+        for (unsigned c = 0; c < 3; ++c) {
+          const double expected = Diffuse().base_color[c] * light.radiance[c] / kPi *
+              jacobian * p.contribution[3] * normalization;
+          Near(p.contribution[c], expected, 4e-6,
+              "resolved area contribution at current jittered receiver");
+        }
         const double crossing_x = receiver_x + t * (2.0 + 8.0 * p.uv[0] - receiver_x);
         // Leave a margin for float camera/triangle reconstruction at an edge.
         if (std::abs(crossing_x - (1 + shift)) < 1e-4 ||
@@ -815,23 +832,26 @@ void VisibilitySampleIdentity(OffscreenRenderer& renderer, Integrator integrator
         const double expected = crossing_x > 1 + shift && crossing_x < 3 + shift ? 0.25 : 1;
         Near(p.contribution[3], expected, 1e-6, "current receiver area-sample transmittance");
       };
-      auto Compare = [&](const RestirPixel& resolved, const RestirPixel& input) {
-        Verify(resolved);
+      auto Compare = [&](const RestirReusePixel& reuse, const RestirPixel& input) {
+        const auto& resolved = reuse.reservoir;
+        Verify(resolved, reuse.normalization);
         if (resolved.light == input.light && resolved.uv == input.uv) ++same;
         else {
           ++different;
           changed_visibility += resolved.contribution[3] != input.contribution[3];
         }
       };
-      Verify(frame.restir.initial[slot]);
-      Compare(frame.restir.temporal[slot].reservoir, frame.restir.initial[slot]);
+      const auto& initial = frame.restir.initial[slot];
+      Verify(initial, vulkan_internal::ReservoirNormalization(
+          {initial.light, initial.weight_sum, initial.selected_target, initial.candidate_count}));
+      Compare(frame.restir.temporal[slot], initial);
       if (spatial)
-        Compare(frame.restir.spatial[slot].reservoir, frame.restir.temporal[slot].reservoir);
+        Compare(frame.restir.spatial[slot], frame.restir.temporal[slot].reservoir);
     }
   }
   Check(same != 0 && different != 0 && changed_visibility != 0,
       "area visibility fixture did not exercise retained and changed shadow rays");
-  std::cout << "current area-sample visibility: retained=" << same << " changed=" << different
+  std::cout << "current area-sample target/RGB/visibility: retained=" << same << " changed=" << different
             << " changed transmittance=" << changed_visibility << " PASS\n";
 }
 

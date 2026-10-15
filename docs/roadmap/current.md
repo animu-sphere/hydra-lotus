@@ -50,6 +50,9 @@ Implement the remaining work in this order:
   Same-frame receiver visibility is reused for unchanged light-slot/UV
   selections, with independent moving fractional-occluder checks and matched
   before/after comparisons ([visibility evidence](../reports/2026-10-15-restir-visibility.md)).
+  Exact sample/source targets and final light reconstruction now avoid repeated
+  evaluation, with independent area-light target/RGB checks and matched
+  comparisons ([evaluation evidence](../reports/2026-10-16-restir-evaluation.md)).
   Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
   address the reproduced
   reuse cost and temporal correlation before recording the scope review and
