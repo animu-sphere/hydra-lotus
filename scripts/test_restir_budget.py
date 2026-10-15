@@ -31,6 +31,75 @@ def report(seed=17):
 
 
 class BudgetTests(unittest.TestCase):
+    @staticmethod
+    def with_temporal_residuals():
+        reports = [report(), report(262165)]
+        for run in reports:
+            for case in run["scenes"][0]["cases"]:
+                mean = case["convergence"][-1]["rmse"]
+                centered = .5 if case["mode"] == "mis" else 0
+                fresh = (mean*mean + centered*centered)**.5
+                case["fresh_rmse"] = {"mean": fresh, "raw": [fresh] * 8}
+                case["temporal_residuals"] = {
+                    "sequence_mean_rmse": {"mean": mean, "raw": [mean, mean]},
+                    "centered_rmse": {"mean": centered, "raw": [centered, centered]},
+                    "lag1_autocorrelation_raw": [-.75, .25] if centered else [None, None]}
+        return reports
+
+    def test_temporal_residuals_preserve_run_sequence_and_undefined_values(self):
+        result = summarize(self.with_temporal_residuals(), [.25])["scenes"][0]["cases"]
+        self.assertEqual(result[0]["temporal_residuals"]["sequence_mean_rmse"], [[.25, .25], [.25, .25]])
+        self.assertEqual(result[0]["temporal_residuals"]["lag1_autocorrelation_raw"], [[-.75, .25], [-.75, .25]])
+        self.assertEqual(result[1]["temporal_residuals"]["lag1_autocorrelation_raw"], [[None, None], [None, None]])
+        legacy = summarize([report(), report(262165)], [.25])
+        self.assertIsNone(legacy["scenes"][0]["cases"][0]["temporal_residuals"])
+
+    def test_temporal_residuals_reject_bad_populations_correlations_and_decomposition(self):
+        for metric, invalid in (
+            ("sequence_mean_rmse", {"mean": .25, "raw": [.25]}),
+            ("centered_rmse", {"mean": .5, "raw": [float("nan"), .5]}),
+            ("centered_rmse", {"mean": .4, "raw": [.5, .5]}),
+            ("centered_rmse", {"mean": .4, "raw": [.4, .4]}),
+            ("lag1_autocorrelation_raw", [.25]),
+            ("lag1_autocorrelation_raw", [None, .25]),
+            ("lag1_autocorrelation_raw", [1.1, .25]),
+            ("lag1_autocorrelation_raw", [float("inf"), .25]),
+            ("lag1_autocorrelation_raw", [True, .25]),
+        ):
+            with self.subTest(metric=metric, invalid=invalid):
+                reports = self.with_temporal_residuals()
+                reports[1]["scenes"][0]["cases"][0]["temporal_residuals"][metric] = invalid
+                with self.assertRaises(ValueError):
+                    summarize(reports, [.25])
+        reports = self.with_temporal_residuals()
+        del reports[1]["scenes"][0]["cases"][0]["temporal_residuals"]
+        with self.assertRaisesRegex(ValueError, "every run"):
+            summarize(reports, [.25])
+        reports = self.with_temporal_residuals()
+        reports[1]["scenes"][0]["cases"][1]["temporal_residuals"]["lag1_autocorrelation_raw"] = [0, 0]
+        with self.assertRaisesRegex(ValueError, "zero-variance"):
+            summarize(reports, [.25])
+
+    def test_temporal_residuals_check_each_sequence_and_static_convergence(self):
+        reports = self.with_temporal_residuals()
+        case = reports[1]["scenes"][0]["cases"][0]
+        case["fresh_rmse"]["raw"] = [0] * 4 + [(.625)**.5] * 4
+        # Same aggregate MSE as before, but wrong per-sequence decomposition.
+        with self.assertRaisesRegex(ValueError, "decomposition"):
+            summarize(reports, [.25])
+        reports = self.with_temporal_residuals()
+        case = reports[1]["scenes"][0]["cases"][0]
+        case["temporal_residuals"]["sequence_mean_rmse"] = {"mean": .5, "raw": [.5, .5]}
+        case["fresh_rmse"]["raw"] = [(.5)**.5] * 8
+        with self.assertRaisesRegex(ValueError, "static convergence"):
+            summarize(reports, [.25])
+        # Moving residual means do not equal a final-pose convergence curve.
+        for run in reports:
+            run["scenes"][0]["moving"] = True
+            for case in run["scenes"][0]["cases"]:
+                case["convergence"] = None
+        summarize(reports, [.25])
+
     def test_finite_reference_and_boundary_regions_survive_reduction(self):
         reports = [report(), report(262165)]
         for run in reports:

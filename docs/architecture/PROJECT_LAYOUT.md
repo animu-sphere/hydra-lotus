@@ -90,6 +90,13 @@ The shared reservoir shader also reuses same-frame receiver transmittance for
 unchanged light-slot/UV selections, with moving fractional-occluder validation
 in that executable.
 
+Headless temporal-error measurement is private to
+`adapters/headless/temporal_statistics.hpp`. The uninstalled, runtime-free
+`lotus-restir-statistics-test` checks its streaming moments and lag-one
+autocorrelation against independent finite-sequence definitions. The
+[reservoir comparison contract](../reference/RESTIR.md#headless-reservoir-comparison)
+owns the JSON metrics and their limits.
+
 The same Hydra runtime translates reservoir settings and final diagnostic
 AOVs. The uninstalled `lotus-hydra2-restir-test` exercises synthetic contracts
 and moving UsdImaging stages; GPU mode explains unavailable capabilities.

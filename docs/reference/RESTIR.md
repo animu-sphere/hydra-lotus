@@ -380,6 +380,30 @@ moving bias/artifact conclusions. Reduced frame differences alone do not
 establish improved convergence or speed. Workload/settings/build identity must
 match before comparing reports.
 
+Each case also records `temporal_residuals`, with one entry per independent
+sequence. For each fixed screen-space RGB component, let `r[t]` be the fresh
+sample minus that frame's matched `error_reference`, and `m` its sequence
+mean. `sequence_mean_rmse` is the RMS of `m` across components;
+`centered_rmse` is the RMS of `r[t] - m` across frames and components.
+The sum of their squares equals that sequence's mean fresh-frame squared
+error. In static scenes, the sequence mean RMS also equals its final
+`convergence.rmse_raw` entry. Moving means average residuals at fixed screen
+coordinates, not reprojected surfaces or a static transport solution.
+
+`lag1_autocorrelation_raw` contains
+`sum((r[t]-m)*(r[t-1]-m)) / sum((r[t]-m)^2)`, pooled across components;
+the numerator uses adjacent pairs and the denominator uses all frames.
+This is a finite-sequence, variance-weighted sample autocorrelation, not an
+effective sample count or an unbiased population-correlation estimate.
+Zero centered variance produces null, including a frozen nonzero error;
+the sequence mean RMS keeps that persistent error visible. Every sequence
+starts a separate accumulator, so warmup and sequence-boundary pairs are
+excluded. Per-component Welford moments and squared adjacent differences
+need storage proportional to image size, rather than sequence length.
+Motion, disocclusion, short sequences and finite reference noise limit
+interpretation; static finite references contribute a persistent error to
+the mean, and moving finite references also affect the centered statistics.
+
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
@@ -414,7 +438,11 @@ RMS over independent sequences, not to an ensemble formed by pooling runs.
 Raw checkpoint population/aggregate consistency is checked before reduction.
 Reference labels and split discrepancies are retained in each scene, and
 boundary-region errors are reduced without dropping their identities or pixel
-counts. Mismatched reference kinds or regions reject. Older v1 distant reports
+counts. Temporal residual populations retain run/sequence boundaries and
+undefined correlation entries; their means, variance decomposition and static
+convergence consistency are validated. Missing measurements in every run
+produce null for older reports; mixing measured and unmeasured runs rejects.
+Mismatched reference kinds or regions reject. Older v1 distant reports
 without explicit labels/regions remain supported. A budget against a finite
 NEE/MIS image describes agreement with that image, including reference noise;
 it is not a budget against an exact transport solution.

@@ -71,6 +71,50 @@ def validate_curve(curve, procedure):
     require(previous_samples == procedure["frames"], "missing final convergence checkpoint")
 
 
+def temporal_residuals(runs, procedure, static):
+    measurements = [run.get("temporal_residuals") for run in runs]
+    if all(value is None for value in measurements):
+        return None  # Older v1 reports did not measure temporal residuals.
+    require(all(isinstance(value, dict) for value in measurements),
+            "temporal residual measurements must be present in every run")
+    for run, value in zip(runs, measurements):
+        for metric in ("sequence_mean_rmse", "centered_rmse"):
+            series = value[metric]
+            raw = series["raw"]
+            require(len(raw) == procedure["sequences"], "wrong temporal residual sequence population")
+            for entry in raw:
+                number(entry)
+            require(math.isclose(number(series["mean"]), statistics.mean(raw), rel_tol=1e-8, abs_tol=1e-10),
+                    "temporal residual mean disagrees with raw sequences")
+        means, centered = value["sequence_mean_rmse"]["raw"], value["centered_rmse"]["raw"]
+        lag = value["lag1_autocorrelation_raw"]
+        require(len(lag) == procedure["sequences"], "wrong temporal correlation sequence population")
+        for correlation, rms in zip(lag, centered):
+            require((correlation is None) == (rms == 0), "zero-variance temporal correlation must be null")
+            require(correlation is None or (type(correlation) in (int, float) and
+                    math.isfinite(correlation) and -1.00000001 <= correlation <= 1.00000001),
+                    "invalid temporal correlation")
+        fresh = run["fresh_rmse"]["raw"]
+        require(len(fresh) == procedure["sequences"] * procedure["frames"],
+                "wrong temporal fresh-frame population")
+        for entry in fresh:
+            number(entry)
+        for sequence, (mean, rms) in enumerate(zip(means, centered)):
+            start = sequence * procedure["frames"]
+            mse = statistics.mean(x*x for x in fresh[start:start + procedure["frames"]])
+            require(math.isclose(mse, mean*mean + rms*rms, rel_tol=1e-8, abs_tol=1e-10),
+                    "temporal residual decomposition disagrees with fresh-frame error")
+        if static:
+            require(all(math.isclose(a, b, rel_tol=1e-8, abs_tol=1e-10)
+                        for a, b in zip(means, run["convergence"][-1]["rmse_raw"])),
+                    "temporal sequence mean disagrees with final static convergence")
+    # Keep run and sequence boundaries, including undefined correlations.
+    # These frames are not additional independent replications.
+    return {key: [value[key]["raw"] for value in measurements]
+            for key in ("sequence_mean_rmse", "centered_rmse")} | {
+                "lag1_autocorrelation_raw": [value["lag1_autocorrelation_raw"] for value in measurements]}
+
+
 def summarize(reports, targets):
     require(len(reports) >= 2, "at least two independent reports are required")
     require(bool(targets), "at least one quality target is required")
@@ -146,6 +190,7 @@ def summarize(reports, targets):
                       "max_abs_tile_mean_error": population([r["max_abs_tile_mean_error"] for r in runs]),
                       "signed_mean_error_rgb": [r["signed_mean_error_rgb"] for r in runs],
                       "quality_budgets": None}
+            result["temporal_residuals"] = temporal_residuals(runs, procedure, static)
             region_keys = [(r["id"], r["pixels"]) for r in runs[0].get("regions", [])]
             require(len(set(k[0] for k in region_keys)) == len(region_keys) and
                     all(isinstance(k[0], str) and k[0] and type(k[1]) is int and k[1] > 0
@@ -187,6 +232,7 @@ def summarize(reports, targets):
             "notes": {"quality": "First observed checkpoint at/below target that stays below through the final checkpoint. No interpolation; no claim beyond the measured horizon.",
                       "reference": "Budgets use each scene's error_reference. Finite-spp NEE/MIS noise is retained, with split discrepancies reported separately; repeated references share seeds.",
                       "replication": "Populations are across separate invocations. Frames within a reused sequence are correlated. Shared references are not independent replications.",
+                      "temporal_residuals": "Run/sequence populations retain undefined zero-variance correlations as null. Centering removes persistent error, which remains in sequence_mean_rmse. Motion and finite references affect interpretation; no effective sample count is inferred.",
                       "missing": "Unreached budgets or unavailable GPU timestamps are null. Aggregate times/ratios require every run; no successful-subset averages.",
                       "timing": "Scene GPU time includes reservoir/metadata passes and excludes updates/readback. Dynamic clocks and validation limit inference.",
                       "moving": "Moving poses have no convergence budget. Finite ensemble and tile errors do not establish bias bounds."},

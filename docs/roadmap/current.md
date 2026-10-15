@@ -53,6 +53,10 @@ Implement the remaining work in this order:
   Exact sample/source targets and final light reconstruction now avoid repeated
   evaluation, with independent area-light target/RGB checks and matched
   comparisons ([evaluation evidence](../reports/2026-10-16-restir-evaluation.md)).
+  Per-sequence residual means, centered RMS and lag-one autocorrelation now
+  expose persistent temporal error alongside frame differences, with repeated
+  measurements under both integrators
+  ([correlation evidence](../reports/2026-10-16-restir-correlation.md)).
   Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
   address the reproduced
   reuse cost and temporal correlation before recording the scope review and
