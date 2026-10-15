@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-16-restir-evaluation.md](2026-10-16-restir-evaluation.md) | Exact sample/source target reuse, shared final light reconstruction, independent Lambert/rect target and RGB checks, and matched before/after images and GPU timings; [summary data](2026-10-16-restir-evaluation.json). |
 | [2026-10-15-restir-visibility.md](2026-10-15-restir-visibility.md) | Same-frame receiver transmittance reuse, independent moving fractional-occluder/sample-identity checks and matched before/after images and GPU timings; [summary data](2026-10-15-restir-visibility.json). |
 | [2026-10-15-restir-boundaries.md](2026-10-15-restir-boundaries.md) | Mixed rect/disk/environment lighting, Lambert/metal material and depth boundaries, repeated finite-reference budgets and regional artifact measurements; [summary data](2026-10-15-restir-boundaries.json). |
 | [2026-10-15-restir-budgets.md](2026-10-15-restir-budgets.md) | Independent repeated static quality budgets under both integrators, per-sequence convergence/time populations, moving local errors and remaining reuse cost/correlation. |

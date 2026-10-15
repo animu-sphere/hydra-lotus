@@ -463,6 +463,14 @@ initial sample at that receiver, its already queried transmittance is reused.
 Every changed sample gets a new shadow query; previous-frame visibility is
 never used.
 
+For support correction, an exact light-slot/UV match to a participating
+source uses that source's stored unshadowed `selected_target` at its own
+jittered surface. Every other selection is evaluated at that source surface,
+including sources whose observed stream was all-zero. This target cache
+never substitutes a source's target for the receiving-surface contribution.
+At the receiver, final shading and any required shadow query share one
+reconstructed light sample. Source shading and transmittance remain distinct.
+
 ### Compatibility and publication
 
 Camera and nonemissive rigid-placement motion retain compatible history.
@@ -516,6 +524,9 @@ initial lighting, multibounce and temporal-radiance regressions remain active.
 An independent moving fractional-occluder fixture also checks same-light,
 different-UV transmittance and unchanged selections in temporal and combined
 reuse ([visibility evidence](../reports/2026-10-15-restir-visibility.md)).
+The same area fixture independently checks selected targets and resolved RGB
+at the current jittered receiver using the Lambert/rect area Jacobian
+([evaluation evidence](../reports/2026-10-16-restir-evaluation.md)).
 
 These bounded fixtures do not establish unbiased arbitrary moving-history
 selection, many-light speedup or production temporal stability. Correlated
@@ -547,7 +558,9 @@ and `min(M, restir_max_history_candidates)`. This preserves preceding temporal
 support correction instead of reconstructing it from raw sum/M. The final
 selection is reevaluated at every participating surface; only counts whose
 unshadowed target is positive enter the support denominator. Observed all-zero
-neighbours participate too. Current visibility/transmittance is resolved at the
+neighbours participate too. The exact light-slot/UV target cache described
+under [temporal reuse](#temporal-gpu-reuse) applies at each participating
+source. Current visibility/transmittance is resolved at the
 receiver after selection, with the same emission accounting as initial lighting.
 An exact light-slot/UV match to the centre's current temporal input reuses that
 receiver's transmittance. A changed selection gets a new shadow query, including
