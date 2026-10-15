@@ -7,6 +7,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Changed
+
+- ReSTIR temporal/spatial passes reuse current receiver transmittance when the
+  selected light and both sample coordinates are unchanged, avoiding a repeated
+  shadow query while retaining current-frame visibility and support correction
+  ([contract](docs/reference/RESTIR.md#temporal-gpu-reuse),
+  [evidence](docs/reports/2026-10-15-restir-visibility.md)).
+
 ### Added
 
 - Opt-in mixed area/environment ReSTIR comparison workloads with material,

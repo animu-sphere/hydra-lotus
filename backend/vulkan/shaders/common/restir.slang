@@ -150,6 +150,23 @@ Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
       sample.radiance * (path_constants.lights[light].pdf / sample.pdf);
 }
 
+// The input was resolved at this exact receiver earlier in the SAME frame.
+// Light identity alone is insufficient for area/environment samples: their
+// unit-square variates must match too. Never pass a neighbour or old history.
+float ReceiverVisibility(RestirPixel selected, RestirPixel current, float3 origin) {
+  if (selected.reservoir.sample == current.reservoir.sample &&
+      all(selected.uv == current.uv))
+    return current.contribution.w;
+  const LightSample sample = ReconstructReservoirLight(
+      selected.reservoir.sample, selected.uv, origin);
+  RayDesc shadow;
+  shadow.Origin = origin;
+  shadow.Direction = sample.direction;
+  shadow.TMin = 0.0;
+  shadow.TMax = sample.distance;
+  return ShadowTransmittance(shadow);
+}
+
 public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_rng,
     bool active) {
   const uint slot = pixel.y * path_constants.width + pixel.x;
@@ -220,14 +237,7 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
       }
     }
     if ((result.pixel.flags & 2) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
-      const LightSample sample = ReconstructReservoirLight(
-          result.pixel.reservoir.sample, result.pixel.uv, origin);
-      RayDesc shadow;
-      shadow.Origin = origin;
-      shadow.Direction = sample.direction;
-      shadow.TMin = 0.0;
-      shadow.TMax = sample.distance;
-      const float visibility = ShadowTransmittance(shadow);
+      const float visibility = ReceiverVisibility(result.pixel, initial_reservoirs[slot], origin);
       const Spectrum estimate = HistoryContribution(result,
           result.pixel.reservoir.sample, result.pixel.uv) * (visibility * result.normalization);
       if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
@@ -323,14 +333,7 @@ public void WriteSpatialReservoir(uint2 pixel) {
       result.normalization = ReservoirReuseNormalization(
           result.pixel.reservoir, result.supporting_candidates);
       if ((result.pixel.flags & 2u) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
-        const LightSample sample = ReconstructReservoirLight(
-            result.pixel.reservoir.sample, result.pixel.uv, result.origin.xyz);
-        RayDesc shadow;
-        shadow.Origin = result.origin.xyz;
-        shadow.Direction = sample.direction;
-        shadow.TMin = 0.0;
-        shadow.TMax = sample.distance;
-        const float visibility = ShadowTransmittance(shadow);
+        const float visibility = ReceiverVisibility(result.pixel, centre.pixel, result.origin.xyz);
         const Spectrum estimate = HistoryContribution(result,
             result.pixel.reservoir.sample, result.pixel.uv) * (visibility * result.normalization);
         if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
