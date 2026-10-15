@@ -781,6 +781,60 @@ void Visibility(OffscreenRenderer& renderer, Integrator integrator, bool spatial
   std::cout << "visibility: transparent, fractional and opaque PASS\n";
 }
 
+void VisibilitySampleIdentity(OffscreenRenderer& renderer, Integrator integrator, bool spatial) {
+  Fixture f(renderer, integrator, 32); PlaneWorld(f.world, 4);
+  f.settings.restir_candidates = 1;
+  f.settings.restir_spatial = spatial;
+  Light light; light.shape = LightShape::Rect; light.width = 8; light.height = 4;
+  light.world_from_light = Translation(6, 0, 0);
+  light.radiance = {2, 1, 0.5F}; f.world.SetLight("/light", light);
+  f.world.SetMesh("/blocker", Panel(1, 3, -10, 10, -2), {});
+  Material blocker; blocker.opacity = 0.75F;
+  f.world.SetMaterial("/blocker", blocker); f.world.BindMaterial("/blocker", "/blocker");
+  unsigned same = 0, different = 0, changed_visibility = 0;
+  for (unsigned frame_index = 0; frame_index < 6; ++frame_index) {
+    // Rigid blocker motion retains history while changing current shadows.
+    const float shift = float(frame_index % 2);
+    MeshInstance moved; moved.world_from_object = Translation(shift, 0, 0);
+    f.world.SetMeshInstance("/blocker", moved);
+    const auto frame = f.Temporal();
+    Check(frame.restir.history_available == (frame_index != 0), "visibility fixture lost history");
+    for (unsigned slot = 0; slot < 1024; ++slot) {
+      auto rng = Hash(slot ^ Hash(f.settings.sample_index + frame_index));
+      const double receiver_x = 2.0 * (double(slot % 32) + Random(rng)) / 32 - 1.0;
+      // Independent ray/plane intersection: receiver z=-4 offset by 256
+      // float ULPs towards +Z, rect point x=2+8u, blocker plane z=-2.
+      constexpr double origin_z = -4.0 + 256.0 / 4194304.0;
+      constexpr double t = (-2.0 - origin_z) / -origin_z;
+      auto Verify = [&](const RestirPixel& p) {
+        Check(p.flags == 1 && p.light == 0, "area visibility fixture missed receiver/light");
+        const double crossing_x = receiver_x + t * (2.0 + 8.0 * p.uv[0] - receiver_x);
+        // Leave a margin for float camera/triangle reconstruction at an edge.
+        if (std::abs(crossing_x - (1 + shift)) < 1e-4 ||
+            std::abs(crossing_x - (3 + shift)) < 1e-4) return;
+        const double expected = crossing_x > 1 + shift && crossing_x < 3 + shift ? 0.25 : 1;
+        Near(p.contribution[3], expected, 1e-6, "current receiver area-sample transmittance");
+      };
+      auto Compare = [&](const RestirPixel& resolved, const RestirPixel& input) {
+        Verify(resolved);
+        if (resolved.light == input.light && resolved.uv == input.uv) ++same;
+        else {
+          ++different;
+          changed_visibility += resolved.contribution[3] != input.contribution[3];
+        }
+      };
+      Verify(frame.restir.initial[slot]);
+      Compare(frame.restir.temporal[slot].reservoir, frame.restir.initial[slot]);
+      if (spatial)
+        Compare(frame.restir.spatial[slot].reservoir, frame.restir.temporal[slot].reservoir);
+    }
+  }
+  Check(same != 0 && different != 0 && changed_visibility != 0,
+      "area visibility fixture did not exercise retained and changed shadow rays");
+  std::cout << "current area-sample visibility: retained=" << same << " changed=" << different
+            << " changed transmittance=" << changed_visibility << " PASS\n";
+}
+
 void ProposalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
   Fixture f(renderer, integrator, 64); PlaneWorld(f.world);
   // Powers 1:3 give probabilities 1/4 and 3/4, and alias column zero
@@ -1119,8 +1173,9 @@ int main(int argc, char** argv) try {
   }
   for (auto integrator : {Integrator::Reference, Integrator::Wavefront}) {
     // Fresh scene extraction and renderer ownership for each independent fixture.
-    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
-    for (unsigned test = first_test; test < 25; ++test) {
+    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--visibility-only" ? 25U :
+        argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
+    for (unsigned test = first_test; test < 27; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -1148,6 +1203,8 @@ int main(int argc, char** argv) try {
       if (test == 22) SpatialArithmetic(*renderer, integrator, RestirProposal::PowerUniform);
       if (test == 23) Lighting(*renderer, integrator, RestirProposal::Uniform);
       if (test == 24) Lighting(*renderer, integrator, RestirProposal::PowerUniform);
+      if (test == 25) VisibilitySampleIdentity(*renderer, integrator, false);
+      if (test == 26) VisibilitySampleIdentity(*renderer, integrator, true);
     }
   }
   std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";

@@ -86,6 +86,9 @@ The uninstalled `lotus-restir-gpu-test` compares both integrators with the
 CPU oracle and independent lighting integrals; without Vulkan it explains a
 SKIP, with a Vulkan-only missing-driver regression. The
 [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
+The shared reservoir shader also reuses same-frame receiver transmittance for
+unchanged light-slot/UV selections, with moving fractional-occluder validation
+in that executable.
 
 The same Hydra runtime translates reservoir settings and final diagnostic
 AOVs. The uninstalled `lotus-hydra2-restir-test` exercises synthetic contracts

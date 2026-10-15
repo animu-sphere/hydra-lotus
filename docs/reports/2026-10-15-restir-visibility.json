@@ -1,0 +1,1304 @@
+{
+  "source_base": "25aa138",
+  "compared_pfm_pairs": 276,
+  "images_bit_identical": true,
+  "quality_and_memory_exactly_equal": true,
+  "cases": [
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.15648,
+        "after": 0.174976
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.160896,
+        "after": 0.161248
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.323328,
+        "after": 0.352736
+      },
+      "temporal_gpu_ms": {
+        "before": 0.088064,
+        "after": 0.096256
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.430848,
+        "after": 0.234944
+      },
+      "temporal_gpu_ms": {
+        "before": 0.072704,
+        "after": 0.033792
+      },
+      "spatial_gpu_ms": {
+        "before": 0.106496,
+        "after": 0.055296
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.083264,
+        "after": 0.21744
+      },
+      "temporal_gpu_ms": {
+        "before": 0.016384,
+        "after": 0.036864
+      },
+      "spatial_gpu_ms": {
+        "before": 0.017408,
+        "after": 0.048128
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.033312,
+        "after": 0.159808
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.258368,
+        "after": 0.359328
+      },
+      "temporal_gpu_ms": {
+        "before": 0.063488,
+        "after": 0.088064
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.45376,
+        "after": 0.379296
+      },
+      "temporal_gpu_ms": {
+        "before": 0.068608,
+        "after": 0.052224
+      },
+      "spatial_gpu_ms": {
+        "before": 0.101376,
+        "after": 0.084992
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.48688,
+        "after": 0.09088
+      },
+      "temporal_gpu_ms": {
+        "before": 0.091136,
+        "after": 0.016384
+      },
+      "spatial_gpu_ms": {
+        "before": 0.104448,
+        "after": 0.017408
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.029472,
+        "after": 0.063008
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.111424,
+        "after": 0.107424
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.25584,
+        "after": 0.264224
+      },
+      "temporal_gpu_ms": {
+        "before": 0.06656,
+        "after": 0.068608
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.4,
+        "after": 0.516864
+      },
+      "temporal_gpu_ms": {
+        "before": 0.06656,
+        "after": 0.075776
+      },
+      "spatial_gpu_ms": {
+        "before": 0.095232,
+        "after": 0.13312
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.535776,
+        "after": 0.44784
+      },
+      "temporal_gpu_ms": {
+        "before": 0.11264,
+        "after": 0.090112
+      },
+      "spatial_gpu_ms": {
+        "before": 0.106496,
+        "after": 0.1024
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.22592,
+        "after": 0.224768
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.400704,
+        "after": 0.357664
+      },
+      "temporal_gpu_ms": {
+        "before": 0.091136,
+        "after": 0.086016
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.577696,
+        "after": 0.470112
+      },
+      "temporal_gpu_ms": {
+        "before": 0.073728,
+        "after": 0.06144
+      },
+      "spatial_gpu_ms": {
+        "before": 0.104448,
+        "after": 0.10752
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.431648,
+        "after": 0.409824
+      },
+      "temporal_gpu_ms": {
+        "before": 0.082944,
+        "after": 0.0768
+      },
+      "spatial_gpu_ms": {
+        "before": 0.090112,
+        "after": 0.086016
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.121696,
+        "after": 0.15264
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.125152,
+        "after": 0.161184
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.44496,
+        "after": 0.364512
+      },
+      "temporal_gpu_ms": {
+        "before": 0.13824,
+        "after": 0.11264
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.646176,
+        "after": 0.515648
+      },
+      "temporal_gpu_ms": {
+        "before": 0.106496,
+        "after": 0.069632
+      },
+      "spatial_gpu_ms": {
+        "before": 0.208896,
+        "after": 0.167936
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.558048,
+        "after": 0.58832
+      },
+      "temporal_gpu_ms": {
+        "before": 0.115712,
+        "after": 0.123904
+      },
+      "spatial_gpu_ms": {
+        "before": 0.167936,
+        "after": 0.178176
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.226592,
+        "after": 0.297376
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.43936,
+        "after": 0.468384
+      },
+      "temporal_gpu_ms": {
+        "before": 0.11264,
+        "after": 0.119808
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.607328,
+        "after": 0.684832
+      },
+      "temporal_gpu_ms": {
+        "before": 0.088064,
+        "after": 0.08192
+      },
+      "spatial_gpu_ms": {
+        "before": 0.169984,
+        "after": 0.200704
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.585024,
+        "after": 0.637984
+      },
+      "temporal_gpu_ms": {
+        "before": 0.109568,
+        "after": 0.11776
+      },
+      "spatial_gpu_ms": {
+        "before": 0.154624,
+        "after": 0.172032
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.0488,
+        "after": 0.049024
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.129216,
+        "after": 0.100448
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.367904,
+        "after": 0.399232
+      },
+      "temporal_gpu_ms": {
+        "before": 0.114688,
+        "after": 0.124928
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.368192,
+        "after": 0.414816
+      },
+      "temporal_gpu_ms": {
+        "before": 0.060416,
+        "after": 0.057344
+      },
+      "spatial_gpu_ms": {
+        "before": 0.110592,
+        "after": 0.134144
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.105536,
+        "after": 0.466496
+      },
+      "temporal_gpu_ms": {
+        "before": 0.021504,
+        "after": 0.09728
+      },
+      "spatial_gpu_ms": {
+        "before": 0.028672,
+        "after": 0.137216
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.044928,
+        "after": 0.283264
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.315808,
+        "after": 0.423616
+      },
+      "temporal_gpu_ms": {
+        "before": 0.082944,
+        "after": 0.109568
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.561056,
+        "after": 0.637696
+      },
+      "temporal_gpu_ms": {
+        "before": 0.08192,
+        "after": 0.064512
+      },
+      "spatial_gpu_ms": {
+        "before": 0.155648,
+        "after": 0.156672
+      }
+    },
+    {
+      "integrator": "reference",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.540288,
+        "after": 0.479072
+      },
+      "temporal_gpu_ms": {
+        "before": 0.100352,
+        "after": 0.088064
+      },
+      "spatial_gpu_ms": {
+        "before": 0.140288,
+        "after": 0.123904
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.135552,
+        "after": 0.14864
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.220224,
+        "after": 0.251552
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.509472,
+        "after": 0.396256
+      },
+      "temporal_gpu_ms": {
+        "before": 0.103424,
+        "after": 0.0768
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.641056,
+        "after": 0.579392
+      },
+      "temporal_gpu_ms": {
+        "before": 0.084992,
+        "after": 0.06656
+      },
+      "spatial_gpu_ms": {
+        "before": 0.125952,
+        "after": 0.11264
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.522272,
+        "after": 0.571392
+      },
+      "temporal_gpu_ms": {
+        "before": 0.082944,
+        "after": 0.090112
+      },
+      "spatial_gpu_ms": {
+        "before": 0.093184,
+        "after": 0.1024
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.313536,
+        "after": 0.346752
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.349152,
+        "after": 0.49168
+      },
+      "temporal_gpu_ms": {
+        "before": 0.060416,
+        "after": 0.088064
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.5528,
+        "after": 0.58752
+      },
+      "temporal_gpu_ms": {
+        "before": 0.065536,
+        "after": 0.063488
+      },
+      "spatial_gpu_ms": {
+        "before": 0.096256,
+        "after": 0.106496
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-plane-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.120864,
+        "after": 0.711648
+      },
+      "temporal_gpu_ms": {
+        "before": 0.016384,
+        "after": 0.108544
+      },
+      "spatial_gpu_ms": {
+        "before": 0.017408,
+        "after": 0.124928
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.171264,
+        "after": 0.07072
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.271072,
+        "after": 0.1992
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.460256,
+        "after": 0.457408
+      },
+      "temporal_gpu_ms": {
+        "before": 0.088064,
+        "after": 0.084992
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.601088,
+        "after": 0.546336
+      },
+      "temporal_gpu_ms": {
+        "before": 0.0768,
+        "after": 0.058368
+      },
+      "spatial_gpu_ms": {
+        "before": 0.111616,
+        "after": 0.100352
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.603264,
+        "after": 0.65488
+      },
+      "temporal_gpu_ms": {
+        "before": 0.094208,
+        "after": 0.089088
+      },
+      "spatial_gpu_ms": {
+        "before": 0.106496,
+        "after": 0.126976
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.385248,
+        "after": 0.382944
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.540192,
+        "after": 0.445344
+      },
+      "temporal_gpu_ms": {
+        "before": 0.096256,
+        "after": 0.075776
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.632672,
+        "after": 0.715904
+      },
+      "temporal_gpu_ms": {
+        "before": 0.0768,
+        "after": 0.058368
+      },
+      "spatial_gpu_ms": {
+        "before": 0.110592,
+        "after": 0.104448
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "many-distant-moving-shadow-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.655008,
+        "after": 0.55136
+      },
+      "temporal_gpu_ms": {
+        "before": 0.096256,
+        "after": 0.079872
+      },
+      "spatial_gpu_ms": {
+        "before": 0.109568,
+        "after": 0.090112
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.352704,
+        "after": 0.278304
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.339968,
+        "after": 0.28656
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.581824,
+        "after": 0.632032
+      },
+      "temporal_gpu_ms": {
+        "before": 0.134144,
+        "after": 0.147456
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.69056,
+        "after": 0.645696
+      },
+      "temporal_gpu_ms": {
+        "before": 0.09216,
+        "after": 0.069632
+      },
+      "spatial_gpu_ms": {
+        "before": 0.176128,
+        "after": 0.165888
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.803072,
+        "after": 0.63616
+      },
+      "temporal_gpu_ms": {
+        "before": 0.13312,
+        "after": 0.10752
+      },
+      "spatial_gpu_ms": {
+        "before": 0.2048,
+        "after": 0.151552
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.079328,
+        "after": 0.332384
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.381856,
+        "after": 0.468352
+      },
+      "temporal_gpu_ms": {
+        "before": 0.0768,
+        "after": 0.090112
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.783904,
+        "after": 0.534016
+      },
+      "temporal_gpu_ms": {
+        "before": 0.09216,
+        "after": 0.050176
+      },
+      "spatial_gpu_ms": {
+        "before": 0.182272,
+        "after": 0.118784
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.84832,
+        "after": 0.893728
+      },
+      "temporal_gpu_ms": {
+        "before": 0.130048,
+        "after": 0.140288
+      },
+      "spatial_gpu_ms": {
+        "before": 0.18944,
+        "after": 0.188416
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "mis",
+      "candidates": 0,
+      "scene_gpu_ms": {
+        "before": 0.280256,
+        "after": 0.088736
+      },
+      "temporal_gpu_ms": {
+        "before": null,
+        "after": null
+      },
+      "spatial_gpu_ms": {
+        "before": null,
+        "after": null
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "initial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.359584,
+        "after": 0.213984
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.52144,
+        "after": 0.49872
+      },
+      "temporal_gpu_ms": {
+        "before": 0.119808,
+        "after": 0.104448
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.573888,
+        "after": 0.592352
+      },
+      "temporal_gpu_ms": {
+        "before": 0.074752,
+        "after": 0.063488
+      },
+      "spatial_gpu_ms": {
+        "before": 0.139264,
+        "after": 0.150528
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 1,
+      "scene_gpu_ms": {
+        "before": 0.735776,
+        "after": 0.613984
+      },
+      "temporal_gpu_ms": {
+        "before": 0.124928,
+        "after": 0.1024
+      },
+      "spatial_gpu_ms": {
+        "before": 0.180224,
+        "after": 0.145408
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "initial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.312256,
+        "after": 0.46416
+      },
+      "temporal_gpu_ms": {
+        "before": 0,
+        "after": 0
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "temporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.582016,
+        "after": 0.513248
+      },
+      "temporal_gpu_ms": {
+        "before": 0.113664,
+        "after": 0.101376
+      },
+      "spatial_gpu_ms": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatial",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.711584,
+        "after": 0.758432
+      },
+      "temporal_gpu_ms": {
+        "before": 0.083968,
+        "after": 0.073728
+      },
+      "spatial_gpu_ms": {
+        "before": 0.161792,
+        "after": 0.177152
+      }
+    },
+    {
+      "integrator": "wavefront",
+      "scene": "mixed-area-environment-moving-boundaries-v1",
+      "mode": "spatiotemporal",
+      "candidates": 8,
+      "scene_gpu_ms": {
+        "before": 0.616,
+        "after": 0.736192
+      },
+      "temporal_gpu_ms": {
+        "before": 0.093184,
+        "after": 0.110592
+      },
+      "spatial_gpu_ms": {
+        "before": 0.130048,
+        "after": 0.156672
+      }
+    }
+  ]
+}

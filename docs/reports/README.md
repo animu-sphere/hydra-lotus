@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-15-restir-visibility.md](2026-10-15-restir-visibility.md) | Same-frame receiver transmittance reuse, independent moving fractional-occluder/sample-identity checks and matched before/after images and GPU timings; [summary data](2026-10-15-restir-visibility.json). |
 | [2026-10-15-restir-boundaries.md](2026-10-15-restir-boundaries.md) | Mixed rect/disk/environment lighting, Lambert/metal material and depth boundaries, repeated finite-reference budgets and regional artifact measurements; [summary data](2026-10-15-restir-boundaries.json). |
 | [2026-10-15-restir-budgets.md](2026-10-15-restir-budgets.md) | Independent repeated static quality budgets under both integrators, per-sequence convergence/time populations, moving local errors and remaining reuse cost/correlation. |
 | [2026-10-15-restir-proposals.md](2026-10-15-restir-proposals.md) | Power, uniform and equal-mixture candidate proposals: CPU/GPU weights, mixed-light integrals, history resets and matched many-light comparisons; [summary data](2026-10-15-restir-proposals.json). |

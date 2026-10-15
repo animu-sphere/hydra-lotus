@@ -456,8 +456,12 @@ count enters the denominator only when that old target is positive, including
 when the old observed stream was all-zero. The current stream always covers
 the selected receiving target. This implements the CPU oracle's count-weighted
 support correction using GPU floats. The resolved normalization is stored
-separately and carried into later merges. Visibility is queried again at the
-current receiver and never substituted for unshadowed support evaluation.
+separately and carried into later merges. Visibility is resolved at the current
+receiver and never substituted for unshadowed support evaluation. When the final
+light slot and both unit-square variates exactly match the current frame's
+initial sample at that receiver, its already queried transmittance is reused.
+Every changed sample gets a new shadow query; previous-frame visibility is
+never used.
 
 ### Compatibility and publication
 
@@ -509,6 +513,9 @@ disocclusion and current shadows against NEE/MIS under both integrators. It
 checks resets, rejected requests and GPU merge overflow without history
 publication ([measurement](../reports/2026-10-13-restir-temporal.md)). Existing
 initial lighting, multibounce and temporal-radiance regressions remain active.
+An independent moving fractional-occluder fixture also checks same-light,
+different-UV transmittance and unchanged selections in temporal and combined
+reuse ([visibility evidence](../reports/2026-10-15-restir-visibility.md)).
 
 These bounded fixtures do not establish unbiased arbitrary moving-history
 selection, many-light speedup or production temporal stability. Correlated
@@ -540,8 +547,11 @@ and `min(M, restir_max_history_candidates)`. This preserves preceding temporal
 support correction instead of reconstructing it from raw sum/M. The final
 selection is reevaluated at every participating surface; only counts whose
 unshadowed target is positive enter the support denominator. Observed all-zero
-neighbours participate too. Current visibility/transmittance is traced at the
+neighbours participate too. Current visibility/transmittance is resolved at the
 receiver after selection, with the same emission accounting as initial lighting.
+An exact light-slot/UV match to the centre's current temporal input reuses that
+receiver's transmittance. A changed selection gets a new shadow query, including
+when only its UV changes. Neighbour visibility is never used at the receiver.
 With no accepted neighbours the input record is copied unchanged. Spatial
 selection preserves the selected source's age; only temporal reuse advances it.
 The spatial result retains the receiver's exact shading and becomes next
