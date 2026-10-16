@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-16-restir-glossy-spheres.md](2026-10-16-restir-glossy-spheres.md) | Rough dielectric/metal and rect/sphere-light static/moving comparisons, three regional error bands, temporal residuals and GPU costs under both integrators; [summary data](2026-10-16-restir-glossy-spheres.json). |
 | [2026-10-16-restir-bsdf-partition.md](2026-10-16-restir-bsdf-partition.md) | Complementary reservoir/BSDF direct-light weights, independent fresh-pixel and GGX furnace checks, and matched narrow-glossy before/after quality and cost; [summary data](2026-10-16-restir-bsdf-partition.json). |
 | [2026-10-16-restir-glossy.md](2026-10-16-restir-glossy.md) | Small area emitters, roughness-0.08 metal and camera-only disocclusion; repeated convergence, regional images/errors, temporal residuals and GPU costs under both integrators; [summary data](2026-10-16-restir-glossy.json). |
 | [2026-10-16-restir-correlation.md](2026-10-16-restir-correlation.md) | Per-sequence temporal residual means, centered RMS and lag-one autocorrelation, independent streaming-statistics checks and repeated static/moving comparisons under both integrators; [summary data](2026-10-16-restir-correlation.json). |

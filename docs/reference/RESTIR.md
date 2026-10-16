@@ -334,6 +334,20 @@ glossy highlights while geometry, materials and light domains stay fixed.
 The static camera is the moving sequence's first pose. These scenes use one
 bounce and finite NEE/MIS references; neither has an exact integral.
 
+`--restir-workload glossy-spheres` selects
+`glossy-sphere-environment-static-v1` and
+`glossy-sphere-environment-camera-disocclusion-v1`. They retain the fixed
+foreground, procedural environment and camera-only motion of the narrow-glossy
+pair, but the left panel is a roughness-0.18 dielectric with IOR 1.5 and the
+right panel is roughness-0.5 metal with slope `z = -3.6 - 0.8 x`. The red base
+colour and blue metal F0 are unchanged. Lights alternate 0.6-sided rects and
+radius-0.35 spheres in the same radius-3 disk at Z = -1. Indexed radiance scales
+by `96 / light_count`; this is not a power-matched comparison with the other
+fixtures. This pair exercises a diffuse/specular dielectric mixture, broader
+metal lobes, more oblique receiver normals and the sphere's distinct
+reservoir-area/NEE-cone mappings. Both scenes use one scattering bounce and
+finite NEE/MIS references. The static camera matches the first moving pose.
+
 Each scene identifies its `error_reference`: the static distant plane uses
 `independent-lambert-integral`; moving scenes and the mixed/glossy static scenes
 use `finite-spp-nee-mis`, with null exact-integral fields. Their static convergence
@@ -346,7 +360,9 @@ every boundary pixel. Glossy cases retain this band and add
 `right-glossy-band-v1`, columns `[floor(5 width/8), floor(7 width/8))` over all
 rows. These are fixed screen bands, not material or disocclusion masks, and
 camera motion can move surfaces across them. Distant cases have an empty
-region array.
+region array. The sphere pair also reports `left-dielectric-band-v1`, columns
+`[floor(width/8), floor(3 width/8))` over all rows, with the same screen-space
+interpretation and error metrics.
 
 Defaults and accepted CLI ranges:
 
@@ -359,7 +375,7 @@ Defaults and accepted CLI ranges:
 | `--benchmark-warmup` | 4 | 0–64 |
 | `--restir-sequences` | 4 | 2–64 independent sequences |
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
-| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion` |
+| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |

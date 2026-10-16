@@ -64,8 +64,12 @@ Implement the remaining work in this order:
   narrow-glossy gap, with independent per-pixel/GGX-integral checks and matched
   before/after quality and cost under both integrators
   ([partition evidence](../reports/2026-10-16-restir-bsdf-partition.md)).
+  Rough dielectric/metal and rect/sphere lights extend static/camera-moving
+  coverage with separate dielectric, boundary and metal screen-band errors
+  ([sphere evidence](../reports/2026-10-16-restir-glossy-spheres.md)).
   Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
-  assess convergence across broader glossy scenes and address
+  investigate the static temporal-reuse convergence penalty in the sphere
+  fixture, assess convergence across broader glossy scenes and address
   reuse cost and temporal correlation before recording the scope review and
   release gate.
 

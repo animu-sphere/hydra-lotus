@@ -148,6 +148,19 @@ distinct paths. Substitute your build identity in the shared label. The
 [glossy measurement](../reports/2026-10-16-restir-glossy.md) records both
 integrators, finite-reference errors and the remaining convergence gap.
 
+For a rough dielectric/metal pair with rect/sphere lights and camera-only
+motion, select `--restir-workload glossy-spheres`:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-spheres-reference-0.json --benchmark-label "9595454 plus glossy sphere dielectric workloads; Release; 2026-10-16" --benchmark-integrator reference --restir-workload glossy-spheres --benchmark-size 32 --benchmark-frames 32 --benchmark-warmup 4 --restir-sequences 4 --restir-lights 64 --restir-reference-samples 512 --restir-candidates 1,8 --restir-history-cap 32 --restir-seed 17
+```
+
+Repeat with seed `262165` and suffix `-1.json`, then repeat with `wavefront`
+and distinct paths. Reduce each pair with `scripts/restir_budget.py` as above.
+Use the identity of your measured build. The
+[sphere/dielectric measurement](../reports/2026-10-16-restir-glossy-spheres.md)
+records convergence, three fixed screen bands, temporal residuals and cost.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

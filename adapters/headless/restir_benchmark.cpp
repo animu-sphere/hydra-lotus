@@ -109,7 +109,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-size <16..256>] [--benchmark-frames <2..256>] "
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
-                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion>] "
+                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -140,7 +140,8 @@ Options Parse(int argc, char** argv) {
       else
         throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
     } else if (option == "--restir-workload") {
-      if (value != "distant" && value != "mixed-boundaries" && value != "glossy-disocclusion")
+      if (value != "distant" && value != "mixed-boundaries" &&
+          value != "glossy-disocclusion" && value != "glossy-spheres")
         throw std::invalid_argument("invalid reservoir workload: " + std::string(value));
       options.workload = value;
     } else if (option == "--benchmark-size")
@@ -199,7 +200,9 @@ struct Workload {
 };
 
 Workload MakeMixedWorkload(const Options& options, bool moving) {
-  const bool glossy = options.workload == "glossy-disocclusion";
+  const bool narrow = options.workload == "glossy-disocclusion";
+  const bool spheres = options.workload == "glossy-spheres";
+  const bool glossy = narrow || spheres;
   Workload result;
   result.moving = moving;
   result.exact_integral = false;
@@ -208,21 +211,27 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   if (glossy)
     result.id = moving ? "glossy-area-environment-camera-disocclusion-v1"
                        : "glossy-area-environment-static-v1";
+  if (spheres)
+    result.id = moving ? "glossy-sphere-environment-camera-disocclusion-v1"
+                       : "glossy-sphere-environment-static-v1";
   RenderWorld world;
   Material diffuse;
-  diffuse.ior = 1;
+  diffuse.ior = spheres ? 1.5F : 1;
+  if (spheres)
+    diffuse.roughness = 0.18F;
   diffuse.base_color = {0.8F, 0.12F, 0.04F};
   world.SetMaterial("/diffuse", diffuse);
   Material metal;
   metal.base_color = {0.06F, 0.3F, 0.85F};
   metal.metallic = 1;
-  metal.roughness = glossy ? 0.08F : 0.35F;
+  metal.roughness = narrow ? 0.08F : (spheres ? 0.5F : 0.35F);
   world.SetMaterial("/metal", metal);
   // Adjacent materials meet at X=0 with a depth and geometric-normal step.
   world.SetMesh("/left", {{{-12, -12, -4}, {0, -12, -4}, {0, 12, -4}, {-12, 12, -4}},
                             {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   world.BindMaterial("/left", "/diffuse");
-  world.SetMesh("/right", {{{0, -12, -3.6F}, {12, -12, -6.6F}, {12, 12, -6.6F}, {0, 12, -3.6F}},
+  const float right_far_z = spheres ? -13.2F : -6.6F;
+  world.SetMesh("/right", {{{0, -12, -3.6F}, {12, -12, right_far_z}, {12, 12, right_far_z}, {0, 12, -3.6F}},
                              {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   world.BindMaterial("/right", "/metal");
   if (moving || glossy) {
@@ -235,13 +244,13 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
     const double phi = i * 2.399963229728653;
     const double radius = 3 * std::sqrt((i + 0.5) / options.lights);
     Light light;
-    light.shape = i % 2 ? LightShape::Disk : LightShape::Rect;
-    light.radius = glossy ? 0.06F : 0.3F;
-    light.width = light.height = glossy ? 0.12F : 0.6F;
+    light.shape = i % 2 ? (spheres ? LightShape::Sphere : LightShape::Disk) : LightShape::Rect;
+    light.radius = narrow ? 0.06F : (spheres ? 0.35F : 0.3F);
+    light.width = light.height = narrow ? 0.12F : 0.6F;
     light.world_from_light = Translation(static_cast<float>(radius * std::cos(phi)), -1);
     light.world_from_light[13] = static_cast<float>(radius * std::sin(phi));
     // Preserve emitted power as the glossy fixture narrows the area lights.
-    const float scale = (glossy ? 2400.0F : 96.0F) / options.lights;
+    const float scale = (narrow ? 2400.0F : 96.0F) / options.lights;
     light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
         scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
     world.SetLight("/light/" + std::to_string(i), light);
@@ -292,7 +301,7 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
 }
 
 Workload MakeWorkload(const Options& options, bool moving) {
-  if (options.workload == "mixed-boundaries" || options.workload == "glossy-disocclusion")
+  if (options.workload != "distant")
     return MakeMixedWorkload(options, moving);
   Workload result;
   result.moving = moving;
@@ -617,14 +626,16 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       << ",\"max_abs_tile_mean_error\":" << max_tile_bias
       << ",\"regions\":[";
   if (!work.exact_integral) {
-    const bool glossy = options.workload == "glossy-disocclusion";
-    for (unsigned region = 0; region < (glossy ? 2U : 1U); ++region) {
+    const bool glossy = options.workload == "glossy-disocclusion" || options.workload == "glossy-spheres";
+    const unsigned regions = options.workload == "glossy-spheres" ? 3U : (glossy ? 2U : 1U);
+    for (unsigned region = 0; region < regions; ++region) {
       double squared = 0;
       std::array<double, 3> signed_error{};
       unsigned pixels = 0;
-      // Fixed screen bands: center boundaries, then the glossy right side.
-      const unsigned begin = region ? 5 * options.size / 8 : 3 * options.size / 8;
-      const unsigned end = region ? 7 * options.size / 8 : 5 * options.size / 8;
+      // Fixed screen bands: center boundaries, right metal, left dielectric.
+      const unsigned band = region == 2 ? 1U : (region ? 5U : 3U);
+      const unsigned begin = band * options.size / 8;
+      const unsigned end = (band + 2) * options.size / 8;
       for (unsigned y = 0; y < options.size; ++y)
         for (unsigned x = begin; x < end; ++x) {
           ++pixels;
@@ -638,7 +649,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       for (auto& value : signed_error)
         value /= pixels;
       out << (region ? "," : "") << "{\"id\":"
-          << Quote(region ? "right-glossy-band-v1" : "center-boundary-band-v1") << ",\"pixels\":" << pixels
+          << Quote(region == 2 ? "left-dielectric-band-v1" :
+              (region ? "right-glossy-band-v1" : "center-boundary-band-v1")) << ",\"pixels\":" << pixels
           << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
           << ",\"signed_mean_error_rgb\":";
       Array(out, signed_error);
