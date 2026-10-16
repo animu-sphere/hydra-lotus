@@ -118,6 +118,8 @@ mode to the same installed `lotus-headless` target. Its versioned workloads,
 metrics and CLI are owned by the [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison).
 The same module owns the opt-in mixed area/environment and material/depth
 boundary workload pair and its regional error metrics.
+It also owns the opt-in narrow-glossy, camera-disocclusion workload pair and
+its fixed central/right screen-band errors.
 `validation/restir-benchmark-test.cmake` checks both integrators, all three
 candidate proposals and capability handling, with a Vulkan-only missing-driver
 regression. Proposal selection and marginal densities live in

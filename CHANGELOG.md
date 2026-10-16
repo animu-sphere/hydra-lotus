@@ -21,6 +21,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in narrow-glossy ReSTIR workloads with small area emitters, camera-only
+  parallax/disocclusion and separate central/right screen-band errors under
+  both integrators ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-16-restir-glossy.md)).
 - ReSTIR comparison per-sequence residual means, centered RMS and lag-one
   autocorrelation, with undefined zero-variance correlations preserved and
   repeated-report consistency checks

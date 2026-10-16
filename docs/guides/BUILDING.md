@@ -135,6 +135,19 @@ and central-boundary errors retained in the summary. The
 [boundary measurement](../reports/2026-10-15-restir-boundaries.md) records the
 runs and their limits.
 
+For narrow glossy reflections and camera-only foreground disocclusion, select
+`--restir-workload glossy-disocclusion`:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-restir build/restir-glossy-reference-0.json --benchmark-label "656da5e plus glossy disocclusion workloads; Release; 2026-10-16" --benchmark-integrator reference --restir-workload glossy-disocclusion --benchmark-size 32 --benchmark-frames 16 --benchmark-warmup 4 --restir-sequences 4 --restir-lights 64 --restir-reference-samples 512 --restir-candidates 1,8 --restir-history-cap 32 --restir-seed 17
+```
+
+Repeat with seed `262165` and suffix `-1.json`, then reduce using
+`scripts/restir_budget.py` as above. Repeat the group with `wavefront` and
+distinct paths. Substitute your build identity in the shared label. The
+[glossy measurement](../reports/2026-10-16-restir-glossy.md) records both
+integrators, finite-reference errors and the remaining convergence gap.
+
 ## The Hydra adapter
 
 The adapter needs a real OpenUSD imaging runtime. This repository was measured

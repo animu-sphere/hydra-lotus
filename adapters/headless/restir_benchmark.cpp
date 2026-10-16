@@ -109,7 +109,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-size <16..256>] [--benchmark-frames <2..256>] "
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
-                                "[--restir-workload <distant|mixed-boundaries>] "
+                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -140,7 +140,7 @@ Options Parse(int argc, char** argv) {
       else
         throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
     } else if (option == "--restir-workload") {
-      if (value != "distant" && value != "mixed-boundaries")
+      if (value != "distant" && value != "mixed-boundaries" && value != "glossy-disocclusion")
         throw std::invalid_argument("invalid reservoir workload: " + std::string(value));
       options.workload = value;
     } else if (option == "--benchmark-size")
@@ -199,11 +199,15 @@ struct Workload {
 };
 
 Workload MakeMixedWorkload(const Options& options, bool moving) {
+  const bool glossy = options.workload == "glossy-disocclusion";
   Workload result;
   result.moving = moving;
   result.exact_integral = false;
   result.id = moving ? "mixed-area-environment-moving-boundaries-v1"
                      : "mixed-area-environment-boundaries-v1";
+  if (glossy)
+    result.id = moving ? "glossy-area-environment-camera-disocclusion-v1"
+                       : "glossy-area-environment-static-v1";
   RenderWorld world;
   Material diffuse;
   diffuse.ior = 1;
@@ -212,7 +216,7 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   Material metal;
   metal.base_color = {0.06F, 0.3F, 0.85F};
   metal.metallic = 1;
-  metal.roughness = 0.35F;
+  metal.roughness = glossy ? 0.08F : 0.35F;
   world.SetMaterial("/metal", metal);
   // Adjacent materials meet at X=0 with a depth and geometric-normal step.
   world.SetMesh("/left", {{{-12, -12, -4}, {0, -12, -4}, {0, 12, -4}, {-12, 12, -4}},
@@ -221,7 +225,7 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   world.SetMesh("/right", {{{0, -12, -3.6F}, {12, -12, -6.6F}, {12, 12, -6.6F}, {0, 12, -3.6F}},
                              {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   world.BindMaterial("/right", "/metal");
-  if (moving) {
+  if (moving || glossy) {
     world.SetMesh("/blocker", {{{-0.45F, -1.4F, -2.5F}, {0.45F, -1.4F, -2.5F},
                                  {0.45F, 1.4F, -2.5F}, {-0.45F, 1.4F, -2.5F}},
                                 {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
@@ -232,11 +236,12 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
     const double radius = 3 * std::sqrt((i + 0.5) / options.lights);
     Light light;
     light.shape = i % 2 ? LightShape::Disk : LightShape::Rect;
-    light.radius = 0.3F;
-    light.width = light.height = 0.6F;
+    light.radius = glossy ? 0.06F : 0.3F;
+    light.width = light.height = glossy ? 0.12F : 0.6F;
     light.world_from_light = Translation(static_cast<float>(radius * std::cos(phi)), -1);
     light.world_from_light[13] = static_cast<float>(radius * std::sin(phi));
-    const float scale = 96.0F / options.lights;
+    // Preserve emitted power as the glossy fixture narrows the area lights.
+    const float scale = (glossy ? 2400.0F : 96.0F) / options.lights;
     light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
         scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
     world.SetLight("/light/" + std::to_string(i), light);
@@ -264,10 +269,21 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
     camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
     if (moving) {
       const float phase = static_cast<float>(2 * kPi * f / options.frames);
-      camera.view[12] = 0.12F * std::sin(phase);
-      MeshInstance instance;
-      instance.world_from_object = Translation(0.7F * std::sin(phase + 0.3F));
-      world.SetMeshInstance("/blocker", instance);
+      if (glossy) {
+        // Camera-only motion: the foreground stays fixed, exposing parallax
+        // and newly visible glossy receivers without changing light domains.
+        const float yaw = 0.16F * std::sin(phase);
+        auto rotation = IdentityMatrix();
+        rotation[0] = rotation[10] = std::cos(yaw);
+        rotation[8] = std::sin(yaw);
+        rotation[2] = -std::sin(yaw);
+        camera.view = Multiply(rotation, Translation(1.25F * std::sin(phase)));
+      } else {
+        camera.view[12] = 0.12F * std::sin(phase);
+        MeshInstance instance;
+        instance.world_from_object = Translation(0.7F * std::sin(phase + 0.3F));
+        world.SetMeshInstance("/blocker", instance);
+      }
     }
     world.SetCamera(camera);
     result.snapshots.push_back(world.Commit());
@@ -276,7 +292,7 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
 }
 
 Workload MakeWorkload(const Options& options, bool moving) {
-  if (options.workload == "mixed-boundaries")
+  if (options.workload == "mixed-boundaries" || options.workload == "glossy-disocclusion")
     return MakeMixedWorkload(options, moving);
   Workload result;
   result.moving = moving;
@@ -601,27 +617,33 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       << ",\"max_abs_tile_mean_error\":" << max_tile_bias
       << ",\"regions\":[";
   if (!work.exact_integral) {
-    double squared = 0;
-    std::array<double, 3> signed_error{};
-    unsigned pixels = 0;
-    // Fixed central quarter: material/depth step and moving disocclusion.
-    for (unsigned y = 0; y < options.size; ++y)
-      for (unsigned x = 3 * options.size / 8; x < 5 * options.size / 8; ++x) {
-        ++pixels;
-        for (unsigned c = 0; c < 3; ++c) {
-          const auto i = (std::size_t{y} * options.size + x) * 3 + c;
-          const double residual = ensemble[i] - reference[i];
-          squared += residual * residual;
-          signed_error[c] += residual;
+    const bool glossy = options.workload == "glossy-disocclusion";
+    for (unsigned region = 0; region < (glossy ? 2U : 1U); ++region) {
+      double squared = 0;
+      std::array<double, 3> signed_error{};
+      unsigned pixels = 0;
+      // Fixed screen bands: center boundaries, then the glossy right side.
+      const unsigned begin = region ? 5 * options.size / 8 : 3 * options.size / 8;
+      const unsigned end = region ? 7 * options.size / 8 : 5 * options.size / 8;
+      for (unsigned y = 0; y < options.size; ++y)
+        for (unsigned x = begin; x < end; ++x) {
+          ++pixels;
+          for (unsigned c = 0; c < 3; ++c) {
+            const auto i = (std::size_t{y} * options.size + x) * 3 + c;
+            const double residual = ensemble[i] - reference[i];
+            squared += residual * residual;
+            signed_error[c] += residual;
+          }
         }
-      }
-    for (auto& value : signed_error)
-      value /= pixels;
-    out << "{\"id\":\"center-boundary-band-v1\",\"pixels\":" << pixels
-        << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
-        << ",\"signed_mean_error_rgb\":";
-    Array(out, signed_error);
-    out << '}';
+      for (auto& value : signed_error)
+        value /= pixels;
+      out << (region ? "," : "") << "{\"id\":"
+          << Quote(region ? "right-glossy-band-v1" : "center-boundary-band-v1") << ",\"pixels\":" << pixels
+          << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
+          << ",\"signed_mean_error_rgb\":";
+      Array(out, signed_error);
+      out << '}';
+    }
   }
   out << "],\"fresh_rmse\":";
   Series(out, error);
