@@ -297,18 +297,35 @@ disk at Z = -1, facing -Z. Rect sides are 0.6 and disk radii 0.3, with the
 same indexed colours scaled by `96 / light_count`. A procedural 16x8 HDR
 lat-long environment adds broad colour variation and a bright four-texel
 patch. It is generated in code and needs no external asset. Both scenes
-retain one scattering bounce; light/camera/material animation and production
+retain one scattering bounce; light/material animation and production
 multibounce coverage are outside this fixture.
 
+`--restir-workload glossy-disocclusion` selects
+`glossy-area-environment-static-v1` and
+`glossy-area-environment-camera-disocclusion-v1`. They use the mixed fixture's
+geometry, colours and environment, with metal roughness 0.08. Rect sides
+are 0.12, disk radii 0.06 and radiance scales by `2400 / light_count`,
+preserving the original area lights' emitted power. Both scenes contain the
+fixed foreground panel at Z = -2.5. In the moving scene only the camera
+changes: its view is `rotationY(0.16 sin(phase)) * translationX(1.25 sin(phase))`.
+Large parallax and changing view direction exercise disocclusion and narrow
+glossy highlights while geometry, materials and light domains stay fixed.
+The static camera is the moving sequence's first pose. These scenes use one
+bounce and finite NEE/MIS references; neither has an exact integral.
+
 Each scene identifies its `error_reference`: the static distant plane uses
-`independent-lambert-integral`; moving scenes and both mixed scenes use
-`finite-spp-nee-mis`, with null exact-integral fields. Mixed static convergence
+`independent-lambert-integral`; moving scenes and the mixed/glossy static scenes
+use `finite-spp-nee-mis`, with null exact-integral fields. Their static convergence
 is measured against the saved reference image, retaining its finite sample
 noise. Mixed cases additionally report `regions` with ensemble RMS, signed
 RGB means and pixel count for `center-boundary-band-v1`: all rows and columns
 `[floor(3 width/8), floor(5 width/8))`. This fixed central quarter covers the
 material/depth step and some moving disocclusion, rather than classifying
-every boundary pixel. Distant cases have an empty region array.
+every boundary pixel. Glossy cases retain this band and add
+`right-glossy-band-v1`, columns `[floor(5 width/8), floor(7 width/8))` over all
+rows. These are fixed screen bands, not material or disocclusion masks, and
+camera motion can move surfaces across them. Distant cases have an empty
+region array.
 
 Defaults and accepted CLI ranges:
 
@@ -321,7 +338,7 @@ Defaults and accepted CLI ranges:
 | `--benchmark-warmup` | 4 | 0–64 |
 | `--restir-sequences` | 4 | 2–64 independent sequences |
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
-| `--restir-workload` | `distant` | `distant`, `mixed-boundaries` |
+| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
@@ -408,7 +425,9 @@ CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
 variants check the alternate scene identities, finite-reference labelling,
-boundary metrics and all reservoir modes under both integrators. The Vulkan-only
+boundary metrics and all reservoir modes under both integrators. The `-glossy`
+variants check the camera-disocclusion suite and both regional measurements.
+The Vulkan-only
 `lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. Measured
 evidence belongs in [reports](../reports/README.md).
 

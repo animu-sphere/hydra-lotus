@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-16-restir-glossy.md](2026-10-16-restir-glossy.md) | Small area emitters, roughness-0.08 metal and camera-only disocclusion; repeated convergence, regional images/errors, temporal residuals and GPU costs under both integrators; [summary data](2026-10-16-restir-glossy.json). |
 | [2026-10-16-restir-correlation.md](2026-10-16-restir-correlation.md) | Per-sequence temporal residual means, centered RMS and lag-one autocorrelation, independent streaming-statistics checks and repeated static/moving comparisons under both integrators; [summary data](2026-10-16-restir-correlation.json). |
 | [2026-10-16-restir-evaluation.md](2026-10-16-restir-evaluation.md) | Exact sample/source target reuse, shared final light reconstruction, independent Lambert/rect target and RGB checks, and matched before/after images and GPU timings; [summary data](2026-10-16-restir-evaluation.json). |
 | [2026-10-15-restir-visibility.md](2026-10-15-restir-visibility.md) | Same-frame receiver transmittance reuse, independent moving fractional-occluder/sample-identity checks and matched before/after images and GPU timings; [summary data](2026-10-15-restir-visibility.json). |

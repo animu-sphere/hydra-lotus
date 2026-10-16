@@ -57,8 +57,11 @@ Implement the remaining work in this order:
   expose persistent temporal error alongside frame differences, with repeated
   measurements under both integrators
   ([correlation evidence](../reports/2026-10-16-restir-correlation.md)).
+  Small emitters, roughness-0.08 metal and camera-only disocclusion now have
+  static/moving comparisons and separate central/right screen-band errors
+  ([glossy evidence](../reports/2026-10-16-restir-glossy.md)).
   Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
-  address the reproduced
+  address the reproduced low-roughness convergence gap,
   reuse cost and temporal correlation before recording the scope review and
   release gate.
 

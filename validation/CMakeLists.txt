@@ -182,6 +182,13 @@ foreach(integrator reference wavefront)
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=mixed-boundaries
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-mixed PROPERTIES RUN_SERIAL TRUE)
+  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-glossy
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-glossy"
+      "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-disocclusion
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-glossy PROPERTIES RUN_SERIAL TRUE)
   foreach(proposal uniform power-uniform)
     add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
       COMMAND "${CMAKE_COMMAND}"
