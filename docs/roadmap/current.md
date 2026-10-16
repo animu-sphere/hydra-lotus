@@ -7,71 +7,30 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-The temporal release snapshot and verification are recorded in the
-[release record](../releases/v0.4.0.md) and
-[release gate](../reports/2026-10-13-v0.4.0-release-gate.md).
+The experimental ReSTIR snapshot and release verification are recorded in
+[the release record](../releases/v0.5.0.md) and
+[release gate](../reports/2026-10-16-v0.5.0-release-gate.md).
 Phase and release status belong to the
 [canonical table](README.md#status-at-a-glance).
+The [reservoir reference](../reference/RESTIR.md) owns current behavior and
+limits; opt-in availability does not close the remaining investigations.
 
-Continue with direct-light reservoir reuse under the
-[ReSTIR DI scope](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di).
-The CPU arithmetic and same-target combination are checked against independent
-discrete integrals ([evidence](../reports/2026-10-13-restir-reservoir.md));
-GPU initial-only lighting is checked against independent integrals and NEE/MIS
-images under both integrators ([evidence](../reports/2026-10-13-restir-initial.md)).
-The [reservoir reference](../reference/RESTIR.md) owns behavior and limits.
-Temporal GPU reuse now carries explicit corrected weights and exact source
-shading, using shared reprojection and bounded history counts
-([evidence](../reports/2026-10-13-restir-temporal.md)).
-Spatial reuse reads immutable current reservoirs, rejects surface boundaries
-and retains explicit support-corrected weights. CPU/GPU, visibility, lifecycle
-and four-mode moving many-light comparisons are recorded in its
-[evidence](../reports/2026-10-14-restir-spatial.md).
-Implement the remaining work in this order:
-
-- [ ] **LOTUS-RESTIR-05 — Hydra controls and exit evidence.**
-  Hydra controls/diagnostics and moving USD-stage/installed usdview sequences
-  under both integrators are recorded in the
-  [adapter evidence](../reports/2026-10-14-restir-hydra.md), including
-  deterministic progressive NEE/MIS restoration. A reproducible headless
-  candidate-count sweep now measures static/moving many-light convergence,
-  GPU time, temporal differences, memory and finite-sample local error against
-  independent Lambert/NEE/MIS references
-  ([comparison evidence](../reports/2026-10-14-restir-comparison.md)). Power,
-  uniform and equal-mixture proposals are implemented and checked against
-  CPU/GPU arithmetic, independent mixed-light integrals and matched many-light
-  comparisons ([proposal evidence](../reports/2026-10-15-restir-proposals.md)).
-  Three independent repetitions per integrator now measure observed
-  equal-quality budgets at a longer horizon and higher light count
-  ([budget evidence](../reports/2026-10-15-restir-budgets.md)).
-  Mixed area/environment lighting with material/depth boundaries now has
-  static/moving headless workloads, explicit finite NEE/MIS references and
-  regional errors ([boundary evidence](../reports/2026-10-15-restir-boundaries.md)).
-  Same-frame receiver visibility is reused for unchanged light-slot/UV
-  selections, with independent moving fractional-occluder checks and matched
-  before/after comparisons ([visibility evidence](../reports/2026-10-15-restir-visibility.md)).
-  Exact sample/source targets and final light reconstruction now avoid repeated
-  evaluation, with independent area-light target/RGB checks and matched
-  comparisons ([evaluation evidence](../reports/2026-10-16-restir-evaluation.md)).
-  Per-sequence residual means, centered RMS and lag-one autocorrelation now
-  expose persistent temporal error alongside frame differences, with repeated
-  measurements under both integrators
-  ([correlation evidence](../reports/2026-10-16-restir-correlation.md)).
-  Small emitters, roughness-0.08 metal and camera-only disocclusion now have
-  static/moving comparisons and separate central/right screen-band errors
-  ([glossy evidence](../reports/2026-10-16-restir-glossy.md)).
-  Complementary reservoir/BSDF direct-light weights now reduce the reproduced
-  narrow-glossy gap, with independent per-pixel/GGX-integral checks and matched
-  before/after quality and cost under both integrators
-  ([partition evidence](../reports/2026-10-16-restir-bsdf-partition.md)).
-  Rough dielectric/metal and rect/sphere lights extend static/camera-moving
-  coverage with separate dielectric, boundary and metal screen-band errors
-  ([sphere evidence](../reports/2026-10-16-restir-glossy-spheres.md)).
-  Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
-  investigate the static temporal-reuse convergence penalty in the sphere
-  fixture, assess convergence across broader glossy scenes and address
-  reuse cost and temporal correlation before recording the scope review and
-  release gate.
+- [ ] **LOTUS-RESTIR-05 — Complete ReSTIR DI exit evidence.**
+  Broaden bias/artifact and convergence assessment beyond the bounded
+  one-bounce glossy fixtures, including broader glossy and multibounce
+  scenes. Investigate the static temporal-reuse convergence penalty in the
+  [rough dielectric/sphere-light fixture](../reports/2026-10-16-restir-glossy-spheres.md),
+  distinguish persistent error from finite-reference and rare-event variance,
+  and assess temporal correlation and ghosting. Address reuse cost and
+  demonstrate any equal-quality speedup with repeated measurements against
+  NEE/MIS under both integrators before recording a phase-exit scope review.
+  Existing [quality budgets](../reports/2026-10-15-restir-budgets.md),
+  [boundary measurements](../reports/2026-10-15-restir-boundaries.md),
+  [residual correlations](../reports/2026-10-16-restir-correlation.md) and
+  [complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md)
+  are the starting evidence, including their adverse results and limits.
+  The experimental release gate validates the shipped snapshot; it does not
+  substitute for these remaining transport investigations.
 
 Denoising, spectral research, production material expansion and broad
 platform/backend expansion retain their separate phase assignments.
