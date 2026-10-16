@@ -8,6 +8,25 @@ initial, temporal and spatial direct lighting are in `shaders/sampling/reservoir
 owns delivery status; the [phase policy](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 owns the intended transport scope.
 
+## Experimental use and limits
+
+ReSTIR is opt-in; progressive NEE/MIS remains the default and comparison
+baseline. Initial-only sampling supports deterministic progressive
+accumulation. Temporal/spatial reuse uses fresh batches and bounded,
+correlated histories; represented candidate counts are not counts of
+independent samples.
+
+Reuse can increase static error and GPU cost. The
+[rough dielectric/sphere-light measurements](../reports/2026-10-16-restir-glossy-spheres.md)
+show a static temporal-reuse convergence penalty and no repeatable combined
+equal-quality speedup. The
+[complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
+reduce a reproduced narrow-glossy gap, but do not establish general
+unbiasedness, improved convergence or absence of ghosting. Finite references,
+bounded fixtures and shared integrator draws limit those conclusions.
+Broader artifact/bias coverage and reuse cost/correlation investigations
+remain in the [execution plan](../roadmap/current.md#execution-order).
+
 ## Record and operations
 
 `Reservoir` is a trivially copyable, standard-layout, 16-byte record:

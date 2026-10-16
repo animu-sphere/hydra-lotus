@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
+The experimental ReSTIR DI release adds opt-in initial, temporal, spatial
+and combined direct-light reservoirs under both integrators, with Hydra
+controls, diagnostic AOVs and reproducible quality/cost comparisons.
+Progressive NEE/MIS remains the default. Reuse can increase static error
+and GPU cost; broader bias, artifact and convergence assessment remains
+open. See the [release record](docs/releases/v0.5.0.md) for compatibility,
+validation and known limitations, and the
+[canonical roadmap](docs/roadmap/README.md#status-at-a-glance) for ongoing scope.
+
 ### Changed
 
 - ReSTIR primary direct lighting retains BSDF-found emission with complementary
