@@ -36,6 +36,10 @@ add_executable(lotus-reservoir-test reservoir-test.cpp)
 target_link_libraries(lotus-reservoir-test PRIVATE Lotus::Vulkan)
 add_test(NAME lotus-renderer-reservoir COMMAND lotus-reservoir-test)
 
+add_executable(lotus-restir-statistics-test restir-statistics-test.cpp)
+target_compile_features(lotus-restir-statistics-test PRIVATE cxx_std_20)
+add_test(NAME lotus-renderer-restir-statistics COMMAND lotus-restir-statistics-test)
+
 add_executable(lotus-temporal-gpu-test temporal-gpu-test.cpp)
 target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan)
 if(LOTUS_WITH_VULKAN)

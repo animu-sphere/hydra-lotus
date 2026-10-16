@@ -21,6 +21,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- ReSTIR comparison per-sequence residual means, centered RMS and lag-one
+  autocorrelation, with undefined zero-variance correlations preserved and
+  repeated-report consistency checks
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-16-restir-correlation.md)).
 - Opt-in mixed area/environment ReSTIR comparison workloads with material,
   depth and normal boundaries, static/moving sequences, explicit finite-spp
   reference labels and regional error populations in repeated quality budgets

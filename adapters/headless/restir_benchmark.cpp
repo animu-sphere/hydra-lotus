@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "restir_benchmark.hpp"
 #include "reference.hpp"
+#include "temporal_statistics.hpp"
 
 #include <lotus/vulkan_backend.hpp>
 
@@ -466,6 +467,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
     (void)Image(render(work.snapshots[0], 1U << 23, f, f == 0), options.size, 1);
 
   std::vector<double> error, delta, wall, gpu, initial, temporal, spatial, surface, reprojection;
+  std::vector<double> residual_mean, residual_centered;
+  std::vector<std::optional<double>> residual_lag1;
   std::vector<double> convergence_mse(options.frames), convergence_gpu(options.frames);
   std::vector<std::vector<double>> convergence_rmse_raw(options.frames), convergence_gpu_raw(options.frames);
   std::vector<double> ensemble(std::size_t{options.size} * options.size * 3), previous;
@@ -475,6 +478,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   bool timestamps = false;
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence) {
     std::vector<double> accumulated(ensemble.size());
+    TemporalResidualStatistics residual_statistics(ensemble.size());
     double elapsed_gpu = 0;
     for (unsigned f = 0; f < options.frames; ++f) {
       const auto start = Clock::now();
@@ -498,6 +502,10 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       for (std::size_t i = 0; i < reference.size(); ++i)
         reference[i] = work.exact_integral && !work.moving ? work.integral[i % 3] : baseline.images[f].values[i];
       error.push_back(std::sqrt(Mse(last.values, reference)));
+      std::vector<double> residual(ensemble.size());
+      for (std::size_t i = 0; i < residual.size(); ++i)
+        residual[i] = double(last.values[i]) - reference[i];
+      residual_statistics.Add(residual);
       if (f != 0) {
         std::vector<double> residual_delta(ensemble.size()), zero(ensemble.size());
         for (std::size_t i = 0; i < ensemble.size(); ++i)
@@ -545,6 +553,9 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       metadata_bytes = std::max(metadata_bytes, frame.temporal.surface_bytes +
                                                     frame.temporal.validity_bytes + frame.temporal.metadata_bytes);
     }
+    residual_mean.push_back(residual_statistics.MeanRmse());
+    residual_centered.push_back(residual_statistics.CenteredRmse());
+    residual_lag1.push_back(residual_statistics.Lag1Autocorrelation());
   }
   const auto stats = renderer->UpdateScene({});
   Require(stats.status == FrameStatus::Pass && stats.validation_message_count == 0, "final scene/validation check failed");
@@ -616,6 +627,19 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   Series(out, error);
   out << ",\"residual_frame_delta_rmse\":";
   Series(out, delta);
+  out << ",\"temporal_residuals\":{\"sequence_mean_rmse\":";
+  Series(out, residual_mean);
+  out << ",\"centered_rmse\":";
+  Series(out, residual_centered);
+  out << ",\"lag1_autocorrelation_raw\":[";
+  for (std::size_t i = 0; i < residual_lag1.size(); ++i) {
+    out << (i ? "," : "");
+    if (residual_lag1[i])
+      out << *residual_lag1[i];
+    else
+      out << "null";
+  }
+  out << "]}";
   out << ",\"render_update_wall_ms\":";
   Series(out, wall);
   out << ",\"scene_gpu_ms\":";
@@ -758,6 +782,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
            "\"convergence\":\"Static: RMS across sequences of each prefix mean's error to the scene error_reference. CPU averaging only. Moving: null. Finite-spp reference noise is retained.\","
            "\"ensemble\":\"Static averages all frames and sequences; moving averages only the final frame across independent sequences. Finite-sample errors are not proof of bias.\","
            "\"residual_frame_delta_rmse\":\"Fresh frame difference minus matching reference difference; excludes sequence boundaries. Temporal correlation can reduce it without improving convergence.\","
+           "\"temporal_residuals\":\"One entry per independent sequence. Residual is fresh RGB minus the matched reference at fixed screen coordinates. Sequence mean RMS retains persistent error; centered RMS removes each component's sequence mean. Lag-one sample autocorrelation uses the full centered sum of squares; null for zero variance. Short sequences, motion and finite reference noise limit interpretation; no effective sample count is inferred.\","
            "\"reference_split_rmse\":\"Difference of disjoint equal-spp NEE/MIS halves; the stored reference is their mean. Reference noise is not subtracted.\","
            "\"memory\":\"Fresh renderer per case. Reservoir and metadata bytes include host mirrors; scene pool backing excludes targets. Total VRAM is unavailable.\","
            "\"timestamps\":\"Unavailable or inapplicable GPU series and cumulative times are null.\"},\"scenes\":[";
