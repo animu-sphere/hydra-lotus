@@ -168,6 +168,13 @@ if(LOTUS_WITH_VULKAN)
 endif()
 
 foreach(integrator reference wavefront)
+  add_test(NAME lotus-renderer-restir-controls-${integrator}
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-controls-${integrator}"
+      "-DINTEGRATOR=${integrator}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-controls-test.cmake")
+  set_tests_properties(lotus-renderer-restir-controls-${integrator} PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
@@ -196,6 +203,14 @@ foreach(integrator reference wavefront)
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-spheres PROPERTIES RUN_SERIAL TRUE)
+  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-multibounce
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-multibounce"
+      "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
+      -DBOUNCES=4 -DREFERENCE_SEED=18874368
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-multibounce PROPERTIES RUN_SERIAL TRUE)
   foreach(proposal uniform power-uniform)
     add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
       COMMAND "${CMAKE_COMMAND}"

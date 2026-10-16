@@ -320,7 +320,7 @@ Light RGBs vary by index; irradiance scales by `32 / light_count`.
 RGB integral. `many-distant-moving-shadow-v1` adds a shaded opaque two-triangle
 panel at Z = -2.5: its X translation is `0.7 sin(phase + 0.3)` and camera view
 X translation is `0.12 sin(phase)`, with `phase = 2 pi frame / frames`.
-Both workloads use one scattering bounce to isolate direct lighting.
+By default both workloads use one scattering bounce to isolate direct lighting.
 
 `--restir-workload mixed-boundaries` selects a second pair:
 `mixed-area-environment-boundaries-v1` and
@@ -337,7 +337,7 @@ disk at Z = -1, facing -Z. Rect sides are 0.6 and disk radii 0.3, with the
 same indexed colours scaled by `96 / light_count`. A procedural 16x8 HDR
 lat-long environment adds broad colour variation and a bright four-texel
 patch. It is generated in code and needs no external asset. Both scenes
-retain one scattering bounce; light/material animation and production
+default to one scattering bounce; light/material animation and production
 multibounce coverage are outside this fixture.
 
 `--restir-workload glossy-disocclusion` selects
@@ -350,7 +350,7 @@ fixed foreground panel at Z = -2.5. In the moving scene only the camera
 changes: its view is `rotationY(0.16 sin(phase)) * translationX(1.25 sin(phase))`.
 Large parallax and changing view direction exercise disocclusion and narrow
 glossy highlights while geometry, materials and light domains stay fixed.
-The static camera is the moving sequence's first pose. These scenes use one
+The static camera is the moving sequence's first pose. These scenes default to one
 bounce and finite NEE/MIS references; neither has an exact integral.
 
 `--restir-workload glossy-spheres` selects
@@ -364,7 +364,7 @@ radius-0.35 spheres in the same radius-3 disk at Z = -1. Indexed radiance scales
 by `96 / light_count`; this is not a power-matched comparison with the other
 fixtures. This pair exercises a diffuse/specular dielectric mixture, broader
 metal lobes, more oblique receiver normals and the sphere's distinct
-reservoir-area/NEE-cone mappings. Both scenes use one scattering bounce and
+reservoir-area/NEE-cone mappings. Both scenes default to one scattering bounce and
 finite NEE/MIS references. The static camera matches the first moving pose.
 
 Each scene identifies its `error_reference`: the static distant plane uses
@@ -394,6 +394,8 @@ Defaults and accepted CLI ranges:
 | `--benchmark-warmup` | 4 | 0–64 |
 | `--restir-sequences` | 4 | 2–64 independent sequences |
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
+| `--restir-reference-seed` | 16777216 | 16777216–1073741823; base index for the finite reference |
+| `--restir-bounces` | 1 | 1–64 scattering events, shared by measured and reference rendering |
 | `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
@@ -407,7 +409,9 @@ other modes cannot contaminate its memory measurement. Warmup has a separate
 RNG range and no measured history is inherited. Each sequence starts at
 `seed + sequence * 65537`; its frame `f` uses the next sample index. Measured
 indices must be below `2^23`, where the warmup range begins; overlapping
-settings reject before writing outputs. Reference indices begin at `2^24`.
+settings reject before writing outputs. Reference indices begin at the selected
+reference seed, at least `2^24`; its upper bound leaves room for every pose
+and reference half without unsigned index overflow.
 Reuse modes
 carry a fixed base index through `RenderTemporalScene`, with a cut at sequence
 start; fresh NEE/MIS and initial-only frames use `RenderScene` with explicit
@@ -416,9 +420,25 @@ messages and the expected history availability. Radiance reuse is disabled.
 
 The independent NEE/MIS reference always uses the reference integrator,
 including when wavefront is measured. Each pose uses two disjoint equal-spp
-batches starting at `2^24 + frame * 8192 + half * 4096`. Their mean is saved;
+batches starting at `reference_seed + frame * 8192 + half * 4096`. Their mean is saved;
 `reference_split_rmse` records their discrepancy without subtracting reference
 noise. The static distant reference also reports its error to the independent integral.
+
+`--restir-bounces` changes both reference and measured transport, including later
+NEE/MIS bounces after the primary reservoir. Workload IDs identify geometry,
+materials and motion; `procedure.max_bounces` identifies the transport depth.
+The exact static distant-plane integral remains valid because its isolated plane
+has no other surface to scatter from. The glossy/boundary fixtures can include
+interreflection and retain finite references at every depth. A larger depth alone
+does not establish broad production-scene coverage.
+
+Changing only `--restir-reference-seed` leaves measured draws unchanged and
+allows finite-reference sensitivity checks. Independent reference groups must use
+disjoint ranges: reserving `256 * 8192 = 2097152` indices per seed is sufficient
+for every accepted configuration (for example, seeds 16777216 and 18874368).
+Reference seeds, like transport depth, must match within a repeated quality-budget
+group; analyze different reference groups separately. Shared references across
+measured repeats or integrators are not additional independent reference trials.
 
 The JSON retains raw populations and summaries of fresh-frame RGB RMS error,
 GPU scene duration, reservoir and shared metadata pass durations, blocking
@@ -447,7 +467,7 @@ Each invocation sweeps counts under one proposal, identified in
 to evaluate alternatives. NEE/MIS references and cases retain their existing
 power selection regardless of the reservoir proposal. The distant fixtures do
 not establish area-light/environment performance; the mixed fixtures add
-bounded one-bounce coverage rather than production scene guarantees. The
+bounded fixture coverage, without establishing production scene guarantees. The
 reference split discrepancy and finite number of independent sequences limit
 moving bias/artifact conclusions. Reduced frame differences alone do not
 establish improved convergence or speed. Workload/settings/build identity must
