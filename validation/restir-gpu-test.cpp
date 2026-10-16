@@ -958,7 +958,7 @@ double PanelIntegral(bool disk) {
 void Lighting(OffscreenRenderer& renderer, Integrator integrator,
     RestirProposal proposal = RestirProposal::Power) {
   SceneExtraction extraction;
-  for (const char* name : {"rect", "disk", "sphere", "distant", "emissive", "environment", "constant"}) {
+  for (const char* name : {"rect", "disk", "sphere", "sphere-large", "distant", "emissive", "environment", "constant"}) {
     Fixture f(renderer, integrator);
     f.settings.restir_proposal = proposal;
     f.extraction = std::move(extraction);
@@ -985,6 +985,10 @@ void Lighting(OffscreenRenderer& renderer, Integrator integrator,
       if (kind == "rect") { light.shape = LightShape::Rect; factor = PanelIntegral(false); }
       if (kind == "disk") { light.shape = LightShape::Disk; factor = PanelIntegral(true); }
       if (kind == "sphere") { light.shape = LightShape::Sphere; factor = 0.25 / 5 * (2 / std::sqrt(5.0)); }
+      if (kind == "sphere-large") {
+        light.shape = LightShape::Sphere; light.radius = 1.5F;
+        factor = 2.25 / 5 * (2 / std::sqrt(5.0));
+      }
       if (kind == "distant") { light.shape = LightShape::Distant; light.angle = 60; factor = 0.25; }
       f.world.SetLight("/light", light);
     }
@@ -1019,6 +1023,120 @@ void Lighting(OffscreenRenderer& renderer, Integrator integrator,
               << " initial_ms=" << initial.restir.initial_gpu_ms << '\n';
     extraction = std::move(f.extraction);
   }
+}
+
+// Independently reconstruct both branches of a single fresh Lambert sample.
+// Two full-sphere distant lights have exact power probabilities 1/4 and 3/4.
+// Their BSDF-hit densities differ from candidate q for alternative proposals.
+void BsdfPartition(OffscreenRenderer& renderer, Integrator integrator) {
+  Fixture f(renderer, integrator);
+  PlaneWorld(f.world);
+  f.settings.restir_candidates = 1;
+  for (unsigned j = 0; j < 2; ++j) {
+    Light light; light.shape = LightShape::Distant; light.angle = 360;
+    const float scale = j ? 3.0F : 1.0F;
+    light.radiance = {scale, 2 * scale, 4 * scale};
+    f.world.SetLight(j ? "/b" : "/a", light);
+  }
+  for (auto proposal : {RestirProposal::Power, RestirProposal::Uniform, RestirProposal::PowerUniform}) {
+    for (unsigned mode = 0; mode < 4; ++mode) {
+      f.settings.restir_proposal = proposal;
+      f.settings.restir_spatial = (mode & 2) != 0;
+      for (unsigned frame_index = 0; frame_index < (mode ? 3U : 1U); ++frame_index) {
+        TemporalFrameSettings temporal; temporal.camera_cut = frame_index == 0;
+        const auto frame = f.Temporal(temporal, (mode & 1) != 0);
+        for (unsigned slot = 0; slot < 64; ++slot) {
+          const auto& p = mode & 2 ? frame.restir.spatial[slot].reservoir :
+              mode & 1 ? frame.restir.temporal[slot].reservoir : frame.restir.initial[slot];
+          double light_weight = 0;
+          if (p.weight_sum > 0) {
+            Check(p.light < 2, "partition selected light");
+            const double probability = p.light ? 0.75 : 0.25;
+            const double cosine = 1 - 2 * double(p.uv[0]);
+            Check(cosine > 0, "partition selected backface");
+            light_weight = probability * probability /
+                (probability * probability + 16 * cosine * cosine);
+          }
+          auto rng = Hash(slot ^ Hash(f.settings.sample_index + frame_index));
+          Random(rng); Random(rng); // Camera jitter.
+          const double cosine2 = 1 - double(Random(rng)); // Squared disk radius.
+          float rgba[4];
+          std::memcpy(rgba, frame.color.payload.data() + 16 * slot, 16);
+          for (int c = 0; c < 3; ++c) {
+            double expected = p.contribution[c] * light_weight;
+            for (unsigned j = 0; j < 2; ++j) {
+              const double probability = j ? 0.75 : 0.25;
+              const double radiance = (j ? 3 : 1) * std::pow(2.0, c);
+              expected += Diffuse().base_color[c] * radiance *
+                  (16 * cosine2 / (16 * cosine2 + probability * probability));
+            }
+            if (std::abs(rgba[c] - expected) > 2e-5)
+              std::cerr << "partition context: proposal=" << unsigned(proposal) << " mode=" << mode
+                  << " frame=" << frame_index << " slot=" << slot << " channel=" << c
+                  << " light=" << p.light << " uv=" << p.uv[0] << " bsdf_cos2=" << cosine2
+                  << " light_rgb=" << p.contribution[c] << " light_weight=" << light_weight << '\n';
+            Near(rgba[c], expected, 2e-5, "independent per-sample reservoir/BSDF partition");
+          }
+        }
+      }
+    }
+  }
+  std::cout << "BSDF partition: independent fresh RGB, 3 proposals x 4 modes; 3 reuse frames PASS\n";
+}
+
+void GlossyFurnace(OffscreenRenderer& renderer, Integrator integrator) {
+  const std::array<float, 3> reflectance{0.9F, 0.55F, 0.2F};
+  std::array<double, 3> integral{};
+  // Normal-incidence GGX half-vector quadrature in double precision, using
+  // its inverse NDF CDF rather than the shader's visible-normal sampler.
+  constexpr unsigned steps = 65536;
+  constexpr double alpha = 0.08 * 0.08;
+  for (unsigned i = 0; i < steps; ++i) {
+    const double u = (i + 0.5) / steps;
+    const double h_z = 1 / std::sqrt(1 + alpha * alpha * u / (1 - u));
+    const double wi_z = 2 * h_z * h_z - 1;
+    if (wi_z <= 0) continue;
+    const double g = 2 / (1 + std::sqrt(1 + alpha * alpha * (1 - wi_z * wi_z) / (wi_z * wi_z)));
+    for (unsigned c = 0; c < 3; ++c)
+      integral[c] += (reflectance[c] + (1 - reflectance[c]) * std::pow(1 - h_z, 5)) * g / steps;
+  }
+  Fixture f(renderer, integrator);
+  PlaneWorld(f.world, 100);
+  Material metal; metal.base_color = reflectance; metal.metallic = 1; metal.roughness = 0.08F;
+  f.world.SetMaterial("/diffuse", metal);
+  f.settings.restir_candidates = 1;
+  Light light; light.shape = LightShape::Distant; light.angle = 360; light.radiance = {1, 3, 2};
+  f.world.SetLight("/distant", light);
+  Texture texture; texture.width = 4; texture.height = 2; texture.format = TextureFormat::Rgba32Float;
+  const float rgba[4]{2, 1, 4, 1};
+  texture.texels.resize(8 * 16);
+  for (unsigned i = 0; i < 8; ++i) std::memcpy(texture.texels.data() + i * 16, rgba, 16);
+  f.world.SetTexture("/env", std::move(texture));
+  EnvironmentMap map; map.texture = "/env"; f.world.SetEnvironmentMap(map);
+  f.world.SetEnvironment({0.125F, 0.25F, 0.5F});
+  for (auto proposal : {RestirProposal::Power, RestirProposal::Uniform, RestirProposal::PowerUniform}) {
+    for (unsigned mode = 0; mode < 4; ++mode) {
+      f.settings.restir_proposal = proposal;
+      f.settings.restir_temporal = (mode & 1) != 0;
+      f.settings.restir_spatial = (mode & 2) != 0;
+      std::array<double, 3> mean{};
+      if (mode == 0) {
+        mean = Mean(f.Render(8));
+      } else {
+        for (unsigned frame_index = 0; frame_index < 8; ++frame_index) {
+          TemporalFrameSettings temporal; temporal.camera_cut = frame_index == 0;
+          const auto frame = f.Temporal(temporal, (mode & 1) != 0);
+          const auto fresh = Mean(frame);
+          for (unsigned c = 0; c < 3; ++c) mean[c] += fresh[c] / 8;
+        }
+      }
+      const std::array<double, 3> incoming{3.125, 4.25, 6.5};
+      for (unsigned c = 0; c < 3; ++c)
+        Near(mean[c], incoming[c] * integral[c], 0.006 * incoming[c] * integral[c],
+            "roughness-0.08 independent mixed-light furnace integral");
+    }
+  }
+  std::cout << "glossy furnace: independent GGX quadrature, 3 proposals x 4 modes PASS\n";
 }
 
 void Lifecycle(OffscreenRenderer& renderer, Integrator integrator) {
@@ -1136,6 +1254,8 @@ void Overflow(OffscreenRenderer& renderer, Integrator integrator) {
   const auto upload = renderer.UpdateScene(f.extraction.Update(snapshot));
   Check(upload.status == FrameStatus::Pass, upload.detail.c_str());
   const auto failed = renderer.RenderScene(ExtractDrawSummary(snapshot), f.target, 2, f.settings);
+  if (failed.detail.find("reservoir arithmetic") == std::string::npos)
+    std::cerr << "overflow diagnostic: " << failed.detail << '\n';
   Check(failed.status == FrameStatus::Fail && !failed.restir.available &&
       failed.detail.find("reservoir arithmetic") != std::string::npos,
       "GPU reservoir overflow published a successful frame");
@@ -1193,9 +1313,10 @@ int main(int argc, char** argv) try {
   }
   for (auto integrator : {Integrator::Reference, Integrator::Wavefront}) {
     // Fresh scene extraction and renderer ownership for each independent fixture.
-    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--visibility-only" ? 25U :
+    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--bsdf-only" ? 27U :
+        argc > 7 && std::string(argv[7]) == "--visibility-only" ? 25U :
         argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
-    for (unsigned test = first_test; test < 27; ++test) {
+    for (unsigned test = first_test; test < 29; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -1225,6 +1346,8 @@ int main(int argc, char** argv) try {
       if (test == 24) Lighting(*renderer, integrator, RestirProposal::PowerUniform);
       if (test == 25) VisibilitySampleIdentity(*renderer, integrator, false);
       if (test == 26) VisibilitySampleIdentity(*renderer, integrator, true);
+      if (test == 27) BsdfPartition(*renderer, integrator);
+      if (test == 28) GlossyFurnace(*renderer, integrator);
     }
   }
   std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";

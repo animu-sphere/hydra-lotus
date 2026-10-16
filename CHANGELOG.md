@@ -9,6 +9,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- ReSTIR primary direct lighting retains BSDF-found emission with complementary
+  power-table weights, reducing narrow-glossy error while keeping reservoir
+  targets and diagnostic RGB unpartitioned
+  ([contract](docs/reference/RESTIR.md#emission-accounting),
+  [evidence](docs/reports/2026-10-16-restir-bsdf-partition.md)).
 - ReSTIR support correction uses stored source targets for exact light-slot/UV
   matches, and final visibility/shading share one reconstructed light sample
   ([contract](docs/reference/RESTIR.md#temporal-gpu-reuse),

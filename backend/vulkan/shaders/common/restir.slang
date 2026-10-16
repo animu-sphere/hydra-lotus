@@ -125,12 +125,25 @@ public void WriteInitialReservoir(uint2 pixel, RayDesc ray, inout uint camera_rn
   initial_reservoirs[slot] = result;
 }
 
-public Spectrum InitialDirectLight(uint pixel) {
+public Spectrum InitialDirectLight(uint pixel, SurfaceHit surface, ShadingFrame basis, float3 wo) {
+  RestirPixel selected = initial_reservoirs[pixel];
   if (path_constants.restir_spatial != 0)
-    return SpectrumFromRgb(spatial_reservoirs[pixel].pixel.contribution.xyz);
-  if (path_constants.restir_temporal != 0)
-    return SpectrumFromRgb(temporal_reservoirs[pixel].pixel.contribution.xyz);
-  return SpectrumFromRgb(initial_reservoirs[pixel].contribution.xyz);
+    selected = spatial_reservoirs[pixel].pixel;
+  else if (path_constants.restir_temporal != 0)
+    selected = temporal_reservoirs[pixel].pixel;
+  // Failed streams are diagnosed by readback; never dereference their key.
+  if ((selected.flags & 2) != 0 || !(selected.reservoir.weight_sum > 0.0) ||
+      selected.reservoir.sample >= path_constants.light_count)
+    return SpectrumConstant(0.0);
+  const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
+  const LightSample sample = ReconstructReservoirLight(selected.reservoir.sample, selected.uv, origin);
+  // Split the integrand, not the selected reservoir's unknown distribution.
+  // The BSDF continuation uses the complementary power-table/BSDF weight.
+  // Targets, support correction and diagnostic RGB remain unpartitioned.
+  const float weight = sample.delta ? 1.0 : PowerHeuristic(
+      ReservoirPartitionPdf(selected.reservoir.sample, sample, origin),
+      BsdfPdf(surface.bsdf, wo, basis.ToLocal(sample.direction)));
+  return SpectrumFromRgb(selected.contribution.xyz) * weight;
 }
 
 Spectrum HistoryContribution(RestirHistory source, uint light, LightSample sample) {

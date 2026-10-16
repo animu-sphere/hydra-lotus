@@ -805,6 +805,23 @@ public LightSample ReconstructReservoirLight(uint index, float2 u, float3 origin
   return sample;
 }
 
+// A fixed partition of direct lighting shared by reservoirs and BSDF hits.
+// This is SampleLight's power-table density, NOT a reservoir selection PDF.
+// Sphere reservoirs use whole-area points, whereas SampleLight/CrossedLights
+// use a cone; convert to that same cone density for complementary weights.
+public float ReservoirPartitionPdf(uint index, LightSample sample, float3 origin) {
+  const LightRecord chosen = path_constants.lights[index];
+  if ((chosen.instance & kAnalyticLight) != 0 && chosen.instance != kEnvironmentLight) {
+    const AnalyticLightRecord light =
+        path_constants.analytic_lights[chosen.instance & ~kAnalyticLight];
+    if (light.shape.x == kSphereLight) {
+      const float3 offset = light.position.xyz - origin;
+      return chosen.pdf * SphereConePdf(light.position.w * light.position.w / dot(offset, offset));
+    }
+  }
+  return sample.pdf;
+}
+
 // The parallel light `index` of the analytic lights: its direction and
 // irradiance, as a delta light of density 1.
 public LightSample ParallelLight(uint index) {

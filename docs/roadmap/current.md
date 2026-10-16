@@ -60,8 +60,12 @@ Implement the remaining work in this order:
   Small emitters, roughness-0.08 metal and camera-only disocclusion now have
   static/moving comparisons and separate central/right screen-band errors
   ([glossy evidence](../reports/2026-10-16-restir-glossy.md)).
+  Complementary reservoir/BSDF direct-light weights now reduce the reproduced
+  narrow-glossy gap, with independent per-pixel/GGX-integral checks and matched
+  before/after quality and cost under both integrators
+  ([partition evidence](../reports/2026-10-16-restir-bsdf-partition.md)).
   Remaining: broaden artifact/bias coverage beyond these bounded fixtures;
-  address the reproduced low-roughness convergence gap,
+  assess convergence across broader glossy scenes and address
   reuse cost and temporal correlation before recording the scope review and
   release gate.
 

@@ -85,8 +85,9 @@ write zero values and the empty light sentinel. Progressive convergence
 retains the last fresh reservoir rather than clearing diagnostics. The
 weight vector carries the explicitly corrected normalization after reuse;
 it is not reconstructed from the raw sum and total count. Direct light is
-the fresh selected contribution, separate from accumulated colour/indirect
-transport. Generation-local light slots cannot track identity across scene
+the fresh selected contribution before the receiver's
+[BSDF partition](RESTIR.md#emission-accounting), separate from accumulated
+colour/indirect transport. Generation-local light slots cannot track identity across scene
 edits. Correlated represented counts are not independent sample counts.
 
 ## Storage and binding
