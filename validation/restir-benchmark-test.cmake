@@ -16,6 +16,12 @@ endif()
 if(NOT DEFINED WORKLOAD)
   set(WORKLOAD distant)
 endif()
+if(NOT DEFINED BOUNCES)
+  set(BOUNCES 1)
+endif()
+if(NOT DEFINED REFERENCE_SEED)
+  set(REFERENCE_SEED 16777216)
+endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 if(NO_DRIVER)
   set(manifest "${TEST_ROOT}/unavailable-manifest.json")
@@ -32,6 +38,7 @@ execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${report}"
   --restir-sequences 2 --restir-reference-samples 32 --restir-lights 32
   --restir-candidates 1,8 --restir-history-cap 8
   --restir-proposal "${PROPOSAL}" --restir-seed 262165 --restir-workload "${WORKLOAD}"
+  --restir-bounces "${BOUNCES}" --restir-reference-seed "${REFERENCE_SEED}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 120)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "ReSTIR benchmark failed (${result}):\n${output}\n${error}")
@@ -44,13 +51,16 @@ string(JSON integrator GET "${json}" procedure integrator)
 string(JSON reference_integrator GET "${json}" procedure reference_integrator)
 string(JSON proposal GET "${json}" procedure candidate_proposal)
 string(JSON seed GET "${json}" procedure sample_index)
+string(JSON reference_seed GET "${json}" procedure reference_seed)
+string(JSON bounces GET "${json}" procedure max_bounces)
 string(JSON workload GET "${json}" procedure workload_suite)
 string(JSON radiance GET "${json}" procedure radiance_reuse)
 string(JSON count LENGTH "${json}" scenes)
 if(NOT schema STREQUAL "lotus-restir-benchmark-v1" OR
    NOT label STREQUAL "CTest quoted \"label\"" OR NOT integrator STREQUAL INTEGRATOR OR
    NOT reference_integrator STREQUAL "reference" OR NOT proposal STREQUAL PROPOSAL OR
-   NOT seed EQUAL 262165 OR NOT workload STREQUAL WORKLOAD OR radiance)
+   NOT seed EQUAL 262165 OR NOT reference_seed EQUAL REFERENCE_SEED OR
+   NOT bounces EQUAL BOUNCES OR NOT workload STREQUAL WORKLOAD OR radiance)
   message(FATAL_ERROR "Wrong schema/build/estimator procedure")
 endif()
 if(result STREQUAL "77")
@@ -273,6 +283,9 @@ set(invalid_options
   "--restir-proposal|unknown" "--restir-proposal|" "--restir-proposal|Power"
   "--restir-workload|unknown" "--restir-workload|" "--restir-workload|Mixed-boundaries"
   "--restir-seed|-1" "--restir-seed|8388608" "--restir-seed|8388607" "--restir-seed|17junk"
+  "--restir-reference-seed|16777215" "--restir-reference-seed|1073741824"
+  "--restir-reference-seed|-1" "--restir-reference-seed|16777216junk"
+  "--restir-bounces|0" "--restir-bounces|65" "--restir-bounces|1junk"
   "--report|renderer-report.json" "--benchmark|other.json")
 foreach(pair IN LISTS invalid_options)
   string(REPLACE "|" ";" args "${pair}")
@@ -284,8 +297,13 @@ foreach(pair IN LISTS invalid_options)
     message(FATAL_ERROR "Invalid option accepted: ${pair}")
   endif()
 endforeach()
-execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${sentinel}" --restir-lights
-  RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+foreach(option --restir-lights --restir-bounces --restir-reference-seed)
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark-restir "${sentinel}" "${option}"
+    RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+  if(NOT invalid STREQUAL "2")
+    message(FATAL_ERROR "Missing option value accepted: ${option}")
+  endif()
+endforeach()
 file(READ "${sentinel}" preserved)
 if(NOT invalid STREQUAL "2" OR NOT preserved STREQUAL "preserve" OR EXISTS "${TEST_ROOT}/sentinel-images")
   message(FATAL_ERROR "Rejected CLI wrote outputs or accepted a missing value")

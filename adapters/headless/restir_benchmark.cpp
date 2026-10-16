@@ -31,7 +31,7 @@ struct Options {
   std::string label;
   unsigned size = 64, frames = 32, warmup = 4, sequences = 4;
   unsigned lights = 128, reference_samples = 256, cap = 32, radius = 1;
-  unsigned seed = kSeed;
+  unsigned seed = kSeed, reference_seed = kReferenceSeed, bounces = 1;
   std::vector<unsigned> candidates{1, 2, 8};
   Integrator integrator = Integrator::Reference;
   RestirProposal proposal = RestirProposal::Power;
@@ -109,6 +109,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-size <16..256>] [--benchmark-frames <2..256>] "
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
+                                "[--restir-reference-seed <16777216..1073741823>] [--restir-bounces <1..64>] "
                                 "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
@@ -154,6 +155,10 @@ Options Parse(int argc, char** argv) {
       options.sequences = Number(value, 2, 64);
     else if (option == "--restir-seed")
       options.seed = Number(value, 0, (1U << 23) - 1);
+    else if (option == "--restir-reference-seed")
+      options.reference_seed = Number(value, kReferenceSeed, (1U << 30) - 1);
+    else if (option == "--restir-bounces")
+      options.bounces = Number(value, 1, 64);
     else if (option == "--restir-lights")
       options.lights = Number(value, 2, 4096);
     else if (option == "--restir-reference-samples")
@@ -417,12 +422,12 @@ Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const 
   // Use the reference integrator even when measuring wavefront, so it remains
   // an independent transport check. Each half has a disjoint sample range.
   PathTracingSettings settings;
-  settings.max_bounces = 1;
+  settings.max_bounces = options.bounces;
   for (unsigned f = 0; f < (work.moving ? options.frames : 1); ++f) {
     Upload(renderer, extraction, work.snapshots[f]);
     std::array<RgbImage, 2> halves;
     for (unsigned half = 0; half < 2; ++half) {
-      settings.sample_index = kReferenceSeed + f * 8192 + half * 4096;
+      settings.sample_index = options.reference_seed + f * 8192 + half * 4096;
       const auto frame = renderer.RenderScene(ExtractDrawSummary(work.snapshots[f]), target,
           options.reference_samples, settings);
       halves[half] = Image(frame, options.size, options.reference_samples);
@@ -467,7 +472,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   target.width = target.height = options.size;
   PathTracingSettings settings;
   settings.integrator = options.integrator;
-  settings.max_bounces = 1;
+  settings.max_bounces = options.bounces;
   settings.light_sampling = mode.candidates ? LightSampling::RestirInitial : LightSampling::Mis;
   settings.restir_candidates = mode.candidates ? mode.candidates : 8;
   settings.restir_temporal = mode.temporal;
@@ -804,9 +809,10 @@ int RestirBenchmarkMain(int argc, char** argv) {
         << ",\"height\":" << options.size << ",\"frames\":" << options.frames << ",\"warmup_frames\":" << options.warmup
         << ",\"sequences\":" << options.sequences << ",\"analytic_lights\":" << options.lights
         << ",\"reference_samples_per_half\":" << options.reference_samples
-        << ",\"reference_halves\":2,\"reference_seed\":" << kReferenceSeed
+        << ",\"reference_halves\":2,\"reference_seed\":" << options.reference_seed
         << ",\"sample_index\":" << options.seed << ",\"sequence_stride\":" << kSequenceStride
-        << ",\"max_bounces\":1,\"fresh_samples_per_frame\":1,\"radiance_reuse\":false,\"history_cap\":" << options.cap
+        << ",\"max_bounces\":" << options.bounces
+        << ",\"fresh_samples_per_frame\":1,\"radiance_reuse\":false,\"history_cap\":" << options.cap
         << ",\"spatial_radius\":" << options.radius << ",\"candidate_counts\":";
     Array(out, options.candidates);
     out << "},\"image_directory\":" << Quote(image_root.filename().string())

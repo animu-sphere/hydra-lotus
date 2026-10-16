@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Headless ReSTIR comparison controls for scattering depth and the finite-reference
+  seed, preserving one-bounce/default-seed results and recording both settings in
+  the procedure identity ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [four-bounce/reference-sensitivity evidence](docs/reports/2026-10-16-restir-convergence.md)).
+
 ## [0.5.0] - 2026-10-16
 
 The experimental ReSTIR DI release adds opt-in initial, temporal, spatial

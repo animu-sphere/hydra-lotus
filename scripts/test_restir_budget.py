@@ -31,6 +31,17 @@ def report(seed=17):
 
 
 class BudgetTests(unittest.TestCase):
+    def test_transport_depth_and_reference_seed_must_match(self):
+        for field, original, changed in (("max_bounces", 1, 4),
+                                         ("reference_seed", 16777216, 18874368)):
+            reports = [report(), report(262165)]
+            for run in reports:
+                run["procedure"][field] = original
+            self.assertEqual(summarize(reports, [.25])["procedure"][field], original)
+            reports[1]["procedure"][field] = changed
+            with self.assertRaisesRegex(ValueError, "procedure must match"):
+                summarize(reports, [.25])
+
     @staticmethod
     def with_temporal_residuals():
         reports = [report(), report(262165)]

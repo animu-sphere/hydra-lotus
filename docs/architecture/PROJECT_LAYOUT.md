@@ -133,6 +133,11 @@ regression. Proposal selection and marginal densities live in
 `shaders/common/scene.slang`; the plain-C++ `RestirProposal` selector stays in
 `PathTracingSettings`. No new library target is introduced.
 
+The same headless module selects measured/reference scattering depth and the
+finite-reference seed. `validation/restir-controls-test.cmake` checks default
+procedures, reference-seed isolation from measured radiance, and the effect of
+scattering depth on saved images under both integrators.
+
 `scripts/restir_budget.py` reduces repeated headless comparison reports into
 observed static quality budgets and moving error summaries. It uses Python's
 standard library and introduces no installed target or renderer dependency.

@@ -29,6 +29,9 @@ limits; opt-in availability does not close the remaining investigations.
   [residual correlations](../reports/2026-10-16-restir-correlation.md) and
   [complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md)
   are the starting evidence, including their adverse results and limits.
+  The [four-bounce/reference-sensitivity measurement](../reports/2026-10-16-restir-convergence.md)
+  reproduces the static reuse penalty with independent finite-reference groups;
+  use the configurable depth and reference seed to extend that investigation.
   The experimental release gate validates the shipped snapshot; it does not
   substitute for these remaining transport investigations.
 
