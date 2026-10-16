@@ -89,6 +89,11 @@ SKIP, with a Vulkan-only missing-driver regression. The
 The shared reservoir shader also reuses same-frame receiver transmittance for
 unchanged light-slot/UV selections, with moving fractional-occluder validation
 in that executable.
+The same shader partitions its final unweighted RGB against BSDF continuation
+in `shaders/common/transport.slang`, using the existing power-table NEE density
+from `scene.slang` (the cone density for spheres). The same GPU executable
+checks independent per-sample complementary weights and narrow-glossy furnace
+integrals under every candidate proposal and reuse mode.
 
 Headless temporal-error measurement is private to
 `adapters/headless/temporal_statistics.hpp`. The uninstalled, runtime-free

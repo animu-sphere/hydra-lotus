@@ -194,13 +194,34 @@ half for the power alias threshold. Default power draws remain unchanged.
 
 ### Emission accounting
 
-Primary camera-visible emission is unchanged. At depth one, transport suppresses
-BSDF-found emission from table-backed triangles, analytic crossings and the
-sampled environment image: the reservoir already estimates those direct-light
-integrals. This partitions estimators without assuming a reservoir PDF for MIS.
-Unsampled surface emission and the constant environment remain BSDF sampled.
-Later bounces use existing NEE/MIS emission weights. `max_bounces = 0` adds only
-camera-visible emission and generates no candidates.
+Primary camera-visible emission is unchanged. At the first scattering event,
+the final reservoir's shadowed estimate is multiplied by the fixed partition
+`w_L = p_L^2 / (p_L^2 + p_B^2)`. Here `p_L` is the existing **power-table
+NEE solid-angle density** at this receiver and `p_B` is its BSDF density.
+Delta lights receive weight one. This density is independent of candidate
+proposal, candidate count and reuse mode; it is not the unknown marginal
+density of the selected reservoir sample.
+
+At depth one, BSDF-found table-backed triangle emission, analytic crossings
+and the environment image retain the complementary existing NEE/MIS weight
+`w_B = p_B^2 / (p_B^2 + p_L^2)`. The two estimators integrate `w_L * f` and
+`w_B * f`, whose sum is `f`. Reservoir targets, represented counts, support
+correction and normalization still use the full unpartitioned integrand.
+The receiver's partition is applied after selection and reuse, so source
+view-dependent partitions are never carried as source targets. No selected
+reservoir PDF is assumed, and correlated copies add no independent draws.
+
+Sphere reservoir samples still use whole-area points, but their partition
+density uses the power-selected sphere **cone** density, matching BSDF
+crossings rather than the reservoir area mapping. Other light mappings
+already reconstruct the matching NEE density. Unsampled surface emission and
+the constant environment remain BSDF sampled. Later bounces use existing
+NEE/MIS. `max_bounces = 0` adds only camera-visible emission and generates no
+candidates. This fixed partition can reduce narrow-glossy variance; it does
+not establish optimal reservoir/BSDF weights or an equal-quality speedup.
+Transport reconstructs the final selected light once more to evaluate this
+partition, without another shadow query, and restores the BSDF ray's existing
+analytic-light crossing loop. These costs belong in scene GPU measurements.
 
 ### Products, memory and lifecycle
 
@@ -213,7 +234,7 @@ top-left rows of 48-byte `RestirPixel` records:
 | `light`, `weight_sum`, `selected_target`, `candidate_count` | Same first 16-byte layout as CPU Reservoir |
 | `uv`, `proposal` | Selected reconstruction variates and selection probability |
 | `flags` | Bit 0: camera surface; bit 1: invalid/unrepresentable arithmetic |
-| `contribution.xyz` | Selected, normalized, shadowed RGB direct light |
+| `contribution.xyz` | Selected, normalized, shadowed RGB direct light before the receiver's BSDF partition |
 | `contribution.w` | Selected transmittance, zero for no selected sample |
 
 Misses, empty scenes and pixels outside the data window overwrite records with

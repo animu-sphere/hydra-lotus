@@ -111,7 +111,7 @@ struct RestirPixel {
   float proposal = 0;
   // Bit 0: camera surface; bit 1: unrepresentable/invalid arithmetic.
   std::uint32_t flags = 0;
-  // Selected, normalized RGB contribution; w is shadow transmittance.
+  // Selected, normalized RGB before BSDF partition; w is shadow transmittance.
   std::array<float, 4> contribution{};
 };
 static_assert(sizeof(RestirPixel) == 48);
