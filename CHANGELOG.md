@@ -26,6 +26,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Opt-in ReSTIR `glossy-spheres` comparisons with rough dielectric/metal
+  receivers, rect/sphere lights, camera disocclusion and three regional error
+  bands under both integrators
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-16-restir-glossy-spheres.md)).
 - Opt-in narrow-glossy ReSTIR workloads with small area emitters, camera-only
   parallax/disocclusion and separate central/right screen-band errors under
   both integrators ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
