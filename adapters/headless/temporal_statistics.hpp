@@ -67,6 +67,16 @@ public:
     return numerator / denominator;
   }
 
+  unsigned Frames() const { return frames_; }
+  std::size_t Components() const { return moments_.size(); }
+  double Mean(std::size_t component) const { return moments_.at(component).mean; }
+  // Sample variance about this sequence's own mean (T - 1 denominator).
+  double Variance(std::size_t component) const {
+    if (frames_ < 2)
+      throw std::logic_error("temporal residual variance needs two frames");
+    return moments_.at(component).m2 / (frames_ - 1);
+  }
+
 private:
   struct Moments {
     double mean = 0, m2 = 0, first = 0, previous = 0, delta_squared = 0;
@@ -83,5 +93,68 @@ private:
   }
   std::vector<Moments> moments_;
   unsigned frames_ = 0;
+};
+
+// Static residuals of independent, equal-length sequences. Variation of the
+// sequence means across sequences is free of within-sequence correlation, so
+// it measures both the variance inflation that correlation causes and the
+// noise expected in the grand mean. Storage is O(image size).
+class SequenceEnsembleStatistics {
+public:
+  struct Summary {
+    unsigned sequences = 0, frames = 0;
+    double frame_variance = 0, sequence_mean_variance = 0, grand_mean_mse = 0;
+    // T * Var(sequence mean) / Var(frame); one for uncorrelated frames.
+    std::optional<double> variance_inflation;
+  };
+
+  explicit SequenceEnsembleStatistics(std::size_t components) : moments_(components) {
+    if (!components)
+      throw std::invalid_argument("empty sequence ensemble image");
+  }
+
+  void Add(const TemporalResidualStatistics& sequence) {
+    if (sequence.Components() != moments_.size())
+      throw std::invalid_argument("sequence ensemble extent mismatch");
+    if (sequence.Frames() < 2 || (sequences_ && sequence.Frames() != frames_))
+      throw std::invalid_argument("sequence ensemble needs equal sequences of at least two frames");
+    frames_ = sequence.Frames();
+    ++sequences_;
+    for (std::size_t i = 0; i < moments_.size(); ++i) {
+      auto& m = moments_[i];
+      const double value = sequence.Mean(i);
+      const double difference = value - m.mean;
+      m.mean += difference / sequences_;
+      m.m2 += difference * (value - m.mean);
+      m.frame_variance += sequence.Variance(i);
+    }
+  }
+
+  Summary Summarize() const {
+    if (sequences_ < 2)
+      throw std::logic_error("sequence ensemble needs two sequences");
+    Summary result;
+    result.sequences = sequences_;
+    result.frames = frames_;
+    for (const auto& m : moments_) {
+      result.frame_variance += m.frame_variance / sequences_;
+      result.sequence_mean_variance += m.m2 / (sequences_ - 1);
+      result.grand_mean_mse += m.mean * m.mean;
+    }
+    const double n = double(moments_.size());
+    result.frame_variance /= n;
+    result.sequence_mean_variance /= n;
+    result.grand_mean_mse /= n;
+    if (result.frame_variance > 0)
+      result.variance_inflation = frames_ * result.sequence_mean_variance / result.frame_variance;
+    return result;
+  }
+
+private:
+  struct Moments {
+    double mean = 0, m2 = 0, frame_variance = 0;
+  };
+  std::vector<Moments> moments_;
+  unsigned sequences_ = 0, frames_ = 0;
 };
 } // namespace LotusHeadless

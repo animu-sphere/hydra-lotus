@@ -30,8 +30,12 @@ limits; opt-in availability does not close the remaining investigations.
   [complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md)
   are the starting evidence, including their adverse results and limits.
   The [four-bounce/reference-sensitivity measurement](../reports/2026-10-16-restir-convergence.md)
-  reproduces the static reuse penalty with independent finite-reference groups;
-  use the configurable depth and reference seed to extend that investigation.
+  reproduces the static reuse penalty with independent finite-reference groups.
+  The [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ensemble.md)
+  attributes it to temporal correlation, not detectable bias, in that static
+  fixture; the fixture's interreflection is too weak to count as multibounce
+  coverage. Moving-scene bias/ghosting, localized artifacts, scenes with
+  substantial interreflection and reuse cost remain.
   The experimental release gate validates the shipped snapshot; it does not
   substitute for these remaining transport investigations.
 

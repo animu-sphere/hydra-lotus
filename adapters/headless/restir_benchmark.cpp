@@ -506,6 +506,7 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   std::uint64_t reused_pixels = 0, surface_pixels = 0;
   RgbImage last;
   bool timestamps = false;
+  SequenceEnsembleStatistics sequence_ensemble(ensemble.size());
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence) {
     std::vector<double> accumulated(ensemble.size());
     TemporalResidualStatistics residual_statistics(ensemble.size());
@@ -586,6 +587,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
     residual_mean.push_back(residual_statistics.MeanRmse());
     residual_centered.push_back(residual_statistics.CenteredRmse());
     residual_lag1.push_back(residual_statistics.Lag1Autocorrelation());
+    if (!work.moving)
+      sequence_ensemble.Add(residual_statistics);
   }
   const auto stats = renderer->UpdateScene({});
   Require(stats.status == FrameStatus::Pass && stats.validation_message_count == 0, "final scene/validation check failed");
@@ -678,7 +681,37 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
     else
       out << "null";
   }
-  out << "]}";
+  out << "]},\"sequence_ensemble\":";
+  if (work.moving)
+    out << "null";
+  else {
+    // Static only: every sequence shares one reference image, whose finite
+    // noise is common to all sequence means. Each half is an independent
+    // estimate, so a pixel's mean of two halves has variance E[(a-b)^2]/4.
+    const auto summary = sequence_ensemble.Summarize();
+    const double split = work.exact_integral ? 0 : baseline.split_rmse.front();
+    const double grand_noise = summary.sequence_mean_variance / summary.sequences;
+    const double reference_noise = split * split / 4;
+    out << "{\"sequences\":" << summary.sequences << ",\"frames\":" << summary.frames
+        << ",\"frame_variance\":" << summary.frame_variance
+        << ",\"sequence_mean_variance\":" << summary.sequence_mean_variance << ",\"variance_inflation\":";
+    if (summary.variance_inflation)
+      out << *summary.variance_inflation;
+    else
+      out << "null";
+    out << ",\"effective_frames\":";
+    if (summary.variance_inflation && *summary.variance_inflation > 0)
+      out << summary.frames / *summary.variance_inflation;
+    else
+      out << "null";
+    out << ",\"grand_mean_mse\":" << summary.grand_mean_mse << ",\"grand_mean_noise_mse\":" << grand_noise
+        << ",\"reference_noise_mse\":" << reference_noise << ",\"noise_normalized_mse\":";
+    if (grand_noise + reference_noise > 0)
+      out << summary.grand_mean_mse / (grand_noise + reference_noise);
+    else
+      out << "null";
+    out << ",\"excess_mse\":" << summary.grand_mean_mse - grand_noise - reference_noise << '}';
+  }
   out << ",\"render_update_wall_ms\":";
   Series(out, wall);
   out << ",\"scene_gpu_ms\":";
@@ -823,6 +856,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
            "\"ensemble\":\"Static averages all frames and sequences; moving averages only the final frame across independent sequences. Finite-sample errors are not proof of bias.\","
            "\"residual_frame_delta_rmse\":\"Fresh frame difference minus matching reference difference; excludes sequence boundaries. Temporal correlation can reduce it without improving convergence.\","
            "\"temporal_residuals\":\"One entry per independent sequence. Residual is fresh RGB minus the matched reference at fixed screen coordinates. Sequence mean RMS retains persistent error; centered RMS removes each component's sequence mean. Lag-one sample autocorrelation uses the full centered sum of squares; null for zero variance. Short sequences, motion and finite reference noise limit interpretation; no effective sample count is inferred.\","
+           "\"sequence_ensemble\":\"Static only; null when moving. Per-component statistics across independent sequences, averaged over components. Frame variance is the mean within-sequence sample variance; sequence mean variance is the across-sequence sample variance of each sequence's mean. Variance inflation is frames times their ratio (one for uncorrelated frames) and effective frames is frames divided by it. Grand mean MSE is the squared error of the mean of all sequences, equal to the ensemble MSE. Its expected value without bias is grand mean noise (sequence mean variance over sequences) plus reference noise (squared split RMS over four, zero for an exact integral). Noise-normalized MSE near one is consistent with no detectable bias; excess MSE estimates squared bias and can be negative. Pixels are pooled, so spatially correlated or heavy-tailed noise widens its uncertainty; no confidence interval is asserted.\","
            "\"reference_split_rmse\":\"Difference of disjoint equal-spp NEE/MIS halves; the stored reference is their mean. Reference noise is not subtracted.\","
            "\"memory\":\"Fresh renderer per case. Reservoir and metadata bytes include host mirrors; scene pool backing excludes targets. Total VRAM is unavailable.\","
            "\"timestamps\":\"Unavailable or inapplicable GPU series and cumulative times are null.\"},\"scenes\":[";

@@ -46,6 +46,83 @@ void CompareDefinition(double offset) {
   Check(std::abs(stats.MeanRmse() - std::sqrt(mean_squared / 3)) < (offset ? 1e-3 : 1e-10),
       "mean error disagrees with independent definition");
 }
+
+// Across-sequence decomposition, against a direct two-pass definition over
+// three unequal two-component sequences.
+void CompareEnsembleDefinition() {
+  const std::array<std::array<std::array<double, 2>, 3>, 3> sequences{{
+      {{{1, 2}, {3, -2}, {2, 6}}}, {{{-1, 0}, {0, 1}, {4, 5}}}, {{{2, 2}, {2, 2}, {5, -1}}}}};
+  LotusHeadless::SequenceEnsembleStatistics ensemble(2);
+  for (const auto& sequence : sequences) {
+    LotusHeadless::TemporalResidualStatistics stats(2);
+    for (const auto& frame : sequence)
+      stats.Add(frame);
+    ensemble.Add(stats);
+  }
+  double frame_variance = 0, mean_variance = 0, grand = 0;
+  for (unsigned c = 0; c < 2; ++c) {
+    std::array<double, 3> means{};
+    for (unsigned k = 0; k < 3; ++k) {
+      for (const auto& frame : sequences[k])
+        means[k] += frame[c] / 3;
+      for (const auto& frame : sequences[k])
+        frame_variance += (frame[c] - means[k]) * (frame[c] - means[k]) / (2 * 3 * 2);
+    }
+    const double mean = (means[0] + means[1] + means[2]) / 3;
+    for (double m : means)
+      mean_variance += (m - mean) * (m - mean) / (2 * 2);
+    grand += mean * mean / 2;
+  }
+  const auto summary = ensemble.Summarize();
+  Check(summary.sequences == 3 && summary.frames == 3, "wrong ensemble population");
+  Near(summary.frame_variance, frame_variance);
+  Near(summary.sequence_mean_variance, mean_variance);
+  Near(summary.grand_mean_mse, grand);
+  Near(*summary.variance_inflation, 3 * mean_variance / frame_variance);
+
+  // Frozen sequences have no frame variance, so no inflation is defined.
+  LotusHeadless::SequenceEnsembleStatistics frozen(1);
+  for (double value : {1., 3.}) {
+    LotusHeadless::TemporalResidualStatistics stats(1);
+    stats.Add(std::array{value});
+    stats.Add(std::array{value});
+    frozen.Add(stats);
+  }
+  const auto fixed = frozen.Summarize();
+  Near(fixed.sequence_mean_variance, 2);
+  Near(fixed.grand_mean_mse, 4);
+  Check(!fixed.variance_inflation, "frozen sequences must have undefined inflation");
+
+  // Mismatched extents, one-frame and unequal-length sequences reject.
+  LotusHeadless::TemporalResidualStatistics wide(2), single(1), longer(1);
+  wide.Add(std::array{1., 2.});
+  wide.Add(std::array{1., 2.});
+  single.Add(std::array{1.});
+  for (double value : {1., 2., 3.})
+    longer.Add(std::array{value});
+  for (const auto* invalid : {&wide, &single, &longer}) {
+    bool rejected = false;
+    try {
+      frozen.Add(*invalid);
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    Check(rejected, "invalid sequence accepted");
+  }
+  Near(frozen.Summarize().grand_mean_mse, 4);
+  LotusHeadless::SequenceEnsembleStatistics lone(1);
+  LotusHeadless::TemporalResidualStatistics two(1);
+  two.Add(std::array{1.});
+  two.Add(std::array{2.});
+  lone.Add(two);
+  bool rejected = false;
+  try {
+    (void)lone.Summarize();
+  } catch (const std::logic_error&) {
+    rejected = true;
+  }
+  Check(rejected, "one sequence has no across-sequence variance");
+}
 } // namespace
 
 int main() {
@@ -85,7 +162,8 @@ int main() {
       Check(rejected, "invalid residual accepted");
     }
     Near(*ramp.Lag1Autocorrelation(), 0.25);
-    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend and precision passed\n";
+    CompareEnsembleDefinition();
+    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend, precision and sequence ensemble passed\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
