@@ -131,6 +131,10 @@ public:
   // state's viewport extent, without reading it back. Call before the first
   // render pass.
   void SetPresentation(const Lotus::PresentOptions& presentation);
+  // What a presenting pass shows (Lotus::OffscreenRenderer::Present). A
+  // temporal debug view renders the pass through RenderTemporalScene, for
+  // its primary-surface products; a reservoir view needs lotus:restir.
+  void SetPresentView(const Lotus::PresentView& view);
   // The latest presenting pass's presentation; empty before the first.
   [[nodiscard]] Lotus::PresentEvidence GetPresentEvidence();
 

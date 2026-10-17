@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// The built-in scene: the reference Cornell box, path-traced progressively
-// and presented from the backend, seen through the free camera.
+// The built-in scene: the reference Cornell box, path-traced as the
+// renderer controls plan it and presented from the backend, seen through
+// the free camera.
 #include "frame_loop.hpp"
 #include "orbit_camera.hpp"
 #include "reference.hpp"
@@ -10,8 +11,10 @@
 #include <lotus/render_world.hpp>
 #include <lotus/vulkan_backend.hpp>
 
+#include <array>
 #include <iostream>
 #include <memory>
+#include <optional>
 
 namespace Lotus::viewport {
 namespace {
@@ -26,10 +29,8 @@ Matrix4 ToFloat(const Matrix4d& matrix) {
 
 class BuiltinScene final : public Scene {
 public:
-  BuiltinScene(OffscreenRenderer& renderer, std::uint32_t samples)
-      : renderer_(renderer) {
+  explicit BuiltinScene(OffscreenRenderer& renderer) : renderer_(renderer) {
     LotusHeadless::SetCornellBox(world_);
-    settings_.max_samples = samples;
     // The box spans [-1, 1]; the initial view is the headless bootstrap
     // camera's, three units in front of it with a 45 degree field of view.
     camera_.SetBounds(BoxCorners({-1.0, -1.0, -1.0}, {1.0, 1.0, 1.0}));
@@ -55,7 +56,13 @@ public:
     }
   }
 
-  bool Render(std::uint32_t width, std::uint32_t height, FrameResult& result,
+  std::array<float, 2> DepthRange() const override {
+    const std::array<double, 2> range = camera_.ClippingRange();
+    return {static_cast<float>(range[0]), static_cast<float>(range[1])};
+  }
+
+  bool Render(std::uint32_t width, std::uint32_t height,
+      const FramePlan& plan, FrameResult& result,
       std::string& error) override {
     height_ = height;
     const double aspect =
@@ -74,13 +81,23 @@ public:
     target.height = height;
     target.clear_color = {0.0F, 0.0F, 0.0F, 1.0F};
     target.read_back = false;
-    result.frame = renderer_.RenderScene(
-        ExtractDrawSummary(snapshot), target, 1, settings_);
+    if (plan.temporal_frame) {
+      // A frame index after a gap starts the history again, as an ordinary
+      // frame in between does.
+      TemporalFrameSettings temporal = plan.temporal;
+      temporal.frame_index = ++frame_index_;
+      result.frame = renderer_.RenderTemporalScene(snapshot, target, 1,
+          temporal, plan.settings);
+    } else {
+      ++frame_index_;
+      result.frame = renderer_.RenderScene(
+          ExtractDrawSummary(snapshot), target, 1, plan.settings);
+    }
     if (result.frame.status != FrameStatus::Pass) {
       error = "scene frame failed: " + result.frame.detail;
       return false;
     }
-    result.present = renderer_.Present(width, height);
+    result.present = renderer_.Present(width, height, plan.present);
     return true;
   }
 
@@ -98,7 +115,7 @@ private:
   OffscreenRenderer& renderer_;
   RenderWorld world_;
   SceneExtraction extraction_;
-  PathTracingSettings settings_;
+  std::uint64_t frame_index_ = 0;
   OrbitCamera camera_;
   OrbitView home_;
   Navigator navigator_;
@@ -109,23 +126,18 @@ private:
 
 int RunBuiltinScene(const Options& options,
     const std::filesystem::path& shader_directory) {
-  std::unique_ptr<Window> window;
-  PresentOptions presentation;
-  presentation.vsync = options.vsync;
-  try {
-    window = Window::Create("lotus-viewport", options.width, options.height,
-        options.visible, options.fullscreen);
-    presentation.surface = MakeSurfaceProvider(*window);
-  } catch (const std::exception& environment) {
-    return Unavailable(options, environment.what());
+  std::string error;
+  std::optional<ViewportWindow> window = OpenWindow(options, error);
+  if (!window) {
+    return Unavailable(options, error);
   }
 
+  // Destroyed before the window and its developer UI.
   FrameStatus status = FrameStatus::Fail;
-  std::string error;
   const RendererShaders shaders = ShadersIn(shader_directory);
   const std::unique_ptr<OffscreenRenderer> renderer = CreateOffscreenRenderer(
       shaders.vertex, shaders.fragment, status, error, shaders.ray_query,
-      &presentation);
+      &window->presentation);
   if (!renderer) {
     if (status == FrameStatus::Skip) {
       return Unavailable(options, error);
@@ -138,7 +150,7 @@ int RunBuiltinScene(const Options& options,
     return Unavailable(options, ray_query.detail);
   }
 
-  BuiltinScene scene(*renderer, options.samples);
+  BuiltinScene scene(*renderer);
   return RunFrameLoop(options, *window, scene, {});
 }
 

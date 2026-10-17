@@ -13,8 +13,8 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-// Totals over the run. GPU time is the scene pass plus, under the wavefront
-// integrator, its kernels.
+// Totals over the run. GPU time is every submission the frame timed: the
+// scene pass, and the temporal passes submitted after it.
 struct RunTotals {
   std::uint64_t frames = 0;
   std::uint64_t present_skips = 0;
@@ -23,18 +23,44 @@ struct RunTotals {
   std::uint64_t gpu_frames = 0;
   std::uint64_t readback_bytes = 0;
   FrameResult last;
+  std::uint64_t last_cpu_ns = 0;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
 };
 
+// The scene pass's time covers the wavefront kernels, the reservoir passes
+// and, under reuse, the temporal surfaces that precede them; the temporal
+// passes otherwise, and radiance accumulation always, are a later
+// submission.
 double FrameGpuMs(const GpuFrameEvidence& frame) {
   double total = frame.primary_ray_gpu_ms;
-  const WavefrontTimings& wavefront = frame.wavefront_timings;
-  if (wavefront.available) {
-    total += wavefront.camera_gpu_ms + wavefront.intersect_gpu_ms +
-             wavefront.shade_gpu_ms + wavefront.tail_gpu_ms;
+  const TemporalProducts& temporal = frame.temporal;
+  if (temporal.timestamp_available) {
+    const bool reuse = frame.restir.temporal_row_pitch != 0;
+    if (!reuse) {
+      total += temporal.primary_surface_gpu_ms + temporal.reprojection_gpu_ms;
+    }
+    total += temporal.accumulation_gpu_ms;
   }
   return total;
+}
+
+template <typename Record>
+std::uint64_t Bytes(const std::vector<Record>& records) {
+  return std::uint64_t{records.size()} * sizeof(Record);
+}
+
+// Everything the frame copied to the host: a presented frame copies
+// nothing.
+std::uint64_t ReadbackBytes(const GpuFrameEvidence& frame) {
+  const TemporalProducts& temporal = frame.temporal;
+  const RestirProducts& restir = frame.restir;
+  return Bytes(frame.color.payload) + Bytes(frame.depth.payload) +
+         Bytes(temporal.current) + Bytes(temporal.previous) +
+         Bytes(temporal.validity) + Bytes(temporal.radiance) +
+         Bytes(temporal.previous_radiance) + Bytes(restir.initial) +
+         Bytes(restir.temporal) + Bytes(restir.previous) +
+         Bytes(restir.spatial) + Bytes(restir.spatial_sources);
 }
 
 std::string JsonString(std::string_view value) {
@@ -56,7 +82,7 @@ std::string JsonString(std::string_view value) {
 
 void WriteBenchmark(const std::filesystem::path& path,
     std::string_view scene_source, const std::string& stage,
-    const RunTotals& totals) {
+    const RunTotals& totals, const Controls& controls) {
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path());
   }
@@ -79,6 +105,15 @@ void WriteBenchmark(const std::filesystem::path& path,
       << "  \"device\": " << JsonString(frame.device_name) << ",\n"
       << "  \"width\": " << totals.width << ",\n"
       << "  \"height\": " << totals.height << ",\n"
+      << "  \"controls\": {\"integrator\": "
+      << JsonString(Name(controls.integrator))
+      << ", \"nee\": " << (controls.nee ? "true" : "false")
+      << ", \"restir\": " << JsonString(Name(controls.restir))
+      << ", \"restir_candidates\": " << controls.restir_candidates
+      << ", \"temporal_radiance\": "
+      << (controls.temporal_radiance ? "true" : "false")
+      << ", \"accumulate\": " << (controls.accumulate ? "true" : "false")
+      << ", \"view\": " << JsonString(Name(controls.view)) << "},\n"
       << "  \"frames\": " << totals.frames << ",\n"
       << "  \"frames_presented\": " << present.frames_presented << ",\n"
       << "  \"present_skips\": " << totals.present_skips << ",\n"
@@ -109,12 +144,23 @@ void WriteBenchmark(const std::filesystem::path& path,
       << "}\n";
 }
 
-std::string Title(const Scene& scene, const RunTotals& totals) {
+std::string Title(const Scene& scene, const RunTotals& totals,
+    const Controls& controls) {
   std::ostringstream title;
   title << "lotus-viewport | " << scene.source() << " | " << scene.Status()
-        << " | " << totals.last.frame.device_name << " | " << totals.width << 'x'
-        << totals.height << " | " << totals.last.frame.samples_per_pixel
-        << " spp | " << std::setprecision(2) << std::fixed
+        << " | " << Name(controls.integrator) << ' '
+        << (controls.restir != RestirMode::Off
+                   ? "restir-" + std::string(Name(controls.restir))
+               : controls.nee ? std::string("nee")
+                              : std::string("bsdf"))
+        << (controls.temporal_radiance ? " temporal-radiance" : "")
+        << (controls.view != DebugView::Beauty
+                   ? " | " + std::string(Name(controls.view))
+                   : std::string())
+        << " | " << totals.last.frame.device_name << " | " << totals.width
+        << 'x' << totals.height << " | "
+        << totals.last.frame.samples_per_pixel << " spp | "
+        << std::setprecision(2) << std::fixed
         << FrameGpuMs(totals.last.frame) << " ms GPU";
   return title.str();
 }
@@ -123,8 +169,8 @@ std::string Title(const Scene& scene, const RunTotals& totals) {
 // frame says whether it restarted the accumulation.
 class InteractionTest {
 public:
-  InteractionTest(std::vector<InteractionStep> steps, std::uint32_t samples)
-      : steps_(std::move(steps)), samples_(samples) {
+  InteractionTest(std::vector<InteractionStep> steps, const Controls& controls)
+      : steps_(std::move(steps)), controls_(controls) {
   }
 
   // After each frame: checks the pending step, then applies the next one
@@ -134,7 +180,7 @@ public:
     if (pending_) {
       pending_ = false;
       const std::uint32_t expected =
-          restarts_ ? 1U : std::min(before_ + 1U, samples_);
+          restarts_ ? 1U : std::min(before_ + 1U, controls_.samples);
       const InteractionStep& step = steps_[verified_];
       if (samples_per_pixel != expected) {
         error = "interaction test: " + step.name + " left " +
@@ -171,12 +217,84 @@ public:
 
 private:
   std::vector<InteractionStep> steps_;
-  std::uint32_t samples_ = 0;
+  const Controls& controls_;
   std::size_t verified_ = 0;
   bool pending_ = false;
   bool restarts_ = true;
   std::uint32_t before_ = 0;
 };
+
+// Every renderer control and debug view in turn, from the run's controls,
+// each restarting or continuing the accumulation as Restarts says, and
+// back to where it began.
+std::vector<InteractionStep> ControlSteps(Controls& controls) {
+  std::vector<InteractionStep> steps;
+  Controls planned = controls;
+  const Controls initial = controls;
+  const auto step = [&](std::string name, auto edit) {
+    Controls after = planned;
+    edit(after);
+    steps.push_back({std::move(name), Restarts(planned, after),
+        [&controls, after](bool&, std::string&) {
+          controls = after;
+          return true;
+        }});
+    planned = after;
+  };
+  const auto view = [&](DebugView shown) {
+    step("view " + std::string(Name(shown)),
+        [shown](Controls& c) { c.view = shown; });
+  };
+  step("wavefront integrator",
+      [](Controls& c) { c.integrator = Integrator::Wavefront; });
+  step("sample limit 512", [](Controls& c) { c.samples = 512; });
+  for (const DebugView shown : {DebugView::Depth, DebugView::Normal,
+           DebugView::Motion, DebugView::TemporalValidity}) {
+    view(shown);
+  }
+  step("NEE/MIS off", [](Controls& c) { c.nee = false; });
+  step("reference integrator",
+      [](Controls& c) { c.integrator = Integrator::Reference; });
+  step("ReSTIR initial", [](Controls& c) { c.restir = RestirMode::Initial; });
+  for (const DebugView shown : {DebugView::ReservoirValidity,
+           DebugView::ReservoirAge, DebugView::ReservoirWeight}) {
+    view(shown);
+  }
+  step("4 candidates", [](Controls& c) { c.restir_candidates = 4; });
+  for (const RestirMode mode :
+      {RestirMode::Temporal, RestirMode::Spatial, RestirMode::Combined}) {
+    step("ReSTIR " + std::string(Name(mode)),
+        [mode](Controls& c) { c.restir = mode; });
+  }
+  view(DebugView::ReservoirAge);
+  view(DebugView::TemporalValidity);
+  step("wavefront ReSTIR combined",
+      [](Controls& c) { c.integrator = Integrator::Wavefront; });
+  step("ReSTIR off", [](Controls& c) { c.restir = RestirMode::Off; });
+  step("temporal radiance", [](Controls& c) { c.temporal_radiance = true; });
+  view(DebugView::Motion);
+  step("temporal radiance off",
+      [](Controls& c) { c.temporal_radiance = false; });
+  step("accumulation off", [](Controls& c) { c.accumulate = false; });
+  step("the run's controls", [initial](Controls& c) { c = initial; });
+  return steps;
+}
+
+UiStatus Status(const Scene& scene, const RunTotals& totals) {
+  UiStatus status;
+  status.source = scene.source();
+  status.scene = scene.Status();
+  status.device = totals.last.frame.device_name;
+  status.width = totals.width;
+  status.height = totals.height;
+  status.samples_per_pixel = totals.last.frame.samples_per_pixel;
+  status.frame_ms = static_cast<double>(totals.last_cpu_ns) / 1.0e6;
+  if (totals.last.frame.primary_ray_timestamp_available) {
+    status.gpu_ms = FrameGpuMs(totals.last.frame);
+  }
+  status.depth_range = scene.DepthRange();
+  return status;
+}
 
 } // namespace
 
@@ -229,13 +347,37 @@ int Unavailable(const Options& options, std::string_view reason) {
   return options.allow_unavailable ? kExitSkip : 1;
 }
 
-int RunFrameLoop(const Options& options, Window& window, Scene& scene,
-    const std::string& stage) {
+std::optional<ViewportWindow> OpenWindow(const Options& options,
+    std::string& reason) {
+  ViewportWindow opened;
+  opened.presentation.vsync = options.vsync;
+  try {
+    opened.window = Window::Create("lotus-viewport", options.width,
+        options.height, options.visible, options.fullscreen);
+    opened.presentation.surface = MakeSurfaceProvider(*opened.window);
+  } catch (const std::exception& environment) {
+    reason = environment.what();
+    return std::nullopt;
+  }
+  opened.ui = DeveloperUi::Create(*opened.window);
+  opened.ui->ConfigurePresentation(opened.presentation);
+  return opened;
+}
+
+int RunFrameLoop(const Options& options, ViewportWindow& viewport,
+    Scene& scene, const std::string& stage) {
+  Window& window = *viewport.window;
+  DeveloperUi& ui = *viewport.ui;
+  Controls controls = options.controls;
   RunTotals totals;
-  InteractionTest interaction(options.interaction_test
-                                  ? scene.InteractionSteps()
-                                  : std::vector<InteractionStep>{},
-      options.samples);
+  std::vector<InteractionStep> steps;
+  if (options.interaction_test) {
+    steps = scene.InteractionSteps();
+    for (InteractionStep& step : ControlSteps(controls)) {
+      steps.push_back(std::move(step));
+    }
+  }
+  InteractionTest interaction(std::move(steps), controls);
   // Out-of-date swapchains skip a present without an error; a run that
   // keeps skipping is still a failure.
   const std::uint64_t frame_cap =
@@ -249,12 +391,19 @@ int RunFrameLoop(const Options& options, Window& window, Scene& scene,
                             options.frame_limit)) {
     Event event;
     while (window.PollEvent(event)) {
+      const bool key = event.type == EventType::KeyDown;
+      const bool pointer = event.type == EventType::PointerDown ||
+                           event.type == EventType::PointerMove ||
+                           event.type == EventType::Scroll;
       if (event.type == EventType::Close ||
-          (event.type == EventType::KeyDown && event.key == Key::Escape)) {
+          (key && event.key == Key::Escape && !ui.WantsKeyboard())) {
         running = false;
-      } else if (event.type == EventType::KeyDown &&
-                 event.key == Key::Fullscreen) {
+      } else if (key && event.key == Key::Fullscreen) {
         window.SetFullscreen(!window.fullscreen());
+      } else if (key && event.key == Key::ToggleUi) {
+        ui.ToggleVisible();
+      } else if ((key && ui.WantsKeyboard()) || (pointer && ui.WantsPointer())) {
+        // The developer UI has it; a release still ends a scene drag.
       } else if (event.type != EventType::Resize) {
         scene.Handle(event);
       }
@@ -275,17 +424,21 @@ int RunFrameLoop(const Options& options, Window& window, Scene& scene,
                 << " attempts\n";
       return 1;
     }
-    FrameResult result;
     const auto start = Clock::now();
-    if (!scene.Render(width, height, result, error)) {
+    (void)ui.Draw(controls, Status(scene, totals));
+    const FramePlan plan = PlanFrame(controls, totals.frames,
+        scene.DepthRange());
+    FrameResult result;
+    if (!scene.Render(width, height, plan, result, error)) {
       std::cerr << "lotus-viewport: frame " << totals.frames + 1 << ": "
                 << error << '\n';
       return 1;
     }
-    totals.cpu_ns += static_cast<std::uint64_t>(
+    totals.last_cpu_ns = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             Clock::now() - start)
             .count());
+    totals.cpu_ns += totals.last_cpu_ns;
     if (result.present.status == FrameStatus::Fail) {
       std::cerr << "lotus-viewport: presentation failed: "
                 << result.present.detail << '\n';
@@ -297,9 +450,7 @@ int RunFrameLoop(const Options& options, Window& window, Scene& scene,
       totals.gpu_ms += FrameGpuMs(result.frame);
       ++totals.gpu_frames;
     }
-    totals.readback_bytes +=
-        std::uint64_t{result.frame.color.row_pitch} * result.frame.color.height +
-        std::uint64_t{result.frame.depth.row_pitch} * result.frame.depth.height;
+    totals.readback_bytes += ReadbackBytes(result.frame);
     totals.width = width;
     totals.height = height;
     totals.last = std::move(result);
@@ -315,13 +466,14 @@ int RunFrameLoop(const Options& options, Window& window, Scene& scene,
     }
     const auto now = Clock::now();
     if (now - title_update >= std::chrono::milliseconds(250)) {
-      window.SetTitle(Title(scene, totals));
+      window.SetTitle(Title(scene, totals, controls));
       title_update = now;
     }
   }
 
   if (!options.benchmark.empty()) {
-    WriteBenchmark(options.benchmark, scene.source(), stage, totals);
+    WriteBenchmark(options.benchmark, scene.source(), stage, totals,
+        controls);
   }
   const GpuFrameEvidence& frame = totals.last.frame;
   const PresentEvidence& present = totals.last.present;

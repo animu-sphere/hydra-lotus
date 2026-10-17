@@ -3,6 +3,8 @@
 // unit test covers them in every configuration.
 #pragma once
 
+#include "controls.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -15,8 +17,9 @@ struct Options {
   std::uint32_t height = 720;
   // Exit after this many presented frames; 0 runs until the window closes.
   std::uint64_t frame_limit = 0;
-  // Radiance samples per pixel at which the accumulation stops growing.
-  std::uint32_t samples = 1024;
+  // The renderer controls the run starts with; --samples sets
+  // controls.samples, the samples per pixel at which the accumulation stops.
+  Controls controls;
   bool visible = true;
   bool fullscreen = false;
   bool vsync = true;

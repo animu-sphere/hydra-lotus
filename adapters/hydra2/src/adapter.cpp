@@ -713,6 +713,11 @@ public:
     presentation_ = presentation;
   }
 
+  void SetPresentView(const Lotus::PresentView& view) {
+    std::scoped_lock lock(mutex_);
+    present_view_ = view;
+  }
+
   Lotus::PresentEvidence GetPresentEvidence() {
     std::scoped_lock lock(mutex_);
     return present_evidence_;
@@ -756,7 +761,12 @@ public:
     }
     ApplyFraming(state, target);
     const bool reservoir_reuse = settings.restir_temporal || settings.restir_spatial;
+    // The temporal debug views present the primary-surface products.
+    const bool present_temporal =
+        present && present_view_.view != Lotus::DebugView::Beauty &&
+        present_view_.view < Lotus::DebugView::ReservoirValidity;
     const bool temporal_products = temporal.accumulate_radiance || reservoir_reuse ||
+                                   present_temporal ||
                                    std::any_of(bindings.begin(), bindings.end(), [](const auto& binding) {
                                      return IsTemporalAov(binding.aovName);
                                    });
@@ -845,7 +855,8 @@ public:
     }
 
     if (present) {
-      present_evidence_ = renderer_->Present(target.width, target.height);
+      present_evidence_ =
+          renderer_->Present(target.width, target.height, present_view_);
       if (present_evidence_.status == Lotus::FrameStatus::Fail) {
         TF_RUNTIME_ERROR("Lotus presentation failed: %s",
             present_evidence_.detail.c_str());
@@ -1062,6 +1073,7 @@ private:
   Lotus::GpuFrameEvidence frame_evidence_;
   // The window a viewport host presents to, and its latest presentation.
   std::optional<Lotus::PresentOptions> presentation_;
+  Lotus::PresentView present_view_;
   Lotus::PresentEvidence present_evidence_;
   Lotus::RestirProducts restir_diagnostics_;
   std::uint64_t renderer_creations_{};
@@ -2461,6 +2473,10 @@ Lotus::GpuFrameEvidence HdLotusRenderDelegate::GetFrameEvidence() {
 void HdLotusRenderDelegate::SetPresentation(
     const Lotus::PresentOptions& presentation) {
   impl_->state->SetPresentation(presentation);
+}
+
+void HdLotusRenderDelegate::SetPresentView(const Lotus::PresentView& view) {
+  impl_->state->SetPresentView(view);
 }
 
 Lotus::PresentEvidence HdLotusRenderDelegate::GetPresentEvidence() {

@@ -4,7 +4,8 @@
 // UsdImaging populates its render index, and HdEngine runs one task whose
 // render pass presents from the backend. The view is the free camera or an
 // authored camera prim; every frame applies the stage's pending edits at the
-// current time code. Only the Hydra-enabled build (LOTUS_ENABLE_HYDRA2)
+// current time code, and the renderer controls through the delegate's
+// render settings. Only the Hydra-enabled build (LOTUS_ENABLE_HYDRA2)
 // compiles this file.
 #include "frame_loop.hpp"
 #include "orbit_camera.hpp"
@@ -13,6 +14,7 @@
 #include "adapter.hpp"
 
 #include <pxr/base/gf/bbox3d.h>
+#include <pxr/base/gf/range1f.h>
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3d.h>
 #include <pxr/base/gf/vec3f.h>
@@ -43,6 +45,7 @@
 #include <iterator>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -233,8 +236,19 @@ public:
     (void)navigator_.Handle(event, camera_, height_);
   }
 
-  bool Render(std::uint32_t width, std::uint32_t height, FrameResult& frame,
+  std::array<float, 2> DepthRange() const override {
+    if (const HdCamera* camera = SelectedCamera()) {
+      const GfRange1f range = camera->GetClippingRange();
+      return {range.GetMin(), range.GetMax()};
+    }
+    const std::array<double, 2> range = camera_.ClippingRange();
+    return {static_cast<float>(range[0]), static_cast<float>(range[1])};
+  }
+
+  bool Render(std::uint32_t width, std::uint32_t height,
+      const FramePlan& plan, FrameResult& frame,
       std::string& error) override {
+    ApplyPlan(plan);
     // Applies the stage's pending edits, then moves to the time code.
     scene_delegate_->SetTime(time_);
     if (width != width_ || height != height_) {
@@ -344,8 +358,38 @@ private:
   static HdRenderSettingsMap Settings(const Options& options) {
     HdRenderSettingsMap settings;
     settings[HdRenderSettingsTokens->convergedSamplesPerPixel] =
-        VtValue(static_cast<int>(options.samples));
+        VtValue(static_cast<int>(options.controls.samples));
     return settings;
+  }
+
+  // The plan as the delegate's render settings (adapter.hpp), each set only
+  // when it changes, and the view the presenting pass shows.
+  void ApplyPlan(const FramePlan& plan) {
+    const auto set = [this](const char* name, const VtValue& value) {
+      const TfToken key(name);
+      if (render_delegate_.GetRenderSetting(key) != value) {
+        render_delegate_.SetRenderSetting(key, value);
+      }
+    };
+    const PathTracingSettings& settings = plan.settings;
+    const bool restir =
+        settings.light_sampling == LightSampling::RestirInitial;
+    set(HdRenderSettingsTokens->convergedSamplesPerPixel.GetText(),
+        VtValue(static_cast<int>(settings.max_samples)));
+    set("lotus:sampleIndex", VtValue(static_cast<int>(settings.sample_index)));
+    set("lotus:wavefront",
+        VtValue(settings.integrator == Integrator::Wavefront));
+    set("lotus:lightSampling",
+        VtValue(settings.light_sampling != LightSampling::Bsdf));
+    set("lotus:restir", VtValue(restir));
+    set("lotus:restirCandidates",
+        VtValue(static_cast<int>(settings.restir_candidates)));
+    set("lotus:restirTemporal", VtValue(settings.restir_temporal));
+    set("lotus:restirSpatial", VtValue(settings.restir_spatial));
+    set("lotus:temporal", VtValue(plan.temporal.accumulate_radiance));
+    set("lotus:historySamples",
+        VtValue(static_cast<int>(plan.temporal.max_history_samples)));
+    render_delegate_.SetPresentView(plan.present);
   }
 
   double Aspect() const noexcept {
@@ -554,20 +598,16 @@ int RunHydraStage(const Options& options) {
               << '\n';
     return 1;
   }
-  std::unique_ptr<Window> window;
-  PresentOptions presentation;
-  presentation.vsync = options.vsync;
-  try {
-    window = Window::Create("lotus-viewport", options.width, options.height,
-        options.visible, options.fullscreen);
-    presentation.surface = MakeSurfaceProvider(*window);
-  } catch (const std::exception& environment) {
-    return Unavailable(options, environment.what());
+  std::string reason;
+  std::optional<ViewportWindow> window = OpenWindow(options, reason);
+  if (!window) {
+    return Unavailable(options, reason);
   }
 
+  // The scene owns the renderer, which goes before the window's UI.
   std::unique_ptr<HydraScene> scene;
   try {
-    scene = std::make_unique<HydraScene>(options, stage, presentation);
+    scene = std::make_unique<HydraScene>(options, stage, window->presentation);
   } catch (const std::exception& setup) {
     std::cerr << "lotus-viewport: " << setup.what() << '\n';
     return 1;

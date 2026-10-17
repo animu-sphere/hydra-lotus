@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Swapchain presentation of the renderer's scene colour. One blit per
 // presented frame, from the RGBA32F colour target into an sRGB swapchain
-// image: the format conversion encodes and clamps, so no shader or render
-// pass is involved and the colour never reaches the host.
+// image: the format conversion encodes and clamps, so no shader is involved
+// and the colour never reaches the host. A debug view first maps its product
+// to an RGBA16F image with one compute dispatch and blits that instead; a
+// host overlay then draws over the swapchain image in a render pass of its
+// own.
 #include "presentation.hpp"
 
 #include <algorithm>
@@ -17,6 +20,18 @@ namespace Lotus::vulkan_internal {
 namespace {
 
 constexpr std::uint64_t kTimeoutNs = 10'000'000'000ULL;
+constexpr VkFormat kViewFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+// Mirrors ViewConstants in shaders/present/present_view.slang.
+struct ViewConstants {
+  std::uint32_t view;
+  std::uint32_t stride;
+  std::uint32_t width;
+  std::uint32_t height;
+  float range[2];
+  std::uint32_t reserved[2];
+};
+static_assert(sizeof(ViewConstants) == 32);
 
 template <typename Handle>
 std::uintptr_t EncodeHandle(Handle handle) noexcept {
@@ -105,13 +120,18 @@ bool Presentation::Supports(VkPhysicalDevice device, std::uint32_t family) const
          supported == VK_TRUE;
 }
 
-bool Presentation::Initialize(VkPhysicalDevice physical, VkDevice device,
-    VkQueue queue, std::uint32_t family, VkFormat source, bool vsync,
-    bool& unsupported, std::string& detail) {
+bool Presentation::Initialize(VkInstance instance, VkPhysicalDevice physical,
+    VkDevice device, VkQueue queue, std::uint32_t family, VkFormat source,
+    const PresentOptions& options,
+    const std::vector<std::uint32_t>& view_kernel, bool& unsupported,
+    std::string& detail) {
   unsupported = false;
+  instance_ = instance;
   physical_device_ = physical;
   device_ = device;
   queue_ = queue;
+  queue_family_ = family;
+  overlay_ = options.overlay;
 
   VkFormatProperties source_properties{};
   vkGetPhysicalDeviceFormatProperties(physical, source, &source_properties);
@@ -128,9 +148,13 @@ bool Presentation::Initialize(VkPhysicalDevice physical, VkDevice device,
     return false;
   }
   if ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ==
-      0) {
+          0 ||
+      (overlay_.record != nullptr &&
+          (capabilities.supportedUsageFlags &
+              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0)) {
     unsupported = true;
-    detail = "the presentation surface's images cannot be transfer targets";
+    detail = "the presentation surface's images cannot be transfer targets "
+             "(or, for an overlay, colour attachments)";
     return false;
   }
   std::uint32_t format_count = 0;
@@ -164,7 +188,7 @@ bool Presentation::Initialize(VkPhysicalDevice physical, VkDevice device,
   surface_format_ = *found;
 
   present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
-  if (!vsync) {
+  if (!options.vsync) {
     std::uint32_t mode_count = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical, surface_, &mode_count,
         nullptr);
@@ -202,11 +226,287 @@ bool Presentation::Initialize(VkPhysicalDevice physical, VkDevice device,
       VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   VkFenceCreateInfo fence_create{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   fence_create.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-  return VulkanOk(vkCreateSemaphore(device, &semaphore_create, nullptr,
-                      &image_available_),
-             "vkCreateSemaphore(acquire)", detail) &&
-         VulkanOk(vkCreateFence(device, &fence_create, nullptr, &in_flight_),
-             "vkCreateFence(present)", detail);
+  if (!VulkanOk(vkCreateSemaphore(device, &semaphore_create, nullptr,
+                    &image_available_),
+          "vkCreateSemaphore(acquire)", detail) ||
+      !VulkanOk(vkCreateFence(device, &fence_create, nullptr, &in_flight_),
+          "vkCreateFence(present)", detail)) {
+    return false;
+  }
+  if (!view_kernel.empty()) {
+    VkFormatProperties view_properties{};
+    vkGetPhysicalDeviceFormatProperties(physical, kViewFormat,
+        &view_properties);
+    constexpr VkFormatFeatureFlags kViewFeatures =
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+    if ((view_properties.optimalTilingFeatures & kViewFeatures) !=
+        kViewFeatures) {
+      unsupported = true;
+      detail = "RGBA16F cannot be a storage image and a blit source";
+      return false;
+    }
+    if (!CreateViewPipeline(view_kernel, detail)) {
+      return false;
+    }
+  }
+  return overlay_.record == nullptr || CreateOverlayRenderPass(detail);
+}
+
+bool Presentation::CreateViewPipeline(const std::vector<std::uint32_t>& words,
+    std::string& detail) {
+  const VkDescriptorSetLayoutBinding bindings[2] = {
+      {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+          nullptr},
+      {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+          nullptr}};
+  VkDescriptorSetLayoutCreateInfo set_create{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  set_create.bindingCount = 2;
+  set_create.pBindings = bindings;
+  if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &set_create, nullptr,
+                    &view_set_layout_),
+          "vkCreateDescriptorSetLayout(present view)", detail)) {
+    return false;
+  }
+  const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(ViewConstants)};
+  VkPipelineLayoutCreateInfo layout_create{
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  layout_create.setLayoutCount = 1;
+  layout_create.pSetLayouts = &view_set_layout_;
+  layout_create.pushConstantRangeCount = 1;
+  layout_create.pPushConstantRanges = &push;
+  if (!VulkanOk(vkCreatePipelineLayout(device_, &layout_create, nullptr,
+                    &view_layout_),
+          "vkCreatePipelineLayout(present view)", detail)) {
+    return false;
+  }
+  const VkDescriptorPoolSize sizes[2] = {
+      {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+      {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
+  VkDescriptorPoolCreateInfo pool_create{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pool_create.maxSets = 1;
+  pool_create.poolSizeCount = 2;
+  pool_create.pPoolSizes = sizes;
+  if (!VulkanOk(vkCreateDescriptorPool(device_, &pool_create, nullptr,
+                    &view_pool_),
+          "vkCreateDescriptorPool(present view)", detail)) {
+    return false;
+  }
+  VkDescriptorSetAllocateInfo set_allocate{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  set_allocate.descriptorPool = view_pool_;
+  set_allocate.descriptorSetCount = 1;
+  set_allocate.pSetLayouts = &view_set_layout_;
+  if (!VulkanOk(vkAllocateDescriptorSets(device_, &set_allocate, &view_set_),
+          "vkAllocateDescriptorSets(present view)", detail)) {
+    return false;
+  }
+  const VkShaderModule shader = CreateShader(device_, words, detail);
+  if (shader == VK_NULL_HANDLE) {
+    return false;
+  }
+  VkComputePipelineCreateInfo pipeline_create{
+      VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+  pipeline_create.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pipeline_create.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  pipeline_create.stage.module = shader;
+  pipeline_create.stage.pName = "main";
+  pipeline_create.layout = view_layout_;
+  const bool created = VulkanOk(
+      vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipeline_create,
+          nullptr, &view_pipeline_),
+      "vkCreateComputePipelines(present view)", detail);
+  vkDestroyShaderModule(device_, shader, nullptr);
+  return created;
+}
+
+bool Presentation::CreateOverlayRenderPass(std::string& detail) {
+  VkAttachmentDescription attachment{};
+  attachment.format = surface_format_.format;
+  attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+  attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  const VkAttachmentReference reference{0,
+      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &reference;
+  // A barrier before the pass orders the blit's writes; the present waits
+  // on the submission's semaphore.
+  VkSubpassDependency dependencies[2]{};
+  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[0].dstSubpass = 0;
+  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[1].srcSubpass = 0;
+  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  VkRenderPassCreateInfo create{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+  create.attachmentCount = 1;
+  create.pAttachments = &attachment;
+  create.subpassCount = 1;
+  create.pSubpasses = &subpass;
+  create.dependencyCount = 2;
+  create.pDependencies = dependencies;
+  return VulkanOk(vkCreateRenderPass(device_, &create, nullptr, &overlay_pass_),
+      "vkCreateRenderPass(overlay)", detail);
+}
+
+bool Presentation::EnsureViewImage(VkExtent2D extent, std::string& detail) {
+  if (view_image_ != VK_NULL_HANDLE && view_extent_.width == extent.width &&
+      view_extent_.height == extent.height) {
+    return true;
+  }
+  DestroyViewImage();
+  VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  create.imageType = VK_IMAGE_TYPE_2D;
+  create.format = kViewFormat;
+  create.extent = {extent.width, extent.height, 1};
+  create.mipLevels = 1;
+  create.arrayLayers = 1;
+  create.samples = VK_SAMPLE_COUNT_1_BIT;
+  create.tiling = VK_IMAGE_TILING_OPTIMAL;
+  create.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  create.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  create.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  if (!VulkanOk(vkCreateImage(device_, &create, nullptr, &view_image_),
+          "vkCreateImage(present view)", detail)) {
+    return false;
+  }
+  VkMemoryRequirements requirements{};
+  vkGetImageMemoryRequirements(device_, view_image_, &requirements);
+  VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  allocate.allocationSize = requirements.size;
+  allocate.memoryTypeIndex = FindMemoryType(physical_device_,
+      requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+  if (allocate.memoryTypeIndex == std::numeric_limits<std::uint32_t>::max()) {
+    detail = "no device-local memory for the present view image";
+    return false;
+  }
+  if (!VulkanOk(vkAllocateMemory(device_, &allocate, nullptr, &view_memory_),
+          "vkAllocateMemory(present view)", detail) ||
+      !VulkanOk(vkBindImageMemory(device_, view_image_, view_memory_, 0),
+          "vkBindImageMemory(present view)", detail)) {
+    return false;
+  }
+  VkImageViewCreateInfo view_create{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  view_create.image = view_image_;
+  view_create.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  view_create.format = kViewFormat;
+  view_create.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  if (!VulkanOk(vkCreateImageView(device_, &view_create, nullptr,
+                    &view_image_view_),
+          "vkCreateImageView(present view)", detail)) {
+    return false;
+  }
+  view_extent_ = extent;
+  return true;
+}
+
+void Presentation::DestroyViewImage() {
+  vkDestroyImageView(device_, view_image_view_, nullptr);
+  vkDestroyImage(device_, view_image_, nullptr);
+  vkFreeMemory(device_, view_memory_, nullptr);
+  view_image_view_ = VK_NULL_HANDLE;
+  view_image_ = VK_NULL_HANDLE;
+  view_memory_ = VK_NULL_HANDLE;
+  view_extent_ = {0, 0};
+}
+
+// Recorded after the in-flight fence, so the previous frame no longer uses
+// the descriptor set or the view image.
+void Presentation::RecordView(const PresentSource& source) {
+  const VkDescriptorImageInfo image{VK_NULL_HANDLE, view_image_view_,
+      VK_IMAGE_LAYOUT_GENERAL};
+  const VkDescriptorBufferInfo buffer{source.product, 0, VK_WHOLE_SIZE};
+  VkWriteDescriptorSet writes[2]{};
+  for (std::uint32_t binding = 0; binding < 2; ++binding) {
+    writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[binding].dstSet = view_set_;
+    writes[binding].dstBinding = binding;
+    writes[binding].descriptorCount = 1;
+  }
+  writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  writes[0].pImageInfo = &image;
+  writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  writes[1].pBufferInfo = &buffer;
+  vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+
+  // The frame's writes to the product, in earlier submissions, before the
+  // kernel reads it; the previous frame's blit of the view image before the
+  // kernel overwrites it.
+  VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  memory.srcAccessMask =
+      VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+  memory.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  VkImageMemoryBarrier image_barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  image_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  image_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  image_barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  image_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  image_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  image_barrier.image = view_image_;
+  image_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  vkCmdPipelineBarrier(command_,
+      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+          VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &memory, 0, nullptr, 1,
+      &image_barrier);
+  ViewConstants constants{};
+  constants.view = static_cast<std::uint32_t>(source.view.view);
+  constants.stride = source.stride;
+  constants.width = source.extent.width;
+  constants.height = source.extent.height;
+  constants.range[0] = source.view.range[0];
+  constants.range[1] = source.view.range[1];
+  vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, view_pipeline_);
+  vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_COMPUTE,
+      view_layout_, 0, 1, &view_set_, 0, nullptr);
+  vkCmdPushConstants(command_, view_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+      sizeof(constants), &constants);
+  vkCmdDispatch(command_, (source.extent.width + 7) / 8,
+      (source.extent.height + 7) / 8, 1);
+  image_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+  image_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  image_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  image_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+      &image_barrier);
+}
+
+void Presentation::CallOverlay(PresentOverlayPhase phase) {
+  PresentOverlayContext context;
+  context.phase = phase;
+  context.instance = EncodeHandle(instance_);
+  context.physical_device = EncodeHandle(physical_device_);
+  context.device = EncodeHandle(device_);
+  context.queue = EncodeHandle(queue_);
+  context.render_pass = EncodeHandle(overlay_pass_);
+  context.api_version = VK_API_VERSION_1_3;
+  context.queue_family = queue_family_;
+  context.image_count = static_cast<std::uint32_t>(images_.size());
+  context.color_format = static_cast<std::uint32_t>(surface_format_.format);
+  if (phase == PresentOverlayPhase::Render) {
+    context.command_buffer = EncodeHandle(command_);
+    context.width = extent_.width;
+    context.height = extent_.height;
+  }
+  overlay_.record(overlay_.user_data, context);
 }
 
 PresentEvidence Presentation::Evidence(FrameStatus status,
@@ -269,6 +569,9 @@ bool Presentation::RecreateSwapchain(std::uint32_t width,
   create.imageExtent = extent;
   create.imageArrayLayers = 1;
   create.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  if (overlay_pass_ != VK_NULL_HANDLE) {
+    create.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  }
   create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
   create.preTransform = capabilities.currentTransform;
   create.compositeAlpha = composite;
@@ -292,6 +595,35 @@ bool Presentation::RecreateSwapchain(std::uint32_t width,
       return false;
     }
   }
+  if (overlay_pass_ != VK_NULL_HANDLE) {
+    image_views_.resize(count, VK_NULL_HANDLE);
+    framebuffers_.resize(count, VK_NULL_HANDLE);
+    for (std::uint32_t index = 0; index < count; ++index) {
+      VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      view.image = images_[index];
+      view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      view.format = surface_format_.format;
+      view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      if (!VulkanOk(vkCreateImageView(device_, &view, nullptr,
+                        &image_views_[index]),
+              "vkCreateImageView(swapchain)", detail)) {
+        return false;
+      }
+      VkFramebufferCreateInfo framebuffer{
+          VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+      framebuffer.renderPass = overlay_pass_;
+      framebuffer.attachmentCount = 1;
+      framebuffer.pAttachments = &image_views_[index];
+      framebuffer.width = extent.width;
+      framebuffer.height = extent.height;
+      framebuffer.layers = 1;
+      if (!VulkanOk(vkCreateFramebuffer(device_, &framebuffer, nullptr,
+                        &framebuffers_[index]),
+              "vkCreateFramebuffer(swapchain)", detail)) {
+        return false;
+      }
+    }
+  }
   extent_ = extent;
   if (swapchain_created_once_) {
     ++swapchain_recreates_;
@@ -300,9 +632,10 @@ bool Presentation::RecreateSwapchain(std::uint32_t width,
   return true;
 }
 
-PresentEvidence Presentation::Present(VkImage source,
-    VkExtent2D source_extent, std::uint32_t width, std::uint32_t height) {
+PresentEvidence Presentation::Present(const PresentSource& source,
+    std::uint32_t width, std::uint32_t height) {
   std::string detail;
+  const bool view = source.view.view != DebugView::Beauty;
   if (width == 0 || height == 0) {
     return Evidence(FrameStatus::Skip, "the window has a zero extent");
   }
@@ -314,6 +647,11 @@ PresentEvidence Presentation::Present(VkImage source,
     if (swapchain_ == VK_NULL_HANDLE) {
       return Evidence(FrameStatus::Skip, "the surface has a zero extent");
     }
+  }
+  if (overlay_pass_ != VK_NULL_HANDLE && !overlay_initialized_) {
+    // RecreateSwapchain left the device idle.
+    CallOverlay(PresentOverlayPhase::Initialize);
+    overlay_initialized_ = true;
   }
   if (!VulkanOk(vkWaitForFences(device_, 1, &in_flight_, VK_TRUE, kTimeoutNs),
           "vkWaitForFences(present)", detail)) {
@@ -332,6 +670,9 @@ PresentEvidence Presentation::Present(VkImage source,
     VulkanOk(acquire, "vkAcquireNextImageKHR", detail);
     return Evidence(FrameStatus::Fail, detail);
   }
+  if (view && !EnsureViewImage(source.extent, detail)) {
+    return Evidence(FrameStatus::Fail, detail);
+  }
 
   VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -342,6 +683,9 @@ PresentEvidence Presentation::Present(VkImage source,
       !VulkanOk(vkBeginCommandBuffer(command_, &begin), "vkBeginCommandBuffer",
           detail)) {
     return Evidence(FrameStatus::Fail, detail);
+  }
+  if (view) {
+    RecordView(source);
   }
   const VkImage target = images_[image_index];
   // The acquire semaphore's wait stage is TRANSFER; the barrier chains on
@@ -360,21 +704,43 @@ PresentEvidence Presentation::Present(VkImage source,
       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
   VkImageBlit blit{};
   blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.srcOffsets[1] = {static_cast<std::int32_t>(source_extent.width),
-      static_cast<std::int32_t>(source_extent.height), 1};
+  blit.srcOffsets[1] = {static_cast<std::int32_t>(source.extent.width),
+      static_cast<std::int32_t>(source.extent.height), 1};
   blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   blit.dstOffsets[1] = {static_cast<std::int32_t>(extent_.width),
       static_cast<std::int32_t>(extent_.height), 1};
-  vkCmdBlitImage(command_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-      VK_FILTER_NEAREST);
+  vkCmdBlitImage(command_, view ? view_image_ : source.color,
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
   barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  barrier.dstAccessMask = 0;
-  vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
-      &barrier);
+  if (overlay_pass_ != VK_NULL_HANDLE) {
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0,
+        nullptr, 1, &barrier);
+    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    pass.renderPass = overlay_pass_;
+    pass.framebuffer = framebuffers_[image_index];
+    pass.renderArea.extent = extent_;
+    vkCmdBeginRenderPass(command_, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    CallOverlay(PresentOverlayPhase::Render);
+    vkCmdEndRenderPass(command_);
+  } else {
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.dstAccessMask = 0;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+        &barrier);
+  }
+  if (view) {
+    // The kernel's reads of the product before the next frame rewrites it.
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 0,
+        nullptr);
+  }
   if (!VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer", detail)) {
     return Evidence(FrameStatus::Fail, detail);
   }
@@ -419,6 +785,14 @@ PresentEvidence Presentation::Present(VkImage source,
 }
 
 void Presentation::DestroySwapchain() {
+  for (VkFramebuffer framebuffer : framebuffers_) {
+    vkDestroyFramebuffer(device_, framebuffer, nullptr);
+  }
+  framebuffers_.clear();
+  for (VkImageView view : image_views_) {
+    vkDestroyImageView(device_, view, nullptr);
+  }
+  image_views_.clear();
   for (VkSemaphore semaphore : render_finished_) {
     vkDestroySemaphore(device_, semaphore, nullptr);
   }
@@ -433,7 +807,17 @@ void Presentation::DestroySwapchain() {
 
 void Presentation::Destroy(VkInstance instance) {
   if (device_ != VK_NULL_HANDLE) {
+    if (overlay_initialized_) {
+      CallOverlay(PresentOverlayPhase::Shutdown);
+      overlay_initialized_ = false;
+    }
     DestroySwapchain();
+    DestroyViewImage();
+    vkDestroyPipeline(device_, view_pipeline_, nullptr);
+    vkDestroyPipelineLayout(device_, view_layout_, nullptr);
+    vkDestroyDescriptorPool(device_, view_pool_, nullptr);
+    vkDestroyDescriptorSetLayout(device_, view_set_layout_, nullptr);
+    vkDestroyRenderPass(device_, overlay_pass_, nullptr);
     vkDestroyFence(device_, in_flight_, nullptr);
     vkDestroySemaphore(device_, image_available_, nullptr);
     vkDestroyCommandPool(device_, command_pool_, nullptr);
