@@ -79,7 +79,8 @@ Each subject is linked to its owner and never restated here
    ([§16](DESIGN_POLICY.md#16-denoising), [§48](DESIGN_POLICY.md#48-not-done-first),
    [roadmap policy §5](ROADMAP_POLICY.md#5-neural-features)).
 4. **The core stays host-neutral.** OpenUSD appears only under
-   `adapters/hydra2/`, Vulkan only under `backend/vulkan/`
+   `adapters/hydra2/` and in the optional Hydra-enabled viewport build that
+   links it, Vulkan only under `backend/vulkan/`
    ([PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) §4).
 
 ## 5. What this repository does not own

@@ -11,7 +11,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | ReSTIR DI execution order and deferred adapter work. |
+| [current.md](current.md) | v0.6.0 execution order (ReSTIR DI closure, standalone viewport, denoising) and deferred adapter work. |
 
 ## Sequences
 
@@ -35,7 +35,9 @@ Two sequences are live:
 targets.** Other documents link here instead of repeating either. Version
 numbers follow the implementation
 ([roadmap policy §8](../design/ROADMAP_POLICY.md#8-milestones)): a phase gets
-a version here when its predecessor is done.
+a version here when its predecessor is done, or when its predecessor is
+reduced to a bounded closure in the same release, as for
+[v0.6.0](#v060--interactive-rendering).
 
 | Phase | Status | Target |
 | --- | --- | --- |
@@ -45,12 +47,61 @@ a version here when its predecessor is done.
 | Renderer Phase 2 — Wavefront path tracing | ✅ exit criteria met ([exit review](../reports/2026-10-11-hydra-integrator-selection.md#renderer-phase-2-exit)): reference equivalence reached ([evidence](../reports/2026-10-10-wavefront-equivalence.md)); queue bookkeeping and round scheduling [measured](../reports/2026-10-10-wavefront-scheduling.md), path state [stored by section](../reports/2026-10-10-wavefront-path-state.md), generate and accumulate kernels [replaced](../reports/2026-10-11-wavefront-camera-resolve.md); path classification deferred to Renderer Phase 8 ([upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification)); integrator [selected through Hydra](../reports/2026-10-11-hydra-integrator-selection.md) | [v0.2.0](../releases/v0.2.0.md) |
 | Renderer Phase 3 — Direct lighting / NEE / MIS | ✅ exit criteria met ([exit review](../reports/2026-10-12-renderer-phase3-exit.md#renderer-phase-3-exit)): next event estimation of emissive triangles with MIS in both integrators and through Hydra ([evidence](../reports/2026-10-11-emissive-nee-mis.md)); UsdLux sphere, rect, disk and distant lights sampled beside them ([evidence](../reports/2026-10-11-analytic-lights.md)); dome textures as an environment image sampled in proportion to its radiance ([evidence](../reports/2026-10-11-environment-importance-sampling.md)); time to equal quality 2.6–3.0× shorter in the Cornell box and by three orders of magnitude or more in the lit workloads under both integrators; light acceleration assigned to Renderer Phase 9 (LOTUS-LIGHT-05) | [v0.3.0](../releases/v0.3.0.md) |
 | Renderer Phase 4 — Temporal infrastructure | ✅ exit criteria met ([scope review](../reports/2026-10-13-temporal-hydra-exit.md#renderer-phase-4-scope-review), [release gate](../reports/2026-10-13-v0.4.0-release-gate.md)): CPU/GPU frame history, rigid motion, reprojection, shared validity, bounded radiance and reset policy; Hydra controls/AOVs and moving installed-host sequences verified under both integrators | [v0.4.0](../releases/v0.4.0.md) |
-| Renderer Phase 5 — ReSTIR DI | 🚧 experimental snapshot released; initial, temporal and spatial reservoirs, proposals, Hydra controls/AOVs and bounded CPU/GPU comparisons are implemented ([contract](../reference/RESTIR.md)); broader bias/artifact coverage, static convergence, reuse cost and correlation assessment remain in the [execution plan](current.md#execution-order); no phase-exit claim | [v0.5.0 experimental snapshot](../releases/v0.5.0.md); v0.6.0 follow-up target |
-| Renderer Phase 6 — Denoising / SVGF-class pipeline | ⬜ | unscheduled |
+| Renderer Phase 5 — ReSTIR DI | 🚧 experimental snapshot released; initial, temporal and spatial reservoirs, proposals, Hydra controls/AOVs and bounded CPU/GPU comparisons are implemented ([contract](../reference/RESTIR.md)); bias, ghosting, correlation and convergence evidence gathered (latest: [light/material animation](../reports/2026-10-17-restir-animation.md)); closure limited to the [remaining animation/reset checks and the reuse-cost / equal-quality decision](current.md#step-1--restir-di-closure), then the [stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di); no phase-exit claim | [v0.5.0 experimental snapshot](../releases/v0.5.0.md); closure in v0.6.0 |
+| Renderer Phase 6 — Denoising / SVGF-class pipeline | ⬜ SVGF-class baseline [planned](current.md#step-3--svgf-core) | v0.6.0 |
 | Renderer Phase 7 — ReSTIR GI / advanced reservoir transport | ⬜ | unscheduled |
 | Renderer Phase 8 — Production material support | ⬜ | unscheduled |
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | unscheduled |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
+
+## v0.6.0 — Interactive rendering
+
+> **From validated transport research to interactive rendering.**
+
+After v0.5.0 the ReSTIR DI investigation reached the point where more
+fixtures cost more than they add to exit confidence. v0.6.0 turns from making
+ReSTIR smarter to making Lotus usable on its own: open a scene, watch
+progressive path tracing, and observe and switch the temporal, ReSTIR and
+denoising state. ReSTIR DI becomes one selectable transport mode of that
+pipeline rather than a research subject of its own.
+
+| Track | Scope | Order |
+| --- | --- | --- |
+| ReSTIR DI closure | the [Renderer Phase 5 exit criteria and stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di) | [step 1](current.md#step-1--restir-di-closure) |
+| Standalone viewport | the [viewport frontend scope](../design/ROADMAP_POLICY.md#standalone-viewport-frontend) | [step 2](current.md#step-2--viewport-foundation) |
+| SVGF-class denoising | the [Renderer Phase 6 baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline), headless first, then in the viewport | [steps 3–4](current.md#step-3--svgf-core) |
+
+The release is complete when the Renderer Phase 5 exit review is recorded
+with a reuse-cost / equal-quality conclusion and no open research fixture;
+the viewport opens a USD stage standalone, with an interactive camera, stable
+progressive rendering, run-time switching of the major renderer modes, debug
+AOVs and GPU timings; and the denoiser meets its exit criteria under both
+integrators. Its [gate](current.md#step-5--release-gate) adds headless
+correctness, an interactive viewport smoke test, the installed Hydra
+regression, deterministic denoiser validation, GPU timings, clean validation
+and synchronization, and the package / release gate.
+
+Deliberately later: ReSTIR GI (after the denoiser and viewport exist, so it is
+evaluated interactively), path guiding, production MaterialX / OpenPBR
+expansion, spectral rendering, neural denoising, broad platform / backend
+expansion, light trees and many-light acceleration, and editor functionality
+in the viewport.
+
+```text
+v0.5.0   ReSTIR DI experimental snapshot
+   ↓
+Renderer Phase 5 closure — animation/reset validation, reuse cost / equal-quality decision
+   ↓
+v0.6.0   interactive rendering — standalone viewport, SVGF-class denoising, ReSTIR DI closure
+   ↓
+Renderer Phase 7   ReSTIR GI / advanced reservoir transport
+   ↓
+Renderer Phase 8   production materials
+   ↓
+Renderer Phase 9   advanced sampling / scheduling
+   ↓
+Renderer Phase 10  spectral research
+```
 
 ## Milestone evidence
 

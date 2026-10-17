@@ -266,15 +266,75 @@ validation; light candidate strategies.
 **Validation.** Always against the Renderer Phase 3 NEE / MIS renderer, on
 convergence, GPU time, temporal stability, memory, and bias / artifacts.
 
+**Exit criteria.** The phase closes on a bounded set of evidence, not once
+every fixture that could be added has been:
+
+1. **Animation and reset.** Light, material and emissive-state animation keeps
+   the history lifecycle and invalidation contract: no stale reservoir is
+   reused, reset classification is deterministic, the reference and wavefront
+   integrators agree, Hydra applies the same reset policy, and validation is
+   clean. This checks the contract; it is not a convergence campaign.
+2. **Reuse cost and an equal-quality decision.** On representative workloads,
+   NEE / MIS, initial-only, temporal-only, spatial-only and combined reuse are
+   compared on GPU time, time to a target quality, memory and temporal
+   stability.
+3. **A recorded decision.** For each representative workload the exit review
+   records whether there is an equal-quality speedup, the known bad cases, the
+   correlation cost and the unsupported conditions, and it chooses the default
+   renderer path: where ReSTIR is worth using and where NEE / MIS is.
+
+ReSTIR does not have to win. A negative result is a result, and closes the
+phase as well as a positive one.
+
+**Stop rule.** Once the exit review is recorded, ReSTIR DI gains no new
+fixtures. A later finding is routed rather than reopening the phase: a
+correctness bug is fixed as a bug; a production material or scene issue goes
+to Renderer Phase 8; advanced reservoir transport to Renderer Phase 7; light
+selection or scheduling to Renderer Phase 9. From then on ReSTIR DI is one
+selectable transport mode of the rendering pipeline, not a research theme of
+its own.
+
 ### Renderer Phase 6 — Denoising / SVGF-class pipeline
 
 **Goal.** Better quality for low-spp interactive rendering.
 
+Renderer Phase 4 already provides motion and reprojection, stable surface
+identity, temporal validity, the history reset policy, depth / normal history
+and temporal radiance storage — most of what an SVGF-class denoiser needs. This
+phase uses that infrastructure for denoising; it does not build a new temporal
+architecture.
+
 **Required AOVs.** Radiance; albedo; normal; depth; motion vector; variance /
 moments.
 
-**Scope.** Temporal accumulation; variance estimation; edge-aware filtering;
-history rejection; disocclusion handling.
+**Scope.** An SVGF-class baseline, in this order: noisy radiance input;
+temporal reprojection; history validation; temporal accumulation; first and
+second moments; variance estimation; edge-aware à-trous filtering; final
+composite. Guidance comes from depth, geometric and shading normals, motion,
+stable identity and luminance variance. Disocclusion and motion rejection are
+part of history validation.
+
+**Debug products.** Every stage can be inspected, not only the final image:
+raw noisy radiance, reprojected history, history validity, history length,
+first and second moments, variance, filtered output and the rejection reason.
+
+**Evaluation.** Raw low-spp radiance, temporal accumulation alone and the
+filtered output are compared with a high-spp reference on RMS / MSE, temporal
+residual, disocclusion response, static convergence and moving-camera
+stability. A perceptual metric is not required at first.
+
+**Rule.** The denoiser does not presuppose ReSTIR. Its input is the renderer's
+noisy radiance and the shared surface metadata, so it applies equally to
+NEE / MIS, initial-only and reusing ReSTIR, and later to ReSTIR GI and other
+samplers; it is not coupled to the reservoir passes. The baseline is completed
+first: firefly suppression, feature-adaptive filtering and neural filters
+come after it.
+
+**Exit criteria.** Temporal reprojection, moments and variance, à-trous
+filtering, and motion / disocclusion rejection work under both the reference
+and wavefront integrators; the output is compared with a reference; and the
+denoiser can be switched on and off, with its diagnostics shown, in the
+[standalone viewport](#standalone-viewport-frontend).
 
 Neural denoising comes later, as a replacement or an additional backend
 compared against this one (§5).
@@ -286,6 +346,10 @@ GI; path-space reservoir reuse; indirect candidate reuse; temporal GI reuse;
 spatial GI reuse.
 
 This phase is research-oriented and kept apart from production requirements.
+It starts once the Renderer Phase 6 denoiser and the
+[standalone viewport](#standalone-viewport-frontend) give it an interactive
+evaluation environment, and its comparisons are made there as well as
+headless.
 
 ### Renderer Phase 8 — Production material support
 
@@ -332,6 +396,40 @@ IOR; dispersion; RGB ↔ spectrum reconstruction.
 **Policy.** Spectral rendering is not an early requirement. It arrives as a
 research branch or an experimental mode once the RGB reference renderer and
 the production material pipeline are stable.
+
+### Standalone viewport frontend
+
+The standalone viewport (`lotus-viewport`) is not a phase. Renderer Phase 0
+made it an entry point that starts the same core; it becomes the frontend
+for renderer development, debugging and interactive look development, a
+tool for seeing the renderer's state. It is not a usdview replacement.
+
+**Scope.**
+
+- *Window and presentation:* a stable swapchain lifecycle, resize, basic
+  fullscreen / windowed operation, a predictable present loop, validation-clean
+  presentation.
+- *Scene and camera:* opening a USD stage, through an optional
+  Hydra-enabled viewport build that drives the Hydra adapter in process
+  ([DES-Q8](DESIGN_POLICY.md#53-open-questions)); orbit / pan / dolly,
+  selecting an authored camera, restarting accumulation when the camera
+  changes, applying scene dirty updates.
+- *Renderer controls at run time:* the reference or wavefront integrator; spp
+  and accumulation; NEE / MIS; ReSTIR off, initial, temporal, spatial or
+  combined; temporal radiance reuse; the denoiser on or off.
+- *Debug views:* beauty, depth, normal, motion vector, temporal validity,
+  reservoir validity / age / weight, denoiser history and variance — the
+  existing AOVs and debug products, reused rather than duplicated as
+  viewport-only renderer state.
+- *Timing:* frame time and the GPU time of path tracing, ReSTIR, temporal and
+  denoise passes; sample count; scene / TLAS update time; reservoir and
+  history memory. Measurement is first-class in the viewport as everywhere
+  else.
+
+**Outside its scope.** A production-grade docking UI, a scene editor, a
+material editor, a node graph, an animation timeline, an asset browser, a
+gizmo framework, usdview feature parity. The viewport stays a renderer
+frontend; it does not become a UI framework project.
 
 ## 5. Neural features
 
@@ -393,7 +491,8 @@ Foundation
 Each milestone's **correctness evidence** matters more than its release
 number. Which release carries which phase is decided in the
 [roadmap](../roadmap/README.md#status-at-a-glance) when the phase before it
-is done.
+is done, or when the phase before it is reduced to a bounded closure that the
+same release completes.
 
 ## 9. Near-term priority
 
@@ -407,6 +506,15 @@ the foundation, measure repeatable backend behavior, and preserve a fixed
 reference through the Wavefront transition. Queue optimization follows
 transport equivalence. Advanced features must not expand foundation closure
 into an unbounded feature cycle.
+
+The same rule bounds research phases. A phase whose investigation no longer
+raises its exit confidence as fast as it adds validation cost is closed on
+its exit criteria, whatever the result, and the renderer moves on. After
+Renderer Phase 5 the interactive path comes first — the
+[standalone viewport](#standalone-viewport-frontend) and the Renderer Phase 6
+denoiser — so that further transport research, beginning with
+Renderer Phase 7, is evaluated interactively. Every new pass still carries its timing
+and debug AOV (§7; [design policy §24–§25](DESIGN_POLICY.md#24-gpu-profiling)).
 
 ## 10. Long-term identity
 
