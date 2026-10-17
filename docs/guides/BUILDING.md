@@ -19,9 +19,14 @@ and what it was measured on is
 
 ```sh
 ost build --jobs auto
-ost test
+ost test --jobs 8
 ost validate
 ```
+
+`ost test --jobs` takes a number (not `auto`). The GPU checks that assert no
+timing share the device, so eight jobs ran the core suite in 228 seconds
+instead of 859 serially on an RTX A5000 with validation layers enabled. The
+fixed performance baseline and install-tree checks still run alone.
 
 `ost build` runs `lotus-headless`, which renders the bootstrap frame 1,000
 times, checks primary-ray barycentrics and depth against CPU projections and
