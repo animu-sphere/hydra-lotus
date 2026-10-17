@@ -167,8 +167,7 @@ and `-wavefront-animation` check both scene identities, both bands, the static
 control, the edit step and the step-lag population.
 
 The managed core build passes all 48 tests under `ost test --jobs 8` in 295
-seconds, followed
-by strict renderer-evidence validation. The runtime-free build/test records 35
+seconds, followed by strict renderer-evidence validation. The runtime-free build/test records 35
 passes and two explained GPU SKIPs. All 58 Python tests and documentation
 validation pass.
 
