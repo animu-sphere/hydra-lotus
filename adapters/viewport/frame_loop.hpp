@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The present loop that the built-in scene and USD stages share: window
-// events, fullscreen, the resize test, the frame limit, the title, the run's
-// checks and its benchmark JSON.
+// events, fullscreen, the resize and interaction tests, the frame limit, the
+// title, the run's checks and its benchmark JSON.
 #pragma once
 
 #include "options.hpp"
@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Lotus::viewport {
 
@@ -25,15 +26,47 @@ struct FrameResult {
   PresentEvidence present;
 };
 
-// Renders and presents one frame at the window's framebuffer extent. False,
-// with `error`, ends the run as a failure.
-using RenderFrameFunction = std::function<bool(std::uint32_t width,
-    std::uint32_t height, FrameResult& result, std::string& error)>;
+// One step of the scripted interaction test: an input or a scene edit, and
+// whether the next frame must restart the accumulation (1 sample per pixel)
+// or continue it (one sample more, up to --samples). `apply` may revise
+// `restarts` when the scene decides it, and fails the run by returning false
+// with `error`.
+struct InteractionStep {
+  std::string name;
+  bool restarts = true;
+  std::function<bool(bool& restarts, std::string& error)> apply;
+};
 
-// Returns the process exit code.
+class Scene {
+public:
+  virtual ~Scene() = default;
+
+  // What the run renders, for the title, the summary and the benchmark.
+  [[nodiscard]] virtual std::string_view source() const = 0;
+  // The camera and stage time, for the title.
+  [[nodiscard]] virtual std::string Status() const = 0;
+  // An input the loop does not handle itself (navigation and scene keys).
+  virtual void Handle(const Event& event) = 0;
+  // Renders and presents one frame at the window's framebuffer extent.
+  // False, with `error`, ends the run as a failure.
+  virtual bool Render(std::uint32_t width, std::uint32_t height,
+      FrameResult& result, std::string& error) = 0;
+  // The interaction test's steps, in order.
+  [[nodiscard]] virtual std::vector<InteractionStep> InteractionSteps() = 0;
+};
+
+// Synthetic inputs through Scene::Handle, as the window delivers them: a
+// drag by a pixel offset, wheel notches, a key press.
+void Drag(Scene& scene, Button button, double delta_x, double delta_y);
+void Wheel(Scene& scene, double notches);
+void Press(Scene& scene, Key key);
+
+// Tumble, track, dolly and frame, each of which restarts the accumulation.
+[[nodiscard]] std::vector<InteractionStep> NavigationSteps(Scene& scene);
+
+// Returns the process exit code. `stage` is empty for the built-in scene.
 [[nodiscard]] int RunFrameLoop(const Options& options, Window& window,
-    std::string_view scene_source, const std::string& stage,
-    const RenderFrameFunction& render);
+    Scene& scene, const std::string& stage);
 
 // Reports an environment that cannot present: exit 77 with
 // --allow-unavailable, otherwise 1. The explanation always goes to stdout as

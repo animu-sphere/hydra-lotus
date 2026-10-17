@@ -18,6 +18,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   runtime on `PATH` for the process
   ([guide](docs/guides/BUILDING.md#the-standalone-viewport),
   [evidence](docs/reports/2026-10-17-viewport-presentation.md)).
+- `lotus-viewport` navigates with usdview's free camera (tumble, track,
+  dolly, frame), looks through a stage's authored cameras (`--camera`, C) and
+  takes over their view when navigated, opens and steps a stage time code
+  (`--time`, Left/Right), reloads layers (R), and applies the stage's pending
+  edits every frame; camera and scene changes restart the accumulation. The
+  scripted `--interaction-test` checks each restart
+  ([guide](docs/guides/BUILDING.md#the-standalone-viewport),
+  [evidence](docs/reports/2026-10-17-viewport-camera.md)).
 - `CreateOffscreenRenderer` accepts `PresentOptions`, and
   `OffscreenRenderer::Present` copies the latest scene frame into the window's
   sRGB swapchain; `OffscreenTarget::read_back` skips the colour and depth

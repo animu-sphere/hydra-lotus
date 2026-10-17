@@ -45,7 +45,9 @@ int main() {
   Check(defaults.visible && defaults.vsync && !defaults.fullscreen &&
             !defaults.validate && !defaults.resize_test &&
             !defaults.allow_unavailable && defaults.stage.empty() &&
-            defaults.benchmark.empty() && !defaults.help,
+            defaults.benchmark.empty() && !defaults.help &&
+            !defaults.interaction_test && defaults.camera.empty() &&
+            !defaults.time,
       "default flags");
 
   const auto smoke = Parse({"--hidden", "--frames", "8", "--vsync", "off",
@@ -59,6 +61,13 @@ int main() {
       "stage and benchmark paths");
   Check(smoke.samples == 16 && smoke.width == 320 && smoke.height == 200,
       "samples and extent");
+  const auto stage = Parse({"--usd", "stage.usda", "--camera", "/World/Cam",
+      "--time", "12.5", "--frames", "16", "--interaction-test"});
+  Check(stage.camera == "/World/Cam" && stage.time == 12.5 &&
+            stage.interaction_test && stage.frame_limit == 16,
+      "camera, time and interaction test");
+  Check(Parse({"--usd", "s.usda", "--time", "-3"}).time == -3.0,
+      "negative time code");
   Check(Parse({"--fullscreen"}).fullscreen, "fullscreen");
   Check(Parse({"--help"}).help, "help");
 
@@ -73,6 +82,17 @@ int main() {
   Check(Rejects({"--resize-test", "--frames", "2"}),
       "resize test without a third frame");
   Check(Rejects({"--resize-test"}), "resize test without a frame limit");
+  Check(Rejects({"--interaction-test", "--frames", "2"}),
+      "interaction test without a third frame");
+  Check(Rejects({"--interaction-test", "--resize-test", "--frames", "8"}),
+      "interaction and resize tests together");
+  Check(Rejects({"--camera", "/Cam"}), "camera without a stage");
+  Check(Rejects({"--time", "1"}), "time without a stage");
+  Check(Rejects({"--usd", "s.usda", "--camera", "Cam"}),
+      "relative camera path");
+  Check(Rejects({"--usd", "s.usda", "--time", "1x"}),
+      "time with trailing characters");
+  Check(Rejects({"--usd", "s.usda", "--time", "inf"}), "infinite time");
   Check(Rejects({"--bogus"}), "unknown option");
   Check(Lotus::viewport::Usage(true).find("--usd <stage>") !=
             std::string::npos,

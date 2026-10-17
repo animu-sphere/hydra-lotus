@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-17-viewport-camera.md](2026-10-17-viewport-camera.md) | Viewport free camera (usdview's tumble, track, dolly and framing), authored camera selection and hand-over, stage time codes and pending edits; a scripted interaction test showing which inputs and edits restart or continue the accumulation, with mutations it detects; device loss no longer reported as a skip. |
 | [2026-10-17-cmake-cleanup.md](2026-10-17-cmake-cleanup.md) | Build structure cleanup: backend-owned shader graph behind `lotus-shaders`, shader staging and install through one helper, `ShadersIn`, Hydra CTests split out, target-scoped warnings and C++ standard, strict `LOTUS_ENABLE_VULKAN`; identical compile flags and install trees before and after, regression in every tree. |
 | [2026-10-17-viewport-presentation.md](2026-10-17-viewport-presentation.md) | Standalone viewport presenting the progressive path tracer from the backend: built-in Cornell box and a USD stage through the in-process Hydra adapter, resize and swapchain recreation, zero readback bytes, clean validation and synchronization validation, the explained no-driver skip, frame-loop costs with and without the validation layer. |
 | [2026-10-17-v0.5.1-release-gate.md](2026-10-17-v0.5.1-release-gate.md) | v0.5.1 release verification: physical-GPU core/Hydra and installed-host checks, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging. |

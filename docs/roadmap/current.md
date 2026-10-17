@@ -27,13 +27,13 @@ review's [routing](../reports/2026-10-17-renderer-phase5-exit.md#after-the-exit)
 `lotus-viewport` becomes the
 [renderer frontend](../design/ROADMAP_POLICY.md#standalone-viewport-frontend)
 for everyday use; it does not become a UI framework. It already presents the
-progressive path tracer from the backend and opens USD stages through the
-Hydra adapter ([evidence](../reports/2026-10-17-viewport-presentation.md),
+progressive path tracer from the backend, opens USD stages through the
+Hydra adapter ([evidence](../reports/2026-10-17-viewport-presentation.md)),
+and navigates them with usdview's free camera or an authored camera, at a
+stage time code, restarting the accumulation when the camera or scene changes
+([evidence](../reports/2026-10-17-viewport-camera.md),
 [usage](../guides/BUILDING.md#the-standalone-viewport)).
 
-- [ ] **LOTUS-VIEWPORT-02 — Camera and accumulation.** Orbit, pan and dolly;
-  authored camera selection; accumulation restarted on camera change; scene
-  dirty updates applied.
 - [ ] **LOTUS-VIEWPORT-03 — Run-time renderer controls and debug views.**
   Switch the reference/wavefront integrator, spp and accumulation, NEE/MIS,
   ReSTIR off/initial/temporal/spatial/combined and temporal radiance reuse
