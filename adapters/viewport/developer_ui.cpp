@@ -3,20 +3,39 @@
 // render pass of its own over each swapchain image (PresentOverlay); this
 // file initializes ImGui's Vulkan backend from the handles it is offered
 // and records the latest ImGui frame there. The swapchain is sRGB, so the
-// style's colours, which are display values, are decoded first.
+// style's colours, which are display values, are decoded first. A
+// Hydra-enabled build opens USD stages through the native file dialog
+// (nativefiledialog-extended), as hydra-merlin's viewport does.
 #include "developer_ui.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#if defined(LOTUS_VIEWPORT_FILE_DIALOG)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define GLFW_INCLUDE_NONE
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#elif defined(__APPLE__)
+#define GLFW_EXPOSE_NATIVE_COCOA
+#endif
+#include <GLFW/glfw3.h>
+#include <nfd.h>
+#include <nfd_glfw3.h>
+#endif
+
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace Lotus::viewport {
 namespace {
@@ -89,6 +108,75 @@ const char* Label(DebugView view) {
   return "?";
 }
 
+const char* Label(GpuPass pass) {
+  switch (pass) {
+  case GpuPass::PathTrace:
+    return "Path trace";
+  case GpuPass::WavefrontCamera:
+    return "camera";
+  case GpuPass::WavefrontIntersect:
+    return "intersect";
+  case GpuPass::WavefrontShade:
+    return "shade";
+  case GpuPass::WavefrontTail:
+    return "tail";
+  case GpuPass::RestirInitial:
+    return "ReSTIR initial";
+  case GpuPass::RestirTemporal:
+    return "ReSTIR temporal";
+  case GpuPass::RestirSpatial:
+    return "ReSTIR spatial";
+  case GpuPass::TemporalSurfaces:
+    return "Temporal surfaces";
+  case GpuPass::TemporalAccumulation:
+    return "Temporal accumulation";
+  }
+  return "?";
+}
+
+double Mebibytes(std::uint64_t bytes) {
+  return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+// A table of the HUD's rows: the label takes the room the right-hand columns
+// leave, and they fit their contents.
+bool BeginRows(const char* id) {
+  if (!ImGui::BeginTable(id, 3, ImGuiTableFlags_SizingFixedFit)) {
+    return false;
+  }
+  ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed);
+  ImGui::TableSetupColumn("detail", ImGuiTableColumnFlags_WidthFixed);
+  return true;
+}
+
+// A row of the HUD's tables: a label and up to two right-hand columns.
+void Row(const char* label, const char* value, const char* detail = "") {
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted(label);
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted(value);
+  ImGui::TableNextColumn();
+  ImGui::TextDisabled("%s", detail);
+}
+
+// A memory row: the bytes the latest frame that used them reported, or
+// nothing before any frame did.
+void MemoryRow(const char* label, std::uint64_t bytes, bool current) {
+  char value[32] = "-";
+  if (bytes != 0) {
+    std::snprintf(value, sizeof(value), "%.2f MiB", Mebibytes(bytes));
+  }
+  Row(label, value, bytes != 0 && !current ? "retained" : "");
+}
+
+void Graph(const char* id, const std::vector<float>& values,
+    const char* overlay) {
+  ImGui::PlotLines(id, values.data(), static_cast<int>(values.size()), 0,
+      overlay, 0.0F, FLT_MAX, ImVec2(-FLT_MIN, 40.0F));
+}
+
 void Swatch(const char* id, const std::array<float, 3>& display,
     const char* label) {
   ImGui::ColorButton(id, Linear(display),
@@ -111,7 +199,8 @@ bool SliderUnsigned(const char* label, std::uint32_t& value, int minimum,
 
 class ImGuiDeveloperUi final : public DeveloperUi {
 public:
-  explicit ImGuiDeveloperUi(Window& window) {
+  explicit ImGuiDeveloperUi(Window& window)
+      : window_(static_cast<GLFWwindow*>(window.native_handle())) {
     IMGUI_CHECKVERSION();
     context_ = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -124,11 +213,21 @@ public:
           color.w);
     }
     // Chains the window's own callbacks, installed when it was created.
-    if (!ImGui_ImplGlfw_InitForVulkan(
-            static_cast<GLFWwindow*>(window.native_handle()), true)) {
+    if (!ImGui_ImplGlfw_InitForVulkan(window_, true)) {
       ImGui::DestroyContext(context_);
       throw std::runtime_error("Dear ImGui could not use the GLFW window");
     }
+#if defined(LOTUS_VIEWPORT_FILE_DIALOG)
+    if (NFD_Init() == NFD_OKAY) {
+      file_dialog_ = true;
+      NFD_SetDisplayPropertiesFromGLFW();
+    } else {
+      const char* error = NFD_GetError();
+      stage_error_ = error != nullptr
+                         ? error
+                         : "the native file dialog is unavailable";
+    }
+#endif
   }
 
   ~ImGuiDeveloperUi() override {
@@ -138,6 +237,11 @@ public:
     }
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext(context_);
+#if defined(LOTUS_VIEWPORT_FILE_DIALOG)
+    if (file_dialog_) {
+      NFD_Quit();
+    }
+#endif
   }
 
   void ConfigurePresentation(PresentOptions& presentation) override {
@@ -157,13 +261,23 @@ public:
     const Controls before = controls;
     if (visible_) {
       DrawRenderer(controls, status);
+      DrawTiming(controls, status);
     }
     ImGui::Render();
+    drawn_ = true;
     return !(controls == before);
   }
 
   void ToggleVisible() override {
     visible_ = !visible_;
+  }
+
+  std::optional<std::filesystem::path> TakeStageRequest() override {
+    return std::exchange(stage_request_, std::nullopt);
+  }
+
+  void SetStageError(std::string error) override {
+    stage_error_ = std::move(error);
   }
 
   bool WantsPointer() const noexcept override {
@@ -207,7 +321,7 @@ private:
       break;
     }
     case PresentOverlayPhase::Render:
-      if (vulkan_) {
+      if (vulkan_ && drawn_) {
         if (ImDrawData* draw = ImGui::GetDrawData(); draw != nullptr) {
           ImGui_ImplVulkan_RenderDrawData(draw,
               Decode<VkCommandBuffer>(context.command_buffer));
@@ -219,14 +333,20 @@ private:
         ImGui_ImplVulkan_Shutdown();
         vulkan_ = false;
       }
+      // The latest frame names this backend's textures; the next renderer
+      // draws nothing until the UI builds a frame for it.
+      drawn_ = false;
       break;
     }
   }
 
   void DrawRenderer(Controls& controls, const UiStatus& status) {
     ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360.0F, 0.0F), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Renderer")) {
+    // A fixed width; the height follows the controls shown.
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(360.0F, 0.0F), ImVec2(360.0F, FLT_MAX));
+    if (!ImGui::Begin(
+            "Renderer", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
       ImGui::End();
       return;
     }
@@ -234,14 +354,11 @@ private:
         status.source.data(), status.scene.c_str());
     ImGui::TextDisabled("%.*s", static_cast<int>(status.device.size()),
         status.device.data());
+    if (status.can_open_stage) {
+      DrawOpenStage(status.stage);
+    }
     ImGui::Text("%ux%u  %u / %u spp", status.width, status.height,
         status.samples_per_pixel, controls.samples);
-    if (status.gpu_ms >= 0.0) {
-      ImGui::Text("frame %.2f ms  GPU %.2f ms", status.frame_ms,
-          status.gpu_ms);
-    } else {
-      ImGui::Text("frame %.2f ms", status.frame_ms);
-    }
 
     ImGui::SeparatorText("Integration");
     int integrator = controls.integrator == Integrator::Wavefront ? 1 : 0;
@@ -304,7 +421,112 @@ private:
     }
     DrawViewDetail(controls, status);
     ImGui::Spacing();
-    ImGui::TextDisabled("F1 hides this window");
+    ImGui::TextDisabled("F1 hides the developer UI");
+    ImGui::End();
+  }
+
+  // The timing HUD: the recent frames' mean host and GPU times, pass by
+  // pass, the latest scene update and the renderer memory.
+  static void DrawTiming(const Controls& controls, const UiStatus& status) {
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(display.x - 12.0F, 12.0F),
+        ImGuiCond_FirstUseEver, ImVec2(1.0F, 0.0F));
+    // A fixed width; the height follows the passes that ran.
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(340.0F, 0.0F), ImVec2(340.0F, FLT_MAX));
+    if (!ImGui::Begin(
+            "Timing", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::End();
+      return;
+    }
+    if (status.timings == nullptr || status.timings->frames() == 0) {
+      ImGui::TextDisabled("no frame yet");
+      ImGui::End();
+      return;
+    }
+    const TimingRecord& record = *status.timings;
+    const FrameTimes mean = record.Mean();
+    char value[32];
+    char detail[48];
+
+    ImGui::Text("%u / %u spp", status.samples_per_pixel, controls.samples);
+    ImGui::TextDisabled("mean of the last %zu frames with these passes",
+        record.mean_frames());
+    if (BeginRows("##frame")) {
+      std::snprintf(value, sizeof(value), "%.2f ms", mean.frame_ms);
+      std::snprintf(detail, sizeof(detail), "%.0f fps",
+          mean.frame_ms > 0.0 ? 1000.0 / mean.frame_ms : 0.0);
+      Row("Frame (host)", value, detail);
+      if (mean.gpu_ms >= 0.0) {
+        std::snprintf(value, sizeof(value), "%.3f ms", mean.gpu_ms);
+        Row("GPU", value);
+      }
+      ImGui::EndTable();
+    }
+    Graph("##frame-history", record.FrameHistory(), "frame ms");
+
+    ImGui::SeparatorText("GPU passes");
+    if (mean.gpu_ms < 0.0) {
+      ImGui::TextDisabled("the queue writes no timestamps");
+    } else {
+      if (BeginRows("##passes")) {
+        for (std::size_t index = 0; index < kGpuPassCount; ++index) {
+          const auto pass = static_cast<GpuPass>(index);
+          if (!mean.ran(pass)) {
+            continue;
+          }
+          char label[40];
+          std::snprintf(label, sizeof(label), "%s%s",
+              PartOfPathTrace(pass) ? "  wavefront " : "", Label(pass));
+          std::snprintf(value, sizeof(value), "%.3f ms", mean.pass(pass));
+          detail[0] = '\0';
+          if (mean.gpu_ms > 0.0) {
+            std::snprintf(detail, sizeof(detail), "%.0f%%",
+                100.0 * mean.pass(pass) / mean.gpu_ms);
+          }
+          Row(label, value, detail);
+        }
+        ImGui::EndTable();
+      }
+      Graph("##gpu-history", record.GpuHistory(), "GPU ms");
+    }
+
+    ImGui::SeparatorText("Scene update");
+    const SceneUpdateTimes& update = record.scene_update();
+    if (!update.available) {
+      ImGui::TextDisabled("none with GPU work yet");
+    } else {
+      ImGui::TextDisabled("before frame %llu; %llu with GPU work",
+          static_cast<unsigned long long>(update.frame),
+          static_cast<unsigned long long>(update.count));
+      if (BeginRows("##update")) {
+        std::snprintf(value, sizeof(value), "%.3f ms", update.upload_ms);
+        Row("Upload", value);
+        std::snprintf(value, sizeof(value), "%.3f ms", update.blas_ms);
+        Row("BLAS build/refit", value);
+        std::snprintf(value, sizeof(value), "%.3f ms", update.tlas_ms);
+        Row("TLAS build/refit", value);
+        ImGui::EndTable();
+      }
+    }
+
+    ImGui::SeparatorText("Memory");
+    const MemoryUse& memory = record.memory();
+    if (BeginRows("##memory")) {
+      MemoryRow("Reservoirs", memory.reservoir_bytes,
+          memory.reservoir_current);
+      MemoryRow("Surface history", memory.surface_history_bytes,
+          memory.surface_history_current);
+      MemoryRow("Radiance history", memory.radiance_history_bytes,
+          memory.radiance_history_current);
+      std::snprintf(value, sizeof(value), "%.2f MiB",
+          Mebibytes(memory.scene_used_bytes));
+      std::snprintf(detail, sizeof(detail), "of %.2f reserved",
+          Mebibytes(memory.scene_reserved_bytes));
+      Row("Scene", value, detail);
+      MemoryRow("BLAS + TLAS", memory.acceleration_bytes, true);
+      ImGui::EndTable();
+    }
     ImGui::End();
   }
 
@@ -362,9 +584,68 @@ private:
     }
   }
 
+  // The button that opens a USD stage, the open stage's file name beside it
+  // (its path in a tooltip), and why the last pick did not open.
+  void DrawOpenStage(std::string_view stage) {
+#if defined(LOTUS_VIEWPORT_FILE_DIALOG)
+    ImGui::BeginDisabled(!file_dialog_);
+    if (ImGui::Button("Open USD...")) {
+      OpenStage();
+    }
+    ImGui::EndDisabled();
+#endif
+    if (!stage.empty()) {
+      const std::size_t slash = stage.find_last_of("/\\");
+      const std::string_view name =
+          slash == std::string_view::npos ? stage : stage.substr(slash + 1);
+      ImGui::SameLine();
+      ImGui::TextDisabled("%.*s", static_cast<int>(name.size()), name.data());
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%.*s", static_cast<int>(stage.size()),
+            stage.data());
+      }
+    }
+    if (!stage_error_.empty()) {
+      ImGui::PushTextWrapPos(0.0F);
+      ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.1F, 1.0F), "%s",
+          stage_error_.c_str());
+      ImGui::PopTextWrapPos();
+    }
+  }
+
+#if defined(LOTUS_VIEWPORT_FILE_DIALOG)
+  // Blocks the frame while the dialog is open, as hydra-merlin's does.
+  void OpenStage() {
+    stage_error_.clear();
+    const nfdu8filteritem_t filters[] = {
+        {"OpenUSD stage", "usd,usda,usdc,usdz"}};
+    nfdopendialogu8args_t arguments{};
+    arguments.filterList = filters;
+    arguments.filterCount = static_cast<nfdfiltersize_t>(std::size(filters));
+    NFD_GetNativeWindowFromGLFWWindow(window_, &arguments.parentWindow);
+    nfdu8char_t* selected = nullptr;
+    const nfdresult_t result = NFD_OpenDialogU8_With(&selected, &arguments);
+    if (result == NFD_OKAY) {
+      stage_request_ = std::filesystem::path(
+          std::u8string(reinterpret_cast<const char8_t*>(selected)));
+      NFD_FreePathU8(selected);
+    } else if (result == NFD_ERROR) {
+      const char* error = NFD_GetError();
+      stage_error_ =
+          error != nullptr ? error : "the native file dialog failed";
+    }
+  }
+#endif
+
+  GLFWwindow* window_ = nullptr;
   ImGuiContext* context_ = nullptr;
   bool vulkan_ = false;
+  // Whether ImGui's draw data is a frame built since the backend initialized.
+  bool drawn_ = false;
   bool visible_ = true;
+  bool file_dialog_ = false;
+  std::optional<std::filesystem::path> stage_request_;
+  std::string stage_error_;
 };
 
 } // namespace

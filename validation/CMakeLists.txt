@@ -43,6 +43,13 @@ target_link_libraries(lotus-viewport-controls-test PRIVATE
 target_compile_features(lotus-viewport-controls-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-controls COMMAND lotus-viewport-controls-test)
 
+add_executable(lotus-viewport-timings-test viewport-timings-test.cpp
+  ../adapters/viewport/timings.cpp)
+target_link_libraries(lotus-viewport-timings-test PRIVATE
+  Lotus::RenderExtraction Lotus::Warnings)
+target_compile_features(lotus-viewport-timings-test PRIVATE cxx_std_20)
+add_test(NAME lotus-viewport-timings COMMAND lotus-viewport-timings-test)
+
 add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
 target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
 add_test(NAME lotus-renderer-scene-mesh COMMAND lotus-render-world-mesh-test)

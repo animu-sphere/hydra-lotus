@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The present loop that the built-in scene and USD stages share: window
 // events, fullscreen, the developer UI and the renderer controls, the resize
-// and interaction tests, the frame limit, the title, the run's checks and its
-// benchmark JSON.
+// and interaction tests, the frame limit, the title, the timing HUD's record,
+// the run's checks and its benchmark JSON.
 #pragma once
 
 #include "controls.hpp"
@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -26,10 +27,13 @@ namespace Lotus::viewport {
 inline constexpr int kExitSkip = 77;
 
 // One rendered frame. `frame` may lack its colour and depth payloads; its
-// product extents say whether they were read back.
+// product extents say whether they were read back. `scene_update` times the
+// GPU scene update before the frame; `scene` is the GPU scene after it.
 struct FrameResult {
   GpuFrameEvidence frame;
   PresentEvidence present;
+  GpuSceneTimings scene_update;
+  GpuSceneStats scene;
 };
 
 // One step of the scripted interaction test: an input, a scene edit or a
@@ -74,10 +78,19 @@ void Press(Scene& scene, Key key);
 
 // The window, its developer UI and the presentation to create the renderer
 // with. Members go in reverse: the UI before the window it uses.
+//
+// A Hydra-enabled build sets `open_stage`: it opens a stage the developer UI
+// picked, or says why it cannot. Once it has, the frame loop ends with
+// `next_stage` set, and the caller renders that stage in the same window,
+// with the renderer controls as the previous scene left them.
 struct ViewportWindow {
   std::unique_ptr<Window> window;
   std::unique_ptr<DeveloperUi> ui;
   PresentOptions presentation;
+  Controls controls;
+  std::function<bool(const std::filesystem::path& stage, std::string& error)>
+      open_stage;
+  std::optional<std::filesystem::path> next_stage;
 };
 
 // Nothing, with `reason`, when this environment has no window to present
@@ -86,7 +99,7 @@ struct ViewportWindow {
     std::string& reason);
 
 // Returns the process exit code. `stage` is empty for the built-in scene.
-// The run starts with the options' controls; `ui` edits them.
+// The run starts with the window's controls; its UI edits them.
 [[nodiscard]] int RunFrameLoop(const Options& options, ViewportWindow& window,
     Scene& scene, const std::string& stage);
 

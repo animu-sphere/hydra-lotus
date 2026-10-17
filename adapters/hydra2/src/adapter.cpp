@@ -698,6 +698,11 @@ public:
     return scene_stats_;
   }
 
+  Lotus::GpuSceneTimings GetGpuSceneTimings() {
+    std::scoped_lock lock(mutex_);
+    return scene_timings_;
+  }
+
   Lotus::FrameSnapshot GetSelectedSnapshot() {
     std::scoped_lock lock(mutex_);
     return selected_snapshot_;
@@ -742,6 +747,7 @@ public:
     const HdRenderPassAovBindingVector& bindings = state.GetAovBindings();
     std::scoped_lock lock(mutex_);
     converged_ = true;
+    scene_timings_ = {};
     for (const HdRenderPassAovBinding& binding : bindings) {
       if (auto* buffer = dynamic_cast<HdLotusRenderBuffer*>(binding.renderBuffer)) {
         buffer->SetConverged(false);
@@ -816,6 +822,7 @@ public:
     const Lotus::GpuSceneEvidence scene =
         renderer_->UpdateScene(extraction_.Update(snapshot));
     scene_stats_ = scene.stats;
+    scene_timings_ = scene.timings;
     if (scene.status != Lotus::FrameStatus::Pass) {
       TF_RUNTIME_ERROR("Lotus GPU scene update failed: %s",
           scene.detail.c_str());
@@ -1069,6 +1076,7 @@ private:
   // Plans the renderer's GPU scene updates; reset with each new renderer.
   Lotus::SceneExtraction extraction_;
   Lotus::GpuSceneStats scene_stats_;
+  Lotus::GpuSceneTimings scene_timings_;
   // The latest frame's evidence without colour/depth payloads.
   Lotus::GpuFrameEvidence frame_evidence_;
   // The window a viewport host presents to, and its latest presentation.
@@ -2460,6 +2468,10 @@ Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
 
 Lotus::GpuSceneStats HdLotusRenderDelegate::GetGpuSceneStats() {
   return impl_->state->GetGpuSceneStats();
+}
+
+Lotus::GpuSceneTimings HdLotusRenderDelegate::GetGpuSceneTimings() {
+  return impl_->state->GetGpuSceneTimings();
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetSelectedSnapshot() {

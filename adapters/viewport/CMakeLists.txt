@@ -61,6 +61,7 @@ add_executable(lotus-viewport
   main.cpp
   options.cpp
   orbit_camera.cpp
+  timings.cpp
   window_glfw.cpp
   "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp")
 target_include_directories(lotus-viewport PRIVATE
@@ -79,13 +80,34 @@ target_compile_features(lotus-viewport PRIVATE cxx_std_20)
 # A Hydra-enabled build opens USD stages: it drives the co-built Hydra
 # runtime in process (project layout section 4, rule 4; DES-Q8).
 if(LOTUS_ENABLE_HYDRA2)
+  # The developer UI opens stages through the native file dialog: the
+  # nativefiledialog-extended 1.3.0 commit hydra-merlin's viewport pins.
+  set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(NFD_BUILD_SDL2_TESTS OFF CACHE BOOL "" FORCE)
+  set(NFD_BUILD_GLFW3_TESTS OFF CACHE BOOL "" FORCE)
+  set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
+  if(UNIX AND NOT APPLE)
+    # The desktop portal, without an X11 or Wayland client.
+    set(NFD_PORTAL ON CACHE BOOL "" FORCE)
+  endif()
+  FetchContent_Declare(nfd
+    GIT_REPOSITORY https://github.com/btzy/nativefiledialog-extended.git
+    GIT_TAG 3cd252a8f7ca32419b1ca235c2990ba6a0ecba7c # 1.3.0
+    GIT_SHALLOW FALSE)
+  FetchContent_MakeAvailable(nfd)
+  install(FILES "${nfd_SOURCE_DIR}/LICENSE"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/lotus/licenses"
+    RENAME nativefiledialog-extended-LICENSE.txt)
+
   target_sources(lotus-viewport PRIVATE hydra_stage.cpp)
   target_link_libraries(lotus-viewport PRIVATE
     lotus-hydra2-runtime
-    lotus-hydra2-host-dependencies)
+    lotus-hydra2-host-dependencies
+    nfd)
   get_target_property(_pxr_root lotus-hydra2-host-dependencies LOTUS_PXR_ROOT)
   target_compile_definitions(lotus-viewport PRIVATE
     LOTUS_VIEWPORT_HYDRA=1
+    LOTUS_VIEWPORT_FILE_DIALOG=1
     NOMINMAX
     _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   if(WIN32)

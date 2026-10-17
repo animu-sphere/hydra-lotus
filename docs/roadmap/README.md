@@ -67,7 +67,7 @@ pipeline rather than a research subject of its own.
 | Track | Scope | Order |
 | --- | --- | --- |
 | ReSTIR DI closure | the [Renderer Phase 5 exit criteria and stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di); [exit review](../reports/2026-10-17-renderer-phase5-exit.md) shipped early in [v0.5.1](../releases/v0.5.1.md) | [step 1](current.md#step-1--restir-di-closure) |
-| Standalone viewport | the [viewport frontend scope](../design/ROADMAP_POLICY.md#standalone-viewport-frontend) | [step 2](current.md#step-2--viewport-foundation) |
+| Standalone viewport | the [viewport frontend scope](../design/ROADMAP_POLICY.md#standalone-viewport-frontend); foundation shipped early in [v0.5.2](../releases/v0.5.2.md) | [step 2](current.md#step-2--viewport-foundation) |
 | SVGF-class denoising | the [Renderer Phase 6 baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline), headless first, then in the viewport | [steps 3–4](current.md#step-3--svgf-core) |
 
 The Renderer Phase 5 exit review, with its reuse-cost / equal-quality
@@ -90,6 +90,8 @@ in the viewport.
 v0.5.0   ReSTIR DI experimental snapshot
    ↓
 v0.5.1   Renderer Phase 5 closure — animation/reset validation, reuse cost / equal-quality decision
+   ↓
+v0.5.2   viewport foundation — presentation, camera, run-time controls, debug views, timing HUD
    ↓
 v0.6.0   interactive rendering — standalone viewport, SVGF-class denoising
    ↓

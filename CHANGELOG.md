@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-18
+
+The viewport foundation release makes `lotus-viewport` the renderer's
+everyday frontend: it presents progressive path tracing from the backend
+without a readback, opens USD stages through the Hydra adapter (from the
+command line or a file dialog), navigates them with usdview's camera, changes
+the integrator, NEE/MIS, ReSTIR and temporal reuse while running, presents
+the GPU debug products, and shows per-pass GPU timings and renderer memory.
+The build now follows component ownership. See the
+[release record](docs/releases/v0.5.2.md).
+
 ### Added
 
 - `lotus-viewport` presents the renderer's progressive path tracing from the
@@ -48,6 +59,20 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   `PresentOptions::overlay` lets a host draw over each presented frame in a
   backend-owned render pass. `HdLotusRenderDelegate::SetPresentView` selects
   the view a presenting render pass shows.
+- `lotus-viewport` shows a timing HUD: the host frame time and GPU time with
+  graphs, each GPU pass's time (path trace with its wavefront kernels, ReSTIR
+  initial, temporal and spatial, temporal surfaces and accumulation), the
+  sample count, the latest scene update's upload, BLAS and TLAS times, and
+  reservoir, history and scene memory. `--benchmark` adds each pass's mean,
+  the scene updates and the memory; `lotus-viewport-timings` covers the
+  figures without a GPU
+  ([guide](docs/guides/BUILDING.md#the-standalone-viewport),
+  [evidence](docs/reports/2026-10-18-viewport-timing.md)).
+- The Hydra-enabled `lotus-viewport` opens a USD stage from a native file
+  dialog (Open USD..., nativefiledialog-extended 1.3.0 as in hydra-merlin)
+  and renders it in the same window, keeping the renderer controls.
+- `HdLotusRenderDelegate::GetGpuSceneTimings` returns the latest render
+  pass's GPU scene update timings.
 
 ### Changed
 
