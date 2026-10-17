@@ -19,7 +19,10 @@ independent samples.
 Reuse can increase static error and GPU cost. The
 [rough dielectric/sphere-light measurements](../reports/2026-10-16-restir-glossy-spheres.md)
 show a static temporal-reuse convergence penalty and no repeatable combined
-equal-quality speedup. The
+equal-quality speedup. The [sequence-ensemble measurements](../reports/2026-10-16-restir-sequence-ensemble.md)
+attribute that penalty to temporally correlated reservoirs (fewer effective
+independent frames, decreasing with the history cap) rather than detectable bias,
+in that static fixture only. The
 [complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
 reduce a reproduced narrow-glossy gap, but do not establish general
 unbiasedness, improved convergence or absence of ghosting. Finite references,
@@ -497,6 +500,31 @@ Motion, disocclusion, short sequences and finite reference noise limit
 interpretation; static finite references contribute a persistent error to
 the mean, and moving finite references also affect the centered statistics.
 
+Static cases also record `sequence_ensemble`, null for moving cases. It treats
+the independent sequences as replications. For each component, `m_k` is
+sequence `k`'s mean residual and `s_k^2` its within-sequence sample variance
+(denominator `T - 1`). Averaged over components, `frame_variance` is the mean
+`s_k^2` and `sequence_mean_variance` the across-sequence sample variance of `m_k`
+(denominator `K - 1`), which is unaffected by correlation within a sequence.
+`variance_inflation = T * sequence_mean_variance / frame_variance` is one for
+uncorrelated frames and estimates the integrated autocorrelation time otherwise;
+`effective_frames = T / variance_inflation`. Both are null when frame variance
+is zero (effective frames also when inflation is zero).
+
+`grand_mean_mse` is the squared error of the mean over all sequences, equal to
+the static ensemble MSE. Without bias, its expectation is
+`grand_mean_noise_mse = sequence_mean_variance / K` plus `reference_noise_mse`,
+the squared reference split RMS over four (a mean of two independent halves),
+or zero for the exact integral. `noise_normalized_mse` divides the grand mean MSE
+by that expected noise: values near one are consistent with no detectable bias.
+`excess_mse` subtracts it, estimating squared bias, and can be negative.
+Pooled pixels can be spatially correlated (spatial reuse) or heavy-tailed, and
+within-sequence variance is slightly underestimated under correlation; no
+confidence interval is asserted. Use many sequences: two give a single degree
+of freedom. CTest checks presence, populations and the exact-integral zero
+reference noise; `lotus-renderer-restir-statistics` checks the decomposition
+against an independent definition.
+
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
@@ -535,7 +563,10 @@ Reference labels and split discrepancies are retained in each scene, and
 boundary-region errors are reduced without dropping their identities or pixel
 counts. Temporal residual populations retain run/sequence boundaries and
 undefined correlation entries; their means, variance decomposition and static
-convergence consistency are validated. Missing measurements in every run
+convergence consistency are validated. Sequence ensembles are retained per
+run, with inflation and noise-normalized summaries only when every run defines
+them; their identities with the ensemble error, split RMS and each other are
+validated, and moving cases must report null. Missing measurements in every run
 produce null for older reports; mixing measured and unmeasured runs rejects.
 Mismatched reference kinds or regions reject. Older v1 distant reports
 without explicit labels/regions remain supported. A budget against a finite

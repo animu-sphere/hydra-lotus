@@ -115,6 +115,63 @@ def temporal_residuals(runs, procedure, static):
                 "lag1_autocorrelation_raw": [value["lag1_autocorrelation_raw"] for value in measurements]}
 
 
+def close(a, b):
+    return math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-12)
+
+
+def sequence_ensemble(runs, procedure, static, splits):
+    if all("sequence_ensemble" not in run for run in runs):
+        return None  # Older reports predate the decomposition.
+    require(all("sequence_ensemble" in run for run in runs),
+            "sequence ensemble measurements must be present in every run")
+    measurements = [run["sequence_ensemble"] for run in runs]
+    if not static:
+        require(all(value is None for value in measurements), "moving workloads have no sequence ensemble")
+        return None
+    require(all(isinstance(value, dict) for value in measurements), "static workloads need a sequence ensemble")
+    for run, value, split in zip(runs, measurements, splits):
+        require(value["sequences"] == procedure["sequences"] and value["frames"] == procedure["frames"],
+                "wrong sequence ensemble population")
+        for metric in ("frame_variance", "sequence_mean_variance", "grand_mean_mse",
+                       "grand_mean_noise_mse", "reference_noise_mse"):
+            number(value[metric])
+        require(type(value["excess_mse"]) in (int, float) and math.isfinite(value["excess_mse"]),
+                "invalid excess MSE")
+        # The grand mean of all sequences is the static ensemble image.
+        require(close(value["grand_mean_mse"], run["ensemble_rmse"] ** 2),
+                "sequence ensemble disagrees with the static ensemble error")
+        require(close(value["grand_mean_noise_mse"], value["sequence_mean_variance"] / value["sequences"]),
+                "grand mean noise disagrees with sequence mean variance")
+        reference = 0 if split is None else split[0] ** 2 / 4
+        require(close(value["reference_noise_mse"], reference), "reference noise disagrees with split RMS")
+        expected = value["grand_mean_noise_mse"] + value["reference_noise_mse"]
+        # Excess is a small difference of large terms; compare at their scale.
+        require(math.isclose(value["excess_mse"], value["grand_mean_mse"] - expected, rel_tol=0,
+                             abs_tol=1e-6 * max(value["grand_mean_mse"], expected) + 1e-15),
+                "excess MSE disagrees with its decomposition")
+        normalized = value["noise_normalized_mse"]
+        require((normalized is None) == (expected == 0), "noise-normalized MSE needs positive expected noise")
+        require(normalized is None or close(number(normalized), value["grand_mean_mse"] / expected),
+                "noise-normalized MSE disagrees with its decomposition")
+        inflation, effective = value["variance_inflation"], value["effective_frames"]
+        require((inflation is None) == (value["frame_variance"] == 0) and
+                (effective is None) == (inflation is None or inflation == 0),
+                "variance inflation needs positive frame variance")
+        if inflation is not None:
+            require(close(number(inflation), value["frames"] * value["sequence_mean_variance"] / value["frame_variance"]),
+                    "variance inflation disagrees with its decomposition")
+        if effective is not None:
+            require(close(number(effective), value["frames"] / inflation),
+                    "effective frames disagree with variance inflation")
+    result = {key: [value[key] for value in measurements]
+              for key in ("frame_variance", "sequence_mean_variance", "variance_inflation", "effective_frames",
+                          "grand_mean_mse", "grand_mean_noise_mse", "reference_noise_mse",
+                          "noise_normalized_mse", "excess_mse")}
+    for key in ("variance_inflation", "noise_normalized_mse"):
+        result[key + "_summary"] = population(result[key]) if all(v is not None for v in result[key]) else None
+    return result
+
+
 def summarize(reports, targets):
     require(len(reports) >= 2, "at least two independent reports are required")
     require(bool(targets), "at least one quality target is required")
@@ -191,6 +248,8 @@ def summarize(reports, targets):
                       "signed_mean_error_rgb": [r["signed_mean_error_rgb"] for r in runs],
                       "quality_budgets": None}
             result["temporal_residuals"] = temporal_residuals(runs, procedure, static)
+            result["sequence_ensemble"] = sequence_ensemble(
+                runs, procedure, static, splits if reference == "finite-spp-nee-mis" else [None] * len(runs))
             region_keys = [(r["id"], r["pixels"]) for r in runs[0].get("regions", [])]
             require(len(set(k[0] for k in region_keys)) == len(region_keys) and
                     all(isinstance(k[0], str) and k[0] and type(k[1]) is int and k[1] > 0
@@ -233,6 +292,7 @@ def summarize(reports, targets):
                       "reference": "Budgets use each scene's error_reference. Finite-spp NEE/MIS noise is retained, with split discrepancies reported separately; repeated references share seeds.",
                       "replication": "Populations are across separate invocations. Frames within a reused sequence are correlated. Shared references are not independent replications.",
                       "temporal_residuals": "Run/sequence populations retain undefined zero-variance correlations as null. Centering removes persistent error, which remains in sequence_mean_rmse. Motion and finite references affect interpretation; no effective sample count is inferred.",
+                      "sequence_ensemble": "Static only. Inflation compares across-sequence variance of sequence means with within-sequence frame variance; noise-normalized MSE compares the grand mean error with its expected noise, including finite-reference noise. Values near one are consistent with uncorrelated frames and with no detectable bias respectively; neither is a confidence bound.",
                       "missing": "Unreached budgets or unavailable GPU timestamps are null. Aggregate times/ratios require every run; no successful-subset averages.",
                       "timing": "Scene GPU time includes reservoir/metadata passes and excludes updates/readback. Dynamic clocks and validation limit inference.",
                       "moving": "Moving poses have no convergence budget. Finite ensemble and tile errors do not establish bias bounds."},

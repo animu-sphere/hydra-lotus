@@ -13,6 +13,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   seed, preserving one-bounce/default-seed results and recording both settings in
   the procedure identity ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [four-bounce/reference-sensitivity evidence](docs/reports/2026-10-16-restir-convergence.md)).
+- Headless ReSTIR comparison static cases report an across-sequence ensemble
+  decomposition (variance inflation, effective frames, noise-normalized and excess
+  MSE), validated by the budget reducer; it attributes the static temporal-reuse
+  penalty to correlation rather than detectable bias
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-16-restir-sequence-ensemble.md)).
 
 ## [0.5.0] - 2026-10-16
 

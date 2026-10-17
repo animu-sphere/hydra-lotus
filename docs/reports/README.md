@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-16-restir-sequence-ensemble.md](2026-10-16-restir-sequence-ensemble.md) | Across-sequence variance inflation and noise-normalized bias decomposition: the static temporal-reuse penalty is correlation (inflation 2.34 at cap 32, falling with the cap), not detectable bias; history-cap sweep and one-bounce control; [summary data](2026-10-16-restir-sequence-ensemble.json). |
 | [2026-10-16-restir-convergence.md](2026-10-16-restir-convergence.md) | Configurable transport depth/reference seeds, four-bounce static/moving measurements with independent reference groups, persistent temporal-reuse error penalty and saved-image isolation checks; [summary data](2026-10-16-restir-convergence.json). |
 | [2026-10-16-v0.5.0-release-gate.md](2026-10-16-v0.5.0-release-gate.md) | Experimental v0.5.0 snapshot verification and scope disposition; ongoing transport investigations remain open. |
 | [2026-10-16-restir-glossy-spheres.md](2026-10-16-restir-glossy-spheres.md) | Rough dielectric/metal and rect/sphere-light static/moving comparisons, three regional error bands, temporal residuals and GPU costs under both integrators; [summary data](2026-10-16-restir-glossy-spheres.json). |

@@ -111,6 +111,80 @@ class BudgetTests(unittest.TestCase):
                 case["convergence"] = None
         summarize(reports, [.25])
 
+    @staticmethod
+    def with_sequence_ensemble(split=None):
+        reports = [report(), report(262165)]
+        for run in reports:
+            scene = run["scenes"][0]
+            if split is not None:
+                scene["error_reference"] = "finite-spp-nee-mis"
+                scene["reference_split_rmse"] = [split]
+            reference = 0 if split is None else split * split / 4
+            for case in scene["cases"]:
+                # ensemble_rmse .1: grand mean MSE .01, frames 4, sequences 2.
+                inflation = 1.0 if case["mode"] == "mis" else 2.0
+                case["sequence_ensemble"] = {
+                    "sequences": 2, "frames": 4, "frame_variance": .02,
+                    "sequence_mean_variance": .005 * inflation, "variance_inflation": inflation,
+                    "effective_frames": 4 / inflation, "grand_mean_mse": .01,
+                    "grand_mean_noise_mse": .0025 * inflation, "reference_noise_mse": reference,
+                    "noise_normalized_mse": .01 / (.0025 * inflation + reference),
+                    "excess_mse": .01 - .0025 * inflation - reference}
+        return reports
+
+    def test_sequence_ensemble_survives_reduction(self):
+        for split in (None, .04):
+            with self.subTest(split=split):
+                cases = summarize(self.with_sequence_ensemble(split), [.25])["scenes"][0]["cases"]
+                self.assertEqual(cases[1]["sequence_ensemble"]["variance_inflation"], [2.0, 2.0])
+                self.assertEqual(cases[1]["sequence_ensemble"]["variance_inflation_summary"]["mean"], 2.0)
+                self.assertEqual(cases[0]["sequence_ensemble"]["excess_mse"],
+                                 [.01 - .0025 - (split or 0) ** 2 / 4] * 2)
+        self.assertIsNone(summarize([report(), report(262165)], [.25])["scenes"][0]["cases"][0]["sequence_ensemble"])
+        # A frozen ensemble has no inflation, effective frame count or summary.
+        reports = self.with_sequence_ensemble()
+        for run in reports:
+            run["scenes"][0]["cases"][0]["sequence_ensemble"].update(
+                frame_variance=0, variance_inflation=None, effective_frames=None)
+        result = summarize(reports, [.25])["scenes"][0]["cases"][0]["sequence_ensemble"]
+        self.assertIsNone(result["variance_inflation_summary"])
+
+    def test_sequence_ensemble_rejects_inconsistent_decomposition(self):
+        for field, invalid in (("grand_mean_mse", .02), ("grand_mean_noise_mse", .001),
+                               ("reference_noise_mse", .001), ("variance_inflation", 3.0),
+                               ("effective_frames", 1.0), ("noise_normalized_mse", 1.0),
+                               ("excess_mse", 0.0), ("frames", 8), ("sequences", 4),
+                               ("frame_variance", -1), ("noise_normalized_mse", None),
+                               ("effective_frames", None)):
+            with self.subTest(field=field, invalid=invalid):
+                reports = self.with_sequence_ensemble()
+                reports[1]["scenes"][0]["cases"][1]["sequence_ensemble"][field] = invalid
+                with self.assertRaises(ValueError):
+                    summarize(reports, [.25])
+        reports = self.with_sequence_ensemble(.04)
+        for run in reports:
+            run["scenes"][0]["reference_split_rmse"] = [.08]
+        with self.assertRaisesRegex(ValueError, "reference noise"):
+            summarize(reports, [.25])
+        reports = self.with_sequence_ensemble()
+        del reports[1]["scenes"][0]["cases"][0]["sequence_ensemble"]
+        with self.assertRaisesRegex(ValueError, "every run"):
+            summarize(reports, [.25])
+        reports = self.with_sequence_ensemble()
+        reports[1]["scenes"][0]["cases"][0]["sequence_ensemble"] = None
+        with self.assertRaisesRegex(ValueError, "static"):
+            summarize(reports, [.25])
+        for run in reports:
+            run["scenes"][0]["moving"] = True
+            for case in run["scenes"][0]["cases"]:
+                case["convergence"] = None
+        with self.assertRaisesRegex(ValueError, "moving"):
+            summarize(reports, [.25])
+        for run in reports:
+            for case in run["scenes"][0]["cases"]:
+                case["sequence_ensemble"] = None
+        self.assertIsNone(summarize(reports, [.25])["scenes"][0]["cases"][0]["sequence_ensemble"])
+
     def test_finite_reference_and_boundary_regions_survive_reduction(self):
         reports = [report(), report(262165)]
         for run in reports:
