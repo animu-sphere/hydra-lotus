@@ -7,6 +7,26 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-17
+
+The Renderer Phase 5 closure release records the ReSTIR DI exit review.
+Progressive NEE/MIS stays the default renderer path; initial-only
+reservoirs with eight candidates reach equal quality about 1.4 times faster
+only with many distant lights, and temporal, spatial and combined reuse are
+not worth using as a renderer path. No renderer or shader behaviour changes
+from 0.5.0; the additions are measurement harness, tests and evidence. See the
+[release record](docs/releases/v0.5.1.md) and the
+[exit review](docs/reports/2026-10-17-renderer-phase5-exit.md).
+
+### Changed
+
+- Renderer Phase 5 is closed on its exit criteria: per-workload equal-quality
+  results, known bad cases, correlation cost, unsupported conditions and the
+  default path are recorded, the reservoir reference says when to enable
+  reservoirs, and ReSTIR DI gains no further fixtures
+  ([guidance](docs/reference/RESTIR.md#when-to-use-reservoirs),
+  [exit review](docs/reports/2026-10-17-renderer-phase5-exit.md)).
+
 ### Added
 
 - Headless ReSTIR comparison controls for scattering depth and the finite-reference

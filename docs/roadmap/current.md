@@ -9,48 +9,18 @@ represented by its [evidence](../reports/README.md) and
 
 The [v0.6.0 plan](README.md#v060--interactive-rendering) sets the order
 below; scope and exit criteria are the
-[roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap). The experimental
-ReSTIR snapshot is recorded in [the release record](../releases/v0.5.0.md) and
-[release gate](../reports/2026-10-16-v0.5.0-release-gate.md), and the
-[reservoir reference](../reference/RESTIR.md) owns current behavior and
-limits. Step 1 comes first and is kept short.
+[roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
 
 ### Step 1 — ReSTIR DI closure
 
-The remaining Renderer Phase 5 work is limited to the exit review below;
-no other ReSTIR DI fixture is added
-([stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)).
-The starting evidence, including its adverse results and limits:
-[quality budgets](../reports/2026-10-15-restir-budgets.md),
-[boundaries](../reports/2026-10-15-restir-boundaries.md),
-[residual correlations](../reports/2026-10-16-restir-correlation.md),
-[complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md),
-the [rough dielectric/sphere-light fixture](../reports/2026-10-16-restir-glossy-spheres.md),
-[four-bounce/reference sensitivity](../reports/2026-10-16-restir-convergence.md),
-the [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ensemble.md)
-(the static temporal penalty is correlation, not detectable bias),
-[replication bias tests](../reports/2026-10-17-restir-moving-bias.md)
-(no moving-scene bias, ghosting or localized error in four moving suites;
-narrow glossy highlights limited by rare-event variance), a
-[closed interreflecting room](../reports/2026-10-17-restir-interreflection.md),
-[light/material animation](../reports/2026-10-17-restir-animation.md) and the
-[emissive-state and Hydra reset contract](../reports/2026-10-17-restir-reset-contract.md),
-which together complete the animation-and-reset criterion. Fresh batches
-replaying random numbers after each reset is
-[DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the
-denoiser. The [reuse-cost decision](../reports/2026-10-17-restir-reuse-cost.md),
-timed at locked clocks, completes the cost criterion: NEE/MIS stays the
-default, and only initial-only reservoirs with eight candidates pay off, for
-many distant lights (about 1.4 times faster to equal quality); temporal,
-spatial and combined reuse are not worth using.
-
-- [ ] **LOTUS-RESTIR-06 — Renderer Phase 5 exit review.** A report that
-  records, per representative workload, whether there is an equal-quality
-  speedup, plus the known bad cases, correlation cost and unsupported
-  conditions; states the default renderer path and when to choose ReSTIR;
-  and updates the [reservoir reference](../reference/RESTIR.md) and the
-  [canonical status](README.md#status-at-a-glance). The experimental release
-  gate validated the shipped snapshot; it is not this review.
+Closed by the [exit review](../reports/2026-10-17-renderer-phase5-exit.md) and
+shipped ahead of the other steps ([release record](../releases/v0.5.1.md)).
+NEE/MIS is the default renderer path; initial-only reservoirs with eight
+candidates are worth using for many lights of similar importance, and the
+[reservoir reference](../reference/RESTIR.md#when-to-use-reservoirs) owns that
+guidance. The [stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
+applies: ReSTIR DI gains no new fixtures, and later findings follow the
+review's [routing](../reports/2026-10-17-renderer-phase5-exit.md#after-the-exit).
 
 ### Step 2 — Viewport foundation
 

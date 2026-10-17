@@ -11,6 +11,7 @@ dry runs, asset naming and publication.
 
 | Version | Record | Theme |
 | --- | --- | --- |
+| [v0.5.1](v0.5.1.md) | [ReSTIR DI closure release](v0.5.1.md) | Exit review of the ReSTIR DI investigation: NEE/MIS stays the default, initial-only reservoirs for many lights of similar importance, reuse not worth using as a renderer path. |
 | [v0.5.0](v0.5.0.md) | [Experimental ReSTIR DI release](v0.5.0.md) | Opt-in initial, temporal, spatial and combined direct-light reservoirs, Hydra controls/AOVs and measured quality/cost limits. |
 | [v0.4.0](v0.4.0.md) | [Temporal infrastructure release](v0.4.0.md) | Frame history, rigid motion, reprojection, shared validity and opt-in bounded radiance under both integrators, with Hydra controls and debug AOVs. |
 | [v0.3.0](v0.3.0.md) | [Direct lighting release](v0.3.0.md) | Next event estimation with MIS towards emissive geometry, UsdLux analytic lights and textured domes, under both integrators and through Hydra. |
