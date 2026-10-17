@@ -31,11 +31,13 @@ narrow-glossy highlights limited by rare-event variance. The
 and material edits reset history exactly, with no reset-related ghosting or
 frames-since-reset dependence; reuse noise stays correlated across edits (see
 [compatibility](#compatibility-and-publication)). The
+[reset-contract tests](../reports/2026-10-17-restir-reset-contract.md) extend
+this to emissive-state edits and to Hydra, identically under both integrators. The
 [complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
 reduce a reproduced narrow-glossy gap, but do not establish general
 unbiasedness, improved convergence or absence of ghosting. Finite references,
 bounded fixtures and shared integrator draws limit those conclusions.
-The remaining reset checks and the reuse-cost / equal-quality decision are in
+The reuse-cost / equal-quality decision is in
 the [execution plan](../roadmap/current.md#step-1--restir-di-closure).
 
 ## Record and operations
@@ -807,6 +809,11 @@ reuse ([visibility evidence](../reports/2026-10-15-restir-visibility.md)).
 The same area fixture independently checks selected targets and resolved RGB
 at the current jittered receiver using the Lambert/rect area Jacobian
 ([evaluation evidence](../reports/2026-10-16-restir-evaluation.md)).
+Emissive emission, toggle, visibility and placement edits, with reservoir and
+radiance histories together, check each reset reason, the conservative
+emissive-scene reset, that no reset publishes or reuses a stale record, and
+byte-identical reference/wavefront sequences
+([reset-contract evidence](../reports/2026-10-17-restir-reset-contract.md)).
 
 These bounded fixtures do not establish unbiased arbitrary moving-history
 selection, many-light speedup or production temporal stability. Correlated
@@ -935,7 +942,10 @@ candidate count, effective reuse flags, compatible history and allocated
 backend reservoir bytes. `lotus-renderer-hydra-restir-contract` checks defaults,
 synthetic final-stage priority, row layout and invalid writes without a GPU.
 `lotus-renderer-hydra-restir-gpu` checks moving USD stages, controls, resets,
-diagnostics and deterministic NEE/MIS restoration under both integrators.
+diagnostics and deterministic NEE/MIS restoration under both integrators, and
+that USD light, material, emission, placement and visibility edits reset as
+headless does, byte-identically under both integrators
+([reset-contract evidence](../reports/2026-10-17-restir-reset-contract.md)).
 Installed usdview also exercises all four reservoir modes and moving/cut
 sequences ([measurement](../reports/2026-10-14-restir-hydra.md)). These
 adapter checks do not establish many-light speedup or phase-exit quality.

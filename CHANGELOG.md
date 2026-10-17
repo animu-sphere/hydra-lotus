@@ -39,6 +39,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   noise across edits
   ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [evidence](docs/reports/2026-10-17-restir-animation.md)).
+- ReSTIR reset-contract tests: emissive emission, toggle, visibility and placement
+  edits in `lotus-renderer-restir-gpu`, and USD light, material, emission, placement
+  and visibility edits in `lotus-renderer-hydra-restir-gpu`, each checking reset
+  reasons, that no stale reservoir or radiance sample survives a reset, and
+  byte-identical integrators ([evidence](docs/reports/2026-10-17-restir-reset-contract.md)).
 - `scripts/restir_campaign.py` runs a JSON plan of headless ReSTIR invocations
   with resumable, command-checked reports, a manifest and optional concurrency
   (labelled, and excluded from timing evidence)

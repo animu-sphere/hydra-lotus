@@ -84,6 +84,93 @@ def Xform "World"
 }
 )usda";
 
+// The same room lit by the sun and an emissive lamp, with a bound panel
+// material, for light, material and emissive-state edits.
+constexpr const char* kAnimationStage = R"usda(#usda 1.0
+def Camera "Camera"
+{
+    float focalLength = 18
+    float horizontalAperture = 20.955
+    float verticalAperture = 20.955
+    double3 xformOp:translate = (0, 1, 4)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+
+def DistantLight "Sun"
+{
+    float inputs:intensity = 2
+    float inputs:angle = 0
+    color3f inputs:color = (3, 2, 1)
+}
+
+def Scope "Looks"
+{
+    def Material "Panel"
+    {
+        token outputs:surface.connect = </Looks/Panel/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.6, 0.4, 0.2)
+            token outputs:surface
+        }
+    }
+
+    def Material "Lamp"
+    {
+        token outputs:surface.connect = </Looks/Lamp/Surface.outputs:surface>
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0, 0, 0)
+            color3f inputs:emissiveColor = (8, 6, 4)
+            token outputs:surface
+        }
+    }
+}
+
+def Xform "World"
+{
+    def Mesh "Floor"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-2, 0, 2), (2, 0, 2), (2, 0, -2), (-2, 0, -2)]
+    }
+
+    def Mesh "Wall"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-2, 0, -1), (2, 0, -1), (2, 3, -1), (-2, 3, -1)]
+    }
+
+    def Mesh "Panel" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(-0.8, 0.1, 0.5), (0.8, 0.1, -0.3), (0, 1.6, 0)]
+        rel material:binding = </Looks/Panel>
+    }
+
+    def Mesh "Lamp" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-0.3, 1.5, -0.3), (0.3, 1.5, -0.3), (0.3, 1.5, 0.3), (-0.3, 1.5, 0.3)]
+        rel material:binding = </Looks/Lamp>
+    }
+}
+)usda";
+
 constexpr std::uint32_t kSize = 32;
 constexpr int kSamples = 3;
 constexpr int kSampleIndex = 4096;
@@ -238,11 +325,11 @@ HdRenderSettingsMap InitialSettings(bool wavefront) {
 
 class Session {
 public:
-  explicit Session(bool wavefront)
+  explicit Session(bool wavefront, const char* stage = kStage)
       : delegate_(InitialSettings(wavefront)),
         index_(HdRenderIndex::New(&delegate_, {})) {
     const auto layer = SdfLayer::CreateAnonymous(".usda");
-    Check(layer->ImportFromString(kStage), "parse stage");
+    Check(layer->ImportFromString(stage), "parse stage");
     stage_ = UsdStage::Open(layer);
     Check(stage_ && index_, "stage/index");
     UsdImagingCreateSceneIndicesInfo info;
@@ -284,7 +371,14 @@ public:
     delegate_.SetRenderSetting(key, value);
   }
   void Move(const char* path, GfVec3d translation) {
-    Check(stage_->GetPrimAtPath(SdfPath(path)).GetAttribute(TfToken("xformOp:translate")).Set(translation), "edit transform");
+    Set(path, "xformOp:translate", VtValue(translation));
+  }
+  void Set(const char* path, const char* attribute, const VtValue& value) {
+    Check(stage_->GetPrimAtPath(SdfPath(path)).GetAttribute(TfToken(attribute)).Set(value),
+        std::string("edit ") + path + "." + attribute);
+  }
+  HdLotusRenderDelegate& Delegate() {
+    return delegate_;
   }
   void ColorClear(bool enabled) {
     bindings_[0].clearValue = enabled ? VtValue(GfVec4f(0)) : VtValue();
@@ -474,6 +568,76 @@ void Sequence(bool wavefront) {
     session.Frame();
   Check(session.Color() == mis, "restoring NEE/MIS changed deterministic image");
 }
+
+// One frame of the animation sequence, compared across integrators.
+struct AnimationFrame {
+  Lotus::TemporalResetReason reason;
+  std::vector<Lotus::RestirReusePixel> reservoirs;
+  std::vector<float> color;
+};
+
+// Light, material and emissive-state USD edits reset reservoir and radiance
+// history through the delegate exactly as headless; while the lamp emits,
+// any scene edit resets conservatively and camera motion does not.
+std::vector<AnimationFrame> Animation(bool wavefront) {
+  using R = Lotus::TemporalResetReason;
+  std::cout << (wavefront ? "wavefront" : "reference") << " animation\n";
+  Session session(wavefront, kAnimationStage);
+  session.Setting(kTemporalReuse, VtValue(true));
+  session.Setting(kTemporal, VtValue(true));
+  std::vector<AnimationFrame> frames;
+  const auto step = [&](R reason, std::uint32_t emissive) {
+    const auto frame = session.Render(true, reason);
+    const bool history = reason == R::None;
+    Check(frame.restir.history_available == history && frame.restir.previous.empty() != history &&
+              frame.temporal.radiance_available &&
+              frame.temporal.previous_radiance.empty() != history,
+        "animation history publication");
+    Check(frame.validation_message_count == 0, "animation validation: " + frame.validation_detail);
+    Check(session.Delegate().GetGpuSceneStats().emissive_triangles == emissive,
+        "emissive light table size");
+    std::size_t reused = 0;
+    for (std::size_t i = 0; i < frame.restir.temporal.size(); ++i) {
+      const auto& p = frame.restir.temporal[i];
+      reused += p.previous_index != 0xFFFFFFFFU;
+      if (!history)
+        Check(p.previous_index == 0xFFFFFFFFU && p.age == 0 &&
+                  frame.temporal.radiance[i].sample_count <= 1 &&
+                  std::memcmp(&frame.restir.initial[i], &p.reservoir, sizeof(p.reservoir)) == 0,
+            "reset reused a stale reservoir or radiance sample");
+    }
+    Check(history == (reused != 0), "retained reservoir history unused");
+    frames.push_back({reason, frame.restir.temporal, session.Color()});
+  };
+  step(R::FirstFrame, 2);
+  step(R::None, 2);
+  session.Move("/Camera", GfVec3d(0.12, 1, 4));
+  step(R::None, 2);
+  session.Set("/Sun", "inputs:intensity", VtValue(3.0F));
+  step(R::SceneChanged, 2);
+  step(R::None, 2);
+  session.Set("/Looks/Panel/Surface", "inputs:diffuseColor", VtValue(GfVec3f(0.2F, 0.4F, 0.6F)));
+  step(R::SceneChanged, 2);
+  session.Set("/Looks/Lamp/Surface", "inputs:emissiveColor", VtValue(GfVec3f(4, 6, 8)));
+  step(R::SceneChanged, 2);
+  step(R::None, 2);
+  session.Move("/World/Panel", GfVec3d(0.3, 0, 0));
+  step(R::SceneChanged, 2);
+  session.Move("/World/Lamp", GfVec3d(0.2, 0, 0));
+  step(R::SceneChanged, 2);
+  session.Set("/Looks/Lamp/Surface", "inputs:emissiveColor", VtValue(GfVec3f(0, 0, 0)));
+  step(R::SceneChanged, 0);
+  session.Move("/World/Panel", GfVec3d(0, 0, 0));
+  step(R::None, 0);
+  session.Set("/Looks/Lamp/Surface", "inputs:emissiveColor", VtValue(GfVec3f(8, 6, 4)));
+  step(R::SceneChanged, 2);
+  session.Set("/World/Lamp", "visibility", VtValue(TfToken("invisible")));
+  step(R::SceneChanged, 0);
+  session.Set("/World/Lamp", "visibility", VtValue(TfToken("inherited")));
+  step(R::SceneChanged, 2);
+  step(R::None, 2);
+  return frames;
+}
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -496,6 +660,15 @@ int main(int argc, char** argv) try {
   }
   Sequence(false);
   Sequence(true);
+  const auto reference = Animation(false);
+  const auto wavefront = Animation(true);
+  Check(reference.size() == wavefront.size(), "animation sequence length");
+  for (std::size_t i = 0; i < reference.size(); ++i)
+    Check(reference[i].reason == wavefront[i].reason && reference[i].color == wavefront[i].color &&
+              reference[i].reservoirs.size() == wavefront[i].reservoirs.size() &&
+              std::memcmp(reference[i].reservoirs.data(), wavefront[i].reservoirs.data(),
+                  reference[i].reservoirs.size() * sizeof(Lotus::RestirReusePixel)) == 0,
+        "integrators differ under Hydra animation at frame " + std::to_string(i));
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

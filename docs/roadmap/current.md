@@ -17,8 +17,8 @@ limits. Step 1 comes first and is kept short.
 
 ### Step 1 — ReSTIR DI closure
 
-The remaining Renderer Phase 5 work is limited to the two tasks below and the
-exit review; no other ReSTIR DI fixture is added
+The remaining Renderer Phase 5 work is limited to the reuse-cost task below
+and the exit review; no other ReSTIR DI fixture is added
 ([stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)).
 The starting evidence, including its adverse results and limits:
 [quality budgets](../reports/2026-10-15-restir-budgets.md),
@@ -32,21 +32,14 @@ the [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ense
 [replication bias tests](../reports/2026-10-17-restir-moving-bias.md)
 (no moving-scene bias, ghosting or localized error in four moving suites;
 narrow glossy highlights limited by rare-event variance), a
-[closed interreflecting room](../reports/2026-10-17-restir-interreflection.md)
-and [light/material animation](../reports/2026-10-17-restir-animation.md).
+[closed interreflecting room](../reports/2026-10-17-restir-interreflection.md),
+[light/material animation](../reports/2026-10-17-restir-animation.md) and the
+[emissive-state and Hydra reset contract](../reports/2026-10-17-restir-reset-contract.md),
+which together complete the animation-and-reset criterion. Fresh batches
+replaying random numbers after each reset is
+[DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the
+denoiser.
 
-- [ ] **LOTUS-RESTIR-05A — Animated lighting/material reset validation.**
-  Confirm that light, material and emissive-state animation keeps the history
-  lifecycle and invalidation contract; this is a contract check, not a
-  convergence campaign. Required: no stale reservoir is reused, reset
-  classification is deterministic, the reference and wavefront integrators
-  agree, Hydra applies the same reset policy, and validation is clean.
-  [Light/material animation](../reports/2026-10-17-restir-animation.md)
-  already shows exact resets with no reset-related ghosting under both
-  integrators, headless; emissive-state changes and the Hydra path remain.
-  Fresh batches replaying random numbers after each reset is
-  [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the
-  denoiser rather than here.
 - [ ] **LOTUS-RESTIR-05B — Reuse cost and equal-quality decision.**
   On representative workloads, under both integrators, compare NEE/MIS,
   initial-only, temporal-only, spatial-only and combined reuse on GPU time,
