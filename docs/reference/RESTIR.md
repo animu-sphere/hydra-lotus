@@ -8,37 +8,45 @@ initial, temporal and spatial direct lighting are in `shaders/sampling/reservoir
 owns delivery status; the [phase policy](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 owns the intended transport scope.
 
-## Experimental use and limits
+## When to use reservoirs
 
-ReSTIR is opt-in; progressive NEE/MIS remains the default and comparison
-baseline. Initial-only sampling supports deterministic progressive
-accumulation. Temporal/spatial reuse uses fresh batches and bounded,
-correlated histories; represented candidate counts are not counts of
-independent samples.
+ReSTIR is opt-in. **Progressive NEE/MIS is the default renderer path** under
+both integrators, headless and through Hydra, and the comparison baseline.
+The [Renderer Phase 5 exit review](../reports/2026-10-17-renderer-phase5-exit.md)
+records the decision per workload, from the
+[reuse-cost measurements](../reports/2026-10-17-restir-reuse-cost.md) at locked
+GPU clocks:
 
-Reuse can increase static error and GPU cost. The
-[rough dielectric/sphere-light measurements](../reports/2026-10-16-restir-glossy-spheres.md)
-show a static temporal-reuse convergence penalty and no repeatable combined
-equal-quality speedup. The [sequence-ensemble measurements](../reports/2026-10-16-restir-sequence-ensemble.md)
-attribute that penalty to temporally correlated reservoirs (fewer effective
-independent frames, decreasing with the history cap) rather than detectable bias,
-in that static fixture only. The
-[replication bias measurements](../reports/2026-10-17-restir-moving-bias.md)
-find no moving-scene, band or tile error distinguishable from non-reusing
-estimators in the four bounded moving suites, at their resolution, with
-narrow-glossy highlights limited by rare-event variance. The
-[animation measurements](../reports/2026-10-17-restir-animation.md) find light
-and material edits reset history exactly, with no reset-related ghosting or
-frames-since-reset dependence; reuse noise stays correlated across edits (see
-[compatibility](#compatibility-and-publication)). The
-[reset-contract tests](../reports/2026-10-17-restir-reset-contract.md) extend
-this to emissive-state edits and to Hydra, identically under both integrators. The
-[complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
-reduce a reproduced narrow-glossy gap, but do not establish general
-unbiasedness, improved convergence or absence of ghosting. Finite references,
-bounded fixtures and shared integrator draws limit those conclusions.
-The reuse-cost / equal-quality decision is in
-the [execution plan](../roadmap/current.md#step-1--restir-di-closure).
+| Mode | Use |
+| --- | --- |
+| NEE/MIS | Default. With area lights, an environment, glossy materials or deep interreflection no reservoir mode reaches equal quality faster. |
+| Initial-only, eight candidates | For many lights of similar importance that BSDF sampling cannot find: about 1.4 times faster to equal quality with many distant lights, accumulating and in motion; 96 bytes per pixel, no history, deterministic progressive accumulation. Slower than NEE/MIS (0.82–0.97) elsewhere. |
+| Initial-only, one candidate | Not worth using; never beats NEE/MIS. |
+| Temporal, combined | Not worth using with accumulation: correlated frames accumulate 0.03–0.74 as efficiently as NEE/MIS. Cuts raw flicker only where reservoirs already win; its value as denoiser input is a Renderer Phase 6 question. |
+| Spatial (radius 1) | Not worth using: lower error per frame, but too costly (0.49–0.89 static, at most 1.02 in motion). |
+
+Initial-only sampling supports deterministic progressive accumulation.
+Temporal/spatial reuse uses fresh batches and bounded, correlated histories;
+represented candidate counts are not counts of independent samples. Reuse
+frames through `RenderTemporalScene` read back and check their evidence
+products, 28–36 ms of wall time at 128x128, so reuse is not interactive as it
+stands.
+
+No bias, ghosting or localized error attributable to reuse was found in the
+bounded fixtures: the [static penalty](../reports/2026-10-16-restir-sequence-ensemble.md)
+is temporal correlation, not detectable bias;
+[four moving suites](../reports/2026-10-17-restir-moving-bias.md), a
+[closed interreflecting room](../reports/2026-10-17-restir-interreflection.md)
+and [light/material animation](../reports/2026-10-17-restir-animation.md) show
+no reuse error distinguishable from non-reusing estimators, with narrow glossy
+highlights limited by rare-event variance; the
+[reset-contract tests](../reports/2026-10-17-restir-reset-contract.md) cover
+emissive-state edits and Hydra, identically under both integrators. Reuse
+noise stays correlated across resets (see
+[compatibility](#compatibility-and-publication)). Finite references, bounded
+fixtures and shared integrator draws limit these conclusions, and the exit
+review lists the known bad cases and unsupported conditions. ReSTIR DI gains no
+further fixtures ([stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)).
 
 ## Record and operations
 
@@ -912,7 +920,8 @@ The stencil, geometry thresholds and candidate strategy are deliberately fixed
 for this first pass. These bounded comparisons establish no general many-light
 speedup or production artifact/stability guarantee. Reservoir correlations,
 nearest-pixel temporal selection and geometric rejection retain the limits
-above; broader phase-exit evaluation remains later work.
+above; the [exit review](../reports/2026-10-17-renderer-phase5-exit.md) records
+where spatial reuse is worth its cost.
 
 ## Hydra controls and diagnostics
 
@@ -958,4 +967,6 @@ headless does, byte-identically under both integrators
 ([reset-contract evidence](../reports/2026-10-17-restir-reset-contract.md)).
 Installed usdview also exercises all four reservoir modes and moving/cut
 sequences ([measurement](../reports/2026-10-14-restir-hydra.md)). These
-adapter checks do not establish many-light speedup or phase-exit quality.
+adapter checks do not establish many-light speedup; the
+[exit review](../reports/2026-10-17-renderer-phase5-exit.md) records when to
+enable reservoirs.
