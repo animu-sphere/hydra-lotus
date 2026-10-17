@@ -17,8 +17,8 @@ limits. Step 1 comes first and is kept short.
 
 ### Step 1 — ReSTIR DI closure
 
-The remaining Renderer Phase 5 work is limited to the reuse-cost task below
-and the exit review; no other ReSTIR DI fixture is added
+The remaining Renderer Phase 5 work is limited to the exit review below;
+no other ReSTIR DI fixture is added
 ([stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)).
 The starting evidence, including its adverse results and limits:
 [quality budgets](../reports/2026-10-15-restir-budgets.md),
@@ -38,15 +38,12 @@ narrow glossy highlights limited by rare-event variance), a
 which together complete the animation-and-reset criterion. Fresh batches
 replaying random numbers after each reset is
 [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the
-denoiser.
+denoiser. The [reuse-cost decision](../reports/2026-10-17-restir-reuse-cost.md),
+timed at locked clocks, completes the cost criterion: NEE/MIS stays the
+default, and only initial-only reservoirs with eight candidates pay off, for
+many distant lights (about 1.4 times faster to equal quality); temporal,
+spatial and combined reuse are not worth using.
 
-- [ ] **LOTUS-RESTIR-05B — Reuse cost and equal-quality decision.**
-  On representative workloads, under both integrators, compare NEE/MIS,
-  initial-only, temporal-only, spatial-only and combined reuse on GPU time,
-  time to a target quality, memory and temporal stability, with repeated
-  measurements (timings run alone, `--jobs 1`). ReSTIR need not win: what is
-  required is the decision of where it is worth using and where NEE/MIS is,
-  and a negative result closes the phase too.
 - [ ] **LOTUS-RESTIR-06 — Renderer Phase 5 exit review.** A report that
   records, per representative workload, whether there is an equal-quality
   speedup, plus the known bad cases, correlation cost and unsupported
@@ -86,9 +83,13 @@ for everyday use; it does not become a UI framework.
   ReSTIR off/initial/temporal/spatial/combined and temporal radiance reuse
   while running. Show beauty, depth, normal, motion vector, temporal validity
   and reservoir validity/age/weight from the existing AOVs and debug products,
-  without new viewport-only renderer state. The controls are a Dear ImGui
-  developer UI, as in `hydra-merlin`'s viewport, with the settings logic in
-  sources that a GPU-free unit test covers.
+  without new viewport-only renderer state. Reuse frames currently read back
+  and check reservoir and temporal products every frame, 28–36 ms of wall
+  time at 128x128 against 1.3–2.0 ms for NEE/MIS
+  ([measurement](../reports/2026-10-17-restir-reuse-cost.md#wall-time-and-memory)),
+  so interactive reuse needs a path that skips them. The controls are a Dear
+  ImGui developer UI, as in `hydra-merlin`'s viewport, with the settings logic
+  in sources that a GPU-free unit test covers.
 - [ ] **LOTUS-VIEWPORT-04 — Timing HUD.** Frame time; GPU path-trace, ReSTIR,
   temporal and (once it exists) denoise pass times; sample count; scene/TLAS
   update time; reservoir and history memory.
