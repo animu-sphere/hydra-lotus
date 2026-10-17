@@ -211,6 +211,12 @@ foreach(integrator reference wavefront)
       -DBOUNCES=4 -DREFERENCE_SEED=18874368
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-multibounce PROPERTIES RUN_SERIAL TRUE)
+  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-interreflection
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-interreflection"
+      "-DINTEGRATOR=${integrator}" -DWORKLOAD=interreflection -DBOUNCES=4
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   foreach(proposal uniform power-uniform)
     add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
       COMMAND "${CMAKE_COMMAND}"
