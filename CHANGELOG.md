@@ -33,6 +33,21 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   whose colour binding has no render buffer.
 - `ShadersIn` names the backend's shader files in a directory, so hosts pass
   only the `shaders/` directory beside them.
+- `lotus-viewport` changes the renderer while it runs, from a Dear ImGui
+  developer UI (F1) or the command line: the reference or wavefront
+  integrator, the sample limit and accumulation, NEE/MIS, ReSTIR off, initial,
+  temporal, spatial or combined, and temporal radiance reuse. It presents
+  beauty, depth, normal, motion vectors, temporal validity and reservoir
+  validity, age and weight from the existing GPU debug products, without
+  reading them back. `--interaction-test` steps through every control and
+  view ([guide](docs/guides/BUILDING.md#the-standalone-viewport),
+  [evidence](docs/reports/2026-10-18-viewport-controls.md)).
+- `OffscreenRenderer::Present` takes a `PresentView`: a `DebugView` of the
+  latest frame's temporal or reservoir products, mapped to display colours
+  by a compute kernel (`present_view.comp.spv`, in `ShadersIn`).
+  `PresentOptions::overlay` lets a host draw over each presented frame in a
+  backend-owned render pass. `HdLotusRenderDelegate::SetPresentView` selects
+  the view a presenting render pass shows.
 
 ### Changed
 
@@ -49,6 +64,24 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   backend. Set it `OFF` for a CPU-only build, as the `ci-core` intent does.
 - `lotus-temporal-gpu-test` and `lotus-restir-gpu-test` take the shader
   directory instead of five shader paths.
+- `OffscreenTarget::read_back` false now also leaves the temporal and
+  reservoir records on the GPU and skips the host check of the reservoirs'
+  arithmetic flags, so reuse frames that are presented no longer pay for the
+  evidence path; availability, extents, byte counts and GPU times are still
+  reported.
+- A progressive frame after a fresh batch (temporal radiance or reservoir
+  reuse) restarts the accumulation, instead of continuing from that sample
+  when its sample sequence happened to match.
+
+### Fixed
+
+- GPU reservoirs could leave their first positive candidate unselected when
+  the random number was within about 1e-7 of 1, which the evidence path then
+  reported as invalid reservoir arithmetic (a 1280x720 Cornell box at frame
+  121). The first positive weight is now selected unconditionally, as the
+  CPU oracle does ([evidence](docs/reports/2026-10-18-viewport-controls.md#findings-fixed-on-the-way)).
+- `lotus-viewport`'s GPU time (title, benchmark JSON) added the wavefront
+  kernels to the scene pass time that already contains them.
 
 ### Removed
 

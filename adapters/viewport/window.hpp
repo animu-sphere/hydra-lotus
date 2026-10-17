@@ -35,6 +35,8 @@ public:
   [[nodiscard]] virtual bool fullscreen() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
+  // The GLFWwindow, for the developer UI's input backend alone.
+  [[nodiscard]] virtual void* native_handle() const noexcept = 0;
 };
 
 // Bundles the GLFW-required instance extensions and the surface-creation

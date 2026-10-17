@@ -32,20 +32,13 @@ Hydra adapter ([evidence](../reports/2026-10-17-viewport-presentation.md)),
 and navigates them with usdview's free camera or an authored camera, at a
 stage time code, restarting the accumulation when the camera or scene changes
 ([evidence](../reports/2026-10-17-viewport-camera.md),
-[usage](../guides/BUILDING.md#the-standalone-viewport)).
+[usage](../guides/BUILDING.md#the-standalone-viewport)). A Dear ImGui
+developer UI switches the integrator, accumulation, NEE/MIS, ReSTIR and
+temporal radiance reuse while running, and presents the depth, normal,
+motion, temporal-validity and reservoir debug products from the GPU; reuse
+frames that are presented no longer read back their evidence products
+([evidence](../reports/2026-10-18-viewport-controls.md)).
 
-- [ ] **LOTUS-VIEWPORT-03 — Run-time renderer controls and debug views.**
-  Switch the reference/wavefront integrator, spp and accumulation, NEE/MIS,
-  ReSTIR off/initial/temporal/spatial/combined and temporal radiance reuse
-  while running. Show beauty, depth, normal, motion vector, temporal validity
-  and reservoir validity/age/weight from the existing AOVs and debug products,
-  without new viewport-only renderer state. Reuse frames currently read back
-  and check reservoir and temporal products every frame, 28–36 ms of wall
-  time at 128x128 against 1.3–2.0 ms for NEE/MIS
-  ([measurement](../reports/2026-10-17-restir-reuse-cost.md#wall-time-and-memory)),
-  so interactive reuse needs a path that skips them. The controls are a Dear
-  ImGui developer UI, as in `hydra-merlin`'s viewport, with the settings logic
-  in sources that a GPU-free unit test covers.
 - [ ] **LOTUS-VIEWPORT-04 — Timing HUD.** Frame time; GPU path-trace, ReSTIR,
   temporal and (once it exists) denoise pass times; sample count; scene/TLAS
   update time; reservoir and history memory.

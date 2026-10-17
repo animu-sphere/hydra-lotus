@@ -53,11 +53,19 @@ lotus_add_slang_shader(
   OPTIONS ${_ray_query_options}
   DEPENDS ${_scene_modules})
 
+# Present's debug views: the latest frame's debug products as display
+# colours.
+lotus_add_slang_shader(
+  TARGET lotus-shader-present-view
+  SOURCE present/present_view.slang
+  ENTRIES present_main:compute)
+
 # Every shader a renderer loads, in the one directory that ShadersIn
 # (include/lotus/vulkan_backend.hpp) names the files in. Hosts stage or
 # install LOTUS_SHADER_OUTPUTS; build-tree checks may read
 # LOTUS_SHADER_DIRECTORY in place.
-set(_shaders lotus-shader-triangle lotus-shader-pathtrace lotus-shader-wavefront)
+set(_shaders lotus-shader-triangle lotus-shader-pathtrace lotus-shader-wavefront
+  lotus-shader-present-view)
 add_custom_target(lotus-shaders)
 add_dependencies(lotus-shaders ${_shaders})
 foreach(_shader IN LISTS _shaders)

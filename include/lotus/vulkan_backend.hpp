@@ -227,11 +227,55 @@ struct OffscreenTarget {
   // attachment; nonempty arrays must match the target extent.
   std::vector<float> preserved_color;
   std::vector<float> preserved_depth;
-  // False skips the colour and depth readback: their products stay empty
-  // and the frame stays on the GPU, for Present. Temporal and reservoir
-  // products are read back either way.
+  // False keeps the frame on the GPU, for Present: no product is read back
+  // or checked on the host. The colour and depth products stay empty, and so
+  // do the temporal and reservoir products' records; their availability,
+  // reset reason, extents, byte counts and GPU times are still reported. The
+  // host's check of the reservoirs' arithmetic flags is skipped with them.
   bool read_back = true;
 };
+
+// What Present shows. Beauty is the frame's colour; the others map one of
+// the latest frame's GPU debug products to display colours, which reach the
+// screen unchanged (the sRGB encoding is undone first). Pixels without a
+// surface are black unless a view says otherwise.
+enum class DebugView {
+  Beauty,
+  // Temporal primary-surface products (RenderTemporalScene):
+  // positive linear view depth, logarithmically from white at range[0] to
+  // dark grey at range[1];
+  Depth,
+  // the unit world geometric normal, as 0.5 + 0.5 * n;
+  Normal,
+  // backward motion, as red 0.5 + 0.5 * x / range[1] and green
+  // 0.5 + 0.5 * y / range[1] over blue 0.5; black without a projection;
+  Motion,
+  // the shared history validity: green accepted, and per TemporalRejection
+  // a colour of its own (DebugViewRejectionColor).
+  TemporalValidity,
+  // The final reservoir of the last fresh sample (RestirInitial): the
+  // spatial or temporal one when reuse ran, the initial one otherwise.
+  // Green with a selected sample, dark red on a surface where no candidate
+  // had a target, magenta for invalid arithmetic (flag bit 1);
+  ReservoirValidity,
+  // the selected sample's age in frames, from blue at 0 to red at range[1];
+  // initial-only reservoirs are 0;
+  ReservoirAge,
+  // the resolved contribution weight W, as log10(W) from blue at range[0]
+  // to red at range[1]; dark red where no sample was selected.
+  ReservoirWeight,
+};
+
+// Present's choice of view, and the values its colour map spans.
+struct PresentView {
+  DebugView view = DebugView::Beauty;
+  std::array<float, 2> range{0.0F, 1.0F};
+};
+
+// The display colour TemporalValidity shows for each TemporalRejection
+// (None for an accepted history), for a host's legend.
+[[nodiscard]] std::array<float, 3> DebugViewRejectionColor(
+    TemporalRejection rejection);
 
 // One OffscreenRenderer::Present call.
 struct PresentEvidence {
@@ -613,6 +657,8 @@ public:
   // per-pixel radiance with bounded sample counts. It automatically resets
   // for transport settings and non-rigid scene edits. Camera/rigid motion
   // preserves compatible history; history_key/camera_cut reset explicitly.
+  // A progressive frame after a fresh batch (radiance or reservoir reuse)
+  // restarts the accumulation.
   [[nodiscard]] virtual GpuFrameEvidence RenderTemporalScene(
       const FrameSnapshot& snapshot, const OffscreenTarget& target,
       std::uint32_t frame_count, const TemporalFrameSettings& temporal,
@@ -629,16 +675,20 @@ public:
   // allocates a readback buffer and waits for the copy.
   [[nodiscard]] virtual GpuSceneContents ReadBackScene() = 0;
 
-  // Copy the colour of the latest RenderScene or RenderTemporalScene frame
-  // into the window's next swapchain image and present it. The copy encodes
-  // the linear colour as sRGB, clamped to [0, 1], with no tone mapping. The
+  // Copy the colour of the latest RenderScene or RenderTemporalScene frame,
+  // or the debug product `view` selects, into the window's next swapchain
+  // image, draw the overlay over it and present it. The copy encodes the
+  // linear colour as sRGB, clamped to [0, 1], with no tone mapping. The
   // swapchain follows `width` x `height`, the window's framebuffer extent; a
   // frame of another extent is scaled to it. Returns once the copy is
   // submitted; the next frame is ordered after it on the queue. Fails
   // without a presentation surface or before a scene frame; a failed
-  // presentation leaves the renderer failed, as a failed frame does.
-  [[nodiscard]] virtual PresentEvidence Present(
-      std::uint32_t width, std::uint32_t height) = 0;
+  // presentation leaves the renderer failed, as a failed frame does. A debug
+  // view whose product the latest frame did not write, or without the
+  // presentation kernel, fails before any GPU work and leaves the renderer
+  // usable.
+  [[nodiscard]] virtual PresentEvidence Present(std::uint32_t width,
+      std::uint32_t height, const PresentView& view = {}) = 0;
 };
 
 struct RayQueryShaders {
@@ -647,6 +697,8 @@ struct RayQueryShaders {
   // The wavefront integrator's compute kernels; without them, Wavefront
   // frames fail.
   std::string wavefront;
+  // Present's debug-view kernel; without it, debug views fail.
+  std::string present_view;
 };
 
 // The compiled shaders a renderer loads. The build stages them into a

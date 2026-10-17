@@ -216,7 +216,7 @@ ost renderer viewport -- --frames 8 --hidden
 ost validate --intent renderer-viewport
 ```
 
-The first run fetches GLFW. The viewport builds in a tree of its own
+The first run fetches GLFW and Dear ImGui. The viewport builds in a tree of its own
 (`build/<target>--renderer-viewport`), so it leaves the default target's
 validation untouched, and that build has no OpenUSD dependency.
 
@@ -254,6 +254,12 @@ again after a change; the launcher above runs the executable just built
 | `--width N`, `--height N` | window size, 1280x720 by default |
 | `--fullscreen` | start on the primary monitor; F11 toggles while running |
 | `--samples N` | samples per pixel to accumulate, 1024 by default; the accumulation restarts on a resize |
+| `--integrator reference\|wavefront` | the path tracer to start with |
+| `--nee on\|off` | next event estimation with MIS, on by default; off leaves BSDF sampling alone |
+| `--restir off\|initial\|temporal\|spatial\|combined` | reservoir direct lighting at the camera surface, off by default |
+| `--temporal-radiance` | reuse each pixel's radiance history |
+| `--no-accumulation` | trace one fresh sample per pixel every frame |
+| `--view <name>` | the product to present: `beauty`, `depth`, `normal`, `motion`, `temporal-validity`, `reservoir-validity`, `reservoir-age`, `reservoir-weight` (the last three need `--restir`) |
 | `--vsync on\|off` | FIFO, or immediate (else mailbox) presentation |
 | `--frames N`, `--hidden` | scripted runs: exit after N presented frames, without showing the window |
 | `--validate` | fail unless the Khronos validation layer captured the run; captured messages fail every run |
@@ -273,6 +279,7 @@ The free camera follows usdview's bindings, without requiring Alt:
 | C | the stage's next authored camera, then the free camera again |
 | Left, Right | one time code back or forward, within an authored time range |
 | R | reload the stage's layers |
+| F1 | hide or show the developer UI |
 | F11, Esc | fullscreen, exit |
 
 C, the arrows and R act on USD stages only. Navigating while looking through
@@ -283,9 +290,33 @@ frame applies the stage's pending edits (reloaded layers, a new time code)
 before rendering. A changed camera or scene restarts the accumulation; a
 time code that changes nothing continues it.
 
+The Renderer window (Dear ImGui, drawn over the presented frame) changes the
+options above while the viewport runs: the integrator, the sample limit and
+accumulation, NEE/MIS, the ReSTIR mode and candidate count, temporal radiance
+reuse and its history length, and the presented product with its colour
+scale. It shows the extent, samples per pixel, the frame's wall time and its
+GPU time. Pointer and keyboard input over the window goes to it rather than
+the camera; it writes no files. The settings logic is
+`adapters/viewport/controls.{hpp,cpp}`, which `lotus-viewport-controls`
+covers without a window or GPU.
+
+Changing the integrator, the estimator or the candidate count restarts the
+accumulation; the sample limit and the presented product continue it.
+Temporal and spatial reuse and temporal radiance trace one fresh sample per
+pixel every frame, through `RenderTemporalScene`, as does turning
+accumulation off; leaving them restarts the accumulation. The depth, normal,
+motion and temporal-validity views present the temporal primary-surface
+products, so they render through `RenderTemporalScene` too (without reuse
+the accumulation continues); the reservoir views present the last fresh
+sample's final reservoir and need ReSTIR. Every view maps an existing GPU
+debug product on the GPU (`Lotus::DebugView`); nothing is read back, the
+temporal and reservoir products included
+([evidence](../reports/2026-10-18-viewport-controls.md)).
+
 The presented image is the linear radiance encoded as sRGB and clamped, with
-no exposure or tone mapping. The title bar shows the scene, the camera and time code, device, extent,
-samples per pixel and the last frame's GPU time. Validation is enabled
+no exposure or tone mapping. The title bar shows the scene, the camera and time code, the
+integrator, estimator and view, device, extent, samples per pixel and the
+last frame's GPU time. Validation is enabled
 whenever the Vulkan SDK's layer is installed, which costs CPU time; set
 `VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation` for an interactive
 session without it.
@@ -295,8 +326,9 @@ built-in scene), `lotus-viewport-hydra`, `lotus-viewport-hydra-interaction`
 and `lotus-viewport-hydra-camera` (the smoke stage, Hydra-enabled build
 only) and `lotus-viewport-no-driver` (an explained skip with Vulkan driver discovery
 pointed at a missing manifest), each in the viewport's tree, plus the
-window-free `lotus-viewport-options` and `lotus-viewport-camera` in every
-tree.
+window-free `lotus-viewport-options`, `lotus-viewport-controls` and
+`lotus-viewport-camera` in every tree. The interaction tests also step
+through every renderer control and debug view.
 
 > ⚠️ On a Windows host whose MSVC prints Japanese, some objects record no
 > header dependencies, and editing a header does not rebuild them. Delete

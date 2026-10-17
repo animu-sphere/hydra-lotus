@@ -40,7 +40,10 @@ public bool StreamReservoirCandidate(inout Reservoir r, uint sample,
   if (!isfinite(weight) || !isfinite(sum) || (target > 0.0 && weight == 0.0)) {
     return false;
   }
-  selected = weight > 0.0 && random < weight / sum;
+  // The first positive weight is selected with probability one: a
+  // reciprocal-based float quotient can fall just below 1 and leave a
+  // positive sum without a sample when random is close to 1.
+  selected = weight > 0.0 && (r.weight_sum == 0.0 || random < weight / sum);
   r.weight_sum = sum;
   ++r.candidate_count;
   if (selected) {
@@ -82,7 +85,9 @@ public bool MergeReevaluatedReservoir(inout Reservoir destination,
   const float sum = destination.weight_sum + weight;
   if (!isfinite(weight) || !isfinite(sum) || (target > 0.0 && weight == 0.0))
     return false;
-  selected = weight > 0.0 && random < weight / sum;
+  // As in StreamReservoirCandidate: an empty destination takes the source.
+  selected = weight > 0.0 &&
+             (destination.weight_sum == 0.0 || random < weight / sum);
   destination.weight_sum = sum;
   destination.candidate_count += count;
   if (selected) {

@@ -707,10 +707,15 @@ public:
       return false;
     }
     if (presentation_) {
+      std::vector<std::uint32_t> view_words;
+      if (!ray_shaders.present_view.empty() &&
+          !LoadSpirv(ray_shaders.present_view, view_words, detail))
+        return false;
       bool unsupported = false;
-      if (!presentation_->Initialize(physical_device_, device_, queue_,
-              queue_family_, kSceneColorFormat, presentation->vsync,
-              unsupported, detail)) {
+      if (!presentation_->Initialize(instance_state_.instance,
+              physical_device_, device_, queue_, queue_family_,
+              kSceneColorFormat, *presentation, view_words, unsupported,
+              detail)) {
         if (unsupported)
           status = FrameStatus::Skip;
         return false;
@@ -1059,8 +1064,15 @@ public:
           pixel_count * sizeof(float));
     }
     // Present copies this frame's scene colour; a bootstrap frame leaves
-    // nothing to present.
+    // nothing to present. Its reservoirs hold the last fresh sample's, and
+    // RenderTemporalScene marks its temporal products once they exist.
     presentable_ = trace;
+    temporal_presentable_ = false;
+    if (!restir)
+      restir_presentable_ = RestirPresentable::None;
+    else if (samples_to_add != 0)
+      restir_presentable_ = restir_temporal_active_ ? RestirPresentable::Reuse
+                                                    : RestirPresentable::Initial;
 
     if (trace && ray_timestamps_ != VK_NULL_HANDLE) {
       std::uint64_t ticks[2]{};
@@ -1307,65 +1319,23 @@ public:
     }
   }
 
+  // Without read_back, the records stay on the GPU and the host checks of
+  // their arithmetic flags are skipped; the rest is reported as usual.
   bool ReadRestir(const OffscreenTarget& target, RestirProducts& products,
       std::string& detail) {
-    if (!InvalidateIfNeeded(device_, restir_readback_.memory,
-            restir_readback_.coherent, detail))
-      return false;
     products.width = target.width;
     products.height = target.height;
     products.row_pitch = target.width * sizeof(RestirPixel);
     products.scene_generation = scene_generation_;
     products.reservoir_bytes = restir_initial_.bytes + restir_readback_.bytes;
-    products.initial.resize(std::size_t{target.width} * target.height);
-    std::memcpy(products.initial.data(), restir_readback_.mapped,
-        products.initial.size() * sizeof(RestirPixel));
-    if (std::any_of(products.initial.begin(), products.initial.end(),
-            [](const RestirPixel& p) { return (p.flags & 2) != 0; })) {
-      detail = "initial reservoir arithmetic is invalid or exceeds GPU float storage";
-      return false;
-    }
     if (restir_temporal_active_) {
-      if (!InvalidateIfNeeded(device_, restir_history_readback_.memory,
-              restir_history_readback_.coherent, detail))
-        return false;
       products.history_available = restir_history_available_;
       products.temporal_row_pitch = target.width * sizeof(RestirReusePixel);
-      products.temporal.resize(products.initial.size());
-      if (restir_history_available_)
-        products.previous.resize(products.initial.size());
-      const auto* records = static_cast<const RestirHistoryRecord*>(restir_history_readback_.mapped);
-      const auto* temporal_records = records;
-      if (restir_spatial_active_) {
-        if (!InvalidateIfNeeded(device_, restir_spatial_input_readback_.memory,
-                restir_spatial_input_readback_.coherent, detail) ||
-            !InvalidateIfNeeded(device_, restir_spatial_sources_readback_.memory,
-                restir_spatial_sources_readback_.coherent, detail))
-          return false;
-        temporal_records = static_cast<const RestirHistoryRecord*>(restir_spatial_input_readback_.mapped);
+      if (restir_spatial_active_)
         products.spatial_row_pitch = products.temporal_row_pitch;
-        products.spatial.resize(products.initial.size());
-        products.spatial_sources.resize(products.initial.size());
-        std::memcpy(products.spatial_sources.data(), restir_spatial_sources_readback_.mapped,
-            products.spatial_sources.size() * sizeof(products.spatial_sources[0]));
-      }
-      for (std::size_t i = 0; i < products.initial.size(); ++i) {
-        products.temporal[i] = temporal_records[i].resolved;
-        if ((products.temporal[i].reservoir.flags & 2) != 0) {
-          detail = "temporal reservoir arithmetic is invalid or exceeds GPU float storage";
-          return false;
-        }
-        if (restir_spatial_active_) {
-          products.spatial[i] = records[i].resolved;
-          if ((products.spatial[i].reservoir.flags & 2) != 0) {
-            detail = "spatial reservoir arithmetic is invalid or exceeds GPU float storage";
-            return false;
-          }
-        }
-        if (restir_history_available_)
-          products.previous[i] = records[products.initial.size() + i].resolved;
-      }
     }
+    if (target.read_back && !ReadRestirRecords(target, products, detail))
+      return false;
     for (const auto& buffer : restir_history_buffers_)
       products.reservoir_bytes += buffer.bytes;
     products.reservoir_bytes += restir_history_readback_.bytes;
@@ -1392,6 +1362,67 @@ public:
             device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     products.available = true;
+    return true;
+  }
+
+  bool ReadRestirRecords(const OffscreenTarget& target,
+      RestirProducts& products, std::string& detail) {
+    if (!InvalidateIfNeeded(device_, restir_readback_.memory,
+            restir_readback_.coherent, detail))
+      return false;
+    products.initial.resize(std::size_t{target.width} * target.height);
+    std::memcpy(products.initial.data(), restir_readback_.mapped,
+        products.initial.size() * sizeof(RestirPixel));
+    if (const auto invalid = std::find_if(products.initial.begin(), products.initial.end(),
+            [](const RestirPixel& p) { return (p.flags & 2) != 0; });
+        invalid != products.initial.end()) {
+      const auto index = static_cast<std::size_t>(invalid - products.initial.begin());
+      std::ostringstream where;
+      where << "initial reservoir arithmetic is invalid or exceeds GPU float storage at pixel ("
+            << index % target.width << ", " << index / target.width << "): light " << invalid->light
+            << ", weight sum " << invalid->weight_sum << ", target " << invalid->selected_target
+            << ", candidates " << invalid->candidate_count << ", proposal " << invalid->proposal;
+      detail = where.str();
+      return false;
+    }
+    if (restir_temporal_active_) {
+      if (!InvalidateIfNeeded(device_, restir_history_readback_.memory,
+              restir_history_readback_.coherent, detail))
+        return false;
+      products.temporal.resize(products.initial.size());
+      if (restir_history_available_)
+        products.previous.resize(products.initial.size());
+      const auto* records = static_cast<const RestirHistoryRecord*>(restir_history_readback_.mapped);
+      const auto* temporal_records = records;
+      if (restir_spatial_active_) {
+        if (!InvalidateIfNeeded(device_, restir_spatial_input_readback_.memory,
+                restir_spatial_input_readback_.coherent, detail) ||
+            !InvalidateIfNeeded(device_, restir_spatial_sources_readback_.memory,
+                restir_spatial_sources_readback_.coherent, detail))
+          return false;
+        temporal_records = static_cast<const RestirHistoryRecord*>(restir_spatial_input_readback_.mapped);
+        products.spatial.resize(products.initial.size());
+        products.spatial_sources.resize(products.initial.size());
+        std::memcpy(products.spatial_sources.data(), restir_spatial_sources_readback_.mapped,
+            products.spatial_sources.size() * sizeof(products.spatial_sources[0]));
+      }
+      for (std::size_t i = 0; i < products.initial.size(); ++i) {
+        products.temporal[i] = temporal_records[i].resolved;
+        if ((products.temporal[i].reservoir.flags & 2) != 0) {
+          detail = "temporal reservoir arithmetic is invalid or exceeds GPU float storage";
+          return false;
+        }
+        if (restir_spatial_active_) {
+          products.spatial[i] = records[i].resolved;
+          if ((products.spatial[i].reservoir.flags & 2) != 0) {
+            detail = "spatial reservoir arithmetic is invalid or exceeds GPU float storage";
+            return false;
+          }
+        }
+        if (restir_history_available_)
+          products.previous[i] = records[products.initial.size() + i].resolved;
+      }
+    }
     return true;
   }
 
@@ -1593,7 +1624,8 @@ public:
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
-    if (!RecordTemporal(target, frame.previous.has_value(), accumulate, bytes, detail)) {
+    if (!RecordTemporal(target, frame.previous.has_value(), accumulate,
+            target.read_back, bytes, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1604,14 +1636,16 @@ public:
         !VulkanOk(vkQueueSubmit(queue_, 1, &submit, fence_), "vkQueueSubmit(temporal)", detail) ||
         !VulkanOk(vkWaitForFences(device_, 1, &fence_, VK_TRUE, 10'000'000'000ULL),
             "vkWaitForFences(temporal)", detail) ||
-        !InvalidateIfNeeded(device_, temporal_readback_.memory,
-            temporal_readback_.coherent, detail) ||
-        !InvalidateIfNeeded(device_, temporal_validity_readback_.memory,
-            temporal_validity_readback_.coherent, detail) ||
-        (accumulate && (!InvalidateIfNeeded(device_, temporal_radiance_readback_.memory,
-                            temporal_radiance_readback_.coherent, detail) ||
-                           !InvalidateIfNeeded(device_, scene_targets_.color_readback_memory,
-                               scene_targets_.color_readback_coherent, detail)))) {
+        (target.read_back &&
+            (!InvalidateIfNeeded(device_, temporal_readback_.memory,
+                 temporal_readback_.coherent, detail) ||
+                !InvalidateIfNeeded(device_, temporal_validity_readback_.memory,
+                    temporal_validity_readback_.coherent, detail) ||
+                (accumulate &&
+                    (!InvalidateIfNeeded(device_, temporal_radiance_readback_.memory,
+                         temporal_radiance_readback_.coherent, detail) ||
+                        !InvalidateIfNeeded(device_, scene_targets_.color_readback_memory,
+                            scene_targets_.color_readback_coherent, detail)))))) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1622,34 +1656,40 @@ public:
     products.width = target.width;
     products.height = target.height;
     products.row_pitch = target.width * sizeof(TemporalPixel);
-    products.current.resize(bytes / sizeof(TemporalPixel));
-    std::memcpy(products.current.data(), temporal_readback_.mapped, bytes);
-    if (frame.previous) {
-      products.previous.resize(products.current.size());
-      std::memcpy(products.previous.data(),
-          static_cast<const std::uint8_t*>(temporal_readback_.mapped) + bytes, bytes);
+    const std::size_t pixels = bytes / sizeof(TemporalPixel);
+    if (target.read_back) {
+      products.current.resize(pixels);
+      std::memcpy(products.current.data(), temporal_readback_.mapped, bytes);
+      if (frame.previous) {
+        products.previous.resize(pixels);
+        std::memcpy(products.previous.data(),
+            static_cast<const std::uint8_t*>(temporal_readback_.mapped) + bytes, bytes);
+      }
+      products.validity.resize(pixels);
+      std::memcpy(products.validity.data(), temporal_validity_readback_.mapped, validity_bytes);
     }
     products.surface_bytes = bytes * 4;
-    products.validity.resize(products.current.size());
     products.validity_row_pitch = target.width * sizeof(TemporalValidityPixel);
-    std::memcpy(products.validity.data(), temporal_validity_readback_.mapped, validity_bytes);
     products.validity_bytes = validity_bytes * 2;
     products.metadata_bytes = temporal_constants_.bytes + temporal_instances_.bytes;
     if (accumulate) {
       products.radiance_available = true;
       products.radiance_row_pitch = target.width * sizeof(TemporalRadiancePixel);
-      products.radiance.resize(products.current.size());
-      std::memcpy(products.radiance.data(), temporal_radiance_readback_.mapped, radiance_bytes);
-      if (frame.previous) {
-        products.previous_radiance.resize(products.current.size());
-        std::memcpy(products.previous_radiance.data(),
-            static_cast<const std::uint8_t*>(temporal_radiance_readback_.mapped) + radiance_bytes,
-            radiance_bytes);
+      if (target.read_back) {
+        products.radiance.resize(pixels);
+        std::memcpy(products.radiance.data(), temporal_radiance_readback_.mapped, radiance_bytes);
+        if (frame.previous) {
+          products.previous_radiance.resize(pixels);
+          std::memcpy(products.previous_radiance.data(),
+              static_cast<const std::uint8_t*>(temporal_radiance_readback_.mapped) + radiance_bytes,
+              radiance_bytes);
+        }
+        std::memcpy(evidence.color.payload.data(), scene_targets_.color_mapped,
+            evidence.color.payload.size());
       }
       products.radiance_bytes = radiance_bytes * 4 + temporal_batch_.bytes;
       products.batch_samples = evidence.samples_per_pixel;
       products.batch_sample_index = batch_settings.sample_index;
-      std::memcpy(evidence.color.payload.data(), scene_targets_.color_mapped, evidence.color.payload.size());
     }
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
       std::uint64_t ticks[6]{};
@@ -1673,10 +1713,15 @@ public:
                                        device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     // Publish only after submission, readback and timestamps all succeeded.
+    temporal_presentable_ = true;
     temporal_history_ = std::move(next_history);
     temporal_identities_ = std::move(next_identities);
     temporal_transport_key_ = fresh_batch ? std::optional{radiance_key} : std::nullopt;
     temporal_sample_offset_ = fresh_batch ? sample_offset + evidence.samples_per_pixel : 0u;
+    // A fresh batch is not a progressive mean: the next progressive frame
+    // starts its accumulation again rather than adding to this sample.
+    if (fresh_batch)
+      accumulation_key_.reset();
     temporal_write_ = 1 - temporal_write_;
     evidence.validation_message_count = validation_.message_count;
     evidence.validation_detail = validation_.first_message.empty()
@@ -1754,8 +1799,10 @@ public:
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 3);
   }
 
+  // Without `read_back` the products stay on the GPU: the surfaces,
+  // validity and radiance are not copied to their host mirrors.
   bool RecordTemporal(const OffscreenTarget& target, bool previous,
-      bool accumulate, VkDeviceSize bytes, std::string& detail) {
+      bool accumulate, bool read_back, VkDeviceSize bytes, std::string& detail) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!VulkanOk(vkBeginCommandBuffer(command_, &begin),
             "vkBeginCommandBuffer(temporal)", detail))
@@ -1809,6 +1856,8 @@ public:
       if (temporal_timestamps_ != VK_NULL_HANDLE)
         vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 5);
     }
+    if (!read_back)
+      return VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer(temporal)", detail);
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -2126,7 +2175,8 @@ public:
     return evidence;
   }
 
-  PresentEvidence Present(std::uint32_t width, std::uint32_t height) override {
+  PresentEvidence Present(std::uint32_t width, std::uint32_t height,
+      const PresentView& view) override {
     auto Fail = [](std::string detail) {
       PresentEvidence evidence;
       evidence.status = FrameStatus::Fail;
@@ -2139,8 +2189,44 @@ public:
       return Fail("the renderer was created without a presentation surface");
     if (!presentable_)
       return Fail("no scene frame has been rendered to present");
-    PresentEvidence evidence = presentation_->Present(scene_targets_.color_image,
-        {scene_targets_.width, scene_targets_.height}, width, height);
+    vulkan_internal::PresentSource source;
+    source.color = scene_targets_.color_image;
+    source.extent = {scene_targets_.width, scene_targets_.height};
+    source.view = view;
+    if (view.view != DebugView::Beauty) {
+      if (!presentation_->has_view_kernel())
+        return Fail("debug views need the present_view kernel");
+      // The current records: RenderTemporalScene has flipped the write index.
+      switch (view.view) {
+      case DebugView::Depth:
+      case DebugView::Normal:
+      case DebugView::Motion:
+      case DebugView::TemporalValidity:
+        if (!temporal_presentable_)
+          return Fail("the latest frame wrote no temporal products; render "
+                      "it with RenderTemporalScene");
+        source.product = view.view == DebugView::TemporalValidity
+                             ? temporal_validity_.buffer
+                             : temporal_surfaces_[1 - temporal_write_].buffer;
+        source.stride = view.view == DebugView::TemporalValidity
+                            ? sizeof(TemporalValidityPixel) / 16
+                            : sizeof(TemporalPixel) / 16;
+        break;
+      default:
+        if (restir_presentable_ == RestirPresentable::None)
+          return Fail("the latest frame wrote no reservoirs; render it with "
+                      "RestirInitial");
+        if (restir_presentable_ == RestirPresentable::Reuse) {
+          source.product = restir_history_buffers_[1 - temporal_write_].buffer;
+          source.stride = sizeof(RestirHistoryRecord) / 16;
+        } else {
+          source.product = restir_initial_.buffer;
+          source.stride = sizeof(RestirPixel) / 16;
+        }
+        break;
+      }
+    }
+    PresentEvidence evidence = presentation_->Present(source, width, height);
     if (evidence.status == FrameStatus::Fail)
       failure_ = evidence.detail;
     evidence.validation_message_count = validation_.message_count;
@@ -3070,7 +3156,7 @@ private:
     if (trace && ray_timestamps_ != VK_NULL_HANDLE)
       vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ray_timestamps_, 1);
 
-    if (restir) {
+    if (restir && target.read_back) {
       VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
       barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
       barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -3364,6 +3450,12 @@ private:
   std::unique_ptr<vulkan_internal::Presentation> presentation_;
   // Whether the latest frame was a scene frame, which Present copies.
   bool presentable_ = false;
+  // Which debug products Present may show: the temporal surfaces and
+  // validity after a RenderTemporalScene frame; the initial or the reused
+  // reservoirs after a RestirInitial frame.
+  bool temporal_presentable_ = false;
+  enum class RestirPresentable { None, Initial, Reuse };
+  RestirPresentable restir_presentable_ = RestirPresentable::None;
 };
 
 #endif

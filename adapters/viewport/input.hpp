@@ -22,6 +22,8 @@ enum class Key {
   Unknown,
   Escape,
   Fullscreen,
+  // F1: hide or show the developer UI.
+  ToggleUi,
   // F: restore the initial framing.
   Frame,
   // C: the next authored camera, then the free camera again.

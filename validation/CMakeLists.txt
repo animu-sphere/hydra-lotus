@@ -27,11 +27,21 @@ target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::Warnings)
 target_compile_features(lotus-viewport-camera-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
+# The controls name the backend's settings types; the headers are enough.
 add_executable(lotus-viewport-options-test viewport-options-test.cpp
-  ../adapters/viewport/options.cpp)
-target_link_libraries(lotus-viewport-options-test PRIVATE Lotus::Warnings)
+  ../adapters/viewport/options.cpp
+  ../adapters/viewport/controls.cpp)
+target_link_libraries(lotus-viewport-options-test PRIVATE
+  Lotus::RenderExtraction Lotus::Warnings)
 target_compile_features(lotus-viewport-options-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-options COMMAND lotus-viewport-options-test)
+
+add_executable(lotus-viewport-controls-test viewport-controls-test.cpp
+  ../adapters/viewport/controls.cpp)
+target_link_libraries(lotus-viewport-controls-test PRIVATE
+  Lotus::RenderExtraction Lotus::Warnings)
+target_compile_features(lotus-viewport-controls-test PRIVATE cxx_std_20)
+add_test(NAME lotus-viewport-controls COMMAND lotus-viewport-controls-test)
 
 add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
 target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)

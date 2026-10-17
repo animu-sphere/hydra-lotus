@@ -117,6 +117,10 @@ public:
     return window_;
   }
 
+  void* native_handle() const noexcept override {
+    return window_;
+  }
+
 private:
   void Initialize(std::string_view title, std::uint32_t width,
       std::uint32_t height, bool visible) {
@@ -199,6 +203,8 @@ private:
       return Key::Escape;
     case GLFW_KEY_F11:
       return Key::Fullscreen;
+    case GLFW_KEY_F1:
+      return Key::ToggleUi;
     case GLFW_KEY_F:
       return Key::Frame;
     case GLFW_KEY_C:

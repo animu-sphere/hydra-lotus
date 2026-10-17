@@ -40,7 +40,7 @@ void Check(bool condition, const std::string& what) {
 int main() {
   const auto defaults = Parse({});
   Check(defaults.width == 1280 && defaults.height == 720, "default extent");
-  Check(defaults.frame_limit == 0 && defaults.samples == 1024,
+  Check(defaults.frame_limit == 0 && defaults.controls.samples == 1024,
       "default frame limit and samples");
   Check(defaults.visible && defaults.vsync && !defaults.fullscreen &&
             !defaults.validate && !defaults.resize_test &&
@@ -59,7 +59,7 @@ int main() {
       "smoke-test flags");
   Check(smoke.stage == "stage.usda" && smoke.benchmark == "out/run.json",
       "stage and benchmark paths");
-  Check(smoke.samples == 16 && smoke.width == 320 && smoke.height == 200,
+  Check(smoke.controls.samples == 16 && smoke.width == 320 && smoke.height == 200,
       "samples and extent");
   const auto stage = Parse({"--usd", "stage.usda", "--camera", "/World/Cam",
       "--time", "12.5", "--frames", "16", "--interaction-test"});
@@ -68,6 +68,26 @@ int main() {
       "camera, time and interaction test");
   Check(Parse({"--usd", "s.usda", "--time", "-3"}).time == -3.0,
       "negative time code");
+  using Lotus::DebugView;
+  using Lotus::viewport::RestirMode;
+  const Lotus::viewport::Controls& initial = defaults.controls;
+  Check(initial.integrator == Lotus::Integrator::Reference && initial.nee &&
+            initial.restir == RestirMode::Off && initial.accumulate &&
+            !initial.temporal_radiance && initial.view == DebugView::Beauty,
+      "default renderer controls");
+  const auto controls = Parse({"--integrator", "wavefront", "--nee", "off",
+      "--restir", "combined", "--temporal-radiance", "--no-accumulation",
+      "--view", "reservoir-age"});
+  Check(controls.controls.integrator == Lotus::Integrator::Wavefront &&
+            !controls.controls.nee &&
+            controls.controls.restir == RestirMode::Combined &&
+            controls.controls.temporal_radiance &&
+            !controls.controls.accumulate &&
+            controls.controls.view == DebugView::ReservoirAge,
+      "renderer controls");
+  Check(Parse({"--view", "temporal-validity"}).controls.view ==
+            DebugView::TemporalValidity,
+      "a temporal view without reuse");
   Check(Parse({"--fullscreen"}).fullscreen, "fullscreen");
   Check(Parse({"--help"}).help, "help");
 
@@ -93,6 +113,12 @@ int main() {
   Check(Rejects({"--usd", "s.usda", "--time", "1x"}),
       "time with trailing characters");
   Check(Rejects({"--usd", "s.usda", "--time", "inf"}), "infinite time");
+  Check(Rejects({"--integrator", "megakernel"}), "integrator name");
+  Check(Rejects({"--nee", "maybe"}), "nee value");
+  Check(Rejects({"--restir", "sometimes"}), "restir mode");
+  Check(Rejects({"--view", "albedo"}), "view name");
+  Check(Rejects({"--view", "reservoir-weight"}),
+      "a reservoir view without reservoirs");
   Check(Rejects({"--bogus"}), "unknown option");
   Check(Lotus::viewport::Usage(true).find("--usd <stage>") !=
             std::string::npos,
