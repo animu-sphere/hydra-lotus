@@ -654,6 +654,16 @@ work: `--jobs` above one appends `; jobs=N` to every label, and timing or
 cost evidence must use `--jobs 1`. Reducers that require identical labels
 therefore reject a mix of serial and concurrent runs.
 
+Serial runs are still mostly idle, so with dynamic clocks the GPU spends most
+frames in low power states and the same case can time five times slower
+depending on when it runs. Timing evidence also needs locked graphics and
+memory clocks (for example `nvidia-smi -lgc` and `-lmc`, set by an
+administrator), a clock log covering the campaign, and the clock state in the
+label. Disabling validation layers through the loader
+(`VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation`) removes their CPU
+overhead without changing any image; the report must say so
+([reuse-cost procedure](../reports/2026-10-17-restir-reuse-cost.md#timing-procedure)).
+
 ### Repeated quality budgets
 
 `scripts/restir_budget.py` consumes at least two successful comparison reports

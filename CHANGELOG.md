@@ -44,6 +44,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   and visibility edits in `lotus-renderer-hydra-restir-gpu`, each checking reset
   reasons, that no stale reservoir or radiance sample survives a reset, and
   byte-identical integrators ([evidence](docs/reports/2026-10-17-restir-reset-contract.md)).
+- ReSTIR reuse-cost decision at locked GPU clocks: NEE/MIS stays the default
+  on four workload suites under either integrator; initial-only reservoirs with
+  eight candidates reach equal quality about 1.4 times faster only with many
+  distant lights, and temporal, spatial and combined reuse are not worth using.
+  Timing evidence now requires locked clocks ([contract](docs/reference/RESTIR.md#campaigns),
+  [evidence](docs/reports/2026-10-17-restir-reuse-cost.md)).
 - `scripts/restir_campaign.py` runs a JSON plan of headless ReSTIR invocations
   with resumable, command-checked reports, a manifest and optional concurrency
   (labelled, and excluded from timing evidence)
