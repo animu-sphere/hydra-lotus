@@ -16,6 +16,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_scene.hpp"
+#include "presentation.hpp"
 #include "temporal_metadata.hpp"
 #include "vulkan_internal.hpp"
 #endif
@@ -656,14 +657,19 @@ public:
       vkDestroyRenderPass(device_, render_pass_, nullptr);
       vkDestroyRenderPass(device_, scene_render_pass_, nullptr);
       vkDestroyCommandPool(device_, command_pool_, nullptr);
+      if (presentation_)
+        presentation_->Destroy(instance_state_.instance);
       vkDestroyDevice(device_, nullptr);
+    } else if (presentation_) {
+      presentation_->Destroy(instance_state_.instance);
     }
     DestroyInstance(instance_state_);
   }
 
   bool Initialize(const std::string& vertex_shader,
       const std::string& fragment_shader, FrameStatus& status,
-      std::string& detail, const RayQueryShaders& ray_shaders) {
+      std::string& detail, const RayQueryShaders& ray_shaders,
+      const PresentOptions* presentation) {
     status = FrameStatus::Fail;
     std::vector<std::uint32_t> vertex_words;
     std::vector<std::uint32_t> fragment_words;
@@ -671,10 +677,25 @@ public:
         !LoadSpirv(fragment_shader, fragment_words, detail)) {
       return false;
     }
-    if (!CreateInstanceWithValidation("lotus-headless", {}, &validation_,
-            instance_state_, detail)) {
+    std::vector<const char*> instance_extensions;
+    if (presentation != nullptr) {
+      for (const std::string& extension :
+          presentation->surface.instance_extensions)
+        instance_extensions.push_back(extension.c_str());
+    }
+    if (!CreateInstanceWithValidation(
+            presentation != nullptr ? "lotus-viewport" : "lotus-headless",
+            instance_extensions, &validation_, instance_state_, detail)) {
       status = FrameStatus::Skip;
       return false;
+    }
+    if (presentation != nullptr) {
+      presentation_ = std::make_unique<vulkan_internal::Presentation>();
+      if (!presentation_->CreateSurface(instance_state_.instance,
+              presentation->surface, detail)) {
+        status = FrameStatus::Skip;
+        return false;
+      }
     }
     if (!SelectDevice(status, detail) || !CreateDevice(detail) ||
         !scene_.Initialize(physical_device_, device_, queue_, queue_family_,
@@ -684,6 +705,16 @@ public:
         !CreatePipeline(vertex_words, fragment_words, pipeline_layout_,
             {render_pass_}, pipeline_, detail)) {
       return false;
+    }
+    if (presentation_) {
+      bool unsupported = false;
+      if (!presentation_->Initialize(physical_device_, device_, queue_,
+              queue_family_, kSceneColorFormat, presentation->vsync,
+              unsupported, detail)) {
+        if (unsupported)
+          status = FrameStatus::Skip;
+        return false;
+      }
     }
     targets_.color_format = kColorFormat;
     targets_.color_pixel_bytes = 4;
@@ -981,10 +1012,11 @@ public:
         }
       }
     }
-    if (!InvalidateIfNeeded(device_, targets.color_readback_memory,
-            targets.color_readback_coherent, detail) ||
-        !InvalidateIfNeeded(device_, targets.depth_readback_memory,
-            targets.depth_readback_coherent, detail)) {
+    if (target.read_back &&
+        (!InvalidateIfNeeded(device_, targets.color_readback_memory,
+             targets.color_readback_coherent, detail) ||
+            !InvalidateIfNeeded(device_, targets.depth_readback_memory,
+                targets.depth_readback_coherent, detail))) {
       return Evidence(FrameStatus::Fail, detail);
     }
 
@@ -1007,23 +1039,28 @@ public:
     evidence.validation_detail = validation_.first_message.empty()
                                      ? instance_state_.validation_detail
                                      : validation_.first_message;
-    evidence.color.width = width;
-    evidence.color.height = height;
-    evidence.color.row_pitch = width * targets.color_pixel_bytes;
-    evidence.color.pixel_format = trace ? "rgba32-sfloat" : "rgba8-unorm";
-    evidence.color.origin = "top-left";
-    evidence.color.color_space = "linear";
-    evidence.color.payload.resize(pixel_count * targets.color_pixel_bytes);
-    std::memcpy(evidence.color.payload.data(), targets.color_mapped,
-        evidence.color.payload.size());
-    evidence.depth.width = width;
-    evidence.depth.height = height;
-    evidence.depth.row_pitch = width * sizeof(float);
-    evidence.depth.pixel_format = "d32-sfloat";
-    evidence.depth.origin = "top-left";
-    evidence.depth.payload.resize(pixel_count);
-    std::memcpy(evidence.depth.payload.data(), targets.depth_mapped,
-        pixel_count * sizeof(float));
+    if (target.read_back) {
+      evidence.color.width = width;
+      evidence.color.height = height;
+      evidence.color.row_pitch = width * targets.color_pixel_bytes;
+      evidence.color.pixel_format = trace ? "rgba32-sfloat" : "rgba8-unorm";
+      evidence.color.origin = "top-left";
+      evidence.color.color_space = "linear";
+      evidence.color.payload.resize(pixel_count * targets.color_pixel_bytes);
+      std::memcpy(evidence.color.payload.data(), targets.color_mapped,
+          evidence.color.payload.size());
+      evidence.depth.width = width;
+      evidence.depth.height = height;
+      evidence.depth.row_pitch = width * sizeof(float);
+      evidence.depth.pixel_format = "d32-sfloat";
+      evidence.depth.origin = "top-left";
+      evidence.depth.payload.resize(pixel_count);
+      std::memcpy(evidence.depth.payload.data(), targets.depth_mapped,
+          pixel_count * sizeof(float));
+    }
+    // Present copies this frame's scene colour; a bootstrap frame leaves
+    // nothing to present.
+    presentable_ = trace;
 
     if (trace && ray_timestamps_ != VK_NULL_HANDLE) {
       std::uint64_t ticks[2]{};
@@ -2089,6 +2126,30 @@ public:
     return evidence;
   }
 
+  PresentEvidence Present(std::uint32_t width, std::uint32_t height) override {
+    auto Fail = [](std::string detail) {
+      PresentEvidence evidence;
+      evidence.status = FrameStatus::Fail;
+      evidence.detail = std::move(detail);
+      return evidence;
+    };
+    if (!failure_.empty())
+      return Fail("the renderer failed earlier: " + failure_);
+    if (!presentation_)
+      return Fail("the renderer was created without a presentation surface");
+    if (!presentable_)
+      return Fail("no scene frame has been rendered to present");
+    PresentEvidence evidence = presentation_->Present(scene_targets_.color_image,
+        {scene_targets_.width, scene_targets_.height}, width, height);
+    if (evidence.status == FrameStatus::Fail)
+      failure_ = evidence.detail;
+    evidence.validation_message_count = validation_.message_count;
+    evidence.validation_detail = validation_.first_message.empty()
+                                     ? instance_state_.validation_detail
+                                     : validation_.first_message;
+    return evidence;
+  }
+
   GpuSceneContents ReadBackScene() override {
     GpuSceneContents contents;
     if (!failure_.empty()) {
@@ -2121,7 +2182,8 @@ private:
         physical_devices.data());
     for (VkPhysicalDevice physical : physical_devices) {
       const auto candidate = FindGraphicsQueue(physical);
-      if (candidate) {
+      if (candidate &&
+          (!presentation_ || presentation_->Supports(physical, *candidate))) {
         physical_device_ = physical;
         queue_family_ = *candidate;
         break;
@@ -2129,7 +2191,10 @@ private:
     }
     if (physical_device_ == VK_NULL_HANDLE) {
       status = FrameStatus::Skip;
-      detail = "no Vulkan physical device exposes a graphics queue";
+      detail = presentation_
+                   ? "no Vulkan physical device presents to the window "
+                     "from a graphics queue with VK_KHR_swapchain"
+                   : "no Vulkan physical device exposes a graphics queue";
       return false;
     }
 
@@ -2290,9 +2355,11 @@ private:
         enabled_acceleration.pNext = &enabled_query;
         extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
       }
-      device_create.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
-      device_create.ppEnabledExtensionNames = extensions.data();
     }
+    if (presentation_)
+      extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    device_create.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
+    device_create.ppEnabledExtensionNames = extensions.data();
     device_create.queueCreateInfoCount = 1;
     device_create.pQueueCreateInfos = &queue_create;
     if (!VulkanOk(vkCreateDevice(physical_device_, &device_create, nullptr,
@@ -2685,6 +2752,10 @@ private:
         targets.height == height) {
       return true;
     }
+    // A presentation's blit may still read the scene colour.
+    if (presentation_ && targets.framebuffer != VK_NULL_HANDLE &&
+        !VulkanOk(vkQueueWaitIdle(queue_), "vkQueueWaitIdle", detail))
+      return false;
     DestroyTargets(targets);
     if (&targets == &scene_targets_) {
       accumulation_key_.reset();
@@ -3040,6 +3111,9 @@ private:
       vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
     }
+    if (!target.read_back)
+      return VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer",
+          detail);
     VkBufferImageCopy color_copy{};
     color_copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     color_copy.imageSubresource.layerCount = 1;
@@ -3286,6 +3360,10 @@ private:
   std::uint32_t target_creations_ = 0;
   std::uint64_t completion_ = 0;
   std::string failure_;
+  // The window's swapchain; null for an offscreen renderer.
+  std::unique_ptr<vulkan_internal::Presentation> presentation_;
+  // Whether the latest frame was a scene frame, which Present copies.
+  bool presentable_ = false;
 };
 
 #endif
@@ -3294,18 +3372,20 @@ private:
 
 std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(
     const std::string& vertex_shader, const std::string& fragment_shader,
-    FrameStatus& status, std::string& error, const RayQueryShaders& ray_query_shaders) {
+    FrameStatus& status, std::string& error, const RayQueryShaders& ray_query_shaders,
+    const PresentOptions* presentation) {
 #if !defined(LOTUS_HAS_VULKAN)
   (void)vertex_shader;
   (void)fragment_shader;
   (void)ray_query_shaders;
+  (void)presentation;
   status = FrameStatus::Skip;
   error = "Vulkan backend was not compiled for this configuration";
   return nullptr;
 #else
   auto renderer = std::make_unique<VulkanOffscreenRenderer>();
   if (!renderer->Initialize(vertex_shader, fragment_shader, status, error,
-          ray_query_shaders)) {
+          ray_query_shaders, presentation)) {
     return nullptr;
   }
   return renderer;

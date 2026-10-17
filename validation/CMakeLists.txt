@@ -20,6 +20,11 @@ add_executable(lotus-viewport-camera-test viewport-camera-test.cpp)
 target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
+add_executable(lotus-viewport-options-test viewport-options-test.cpp
+  ../adapters/viewport/options.cpp)
+target_compile_features(lotus-viewport-options-test PRIVATE cxx_std_20)
+add_test(NAME lotus-viewport-options COMMAND lotus-viewport-options-test)
+
 add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
 target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction)
 add_test(NAME lotus-renderer-scene-mesh COMMAND lotus-render-world-mesh-test)

@@ -10,6 +10,7 @@
 
 #include <lotus/extraction.hpp>
 #include <lotus/temporal.hpp>
+#include <lotus/vulkan_present.hpp>
 
 namespace Lotus {
 
@@ -225,6 +226,32 @@ struct OffscreenTarget {
   // attachment; nonempty arrays must match the target extent.
   std::vector<float> preserved_color;
   std::vector<float> preserved_depth;
+  // False skips the colour and depth readback: their products stay empty
+  // and the frame stays on the GPU, for Present. Temporal and reservoir
+  // products are read back either way.
+  bool read_back = true;
+};
+
+// One OffscreenRenderer::Present call.
+struct PresentEvidence {
+  // Pass presented the frame. Skip presented nothing without an error: the
+  // window has a zero extent, or its swapchain was out of date and has been
+  // recreated for the next call.
+  FrameStatus status = FrameStatus::Skip;
+  std::string detail;
+  // Presentations since the renderer was created, this call's included.
+  std::uint64_t frames_presented = 0;
+  // Swapchain creations after the first: resizes and out-of-date surfaces.
+  std::uint32_t swapchain_recreates = 0;
+  std::uint32_t swapchain_width = 0;
+  std::uint32_t swapchain_height = 0;
+  // The swapchain's image format and present mode, as Vulkan names them
+  // without their prefixes ("B8G8R8A8_SRGB", "FIFO").
+  std::string swapchain_format;
+  std::string present_mode;
+  // Messages since the renderer was created, as in GpuFrameEvidence.
+  std::uint32_t validation_message_count = 0;
+  std::string validation_detail;
 };
 
 // Scene-owned backing memory and fragmentation. Renderer attachments and
@@ -600,6 +627,17 @@ public:
   // Copy the GPU scene's buffers back to the host. Validation only: it
   // allocates a readback buffer and waits for the copy.
   [[nodiscard]] virtual GpuSceneContents ReadBackScene() = 0;
+
+  // Copy the colour of the latest RenderScene or RenderTemporalScene frame
+  // into the window's next swapchain image and present it. The copy encodes
+  // the linear colour as sRGB, clamped to [0, 1], with no tone mapping. The
+  // swapchain follows `width` x `height`, the window's framebuffer extent; a
+  // frame of another extent is scaled to it. Returns once the copy is
+  // submitted; the next frame is ordered after it on the queue. Fails
+  // without a presentation surface or before a scene frame; a failed
+  // presentation leaves the renderer failed, as a failed frame does.
+  [[nodiscard]] virtual PresentEvidence Present(
+      std::uint32_t width, std::uint32_t height) = 0;
 };
 
 struct RayQueryShaders {
@@ -616,10 +654,17 @@ struct RayQueryShaders {
 // device capability report Skip, real failures Fail. Shader paths are explicit so build-tree and
 // install-tree layouts exercise the same backend code without source-tree
 // fallbacks.
+//
+// With `presentation`, the renderer also owns the window's surface and
+// swapchain, for Present: the device must present to the surface from its
+// graphics queue, and the surface must offer an sRGB format the scene colour
+// can be copied to. A surface the window layer cannot create, or a device
+// without either, reports Skip.
 [[nodiscard]] std::unique_ptr<OffscreenRenderer> CreateOffscreenRenderer(
     const std::string& vertex_shader, const std::string& fragment_shader,
     FrameStatus& status, std::string& error,
-    const RayQueryShaders& ray_query_shaders = {});
+    const RayQueryShaders& ray_query_shaders = {},
+    const PresentOptions* presentation = nullptr);
 
 // One-shot convenience: create a renderer, render `frame_count` frames and
 // destroy it.

@@ -51,7 +51,7 @@ See the [design policy](docs/design/DESIGN_POLICY.md).
 | `lotus-render-vulkan` | `backend/vulkan/` | Vulkan backend and Slang shaders |
 | `hdLotus` | `adapters/hydra2/` | Hydra render delegate and renderer plugin |
 | `lotus-headless` | `adapters/headless/` | headless runner and renderer evidence |
-| `lotus-viewport` | `adapters/viewport/` | standalone window |
+| `lotus-viewport` | `adapters/viewport/` | standalone renderer frontend |
 
 What each can do today is the
 [capability matrix](docs/reference/CAPABILITY_MATRIX.md); where new code goes

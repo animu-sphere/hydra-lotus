@@ -2,6 +2,10 @@
 if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "EXECUTABLE and TEST_ROOT are required")
 endif()
+# The explanation the SKIP must give; the instance creation's by default.
+if(NOT DEFINED EXPECTED)
+  set(EXPECTED "SKIP:.*VK_ERROR_INCOMPATIBLE_DRIVER")
+endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 set(manifest "${TEST_ROOT}/unavailable-manifest.json")
 if(EXISTS "${manifest}")
@@ -19,7 +23,7 @@ execute_process(
   ERROR_VARIABLE error
   TIMEOUT 30)
 if(NOT result STREQUAL "77" OR
-   NOT output MATCHES "SKIP:.*VK_ERROR_INCOMPATIBLE_DRIVER")
+   NOT output MATCHES "${EXPECTED}")
   message(FATAL_ERROR
     "Missing Vulkan driver must produce an explained SKIP (77), got ${result}:\n${output}\n${error}")
 endif()

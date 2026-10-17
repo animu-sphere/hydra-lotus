@@ -26,25 +26,11 @@ review's [routing](../reports/2026-10-17-renderer-phase5-exit.md#after-the-exit)
 
 `lotus-viewport` becomes the
 [renderer frontend](../design/ROADMAP_POLICY.md#standalone-viewport-frontend)
-for everyday use; it does not become a UI framework.
+for everyday use; it does not become a UI framework. It already presents the
+progressive path tracer from the backend and opens USD stages through the
+Hydra adapter ([evidence](../reports/2026-10-17-viewport-presentation.md),
+[usage](../guides/BUILDING.md#the-standalone-viewport)).
 
-- [ ] **LOTUS-VIEWPORT-01 — Presentation loop and scene loading.**
-  A stable swapchain lifecycle, resize, basic fullscreen/windowed operation,
-  a predictable present loop and validation-clean presentation, replacing
-  the bootstrap triangle with the renderer's progressive output. Open a USD
-  stage the way [`hydra-merlin`'s viewport](https://github.com/animu-sphere/hydra-merlin/blob/main/docs/guides/viewport.md#opening-usd-stages)
-  does ([DES-Q8](../design/DESIGN_POLICY.md#53-open-questions),
-  [layout edge](../architecture/PROJECT_LAYOUT.md#4-dependency-directions)):
-  with `LOTUS_ENABLE_HYDRA2` the viewport links `lotus-hydra2-runtime` and
-  a host-dependency interface target exported by `adapters/hydra2/`, creates
-  the render delegate directly and drives it with `HdRenderIndex`,
-  `UsdImagingDelegate`, `HdEngine` and its own task; normal frames present
-  from the backend without a CPU readback. The default viewport build stays
-  OpenUSD-free. Add an OpenStrata intent for the Hydra-enabled viewport, a
-  generated Windows launcher that puts the OpenUSD runtime on `PATH` for the
-  process only, and scripted CTests (`--hidden`, `--frames`, validation,
-  a resize test, an explained SKIP without a device, `--usd <stage>` and a
-  benchmark JSON), with and without a stage.
 - [ ] **LOTUS-VIEWPORT-02 — Camera and accumulation.** Orbit, pan and dolly;
   authored camera selection; accumulation restarted on camera change; scene
   dirty updates applied.
