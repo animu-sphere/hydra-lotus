@@ -88,6 +88,7 @@ struct Fixture {
   SceneExtraction extraction;
   OffscreenTarget target;
   PathTracingSettings settings;
+  GpuSceneStats scene;
   std::uint64_t frame_index = 0;
   Fixture(OffscreenRenderer& r, Integrator integrator, unsigned size = 8) : renderer(r) {
     target.width = target.height = size;
@@ -111,6 +112,7 @@ struct Fixture {
     auto snapshot = world.Commit();
     const auto upload = renderer.UpdateScene(extraction.Update(snapshot));
     Check(upload.status == FrameStatus::Pass, upload.detail.c_str());
+    scene = upload.stats;
     auto frame = renderer.RenderTemporalScene(snapshot, target, 1, temporal, settings);
     Check(frame.status == FrameStatus::Pass, frame.detail.c_str());
     Check(frame.validation_message_count == 0, frame.validation_detail.c_str());
@@ -592,6 +594,90 @@ void TemporalLifecycle(OffscreenRenderer& renderer, Integrator integrator) {
   auto both = f.Temporal(radiance);
   Check(both.restir.available && both.temporal.radiance_available, "combined history unavailable");
   std::cout << "temporal lifecycle: camera/rigid motion, settings/light/cut/gap/target/ordinary resets PASS\n";
+}
+
+// Emissive-state animation: emission edits, toggles, visibility and emitter
+// motion reset reservoir and radiance history; while table-backed emissive
+// triangles exist any scene edit resets conservatively, camera motion does
+// not. Each integrator's frames are kept so the second can be compared.
+struct EmissiveFrame {
+  TemporalResetReason reason;
+  std::vector<RestirReusePixel> reservoirs;
+  std::vector<std::uint8_t> color;
+};
+std::vector<EmissiveFrame> emissive_frames[2];
+void EmissiveLifecycle(OffscreenRenderer& renderer, Integrator integrator, bool spatial) {
+  using R = TemporalResetReason;
+  Fixture f(renderer, integrator, 16); PlaneWorld(f.world);
+  f.settings.restir_spatial = spatial;
+  Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = {0.5F, 0.5F, 0.5F};
+  f.world.SetLight("/light", light);
+  f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), {});
+  Material emitter; emitter.ior = 1; emitter.base_color = {0, 0, 0}; emitter.emission = {4, 2, 1};
+  f.world.SetMaterial("/emitter", emitter); f.world.BindMaterial("/emitter", "/emitter");
+  TemporalFrameSettings radiance; radiance.accumulate_radiance = true;
+  std::vector<EmissiveFrame> frames;
+  auto step = [&](R expected, std::uint32_t emissive) {
+    auto frame = f.Temporal(radiance);
+    const bool history = expected == R::None;
+    Check(frame.temporal.reset_reason == expected && frame.restir.history_available == history &&
+        frame.restir.previous.empty() != history && frame.temporal.radiance_available &&
+        frame.temporal.previous_radiance.empty() != history, "emissive reset reason/history");
+    Check(f.scene.emissive_triangles == emissive, "emissive light table size");
+    std::size_t reused = 0, accumulated = 0;
+    for (unsigned i = 0; i < frame.restir.temporal.size(); ++i) {
+      const auto& p = frame.restir.temporal[i];
+      reused += p.previous_index != UINT32_MAX;
+      accumulated += frame.temporal.radiance[i].sample_count > 1;
+      if (!history)
+        Check(p.previous_index == UINT32_MAX && p.age == 0 && frame.temporal.radiance[i].sample_count <= 1 &&
+            std::memcmp(&frame.restir.initial[i], &p.reservoir, sizeof(RestirPixel)) == 0,
+            "reset reused a stale reservoir or radiance sample");
+    }
+    Check(history == (reused != 0) && history == (accumulated != 0), "retained history unused");
+    frames.push_back({expected, spatial ? frame.restir.spatial : frame.restir.temporal, frame.color.payload});
+  };
+  step(R::FirstFrame, 2);
+  step(R::None, 2);
+  auto camera = Perspective(); camera.view = Translation(-0.25F, 0, 0);
+  f.world.SetCamera(camera);
+  step(R::None, 2);
+  emitter.emission = {1, 2, 4}; f.world.SetMaterial("/emitter", emitter);
+  step(R::SceneChanged, 2);
+  step(R::None, 2);
+  MeshInstance placement; placement.world_from_object = Translation(0.25F, 0, 0);
+  f.world.SetMesh("/plane", kPlane, placement);
+  step(R::SceneChanged, 2);
+  f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), placement);
+  step(R::SceneChanged, 2);
+  emitter.emission = {0, 0, 0}; f.world.SetMaterial("/emitter", emitter);
+  step(R::SceneChanged, 0);
+  placement.world_from_object = Translation(0, 0, 0);
+  f.world.SetMesh("/plane", kPlane, placement);
+  step(R::None, 0);
+  emitter.emission = {4, 2, 1}; f.world.SetMaterial("/emitter", emitter);
+  step(R::SceneChanged, 2);
+  MeshInstance hidden = placement; hidden.world_from_object = Translation(0.25F, 0, 0); hidden.visible = false;
+  f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), hidden);
+  step(R::SceneChanged, 0);
+  hidden.visible = true;
+  f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), hidden);
+  step(R::SceneChanged, 2);
+  step(R::None, 2);
+  auto& slot = emissive_frames[spatial ? 1 : 0];
+  if (integrator == Integrator::Reference) {
+    slot = std::move(frames);
+  } else {
+    Check(slot.size() == frames.size(), "emissive reference sequence missing");
+    for (std::size_t i = 0; i < frames.size(); ++i)
+      Check(slot[i].reason == frames[i].reason && slot[i].color == frames[i].color &&
+          slot[i].reservoirs.size() == frames[i].reservoirs.size() &&
+          std::memcmp(slot[i].reservoirs.data(), frames[i].reservoirs.data(),
+              frames[i].reservoirs.size() * sizeof(RestirReusePixel)) == 0,
+          "integrators differ under emissive animation");
+  }
+  std::cout << "emissive lifecycle" << (spatial ? " (spatial)" : "")
+            << ": emission/toggle/visibility/emitter/conservative resets, camera and nonemissive retention PASS\n";
 }
 
 void TemporalSupport(OffscreenRenderer& renderer, Integrator integrator, bool spatial = false) {
@@ -1316,7 +1402,7 @@ int main(int argc, char** argv) try {
     const unsigned first_test = argc > 7 && std::string(argv[7]) == "--bsdf-only" ? 27U :
         argc > 7 && std::string(argv[7]) == "--visibility-only" ? 25U :
         argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
-    for (unsigned test = first_test; test < 29; ++test) {
+    for (unsigned test = first_test; test < 31; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -1348,6 +1434,8 @@ int main(int argc, char** argv) try {
       if (test == 26) VisibilitySampleIdentity(*renderer, integrator, true);
       if (test == 27) BsdfPartition(*renderer, integrator);
       if (test == 28) GlossyFurnace(*renderer, integrator);
+      if (test == 29) EmissiveLifecycle(*renderer, integrator, false);
+      if (test == 30) EmissiveLifecycle(*renderer, integrator, true);
     }
   }
   std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";
