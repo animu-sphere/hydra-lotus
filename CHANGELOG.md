@@ -32,6 +32,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   bias, ghosting or localized error distinguishable from non-reusing estimators
   ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [evidence](docs/reports/2026-10-17-restir-interreflection.md)).
+- Headless ReSTIR comparison `animation` workload: stepped light placement, power
+  and material edits that must reset reservoir history exactly at each edit, with
+  an across-sequence step-lag residual correlation. No reset-related ghosting is
+  detectable; each reset replays the fresh-batch random numbers, correlating reuse
+  noise across edits
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-17-restir-animation.md)).
 - `scripts/restir_campaign.py` runs a JSON plan of headless ReSTIR invocations
   with resumable, command-checked reports, a manifest and optional concurrency
   (labelled, and excluded from timing evidence)
