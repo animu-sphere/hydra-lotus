@@ -230,8 +230,8 @@ ost renderer viewport --intent viewport-usd --profile lookdev -- --usd path/to/s
 It drives the Hydra adapter in process: UsdImaging populates a render index
 over the Lotus render delegate, and the render pass presents to the window.
 The stage is framed as usdview frames it initially (its bounds, authored up
-axis and a 60 degree field of view); camera controls and authored cameras
-come with LOTUS-VIEWPORT-02 ([current plan](../roadmap/current.md#step-2--viewport-foundation)).
+axis and a 60 degree field of view), at the stage's start time code when it
+authors a time range and at the default time otherwise.
 On Windows that build also writes `run-lotus-viewport.cmd` beside the
 executable (`build/<target>--viewport-usd--renderer-viewport/adapters/viewport/`),
 which puts the OpenUSD runtime's DLLs on `PATH` for that process only:
@@ -240,9 +240,17 @@ which puts the OpenUSD runtime's DLLs on `PATH` for that process only:
 run-lotus-viewport.cmd --usd path/to/stage.usda
 ```
 
+`ost renderer viewport --intent viewport-usd` launches the copy that the
+`lotus-renderer-usdview-host` test installs in that tree
+(`adapters/hydra2/usdview-install/bin/`), which is stale until that test runs
+again after a change; the launcher above runs the executable just built
+([evidence](../reports/2026-10-17-viewport-camera.md#limits)).
+
 | Option | Effect |
 | --- | --- |
 | `--usd <stage>` | open a USD stage (Hydra-enabled build only) |
+| `--camera <prim>` | look through the stage's camera prim at first, instead of the free camera |
+| `--time T` | open the stage at time code `T` |
 | `--width N`, `--height N` | window size, 1280x720 by default |
 | `--fullscreen` | start on the primary monitor; F11 toggles while running |
 | `--samples N` | samples per pixel to accumulate, 1024 by default; the accumulation restarts on a resize |
@@ -250,19 +258,42 @@ run-lotus-viewport.cmd --usd path/to/stage.usda
 | `--frames N`, `--hidden` | scripted runs: exit after N presented frames, without showing the window |
 | `--validate` | fail unless the Khronos validation layer captured the run; captured messages fail every run |
 | `--resize-test` | resize once after the second frame and fail unless the swapchain followed |
+| `--interaction-test` | apply the scene's scripted inputs and edits, one per frame from the second, and fail unless each restarts or continues the accumulation as it should |
 | `--allow-unavailable` | exit 77 instead of 1, with a `SKIP:` explanation, where no driver or device can present |
 | `--benchmark <file>` | write the run's frame counts, CPU and GPU times, swapchain and validation state as JSON (`lotus.viewport-benchmark/v1`) |
 
+The free camera follows usdview's bindings, without requiring Alt:
+
+| Input | Action |
+| --- | --- |
+| left drag | tumble, a quarter degree per pixel |
+| middle drag, or Ctrl + left drag | track: the point under the cursor follows it |
+| right drag, wheel | dolly |
+| F | restore the initial framing |
+| C | the stage's next authored camera, then the free camera again |
+| Left, Right | one time code back or forward, within an authored time range |
+| R | reload the stage's layers |
+| F11, Esc | fullscreen, exit |
+
+C, the arrows and R act on USD stages only. Navigating while looking through
+an authored camera hands its view, conformed to the window, to the free
+camera, which then orbits the point in front of it at the stage bounds'
+depth; roll is kept, scale and an orthographic projection are not. Every
+frame applies the stage's pending edits (reloaded layers, a new time code)
+before rendering. A changed camera or scene restarts the accumulation; a
+time code that changes nothing continues it.
+
 The presented image is the linear radiance encoded as sRGB and clamped, with
-no exposure or tone mapping. The title bar shows the scene, device, extent,
+no exposure or tone mapping. The title bar shows the scene, the camera and time code, device, extent,
 samples per pixel and the last frame's GPU time. Validation is enabled
 whenever the Vulkan SDK's layer is installed, which costs CPU time; set
 `VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation` for an interactive
 session without it.
 
-CTest runs `lotus-viewport-present` (the built-in scene),
-`lotus-viewport-hydra` (the smoke stage, Hydra-enabled build only) and
-`lotus-viewport-no-driver` (an explained skip with Vulkan driver discovery
+CTest runs `lotus-viewport-present` and `lotus-viewport-interaction` (the
+built-in scene), `lotus-viewport-hydra`, `lotus-viewport-hydra-interaction`
+and `lotus-viewport-hydra-camera` (the smoke stage, Hydra-enabled build
+only) and `lotus-viewport-no-driver` (an explained skip with Vulkan driver discovery
 pointed at a missing manifest), each in the viewport's tree, plus the
 window-free `lotus-viewport-options` and `lotus-viewport-camera` in every
 tree.

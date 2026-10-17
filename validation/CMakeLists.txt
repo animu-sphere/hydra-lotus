@@ -21,8 +21,10 @@ add_test(NAME lotus-renderer-core-boundary-discovery
     "-DCHECKER=${CMAKE_CURRENT_BINARY_DIR}/check-core-boundary.cmake"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/core-boundary-test.cmake")
 
-add_executable(lotus-viewport-camera-test viewport-camera-test.cpp)
-target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
+add_executable(lotus-viewport-camera-test viewport-camera-test.cpp
+  ../adapters/viewport/orbit_camera.cpp)
+target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::Warnings)
+target_compile_features(lotus-viewport-camera-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
 add_executable(lotus-viewport-options-test viewport-options-test.cpp

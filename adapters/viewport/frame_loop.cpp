@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frame_loop.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -108,17 +109,116 @@ void WriteBenchmark(const std::filesystem::path& path,
       << "}\n";
 }
 
-std::string Title(std::string_view scene_source, const RunTotals& totals) {
+std::string Title(const Scene& scene, const RunTotals& totals) {
   std::ostringstream title;
-  title << "lotus-viewport | " << scene_source << " | "
-        << totals.last.frame.device_name << " | " << totals.width << 'x'
+  title << "lotus-viewport | " << scene.source() << " | " << scene.Status()
+        << " | " << totals.last.frame.device_name << " | " << totals.width << 'x'
         << totals.height << " | " << totals.last.frame.samples_per_pixel
         << " spp | " << std::setprecision(2) << std::fixed
         << FrameGpuMs(totals.last.frame) << " ms GPU";
   return title.str();
 }
 
+// The interaction test: each step is applied after a frame, and the next
+// frame says whether it restarted the accumulation.
+class InteractionTest {
+public:
+  InteractionTest(std::vector<InteractionStep> steps, std::uint32_t samples)
+      : steps_(std::move(steps)), samples_(samples) {
+  }
+
+  // After each frame: checks the pending step, then applies the next one
+  // from the second frame on. False, with `error`, fails the run.
+  bool AfterFrame(std::uint64_t frames, std::uint32_t samples_per_pixel,
+      std::string& error) {
+    if (pending_) {
+      pending_ = false;
+      const std::uint32_t expected =
+          restarts_ ? 1U : std::min(before_ + 1U, samples_);
+      const InteractionStep& step = steps_[verified_];
+      if (samples_per_pixel != expected) {
+        error = "interaction test: " + step.name + " left " +
+                std::to_string(samples_per_pixel) +
+                " samples per pixel, expected " + std::to_string(expected) +
+                (restarts_ ? " (a restarted accumulation)"
+                           : " (a continued accumulation)");
+        return false;
+      }
+      std::cout << "Interaction: " << step.name << ": "
+                << (restarts_ ? "restarted" : "continued")
+                << " the accumulation (" << samples_per_pixel << " spp)\n";
+      ++verified_;
+    }
+    if (frames >= 2 && verified_ < steps_.size()) {
+      const InteractionStep& step = steps_[verified_];
+      restarts_ = step.restarts;
+      before_ = samples_per_pixel;
+      if (!step.apply(restarts_, error)) {
+        error = "interaction test: " + step.name + ": " + error;
+        return false;
+      }
+      pending_ = true;
+    }
+    return true;
+  }
+
+  [[nodiscard]] std::size_t verified() const noexcept {
+    return verified_;
+  }
+  [[nodiscard]] std::size_t size() const noexcept {
+    return steps_.size();
+  }
+
+private:
+  std::vector<InteractionStep> steps_;
+  std::uint32_t samples_ = 0;
+  std::size_t verified_ = 0;
+  bool pending_ = false;
+  bool restarts_ = true;
+  std::uint32_t before_ = 0;
+};
+
 } // namespace
+
+void Drag(Scene& scene, Button button, double delta_x, double delta_y) {
+  Event event{EventType::PointerDown};
+  event.button = button;
+  scene.Handle(event);
+  event.type = EventType::PointerMove;
+  event.x = delta_x;
+  event.y = delta_y;
+  scene.Handle(event);
+  event.type = EventType::PointerUp;
+  scene.Handle(event);
+}
+
+void Wheel(Scene& scene, double notches) {
+  Event event{EventType::Scroll};
+  event.scroll = notches;
+  scene.Handle(event);
+}
+
+void Press(Scene& scene, Key key) {
+  Event event{EventType::KeyDown};
+  event.key = key;
+  scene.Handle(event);
+}
+
+std::vector<InteractionStep> NavigationSteps(Scene& scene) {
+  const auto step = [&scene](std::string name, std::function<void()> input) {
+    return InteractionStep{std::move(name), true,
+        [input = std::move(input)](bool&, std::string&) {
+          input();
+          return true;
+        }};
+  };
+  return {step("tumble (left drag)",
+              [&scene] { Drag(scene, Button::Left, 40.0, -20.0); }),
+      step("track (middle drag)",
+          [&scene] { Drag(scene, Button::Middle, -30.0, 15.0); }),
+      step("dolly (wheel)", [&scene] { Wheel(scene, 1.0); }),
+      step("frame (F)", [&scene] { Press(scene, Key::Frame); })};
+}
 
 int Unavailable(const Options& options, std::string_view reason) {
   std::cout << "SKIP: " << reason << '\n';
@@ -129,10 +229,13 @@ int Unavailable(const Options& options, std::string_view reason) {
   return options.allow_unavailable ? kExitSkip : 1;
 }
 
-int RunFrameLoop(const Options& options, Window& window,
-    std::string_view scene_source, const std::string& stage,
-    const RenderFrameFunction& render) {
+int RunFrameLoop(const Options& options, Window& window, Scene& scene,
+    const std::string& stage) {
   RunTotals totals;
+  InteractionTest interaction(options.interaction_test
+                                  ? scene.InteractionSteps()
+                                  : std::vector<InteractionStep>{},
+      options.samples);
   // Out-of-date swapchains skip a present without an error; a run that
   // keeps skipping is still a failure.
   const std::uint64_t frame_cap =
@@ -152,6 +255,8 @@ int RunFrameLoop(const Options& options, Window& window,
       } else if (event.type == EventType::KeyDown &&
                  event.key == Key::Fullscreen) {
         window.SetFullscreen(!window.fullscreen());
+      } else if (event.type != EventType::Resize) {
+        scene.Handle(event);
       }
     }
     if (!running) {
@@ -172,8 +277,9 @@ int RunFrameLoop(const Options& options, Window& window,
     }
     FrameResult result;
     const auto start = Clock::now();
-    if (!render(width, height, result, error)) {
-      std::cerr << "lotus-viewport: " << error << '\n';
+    if (!scene.Render(width, height, result, error)) {
+      std::cerr << "lotus-viewport: frame " << totals.frames + 1 << ": "
+                << error << '\n';
       return 1;
     }
     totals.cpu_ns += static_cast<std::uint64_t>(
@@ -197,6 +303,11 @@ int RunFrameLoop(const Options& options, Window& window,
     totals.width = width;
     totals.height = height;
     totals.last = std::move(result);
+    if (!interaction.AfterFrame(totals.frames,
+            totals.last.frame.samples_per_pixel, error)) {
+      std::cerr << "lotus-viewport: " << error << '\n';
+      return 1;
+    }
     if (options.resize_test && !resized_for_test &&
         totals.last.present.frames_presented == 2) {
       window.SetSize(width + 64U, height + 32U);
@@ -204,13 +315,13 @@ int RunFrameLoop(const Options& options, Window& window,
     }
     const auto now = Clock::now();
     if (now - title_update >= std::chrono::milliseconds(250)) {
-      window.SetTitle(Title(scene_source, totals));
+      window.SetTitle(Title(scene, totals));
       title_update = now;
     }
   }
 
   if (!options.benchmark.empty()) {
-    WriteBenchmark(options.benchmark, scene_source, stage, totals);
+    WriteBenchmark(options.benchmark, scene.source(), stage, totals);
   }
   const GpuFrameEvidence& frame = totals.last.frame;
   const PresentEvidence& present = totals.last.present;
@@ -236,6 +347,13 @@ int RunFrameLoop(const Options& options, Window& window,
     std::cerr << "lotus-viewport: the swapchain did not follow the resize\n";
     exit_code = 1;
   }
+  if (interaction.verified() != interaction.size()) {
+    std::cerr << "lotus-viewport: the interaction test verified "
+              << interaction.verified() << " of " << interaction.size()
+              << " steps; it needs --frames " << interaction.size() + 2
+              << " or more\n";
+    exit_code = 1;
+  }
   if (options.frame_limit != 0 && running &&
       present.frames_presented < options.frame_limit) {
     std::cerr << "lotus-viewport: presented " << present.frames_presented
@@ -244,7 +362,7 @@ int RunFrameLoop(const Options& options, Window& window,
   }
   if (exit_code == 0) {
     std::cout << "Presented " << present.frames_presented << " frames of "
-              << scene_source << " on " << frame.device_name << " ("
+              << scene.source() << " on " << frame.device_name << " ("
               << frame.samples_per_pixel << " spp, "
               << present.swapchain_format << ' ' << present.present_mode
               << ", swapchain recreates: " << present.swapchain_recreates

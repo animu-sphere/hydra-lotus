@@ -4,32 +4,15 @@
 // core or backend targets.
 #pragma once
 
+#include "input.hpp"
+
+#include <lotus/vulkan_present.hpp>
+
 #include <cstdint>
 #include <memory>
 #include <string_view>
 
-#include <lotus/vulkan_present.hpp>
-
 namespace Lotus::viewport {
-
-enum class EventType {
-  Close,
-  Resize,
-  KeyDown,
-};
-
-enum class Key {
-  Unknown,
-  Escape,
-  Fullscreen,
-};
-
-struct Event {
-  EventType type = EventType::Close;
-  Key key = Key::Unknown;
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-};
 
 class Window {
 public:

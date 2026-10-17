@@ -30,6 +30,7 @@ add_executable(lotus-viewport
   frame_loop.cpp
   main.cpp
   options.cpp
+  orbit_camera.cpp
   window_glfw.cpp
   "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp")
 target_include_directories(lotus-viewport PRIVATE
@@ -81,6 +82,13 @@ if(LOTUS_BUILD_TESTS)
   add_test(NAME lotus-viewport-present
     COMMAND lotus-viewport ${_lotus_viewport_smoke}
       --benchmark "${CMAKE_CURRENT_BINARY_DIR}/viewport-benchmark.json")
+  # Scripted navigation and scene edits, each of which must restart (or
+  # continue) the accumulation.
+  set(_lotus_viewport_interaction
+    --hidden --frames 16 --vsync off --validate --interaction-test
+    --allow-unavailable)
+  add_test(NAME lotus-viewport-interaction
+    COMMAND lotus-viewport ${_lotus_viewport_interaction})
   # Without a Vulkan driver the viewport explains the skip (77).
   add_test(NAME lotus-viewport-no-driver
     COMMAND "${CMAKE_COMMAND}"
@@ -89,14 +97,26 @@ if(LOTUS_BUILD_TESTS)
       "-DARGUMENTS=--hidden;--frames;2;--allow-unavailable"
       "-DEXPECTED=SKIP: .*no Vulkan driver presents"
       -P "${PROJECT_SOURCE_DIR}/validation/synchronization-no-driver-test.cmake")
-  set(_lotus_viewport_gpu_tests lotus-viewport-present)
+  set(_lotus_viewport_gpu_tests lotus-viewport-present
+    lotus-viewport-interaction)
   if(LOTUS_ENABLE_HYDRA2)
+    set(_lotus_viewport_stage
+      "${PROJECT_SOURCE_DIR}/adapters/hydra2/tests/usdview-smoke.usda")
     add_test(NAME lotus-viewport-hydra
       COMMAND lotus-viewport ${_lotus_viewport_smoke}
-        --usd "${PROJECT_SOURCE_DIR}/adapters/hydra2/tests/usdview-smoke.usda"
+        --usd "${_lotus_viewport_stage}"
         --benchmark "${CMAKE_CURRENT_BINARY_DIR}/viewport-hydra-benchmark.json")
-    list(APPEND _lotus_viewport_gpu_tests lotus-viewport-hydra)
-    set_tests_properties(lotus-viewport-present lotus-viewport-hydra
+    add_test(NAME lotus-viewport-hydra-interaction
+      COMMAND lotus-viewport ${_lotus_viewport_interaction}
+        --usd "${_lotus_viewport_stage}")
+    # Starts looking through the stage's authored camera at a time code.
+    add_test(NAME lotus-viewport-hydra-camera
+      COMMAND lotus-viewport --hidden --frames 4 --vsync off --validate
+        --allow-unavailable --usd "${_lotus_viewport_stage}"
+        --camera /Camera --time 1)
+    list(APPEND _lotus_viewport_gpu_tests lotus-viewport-hydra
+      lotus-viewport-hydra-interaction lotus-viewport-hydra-camera)
+    set_tests_properties(${_lotus_viewport_gpu_tests}
       lotus-viewport-no-driver PROPERTIES
       ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:${_pxr_root}/bin;PATH=path_list_prepend:${_pxr_root}/lib")

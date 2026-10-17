@@ -150,20 +150,92 @@ private:
           self.events_.push_back(event);
         });
     glfwSetKeyCallback(
-        window_, [](GLFWwindow* window, int key, int, int action, int) {
+        window_, [](GLFWwindow* window, int key, int, int action, int mods) {
           if (action == GLFW_PRESS || action == GLFW_REPEAT) {
             Event event{EventType::KeyDown};
-            event.key = key == GLFW_KEY_ESCAPE ? Key::Escape
-                        : key == GLFW_KEY_F11  ? Key::Fullscreen
-                                               : Key::Unknown;
+            event.key = MapKey(key);
+            event.modifiers = MapModifiers(mods);
             Self(window).events_.push_back(event);
           }
+        });
+    glfwSetMouseButtonCallback(
+        window_, [](GLFWwindow* window, int button, int action, int mods) {
+          if (button != GLFW_MOUSE_BUTTON_LEFT &&
+              button != GLFW_MOUSE_BUTTON_MIDDLE &&
+              button != GLFW_MOUSE_BUTTON_RIGHT) {
+            return;
+          }
+          auto& self = Self(window);
+          Event event = self.Pointer(action == GLFW_PRESS
+                                         ? EventType::PointerDown
+                                         : EventType::PointerUp);
+          event.button = button == GLFW_MOUSE_BUTTON_LEFT     ? Button::Left
+                         : button == GLFW_MOUSE_BUTTON_MIDDLE ? Button::Middle
+                                                              : Button::Right;
+          event.modifiers = MapModifiers(mods);
+          self.events_.push_back(event);
+        });
+    glfwSetCursorPosCallback(window_, [](GLFWwindow* window, double, double) {
+      auto& self = Self(window);
+      self.events_.push_back(self.Pointer(EventType::PointerMove));
+    });
+    glfwSetScrollCallback(
+        window_, [](GLFWwindow* window, double, double offset) {
+          auto& self = Self(window);
+          Event event = self.Pointer(EventType::Scroll);
+          event.scroll = offset;
+          self.events_.push_back(event);
         });
     int framebuffer_width = 0;
     int framebuffer_height = 0;
     glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
     width_ = static_cast<std::uint32_t>(std::max(0, framebuffer_width));
     height_ = static_cast<std::uint32_t>(std::max(0, framebuffer_height));
+  }
+
+  static Key MapKey(int key) noexcept {
+    switch (key) {
+    case GLFW_KEY_ESCAPE:
+      return Key::Escape;
+    case GLFW_KEY_F11:
+      return Key::Fullscreen;
+    case GLFW_KEY_F:
+      return Key::Frame;
+    case GLFW_KEY_C:
+      return Key::NextCamera;
+    case GLFW_KEY_R:
+      return Key::Reload;
+    case GLFW_KEY_LEFT:
+      return Key::TimeBack;
+    case GLFW_KEY_RIGHT:
+      return Key::TimeForward;
+    default:
+      return Key::Unknown;
+    }
+  }
+
+  static Modifiers MapModifiers(int mods) noexcept {
+    return {(mods & GLFW_MOD_SHIFT) != 0, (mods & GLFW_MOD_CONTROL) != 0,
+        (mods & GLFW_MOD_ALT) != 0};
+  }
+
+  // A pointer event at the cursor, in framebuffer pixels: GLFW reports the
+  // cursor in screen coordinates, which differ on high-DPI displays.
+  Event Pointer(EventType type) const {
+    Event event{type};
+    double x = 0.0;
+    double y = 0.0;
+    glfwGetCursorPos(window_, &x, &y);
+    int window_width = 0;
+    int window_height = 0;
+    glfwGetWindowSize(window_, &window_width, &window_height);
+    event.x = window_width > 0
+                  ? x * static_cast<double>(width_) / window_width
+                  : x;
+    event.y = window_height > 0
+                  ? y * static_cast<double>(height_) / window_height
+                  : y;
+    return event;
   }
 
   static GlfwWindow& Self(GLFWwindow* window) {

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "options.hpp"
 
+#include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace Lotus::viewport {
@@ -27,6 +29,23 @@ std::uint64_t ReadUnsigned(std::string_view value, std::string_view name,
     throw reject();
   }
   if (consumed != value.size() || result > maximum) {
+    throw reject();
+  }
+  return result;
+}
+
+double ReadTime(std::string_view value) {
+  const auto reject = []() {
+    return std::invalid_argument("--time must be a finite time code");
+  };
+  std::size_t consumed = 0;
+  double result = 0.0;
+  try {
+    result = std::stod(std::string(value), &consumed);
+  } catch (const std::exception&) {
+    throw reject();
+  }
+  if (consumed != value.size() || !std::isfinite(result)) {
     throw reject();
   }
   return result;
@@ -75,6 +94,15 @@ Options ParseOptions(int argc, const char* const* argv) {
       result.resize_test = true;
     } else if (option == "--allow-unavailable") {
       result.allow_unavailable = true;
+    } else if (option == "--interaction-test") {
+      result.interaction_test = true;
+    } else if (option == "--camera") {
+      result.camera = std::string(next());
+      if (result.camera.empty() || result.camera.front() != '/') {
+        throw std::invalid_argument("--camera must be an absolute prim path");
+      }
+    } else if (option == "--time") {
+      result.time = ReadTime(next());
     } else if (option == "--usd") {
       result.stage = std::filesystem::path(std::string(next()));
     } else if (option == "--benchmark") {
@@ -95,6 +123,14 @@ Options ParseOptions(int argc, const char* const* argv) {
     throw std::invalid_argument(
         "--resize-test needs --frames 3 or more and a windowed viewport");
   }
+  if (result.interaction_test &&
+      (result.frame_limit < 3 || result.resize_test)) {
+    throw std::invalid_argument("--interaction-test needs --frames 3 or more "
+                                "and excludes --resize-test");
+  }
+  if ((!result.camera.empty() || result.time) && result.stage.empty()) {
+    throw std::invalid_argument("--camera and --time need --usd");
+  }
   return result;
 }
 
@@ -104,6 +140,8 @@ std::string Usage(bool hydra) {
       "  --usd <stage>            open a USD stage through Hydra";
   usage += hydra ? "\n" : " (not in this build)\n";
   usage +=
+      "  --camera <prim>          look through the stage's camera at first\n"
+      "  --time T                 the stage time code to open at\n"
       "  --width N --height N     window size (default 1280x720)\n"
       "  --fullscreen             start on the primary monitor\n"
       "  --samples N              samples per pixel to accumulate (default "
@@ -113,10 +151,15 @@ std::string Usage(bool hydra) {
       "  --hidden                 do not show the window\n"
       "  --validate               fail unless Vulkan validation is active\n"
       "  --resize-test            resize once and require a new swapchain\n"
+      "  --interaction-test       script inputs and edits; check each restart\n"
       "  --allow-unavailable      exit 77, explained, without a device\n"
       "  --benchmark <file>       write the run's timings as JSON\n"
       "Without --usd the viewport renders the built-in Cornell box.\n"
-      "F11 toggles fullscreen; Esc or closing the window exits.\n";
+      "Left drag tumbles, middle (or Ctrl+left) drag tracks, right drag and\n"
+      "the wheel dolly, F restores the initial framing. With a stage, C\n"
+      "selects the next authored camera, Left/Right step the time code and\n"
+      "R reloads the layers. F11 toggles fullscreen; Esc or closing the\n"
+      "window exits.\n";
   return usage;
 }
 
