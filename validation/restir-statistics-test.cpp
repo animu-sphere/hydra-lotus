@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../adapters/headless/temporal_statistics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <limits>
@@ -123,6 +124,119 @@ void CompareEnsembleDefinition() {
   }
   Check(rejected, "one sequence has no across-sequence variance");
 }
+
+// Replication bias against a direct two-pass definition: a 3x2 image with
+// 2-pixel tiles (one partial), two bands and a finite reference variance.
+void CompareBiasDefinition() {
+  constexpr unsigned width = 3, height = 2, replications = 4;
+  std::array<std::array<double, width * height * 3>, replications> residuals{};
+  std::array<double, width * height * 3> variance{};
+  for (unsigned k = 0; k < replications; ++k)
+    for (unsigned i = 0; i < width * height * 3; ++i) {
+      residuals[k][i] = (int((i * 7 + k * 13) % 11) - 5) * 0.1 + 0.05 * k;
+      variance[i] = 0.001 * (i % 4);
+    }
+  for (auto& residual : residuals)
+    residual[0] += 2; // A persistent error in tile (0,0), red.
+  LotusHeadless::ReplicationBiasStatistics stats(width, height, 2);
+  for (const auto& residual : residuals)
+    stats.Add(residual);
+  auto mean = [&](unsigned i) {
+    double sum = 0;
+    for (const auto& residual : residuals)
+      sum += residual[i];
+    return sum / replications;
+  };
+  auto noise = [&](auto value) {
+    double average = 0, squares = 0;
+    for (unsigned k = 0; k < replications; ++k)
+      average += value(k) / replications;
+    for (unsigned k = 0; k < replications; ++k)
+      squares += (value(k) - average) * (value(k) - average);
+    return squares / (replications - 1) / replications;
+  };
+  auto region = [&](unsigned begin, unsigned end, bool reference) {
+    double mse = 0, expected = 0, n = 0;
+    for (unsigned y = 0; y < height; ++y)
+      for (unsigned x = begin; x < end; ++x)
+        for (unsigned c = 0; c < 3; ++c, ++n) {
+          const unsigned i = (y * width + x) * 3 + c;
+          mse += mean(i) * mean(i);
+          expected += noise([&](unsigned k) { return residuals[k][i]; }) + (reference ? variance[i] : 0);
+        }
+    return std::array{mse / n, expected / n};
+  };
+  const std::array<LotusHeadless::ReplicationBiasStatistics::Band, 2> bands{{{0, 2}, {2, 3}}};
+  const auto summary = stats.Summarize(variance, bands);
+  Check(summary.replications == replications && summary.bands.size() == 2, "wrong replication population");
+  Near(summary.image.mse, region(0, width, true)[0]);
+  Near(summary.image.noise, region(0, width, true)[1]);
+  for (unsigned b = 0; b < 2; ++b) {
+    Near(summary.bands[b].mse, region(bands[b].begin, bands[b].end, true)[0]);
+    Near(summary.bands[b].noise, region(bands[b].begin, bands[b].end, true)[1]);
+  }
+  unsigned beyond = 0;
+  double max_z = 0;
+  for (unsigned tx = 0; tx < 2; ++tx)
+    for (unsigned c = 0; c < 3; ++c) {
+      std::vector<unsigned> members;
+      for (unsigned y = 0; y < height; ++y)
+        for (unsigned x = tx * 2; x < std::min(width, tx * 2 + 2); ++x)
+          members.push_back((y * width + x) * 3 + c);
+      auto tile = [&](unsigned k) {
+        double sum = 0;
+        for (auto i : members)
+          sum += residuals[k][i];
+        return sum / members.size();
+      };
+      double shared = 0, average = 0;
+      for (auto i : members)
+        shared += variance[i];
+      for (unsigned k = 0; k < replications; ++k)
+        average += tile(k) / replications;
+      const double z = average / std::sqrt(noise(tile) + shared / double(members.size() * members.size()));
+      beyond += std::abs(z) > 3;
+      if (std::abs(z) > std::abs(max_z))
+        max_z = z;
+    }
+  Check(summary.tile_tests == 6 && summary.tiles_beyond_3 == beyond && beyond > 0, "wrong tile tests");
+  Check(summary.max_tile && summary.max_tile->x == 0 && summary.max_tile->y == 0 &&
+            summary.max_tile->channel == 0, "wrong largest tile");
+  Near(summary.max_tile->z, max_z);
+  // An exact reference adds no noise.
+  Near(stats.Summarize({}, {}).image.noise, region(0, width, false)[1]);
+
+  // Identical replications against an exact reference define no tile test.
+  LotusHeadless::ReplicationBiasStatistics frozen(1, 1);
+  for (unsigned k = 0; k < 2; ++k)
+    frozen.Add(std::array{1., -2., 0.});
+  const auto fixed = frozen.Summarize({}, {});
+  Near(fixed.image.mse, 5. / 3);
+  Near(fixed.image.noise, 0);
+  Check(fixed.tile_tests == 0 && !fixed.max_tile, "zero noise must not define a tile test");
+
+  // Invalid replications, bands, reference extents and populations reject.
+  auto rejects = [](auto action) {
+    try {
+      action();
+    } catch (const std::logic_error&) { // Includes std::invalid_argument.
+      return true;
+    }
+    return false;
+  };
+  Check(rejects([&] { frozen.Add(std::array{1., 2.}); }), "wrong extent accepted");
+  Check(rejects([&] { frozen.Add(std::array{1., std::numeric_limits<double>::quiet_NaN(), 0.}); }),
+      "nonfinite replication accepted");
+  Check(frozen.Replications() == 2, "rejected replication changed the population");
+  const std::array<LotusHeadless::ReplicationBiasStatistics::Band, 1> empty_band{{{1, 1}}}, wide_band{{{0, 2}}};
+  Check(rejects([&] { (void)frozen.Summarize({}, empty_band); }), "empty band accepted");
+  Check(rejects([&] { (void)frozen.Summarize({}, wide_band); }), "band beyond the image accepted");
+  Check(rejects([&] { (void)frozen.Summarize(std::array{1.}, {}); }), "wrong reference variance accepted");
+  Check(rejects([] { LotusHeadless::ReplicationBiasStatistics(0, 1); }), "empty image accepted");
+  LotusHeadless::ReplicationBiasStatistics lone(1, 1);
+  lone.Add(std::array{1., 1., 1.});
+  Check(rejects([&] { (void)lone.Summarize({}, {}); }), "one replication has no variance");
+}
 } // namespace
 
 int main() {
@@ -163,7 +277,8 @@ int main() {
     }
     Near(*ramp.Lag1Autocorrelation(), 0.25);
     CompareEnsembleDefinition();
-    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend, precision and sequence ensemble passed\n";
+    CompareBiasDefinition();
+    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend, precision, sequence ensemble and replication bias passed\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

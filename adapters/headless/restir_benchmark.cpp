@@ -409,6 +409,8 @@ double Mse(const auto& a, const auto& b) {
 struct Baseline {
   std::vector<RgbImage> images;
   std::vector<double> split_rmse;
+  // Per pose: each component's variance in the mean of two halves, (a-b)^2/4.
+  std::vector<std::vector<double>> variance;
   std::string device;
   double integral_rmse = 0;
 };
@@ -437,6 +439,9 @@ Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const 
                       (frame.synchronization_validation_available ? "true" : "false") + '}';
     }
     result.split_rmse.push_back(std::sqrt(Mse(halves[0].values, halves[1].values)));
+    auto& variance = result.variance.emplace_back(halves[0].values.size());
+    for (std::size_t i = 0; i < variance.size(); ++i)
+      variance[i] = std::pow(double(halves[0].values[i]) - halves[1].values[i], 2) / 4;
     auto mean = halves[0];
     for (std::size_t i = 0; i < mean.values.size(); ++i)
       mean.values[i] = (mean.values[i] + halves[1].values[i]) * 0.5F;
@@ -455,11 +460,100 @@ Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const 
   return result;
 }
 
+struct Region {
+  const char* id;
+  ReplicationBiasStatistics::Band band;
+};
+
+// Fixed screen bands: center boundaries, right metal, left dielectric.
+std::vector<Region> Regions(const Options& options) {
+  if (options.workload == "distant")
+    return {};
+  auto band = [&](unsigned eighth) {
+    return ReplicationBiasStatistics::Band{eighth * options.size / 8, (eighth + 2) * options.size / 8};
+  };
+  std::vector<Region> result{{"center-boundary-band-v1", band(3)}};
+  if (options.workload == "glossy-disocclusion" || options.workload == "glossy-spheres")
+    result.push_back({"right-glossy-band-v1", band(5)});
+  if (options.workload == "glossy-spheres")
+    result.push_back({"left-dielectric-band-v1", band(1)});
+  return result;
+}
+
 struct Mode {
   std::string name;
   unsigned candidates = 0;
   bool temporal = false, spatial = false;
 };
+
+void Ratio(std::ostream& out, double numerator, double denominator) {
+  if (denominator > 0)
+    out << numerator / denominator;
+  else
+    out << "null";
+}
+
+// Replications share each pose's reference, whose finite noise is common to
+// them; expected noise adds its per-component variance. Poses pool by mean.
+void WriteReplicationBias(std::ostream& out, const Workload& work, const Baseline& baseline,
+    const std::vector<ReplicationBiasStatistics>& poses, const std::vector<Region>& regions,
+    const std::vector<ReplicationBiasStatistics::Band>& bands) {
+  std::vector<double> mse, noise, reference;
+  std::vector<ReplicationBiasStatistics::Error> pooled(regions.size());
+  ReplicationBiasStatistics::Summary first;
+  unsigned tests = 0, beyond = 0, max_pose = 0;
+  std::optional<ReplicationBiasStatistics::Tile> max_tile;
+  for (unsigned f = 0; f < poses.size(); ++f) {
+    const std::vector<double> none;
+    const auto& variance = work.exact_integral && !work.moving ? none : baseline.variance[f];
+    const auto summary = poses[f].Summarize(variance, bands);
+    if (!f)
+      first = summary;
+    mse.push_back(summary.image.mse);
+    noise.push_back(summary.image.noise);
+    reference.push_back(variance.empty() ? 0 : std::accumulate(variance.begin(), variance.end(), 0.0) / variance.size());
+    for (std::size_t r = 0; r < pooled.size(); ++r) {
+      pooled[r].mse += summary.bands[r].mse / poses.size();
+      pooled[r].noise += summary.bands[r].noise / poses.size();
+    }
+    tests += summary.tile_tests;
+    beyond += summary.tiles_beyond_3;
+    if (summary.max_tile && (!max_tile || std::abs(summary.max_tile->z) > std::abs(max_tile->z))) {
+      max_tile = summary.max_tile;
+      max_pose = f;
+    }
+  }
+  auto mean = [](const std::vector<double>& values) {
+    return std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+  };
+  out << "{\"replication\":" << Quote(work.moving ? "pose-frame" : "sequence-mean")
+      << ",\"replications\":" << first.replications << ",\"poses\":" << poses.size()
+      << ",\"grand_mean_mse\":" << mean(mse) << ",\"noise_mse\":" << mean(noise)
+      << ",\"reference_noise_mse\":" << mean(reference) << ",\"noise_normalized_mse\":";
+  Ratio(out, mean(mse), mean(noise));
+  out << ",\"excess_mse\":" << mean(mse) - mean(noise) << ",\"pose_grand_mean_mse\":";
+  Array(out, mse);
+  out << ",\"pose_noise_mse\":";
+  Array(out, noise);
+  out << ",\"pose_reference_noise_mse\":";
+  Array(out, reference);
+  out << ",\"regions\":[";
+  for (std::size_t r = 0; r < regions.size(); ++r) {
+    out << (r ? "," : "") << "{\"id\":" << Quote(regions[r].id) << ",\"pixels\":"
+        << (regions[r].band.end - regions[r].band.begin) * (baseline.images.front().height)
+        << ",\"grand_mean_mse\":" << pooled[r].mse << ",\"noise_mse\":" << pooled[r].noise
+        << ",\"noise_normalized_mse\":";
+    Ratio(out, pooled[r].mse, pooled[r].noise);
+    out << '}';
+  }
+  out << "],\"tiles\":{\"size\":8,\"tests\":" << tests << ",\"beyond_3\":" << beyond << ",\"max\":";
+  if (max_tile)
+    out << "{\"pose\":" << max_pose << ",\"x\":" << max_tile->x << ",\"y\":" << max_tile->y
+        << ",\"channel\":" << max_tile->channel << ",\"z\":" << max_tile->z << '}';
+  else
+    out << "null";
+  out << "}}";
+}
 
 std::string Measure(const Workload& work, const Baseline& baseline, const Mode& mode,
     const Options& options, const std::filesystem::path& executable, const std::filesystem::path& images) {
@@ -507,6 +601,9 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   RgbImage last;
   bool timestamps = false;
   SequenceEnsembleStatistics sequence_ensemble(ensemble.size());
+  // Static: one replication per sequence mean. Moving: per pose, one per sequence.
+  std::vector<ReplicationBiasStatistics> replication_bias(work.moving ? options.frames : 1,
+      ReplicationBiasStatistics(options.size, options.size));
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence) {
     std::vector<double> accumulated(ensemble.size());
     TemporalResidualStatistics residual_statistics(ensemble.size());
@@ -537,6 +634,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       for (std::size_t i = 0; i < residual.size(); ++i)
         residual[i] = double(last.values[i]) - reference[i];
       residual_statistics.Add(residual);
+      if (work.moving)
+        replication_bias[f].Add(residual);
       if (f != 0) {
         std::vector<double> residual_delta(ensemble.size()), zero(ensemble.size());
         for (std::size_t i = 0; i < ensemble.size(); ++i)
@@ -587,8 +686,13 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
     residual_mean.push_back(residual_statistics.MeanRmse());
     residual_centered.push_back(residual_statistics.CenteredRmse());
     residual_lag1.push_back(residual_statistics.Lag1Autocorrelation());
-    if (!work.moving)
+    if (!work.moving) {
       sequence_ensemble.Add(residual_statistics);
+      std::vector<double> means(ensemble.size());
+      for (std::size_t i = 0; i < means.size(); ++i)
+        means[i] = residual_statistics.Mean(i);
+      replication_bias.front().Add(means);
+    }
   }
   const auto stats = renderer->UpdateScene({});
   Require(stats.status == FrameStatus::Pass && stats.validation_message_count == 0, "final scene/validation check failed");
@@ -633,37 +737,31 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   out << ",\"ensemble_rmse\":" << std::sqrt(Mse(ensemble, reference))
       << ",\"max_abs_tile_mean_error\":" << max_tile_bias
       << ",\"regions\":[";
-  if (!work.exact_integral) {
-    const bool glossy = options.workload == "glossy-disocclusion" || options.workload == "glossy-spheres";
-    const unsigned regions = options.workload == "glossy-spheres" ? 3U : (glossy ? 2U : 1U);
-    for (unsigned region = 0; region < regions; ++region) {
-      double squared = 0;
-      std::array<double, 3> signed_error{};
-      unsigned pixels = 0;
-      // Fixed screen bands: center boundaries, right metal, left dielectric.
-      const unsigned band = region == 2 ? 1U : (region ? 5U : 3U);
-      const unsigned begin = band * options.size / 8;
-      const unsigned end = (band + 2) * options.size / 8;
-      for (unsigned y = 0; y < options.size; ++y)
-        for (unsigned x = begin; x < end; ++x) {
-          ++pixels;
-          for (unsigned c = 0; c < 3; ++c) {
-            const auto i = (std::size_t{y} * options.size + x) * 3 + c;
-            const double residual = ensemble[i] - reference[i];
-            squared += residual * residual;
-            signed_error[c] += residual;
-          }
+  const auto regions = Regions(options);
+  std::vector<ReplicationBiasStatistics::Band> bands;
+  for (const auto& region : regions)
+    bands.push_back(region.band);
+  for (unsigned region = 0; region < regions.size(); ++region) {
+    double squared = 0;
+    std::array<double, 3> signed_error{};
+    unsigned pixels = 0;
+    for (unsigned y = 0; y < options.size; ++y)
+      for (unsigned x = regions[region].band.begin; x < regions[region].band.end; ++x) {
+        ++pixels;
+        for (unsigned c = 0; c < 3; ++c) {
+          const auto i = (std::size_t{y} * options.size + x) * 3 + c;
+          const double residual = ensemble[i] - reference[i];
+          squared += residual * residual;
+          signed_error[c] += residual;
         }
-      for (auto& value : signed_error)
-        value /= pixels;
-      out << (region ? "," : "") << "{\"id\":"
-          << Quote(region == 2 ? "left-dielectric-band-v1" :
-              (region ? "right-glossy-band-v1" : "center-boundary-band-v1")) << ",\"pixels\":" << pixels
-          << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
-          << ",\"signed_mean_error_rgb\":";
-      Array(out, signed_error);
-      out << '}';
-    }
+      }
+    for (auto& value : signed_error)
+      value /= pixels;
+    out << (region ? "," : "") << "{\"id\":" << Quote(regions[region].id) << ",\"pixels\":" << pixels
+        << ",\"ensemble_rmse\":" << std::sqrt(squared / (3 * pixels))
+        << ",\"signed_mean_error_rgb\":";
+    Array(out, signed_error);
+    out << '}';
   }
   out << "],\"fresh_rmse\":";
   Series(out, error);
@@ -712,6 +810,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       out << "null";
     out << ",\"excess_mse\":" << summary.grand_mean_mse - grand_noise - reference_noise << '}';
   }
+  out << ",\"replication_bias\":";
+  WriteReplicationBias(out, work, baseline, replication_bias, regions, bands);
   out << ",\"render_update_wall_ms\":";
   Series(out, wall);
   out << ",\"scene_gpu_ms\":";
@@ -857,6 +957,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
            "\"residual_frame_delta_rmse\":\"Fresh frame difference minus matching reference difference; excludes sequence boundaries. Temporal correlation can reduce it without improving convergence.\","
            "\"temporal_residuals\":\"One entry per independent sequence. Residual is fresh RGB minus the matched reference at fixed screen coordinates. Sequence mean RMS retains persistent error; centered RMS removes each component's sequence mean. Lag-one sample autocorrelation uses the full centered sum of squares; null for zero variance. Short sequences, motion and finite reference noise limit interpretation; no effective sample count is inferred.\","
            "\"sequence_ensemble\":\"Static only; null when moving. Per-component statistics across independent sequences, averaged over components. Frame variance is the mean within-sequence sample variance; sequence mean variance is the across-sequence sample variance of each sequence's mean. Variance inflation is frames times their ratio (one for uncorrelated frames) and effective frames is frames divided by it. Grand mean MSE is the squared error of the mean of all sequences, equal to the ensemble MSE. Its expected value without bias is grand mean noise (sequence mean variance over sequences) plus reference noise (squared split RMS over four, zero for an exact integral). Noise-normalized MSE near one is consistent with no detectable bias; excess MSE estimates squared bias and can be negative. Pixels are pooled, so spatially correlated or heavy-tailed noise widens its uncertainty; no confidence interval is asserted.\","
+           "\"replication_bias\":\"Independent replications sharing each pose's reference: sequence means when static, each pose's frame across sequences when moving. Grand mean MSE is the squared error of their mean; expected noise without bias is their across-replication variance over the replication count plus the reference's per-component variance, (a-b)^2/4 from its halves. Poses pool by mean. Regions are fixed screen bands. Tile z divides each 8x8 tile's mean error by its expected noise, from replicated tile means and independent reference pixels; beyond_3 counts |z| > 3 among defined tests. Many tests make some large |z| expected without bias; no confidence interval is asserted.\","
            "\"reference_split_rmse\":\"Difference of disjoint equal-spp NEE/MIS halves; the stored reference is their mean. Reference noise is not subtracted.\","
            "\"memory\":\"Fresh renderer per case. Reservoir and metadata bytes include host mirrors; scene pool backing excludes targets. Total VRAM is unavailable.\","
            "\"timestamps\":\"Unavailable or inapplicable GPU series and cumulative times are null.\"},\"scenes\":[";
