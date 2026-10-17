@@ -28,6 +28,26 @@ target_compile_definitions(lotus-hydra2-runtime PRIVATE
   _CRT_SECURE_NO_WARNINGS
   _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
 
+# The host-side OpenUSD libraries that a Hydra-enabled viewport links to open
+# a stage and drive the delegate in process (project layout section 4,
+# rule 4). Nothing else may link them outside this directory.
+add_library(lotus-hydra2-host-dependencies INTERFACE)
+target_link_libraries(lotus-hydra2-host-dependencies INTERFACE
+  usd usdGeom usdImaging)
+
+# The OpenUSD runtime root, whose bin/ and lib/ hold the DLLs that tests and
+# the viewport launcher put on PATH.
+if(PXR_INCLUDE_DIRS)
+  list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
+  get_filename_component(LOTUS_PXR_ROOT
+    "${_lotus_pxr_include}/.." ABSOLUTE)
+elseif(DEFINED pxr_DIR)
+  set(LOTUS_PXR_ROOT "${pxr_DIR}")
+else()
+  message(FATAL_ERROR "Could not derive the OpenUSD runtime root")
+endif()
+set(LOTUS_PXR_ROOT "${LOTUS_PXR_ROOT}" PARENT_SCOPE)
+
 add_library(hdLotus MODULE
   src/renderer_plugin.cpp
   resources/plugInfo.json.in)
@@ -219,16 +239,6 @@ if(LOTUS_BUILD_TESTS)
   target_compile_definitions(lotus-hydra2-light-test PRIVATE
     NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
   add_dependencies(lotus-hydra2-light-test hdLotus)
-
-  if(PXR_INCLUDE_DIRS)
-    list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
-    get_filename_component(LOTUS_PXR_ROOT
-      "${_lotus_pxr_include}/.." ABSOLUTE)
-  elseif(DEFINED pxr_DIR)
-    set(LOTUS_PXR_ROOT "${pxr_DIR}")
-  else()
-    message(FATAL_ERROR "Could not derive the OpenUSD runtime root")
-  endif()
 
   set(_lotus_pxr_runtime_modifications
     "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/bin"

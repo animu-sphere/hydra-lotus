@@ -125,6 +125,14 @@ public:
   // The latest render pass's frame evidence, without the colour and depth
   // products; empty before the first pass that rendered.
   [[nodiscard]] Lotus::GpuFrameEvidence GetFrameEvidence();
+  // For a host that owns a window (lotus-viewport): the renderer is created
+  // for this surface, and a render pass whose one AOV binding is colour
+  // without a render buffer presents its frame there, at the render pass
+  // state's viewport extent, without reading it back. Call before the first
+  // render pass.
+  void SetPresentation(const Lotus::PresentOptions& presentation);
+  // The latest presenting pass's presentation; empty before the first.
+  [[nodiscard]] Lotus::PresentEvidence GetPresentEvidence();
 
 private:
   class Impl;

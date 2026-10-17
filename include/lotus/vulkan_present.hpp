@@ -2,11 +2,8 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
-
-#include <lotus/extraction.hpp>
 
 namespace Lotus {
 
@@ -22,53 +19,14 @@ struct PresentSurfaceProvider {
   void* user_data = nullptr;
 };
 
-// Why session creation returned no session: `Unavailable` means this
-// environment cannot present (no loader/device/present queue) and callers
-// should report an explicit skip; `Error` is a real failure.
-enum class PresentSetupStatus {
-  Ready,
-  Unavailable,
-  Error,
+// A renderer created for a window (CreateOffscreenRenderer's
+// `presentation`). The backend owns the surface and the swapchain; the window
+// must outlive the renderer.
+struct PresentOptions {
+  PresentSurfaceProvider surface;
+  // FIFO when true. When false, IMMEDIATE, else MAILBOX, else FIFO: whichever
+  // the surface offers first.
+  bool vsync = true;
 };
-
-struct PresentStatistics {
-  std::uint64_t frames_presented = 0;
-  std::uint32_t swapchain_recreates = 0;
-  bool validation_available = false;
-  bool synchronization_validation_available = false;
-  std::string synchronization_validation_detail;
-  std::uint32_t validation_message_count = 0;
-  std::string validation_detail;
-  std::string device_name;
-};
-
-// One swapchain presentation session over the project bootstrap draw. The
-// skeleton policy is intentionally small: one frame in flight, FIFO present
-// mode when vsync is on, IMMEDIATE (when available) otherwise.
-class PresentSession {
-public:
-  virtual ~PresentSession() = default;
-
-  // Render and present one frame at the window's current framebuffer extent.
-  // A zero extent (minimized window) is not an error: the frame is skipped
-  // and `presented` reports false. Swapchain recreation on resize or
-  // out-of-date presentation is handled internally.
-  [[nodiscard]] virtual bool RenderFrame(const DrawSummary& draw,
-      std::uint32_t width,
-      std::uint32_t height, bool& presented,
-      std::string& error) = 0;
-
-  [[nodiscard]] virtual const PresentStatistics& statistics() const = 0;
-};
-
-// Creates the presentation session, enabling Vulkan validation capture
-// whenever the loader offers it (same policy as RenderOffscreen). Returns
-// nullptr with `status`/`error` describing why: the core-only configuration
-// and missing device capability report Unavailable, real failures Error.
-// Shader paths are explicit, as in RenderOffscreen.
-[[nodiscard]] std::unique_ptr<PresentSession> CreatePresentSession(
-    const PresentSurfaceProvider& surface, const std::string& vertex_shader,
-    const std::string& fragment_shader, bool vsync, PresentSetupStatus& status,
-    std::string& error);
 
 } // namespace Lotus

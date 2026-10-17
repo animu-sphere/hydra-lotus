@@ -7,6 +7,28 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- `lotus-viewport` presents the renderer's progressive path tracing from the
+  backend, without a CPU readback, in place of the bootstrap triangle: the
+  reference Cornell box by default, or a USD stage (`--usd`) through the Hydra
+  adapter driven in process in a build with the new `viewport-usd` intent.
+  Resize, fullscreen (F11), scripted runs with validation, a resize test,
+  explained skips and benchmark JSON; a Windows launcher puts the OpenUSD
+  runtime on `PATH` for the process
+  ([guide](docs/guides/BUILDING.md#the-standalone-viewport),
+  [evidence](docs/reports/2026-10-17-viewport-presentation.md)).
+- `CreateOffscreenRenderer` accepts `PresentOptions`, and
+  `OffscreenRenderer::Present` copies the latest scene frame into the window's
+  sRGB swapchain; `OffscreenTarget::read_back` skips the colour and depth
+  readback. `HdLotusRenderDelegate::SetPresentation` presents a render pass
+  whose colour binding has no render buffer.
+
+### Removed
+
+- `PresentSession` and `CreatePresentSession`, the bootstrap triangle's
+  separate presentation device; presentation belongs to the renderer.
+
 ## [0.5.1] - 2026-10-17
 
 The Renderer Phase 5 closure release records the ReSTIR DI exit review.

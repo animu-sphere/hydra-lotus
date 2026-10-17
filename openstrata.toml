@@ -11,6 +11,11 @@ profile = "core"
 [build.intents.hydra]
 cache = { LOTUS_ENABLE_HYDRA2 = { type = "BOOL", value = true } }
 
+# The standalone viewport opening USD stages through the Hydra adapter
+# (`ost renderer viewport --intent viewport-usd --profile lookdev`).
+[build.intents.viewport-usd]
+cache = { LOTUS_ENABLE_HYDRA2 = { type = "BOOL", value = true }, LOTUS_ENABLE_VIEWPORT = { type = "BOOL", value = true } }
+
 # CI proves the core and install tree on a host with no GPU SDK or runtime.
 [build.intents.ci-core]
 cache = { LOTUS_ENABLE_VULKAN = { type = "BOOL", value = false } }

@@ -367,6 +367,38 @@ bool ConfigureTarget(const HdRenderPassAovBindingVector& bindings,
   return target.width != 0;
 }
 
+// A presenting pass renders at the render pass state's viewport extent and
+// leaves its frame on the GPU. The colour clear is optional, as for a CPU
+// buffer; without one the GPU attachment keeps the previous frame.
+bool ConfigurePresentTarget(const HdRenderPassState& state,
+    const HdRenderPassAovBinding& binding, Lotus::OffscreenTarget& target) {
+  const GfVec4f viewport = state.GetViewport();
+  if (!(viewport[2] >= 1.0F && viewport[3] >= 1.0F &&
+          viewport[2] <= 16384.0F && viewport[3] <= 16384.0F)) {
+    TF_RUNTIME_ERROR("Lotus presentation needs a viewport extent");
+    return false;
+  }
+  target.width = static_cast<std::uint32_t>(std::lround(viewport[2]));
+  target.height = static_cast<std::uint32_t>(std::lround(viewport[3]));
+  target.read_back = false;
+  const VtValue& clear = binding.clearValue;
+  if (clear.IsEmpty()) {
+    target.clear_color_enabled = false;
+    return true;
+  }
+  if (clear.IsHolding<GfVec4f>()) {
+    const GfVec4f& value = clear.UncheckedGet<GfVec4f>();
+    std::copy(value.data(), value.data() + 4, target.clear_color.begin());
+    if (std::all_of(target.clear_color.begin(), target.clear_color.end(),
+            [](float component) { return std::isfinite(component); })) {
+      return true;
+    }
+  }
+  TF_RUNTIME_ERROR("Invalid Lotus AOV clear value: %s",
+      binding.aovName.GetText());
+  return false;
+}
+
 // CameraUtilFraming's windows are in pixels with y down, which is the
 // backend's product origin. Without a valid framing the whole image is the
 // display and data window, as for HdEmbree.
@@ -676,6 +708,16 @@ public:
     return frame_evidence_;
   }
 
+  void SetPresentation(const Lotus::PresentOptions& presentation) {
+    std::scoped_lock lock(mutex_);
+    presentation_ = presentation;
+  }
+
+  Lotus::PresentEvidence GetPresentEvidence() {
+    std::scoped_lock lock(mutex_);
+    return present_evidence_;
+  }
+
   // Whether the latest pass finished its image. A failed pass counts as
   // finished, so a host waiting for convergence does not wait forever.
   bool IsConverged() {
@@ -705,7 +747,11 @@ public:
     selected_snapshot_ = snapshot;
     const Lotus::DrawSummary draw = Lotus::ExtractDrawSummary(snapshot);
     Lotus::OffscreenTarget target;
-    if (!ConfigureTarget(bindings, target)) {
+    const bool present = presentation_ && bindings.size() == 1 &&
+                         bindings.front().aovName == HdAovTokens->color &&
+                         bindings.front().renderBuffer == nullptr;
+    if (present ? !ConfigurePresentTarget(state, bindings.front(), target)
+                : !ConfigureTarget(bindings, target)) {
       return;
     }
     ApplyFraming(state, target);
@@ -722,7 +768,7 @@ public:
     // The bound CPU buffer owns its contents, including host writes and
     // reallocation. Never use a different buffer's retained GPU attachment.
     for (const auto& binding : bindings) {
-      if (!binding.clearValue.IsEmpty())
+      if (present || !binding.clearValue.IsEmpty())
         continue;
       const auto* buffer =
           static_cast<const HdLotusRenderBuffer*>(binding.renderBuffer);
@@ -744,10 +790,16 @@ public:
           (shaders / "triangle.frag.spv").string(), status, error,
           {(shaders / "path_trace.vert.spv").string(),
               (shaders / "path_trace.frag.spv").string(),
-              (shaders / "wavefront.comp.spv").string()});
+              (shaders / "wavefront.comp.spv").string()},
+          presentation_ ? &*presentation_ : nullptr);
       if (!renderer_) {
         TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",
             error.c_str());
+        // A host tells an environment that cannot render (Skip) from a
+        // failure by the evidence.
+        frame_evidence_ = {};
+        frame_evidence_.status = status;
+        frame_evidence_.detail = error;
         return;
       }
       ++renderer_creations_;
@@ -764,6 +816,14 @@ public:
       return;
     }
     const bool trace = renderer_->RayQueryCapability().available;
+    if (present && !trace) {
+      present_evidence_ = {};
+      present_evidence_.detail = "Lotus presents scene frames, which need ray "
+                                 "queries: " +
+                                 renderer_->RayQueryCapability().detail;
+      TF_RUNTIME_ERROR("%s", present_evidence_.detail.c_str());
+      return;
+    }
     if ((temporal_products || settings.light_sampling == Lotus::LightSampling::RestirInitial) && !trace) {
       TF_RUNTIME_ERROR("Lotus temporal/ReSTIR products require ray queries");
       return;
@@ -787,6 +847,15 @@ public:
       return;
     }
 
+    if (present) {
+      present_evidence_ = renderer_->Present(target.width, target.height);
+      if (present_evidence_.status == Lotus::FrameStatus::Fail) {
+        TF_RUNTIME_ERROR("Lotus presentation failed: %s",
+            present_evidence_.detail.c_str());
+        renderer_.reset();
+        return;
+      }
+    }
     if (temporal_products) {
       history_reset_ = history_reset;
       temporal_view_ = view;
@@ -994,6 +1063,9 @@ private:
   Lotus::GpuSceneStats scene_stats_;
   // The latest frame's evidence without colour/depth payloads.
   Lotus::GpuFrameEvidence frame_evidence_;
+  // The window a viewport host presents to, and its latest presentation.
+  std::optional<Lotus::PresentOptions> presentation_;
+  Lotus::PresentEvidence present_evidence_;
   Lotus::RestirProducts restir_diagnostics_;
   std::uint64_t renderer_creations_{};
   std::uint64_t frame_index_{};
@@ -2387,6 +2459,15 @@ Lotus::FrameSnapshot HdLotusRenderDelegate::GetSelectedSnapshot() {
 
 Lotus::GpuFrameEvidence HdLotusRenderDelegate::GetFrameEvidence() {
   return impl_->state->GetFrameEvidence();
+}
+
+void HdLotusRenderDelegate::SetPresentation(
+    const Lotus::PresentOptions& presentation) {
+  impl_->state->SetPresentation(presentation);
+}
+
+Lotus::PresentEvidence HdLotusRenderDelegate::GetPresentEvidence() {
+  return impl_->state->GetPresentEvidence();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

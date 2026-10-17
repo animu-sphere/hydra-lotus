@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The window abstraction owned by the viewport adapter. GLFW is the native
 // host boundary: its types stay inside window_glfw.cpp and never reach the
-// core or backend targets. Input handling beyond close/resize/escape is an
-// intentional project extension point.
+// core or backend targets.
 #pragma once
 
 #include <cstdint>
@@ -22,6 +21,7 @@ enum class EventType {
 enum class Key {
   Unknown,
   Escape,
+  Fullscreen,
 };
 
 struct Event {
@@ -37,12 +37,19 @@ public:
   // (no display, no Vulkan-capable GLFW); callers report that as a skip.
   static std::unique_ptr<Window> Create(std::string_view title,
       std::uint32_t width,
-      std::uint32_t height, bool visible);
+      std::uint32_t height, bool visible, bool fullscreen);
   virtual ~Window() = default;
 
   [[nodiscard]] virtual bool PollEvent(Event& event) = 0;
   virtual void WaitForEvent() = 0;
   virtual void SetTitle(std::string_view title) = 0;
+  // Resizes the windowed client area; the framebuffer follows with a Resize
+  // event.
+  virtual void SetSize(std::uint32_t width, std::uint32_t height) = 0;
+  // Fullscreen covers the primary monitor at its current video mode;
+  // leaving it restores the previous windowed position and size.
+  virtual void SetFullscreen(bool fullscreen) = 0;
+  [[nodiscard]] virtual bool fullscreen() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
   [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
 };

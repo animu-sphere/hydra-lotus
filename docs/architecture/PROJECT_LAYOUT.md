@@ -33,10 +33,10 @@ that moment every file is project-owned; the template is not re-applied.
 | --- | --- | --- | --- |
 | `core/render-world/` | `lotus-render-world` | `Lotus::RenderWorld` | host-neutral camera and CPU scene state, keyed geometry/material resources, immutable snapshots and shared geometry; technical behavior is owned by the [scene reference](../reference/SCENE.md) |
 | `core/render-extraction/` | `lotus-render-extraction` | `Lotus::RenderExtraction` | the scene update plan: snapshot changes → geometry uploads and releases, instance and material table rewrites ([scene reference](../reference/SCENE.md#update-plan)) |
-| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments, clear control and CPU-content restoration using persistent staging, GPU scene buffers and BLAS/TLAS with private memory pools, the reference path-tracing pass, the wavefront integrator's compute kernels and GPU timestamps, swapchain presentation, Slang shaders |
+| `backend/vulkan/` | `lotus-render-vulkan` | `Lotus::Vulkan` | Vulkan backend: persistent offscreen colour/depth attachments, clear control and CPU-content restoration using persistent staging, GPU scene buffers and BLAS/TLAS with private memory pools, the reference path-tracing pass, the wavefront integrator's compute kernels and GPU timestamps, swapchain presentation of the scene colour for a renderer created with a window surface, Slang shaders |
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference; its separate benchmark mode writes timing JSON and PFM images ([scene reference](../reference/SCENE.md#fixed-benchmarks)) |
-| `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window; optional (`LOTUS_ENABLE_VIEWPORT`) |
-| `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); optional (`LOTUS_ENABLE_HYDRA2`) |
+| `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window presenting the renderer's progressive output: the headless reference scene by default, a USD stage through the Hydra runtime when built with `LOTUS_ENABLE_HYDRA2` as well ([building guide](../guides/BUILDING.md#the-standalone-viewport)); optional (`LOTUS_ENABLE_VIEWPORT`) |
+| `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime`, `lotus-hydra2-host-dependencies` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); the interface target carries the host-side OpenUSD libraries for the Hydra-enabled viewport; optional (`LOTUS_ENABLE_HYDRA2`) |
 | `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_WITH_VULKAN` only, not installed); `validation/reference/` holds the committed reference images; `validation/assets/` holds third-party inputs (OpenUSD's Stinson Beach image) with their licence and a `manifest.json` of source, revision, size and SHA-256, which `lotus-validation-assets` checks |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
@@ -168,7 +168,7 @@ names the directory of the implementation direction's sketch
 | Hydra prims, render pass, AOVs, material translator (§3.1, §18, §32) | `adapters/hydra2/src/` | `lotus-hydra2-runtime` | `src/hdLotus/` |
 | Headless runner, benchmark, test-scene runner (§3.1) | `adapters/headless/`; a separate executable gets `adapters/<name>/` | `lotus-headless` | `tools/`, `examples/` |
 | Golden-image and correctness tests (§26) | `validation/` | CTest | `tests/` |
-| Public headers — core (`render_world.hpp`, `extraction.hpp`) and backend (`vulkan_backend.hpp`, `vulkan_present.hpp`) | `include/lotus/` | — | — |
+| Public headers — core (`render_world.hpp`, `extraction.hpp`) and backend (`vulkan_backend.hpp`, `vulkan_present.hpp` with the window-surface types) | `include/lotus/` | — | — |
 
 Once `backend/vulkan/` grows, it is split into subdirectories inside the same
 target before it is split into targets.
@@ -211,9 +211,11 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
 | core CI | `ost build --without-runtime --intent ci-core` | none; Vulkan disabled | none |
 | Hydra adapter | `ost build --profile lookdev --intent hydra` | `lookdev` or `usd` (a real runtime) | yes |
 | standalone viewport | `ost renderer viewport` | `core` | none |
+| viewport opening USD stages | `ost renderer viewport --intent viewport-usd --profile lookdev` | `lookdev` or `usd` | yes |
 
 The `hydra` intent is declared in `openstrata.toml`
-(`LOTUS_ENABLE_HYDRA2=ON`). `ost renderer view` requests the same adapter
+(`LOTUS_ENABLE_HYDRA2=ON`), and so is `viewport-usd`
+(`LOTUS_ENABLE_HYDRA2=ON`, `LOTUS_ENABLE_VIEWPORT=ON`). `ost renderer view` requests the same adapter
 through `OST_RENDERER_ADAPTERS=hydra2`.
 
 `openstrata.ci.yaml` owns the CI cells and runtime artifact pins. The registered

@@ -204,15 +204,66 @@ does not have, so here it stops with "no openstrata.plugin.yaml".
 
 ## The standalone viewport
 
+`lotus-viewport` path-traces a scene progressively and presents each frame
+from the backend: the colour never leaves the GPU. Without a stage it renders
+the headless runner's reference Cornell box:
+
 ```sh
+ost renderer viewport
 ost renderer viewport -- --frames 8 --hidden
 ost validate --intent renderer-viewport
 ```
 
-The first run fetches GLFW. Omit the arguments after `--` for an interactive
-window. The viewport builds in a tree of its own
+The first run fetches GLFW. The viewport builds in a tree of its own
 (`build/<target>--renderer-viewport`), so it leaves the default target's
-validation untouched.
+validation untouched, and that build has no OpenUSD dependency.
+
+To open a USD stage, build the Hydra-enabled viewport with the `viewport-usd`
+intent and a real OpenUSD runtime, as for [the Hydra adapter](#the-hydra-adapter):
+
+```sh
+ost renderer viewport --intent viewport-usd --profile lookdev -- --usd path/to/stage.usda
+```
+
+It drives the Hydra adapter in process: UsdImaging populates a render index
+over the Lotus render delegate, and the render pass presents to the window.
+The stage is framed as usdview frames it initially (its bounds, authored up
+axis and a 60 degree field of view); camera controls and authored cameras
+come with LOTUS-VIEWPORT-02 ([current plan](../roadmap/current.md#step-2--viewport-foundation)).
+On Windows that build also writes `run-lotus-viewport.cmd` beside the
+executable (`build/<target>--viewport-usd--renderer-viewport/adapters/viewport/`),
+which puts the OpenUSD runtime's DLLs on `PATH` for that process only:
+
+```sh
+run-lotus-viewport.cmd --usd path/to/stage.usda
+```
+
+| Option | Effect |
+| --- | --- |
+| `--usd <stage>` | open a USD stage (Hydra-enabled build only) |
+| `--width N`, `--height N` | window size, 1280x720 by default |
+| `--fullscreen` | start on the primary monitor; F11 toggles while running |
+| `--samples N` | samples per pixel to accumulate, 1024 by default; the accumulation restarts on a resize |
+| `--vsync on\|off` | FIFO, or immediate (else mailbox) presentation |
+| `--frames N`, `--hidden` | scripted runs: exit after N presented frames, without showing the window |
+| `--validate` | fail unless the Khronos validation layer captured the run; captured messages fail every run |
+| `--resize-test` | resize once after the second frame and fail unless the swapchain followed |
+| `--allow-unavailable` | exit 77 instead of 1, with a `SKIP:` explanation, where no driver or device can present |
+| `--benchmark <file>` | write the run's frame counts, CPU and GPU times, swapchain and validation state as JSON (`lotus.viewport-benchmark/v1`) |
+
+The presented image is the linear radiance encoded as sRGB and clamped, with
+no exposure or tone mapping. The title bar shows the scene, device, extent,
+samples per pixel and the last frame's GPU time. Validation is enabled
+whenever the Vulkan SDK's layer is installed, which costs CPU time; set
+`VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation` for an interactive
+session without it.
+
+CTest runs `lotus-viewport-present` (the built-in scene),
+`lotus-viewport-hydra` (the smoke stage, Hydra-enabled build only) and
+`lotus-viewport-no-driver` (an explained skip with Vulkan driver discovery
+pointed at a missing manifest), each in the viewport's tree, plus the
+window-free `lotus-viewport-options` and `lotus-viewport-camera` in every
+tree.
 
 > ⚠️ On a Windows host whose MSVC prints Japanese, some objects record no
 > header dependencies, and editing a header does not rebuild them. Delete

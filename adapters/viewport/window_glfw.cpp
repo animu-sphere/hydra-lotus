@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <stdexcept>
@@ -27,7 +28,7 @@ std::runtime_error GlfwError(std::string_view operation) {
 class GlfwWindow final : public Window {
 public:
   GlfwWindow(std::string_view title, std::uint32_t width, std::uint32_t height,
-      bool visible) {
+      bool visible, bool fullscreen) {
     if (glfwInit() != GLFW_TRUE) {
       throw GlfwError("initialize GLFW");
     }
@@ -35,6 +36,9 @@ public:
     // A constructor exception skips the destructor, so release GLFW here.
     try {
       Initialize(title, width, height, visible);
+      if (fullscreen) {
+        SetFullscreen(true);
+      }
     } catch (...) {
       if (window_ != nullptr) {
         glfwDestroyWindow(window_);
@@ -70,6 +74,36 @@ public:
   void SetTitle(std::string_view title) override {
     const std::string owned(title);
     glfwSetWindowTitle(window_, owned.c_str());
+  }
+
+  void SetSize(std::uint32_t width, std::uint32_t height) override {
+    glfwSetWindowSize(window_, static_cast<int>(width),
+        static_cast<int>(height));
+  }
+
+  void SetFullscreen(bool fullscreen) override {
+    if (fullscreen == this->fullscreen()) {
+      return;
+    }
+    if (fullscreen) {
+      GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+      const GLFWvidmode* mode =
+          monitor == nullptr ? nullptr : glfwGetVideoMode(monitor);
+      if (mode == nullptr) {
+        throw GlfwError("query the primary monitor's video mode");
+      }
+      glfwGetWindowPos(window_, &windowed_[0], &windowed_[1]);
+      glfwGetWindowSize(window_, &windowed_[2], &windowed_[3]);
+      glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height,
+          mode->refreshRate);
+    } else {
+      glfwSetWindowMonitor(window_, nullptr, windowed_[0], windowed_[1],
+          windowed_[2], windowed_[3], 0);
+    }
+  }
+
+  bool fullscreen() const noexcept override {
+    return glfwGetWindowMonitor(window_) != nullptr;
   }
 
   std::uint32_t width() const noexcept override {
@@ -119,7 +153,9 @@ private:
         window_, [](GLFWwindow* window, int key, int, int action, int) {
           if (action == GLFW_PRESS || action == GLFW_REPEAT) {
             Event event{EventType::KeyDown};
-            event.key = key == GLFW_KEY_ESCAPE ? Key::Escape : Key::Unknown;
+            event.key = key == GLFW_KEY_ESCAPE ? Key::Escape
+                        : key == GLFW_KEY_F11  ? Key::Fullscreen
+                                               : Key::Unknown;
             Self(window).events_.push_back(event);
           }
         });
@@ -138,6 +174,8 @@ private:
   GLFWwindow* window_ = nullptr;
   std::uint32_t width_ = 0;
   std::uint32_t height_ = 0;
+  // The windowed position and size to restore after fullscreen.
+  std::array<int, 4> windowed_{};
   std::deque<Event> events_;
 };
 
@@ -179,15 +217,18 @@ std::int32_t CreateSurface(void* user_data, std::uintptr_t encoded_instance,
 
 std::unique_ptr<Window> Window::Create(std::string_view title,
     std::uint32_t width,
-    std::uint32_t height, bool visible) {
-  return std::make_unique<GlfwWindow>(title, width, height, visible);
+    std::uint32_t height, bool visible, bool fullscreen) {
+  return std::make_unique<GlfwWindow>(title, width, height, visible,
+      fullscreen);
 }
 
 PresentSurfaceProvider MakeSurfaceProvider(Window& window) {
   std::uint32_t count = 0;
   const char** extensions = glfwGetRequiredInstanceExtensions(&count);
   if (extensions == nullptr || count == 0) {
-    throw GlfwError("query GLFW Vulkan instance extensions");
+    // The loader lists surface extensions only when a driver supports them.
+    throw std::runtime_error("the Vulkan loader offers no window-system "
+                             "surface extensions: no Vulkan driver presents");
   }
   PresentSurfaceProvider provider;
   provider.instance_extensions.reserve(count);
