@@ -214,6 +214,12 @@ foreach(integrator reference wavefront)
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-interreflection"
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=interreflection -DBOUNCES=4
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-animation
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-animation"
+      "-DINTEGRATOR=${integrator}" -DWORKLOAD=animation
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   foreach(proposal uniform power-uniform)
     add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
       COMMAND "${CMAKE_COMMAND}"

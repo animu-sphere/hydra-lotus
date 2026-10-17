@@ -291,4 +291,68 @@ private:
   std::vector<Moments> pixels_, tiles_;
   unsigned replications_ = 0;
 };
+
+// Two residual images per independent replication: one sequence's frames at a
+// fixed pair of poses. Centering each component across replications removes
+// persistent error and the poses' shared reference noise, so what remains
+// correlates only their sampling noise. Storage is O(image size).
+class ReplicationCorrelationStatistics {
+public:
+  // Co-moment and second moments about the replication means, summed over
+  // components. Sums from several pose pairs pool by addition.
+  struct Sums {
+    double cross = 0, first = 0, second = 0;
+  };
+
+  explicit ReplicationCorrelationStatistics(std::size_t components) : moments_(components) {
+    if (!components)
+      throw std::invalid_argument("empty replication correlation image");
+  }
+
+  void Add(std::span<const double> first, std::span<const double> second) {
+    if (first.size() != moments_.size() || second.size() != moments_.size())
+      throw std::invalid_argument("replication correlation extent mismatch");
+    for (std::size_t i = 0; i < moments_.size(); ++i)
+      if (!std::isfinite(first[i]) || !std::isfinite(second[i]))
+        throw std::invalid_argument("nonfinite replication correlation residual");
+    ++replications_;
+    for (std::size_t i = 0; i < moments_.size(); ++i) {
+      auto& m = moments_[i];
+      const double a = first[i] - m.first, b = second[i] - m.second;
+      m.first += a / replications_;
+      m.second += b / replications_;
+      m.cross += a * (second[i] - m.second);
+      m.first_m2 += a * (first[i] - m.first);
+      m.second_m2 += b * (second[i] - m.second);
+    }
+  }
+
+  Sums Summarize() const {
+    if (replications_ < 2)
+      throw std::logic_error("replication correlation needs two replications");
+    Sums result;
+    for (const auto& m : moments_) {
+      result.cross += m.cross;
+      result.first += m.first_m2;
+      result.second += m.second_m2;
+    }
+    return result;
+  }
+
+  // Pooled correlation; null when either side has no variance.
+  static std::optional<double> Correlation(const Sums& sums) {
+    if (sums.first <= 0 || sums.second <= 0)
+      return std::nullopt;
+    return sums.cross / std::sqrt(sums.first * sums.second);
+  }
+
+  unsigned Replications() const { return replications_; }
+
+private:
+  struct Moments {
+    double first = 0, second = 0, cross = 0, first_m2 = 0, second_m2 = 0;
+  };
+  std::vector<Moments> moments_;
+  unsigned replications_ = 0;
+};
 } // namespace LotusHeadless

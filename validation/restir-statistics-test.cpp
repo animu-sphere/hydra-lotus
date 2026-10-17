@@ -237,6 +237,78 @@ void CompareBiasDefinition() {
   lone.Add(std::array{1., 1., 1.});
   Check(rejects([&] { (void)lone.Summarize({}, {}); }), "one replication has no variance");
 }
+
+// Replication correlation against a direct two-pass definition: two pose
+// pairs of a two-component image, pooled by summing their moments.
+void CompareCorrelationDefinition() {
+  constexpr unsigned replications = 5;
+  std::array<std::array<std::array<double, 2>, replications>, 4> images{};
+  for (unsigned k = 0; k < replications; ++k)
+    for (unsigned c = 0; c < 2; ++c) {
+      const double noise = (int((k * 7 + c * 3) % 5) - 2) * 0.3;
+      images[0][k][c] = noise + 4 + c;               // Persistent offset.
+      images[1][k][c] = 0.5 * noise + 0.1 * k * k;   // Partly shared noise.
+      images[2][k][c] = (int((k * 3 + c) % 4) - 1.5) * 0.2 - 3;
+      images[3][k][c] = -images[2][k][c] + 0.05 * c;  // Anticorrelated.
+    }
+  double cross = 0, first = 0, second = 0;
+  std::array<LotusHeadless::ReplicationCorrelationStatistics::Sums, 2> sums;
+  for (unsigned pair = 0; pair < 2; ++pair) {
+    LotusHeadless::ReplicationCorrelationStatistics stats(2);
+    for (unsigned k = 0; k < replications; ++k)
+      stats.Add(images[pair * 2][k], images[pair * 2 + 1][k]);
+    Check(stats.Replications() == replications, "wrong correlation population");
+    sums[pair] = stats.Summarize();
+    double pair_cross = 0, pair_first = 0, pair_second = 0;
+    for (unsigned c = 0; c < 2; ++c) {
+      double a = 0, b = 0;
+      for (unsigned k = 0; k < replications; ++k) {
+        a += images[pair * 2][k][c] / replications;
+        b += images[pair * 2 + 1][k][c] / replications;
+      }
+      for (unsigned k = 0; k < replications; ++k) {
+        const double da = images[pair * 2][k][c] - a, db = images[pair * 2 + 1][k][c] - b;
+        pair_cross += da * db;
+        pair_first += da * da;
+        pair_second += db * db;
+      }
+    }
+    Near(sums[pair].cross, pair_cross);
+    Near(sums[pair].first, pair_first);
+    Near(sums[pair].second, pair_second);
+    cross += pair_cross;
+    first += pair_first;
+    second += pair_second;
+  }
+  Check(*LotusHeadless::ReplicationCorrelationStatistics::Correlation(sums[1]) < -0.99,
+      "anticorrelated pair must be near -1");
+  const LotusHeadless::ReplicationCorrelationStatistics::Sums pooled{
+      sums[0].cross + sums[1].cross, sums[0].first + sums[1].first, sums[0].second + sums[1].second};
+  Near(*LotusHeadless::ReplicationCorrelationStatistics::Correlation(pooled), cross / std::sqrt(first * second));
+
+  // Identical replications have no variance, so correlation is undefined.
+  LotusHeadless::ReplicationCorrelationStatistics frozen(1);
+  for (unsigned k = 0; k < 2; ++k)
+    frozen.Add(std::array{1.}, std::array{double(k)});
+  Check(!LotusHeadless::ReplicationCorrelationStatistics::Correlation(frozen.Summarize()),
+      "frozen side must have undefined correlation");
+  auto rejects = [](auto action) {
+    try {
+      action();
+    } catch (const std::logic_error&) {
+      return true;
+    }
+    return false;
+  };
+  Check(rejects([&] { frozen.Add(std::array{1., 2.}, std::array{1.}); }), "wrong extent accepted");
+  Check(rejects([&] { frozen.Add(std::array{1.}, std::array{std::numeric_limits<double>::infinity()}); }),
+      "nonfinite correlation residual accepted");
+  Check(frozen.Replications() == 2, "rejected pair changed the population");
+  Check(rejects([] { LotusHeadless::ReplicationCorrelationStatistics(0); }), "empty image accepted");
+  LotusHeadless::ReplicationCorrelationStatistics lone(1);
+  lone.Add(std::array{1.}, std::array{2.});
+  Check(rejects([&] { (void)lone.Summarize(); }), "one replication has no variance");
+}
 } // namespace
 
 int main() {
@@ -278,7 +350,8 @@ int main() {
     Near(*ramp.Lag1Autocorrelation(), 0.25);
     CompareEnsembleDefinition();
     CompareBiasDefinition();
-    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend, precision, sequence ensemble and replication bias passed\n";
+    CompareCorrelationDefinition();
+    std::cout << "Temporal residual statistics: independent definition, frozen, alternating, trend, precision, sequence ensemble, replication bias and correlation passed\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

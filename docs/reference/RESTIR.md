@@ -27,6 +27,10 @@ in that static fixture only. The
 find no moving-scene, band or tile error distinguishable from non-reusing
 estimators in the four bounded moving suites, at their resolution, with
 narrow-glossy highlights limited by rare-event variance. The
+[animation measurements](../reports/2026-10-17-restir-animation.md) find light
+and material edits reset history exactly, with no reset-related ghosting or
+frames-since-reset dependence; reuse noise stays correlated across edits (see
+[compatibility](#compatibility-and-publication)). The
 [complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
 reduce a reproduced narrow-glossy gap, but do not establish general
 unbiasedness, improved convergence or absence of ghosting. Finite references,
@@ -391,6 +395,21 @@ reservoir history. The static scene is the first moving pose. Both use finite
 NEE/MIS references and fixed bands `center-boundary-band-v1` and
 `left-red-wall-band-v1` (the leftmost quarter).
 
+`--restir-workload animation` selects `animated-area-environment-static-v1`
+and `animated-area-environment-lights-materials-v1`. They use the
+mixed-boundaries geometry, rect/disk lights and procedural environment, with
+its fixed foreground panel and a fixed camera. The moving scene edits lights and
+materials every `step = max(2, floor(frames / 8))` frames, at
+`phase = 2 pi frame / frames`: the light disk rotates by `0.6 sin(phase)`, light
+`i`'s radiance scales by `1 + 0.75 sin(phase) cos(1.7 i)`, the metal roughness
+becomes `0.35 + 0.2 sin(phase)` and the Lambert green becomes
+`0.12 + 0.15 (1 - cos(phase))`. Frames between edits are unchanged. Analytic
+light and material edits [reset reservoir and shared temporal history](#compatibility-and-publication),
+so each edit is a reset and the following frames rebuild history; the
+benchmark requires both exactly. The static scene is the first moving pose. Both
+default to one bounce, use finite NEE/MIS references and report
+`center-boundary-band-v1` and `right-glossy-band-v1` (the metal side).
+
 Each scene identifies its `error_reference`: the static distant plane uses
 `independent-lambert-integral`; moving scenes and the mixed/glossy static scenes
 use `finite-spp-nee-mis`, with null exact-integral fields. Their static convergence
@@ -399,7 +418,7 @@ noise. Mixed cases additionally report `regions` with ensemble RMS, signed
 RGB means and pixel count for `center-boundary-band-v1`: all rows and columns
 `[floor(3 width/8), floor(5 width/8))`. This fixed central quarter covers the
 material/depth step and some moving disocclusion, rather than classifying
-every boundary pixel. Glossy cases retain this band and add
+every boundary pixel. Glossy and animated cases retain this band and add
 `right-glossy-band-v1`, columns `[floor(5 width/8), floor(7 width/8))` over all
 rows. These are fixed screen bands, not material or disocclusion masks, and
 camera motion can move surfaces across them. Distant cases have an empty
@@ -420,7 +439,7 @@ Defaults and accepted CLI ranges:
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
 | `--restir-reference-seed` | 16777216 | 16777216–1073741823; base index for the finite reference |
 | `--restir-bounces` | 1 | 1–64 scattering events, shared by measured and reference rendering |
-| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres`, `interreflection` |
+| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres`, `interreflection`, `animation` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
@@ -584,6 +603,20 @@ counts and reference-noise presence; `lotus-renderer-restir-statistics` compares
 the test with a direct definition, including a partial tile and a detected
 persistent error.
 
+`animation` is null except in the animated moving scene, where it records the
+edit `step`, `edits_per_sequence` and a `step_lag_correlation` over
+`step_lag_pairs` pose pairs. It pairs each sequence's residuals at frames `f`
+and `f + step`, centers each component across sequences (removing persistent
+error and both poses' reference noise) and pools the co-moments over components
+and pairs. An edit separates every pair, so reservoir history cannot connect
+them. Reuse modes restart their fresh-batch RNG at the fixed base index after
+each reset, by the [reset rule](#compatibility-and-publication) that
+[temporal radiance batches](TEMPORAL.md#temporal-radiance-accumulation) share;
+non-reusing modes advance it every frame. The correlation therefore
+measures how much replayed random numbers correlate noise across an edit. It is
+not a bias test; `lotus-renderer-restir-statistics` checks it against a direct
+definition.
+
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
@@ -592,6 +625,9 @@ boundary metrics and all reservoir modes under both integrators. The `-glossy`
 variants check the camera-disocclusion suite and both regional measurements. The
 four-bounce `-interreflection` variants check the closed-room identities,
 the red-wall band and the static control against the first moving pose.
+The `-animation` variants check the animated identities, both bands, the
+static control and the edit step and step-lag population; the benchmark
+fails if any edit retains history or any unedited frame drops it.
 The Vulkan-only
 `lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. These
 checks assert no timing and may run concurrently under `ost test --jobs N`.
@@ -726,6 +762,11 @@ radiance mode/history cap and background changes reset as
 `RenderSettingsChanged`. Frame gaps, target/window changes, explicit history
 keys, camera cuts and successful ordinary renders retain the shared reset
 policy. Same-count instancer reordering still requires a caller cut/key change.
+After any reset the fresh batch starts again at `sample_index`, so frames
+after successive edits reuse the same random numbers: under light/material
+animation, reuse noise stays correlated across edits (about 0.58 in the
+[animation measurements](../reports/2026-10-17-restir-animation.md)), and a
+scene edited on every frame replays one set of random numbers on every frame.
 Only successful submission, readback and timestamp collection publish the
 current histories and rotate buffers. Invalid requests publish nothing and
 do not consume a frame; GPU arithmetic failure latches renderer failure and

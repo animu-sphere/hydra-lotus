@@ -78,12 +78,14 @@ else()
   if(WORKLOAD STREQUAL "mixed-boundaries")
     set(ids mixed-area-environment-boundaries-v1 mixed-area-environment-moving-boundaries-v1)
   elseif(WORKLOAD STREQUAL "glossy-disocclusion" OR WORKLOAD STREQUAL "glossy-spheres" OR
-         WORKLOAD STREQUAL "interreflection")
+         WORKLOAD STREQUAL "interreflection" OR WORKLOAD STREQUAL "animation")
     set(ids glossy-area-environment-static-v1 glossy-area-environment-camera-disocclusion-v1)
     if(WORKLOAD STREQUAL "glossy-spheres")
       set(ids glossy-sphere-environment-static-v1 glossy-sphere-environment-camera-disocclusion-v1)
     elseif(WORKLOAD STREQUAL "interreflection")
       set(ids interreflection-room-static-v1 interreflection-room-moving-block-v1)
+    elseif(WORKLOAD STREQUAL "animation")
+      set(ids animated-area-environment-static-v1 animated-area-environment-lights-materials-v1)
     endif()
     # The static control and moving sequence begin at the same pose with
     # identical geometry/lights and disjoint reference halves using the same
@@ -145,7 +147,8 @@ else()
       string(JSON regions LENGTH "${json}" scenes ${s} cases ${c} regions)
       if(NOT WORKLOAD STREQUAL "distant")
         set(expected_regions 1)
-        if(WORKLOAD STREQUAL "glossy-disocclusion" OR WORKLOAD STREQUAL "glossy-spheres")
+        if(WORKLOAD STREQUAL "glossy-disocclusion" OR WORKLOAD STREQUAL "glossy-spheres" OR
+           WORKLOAD STREQUAL "animation")
           set(expected_regions 2)
           string(JSON glossy_id GET "${json}" scenes ${s} cases ${c} regions 1 id)
           string(JSON glossy_pixels GET "${json}" scenes ${s} cases ${c} regions 1 pixels)
@@ -191,6 +194,27 @@ else()
       endif()
       if((mode STREQUAL "temporal" OR mode STREQUAL "spatiotemporal") AND NOT reuse GREATER 0)
         message(FATAL_ERROR "Temporal benchmark never accepted history")
+      endif()
+      # Four animated frames edit lights/materials once, at frame two; the
+      # benchmark itself requires each reset and the retained history between.
+      string(JSON animation TYPE "${json}" scenes ${s} cases ${c} animation)
+      if(WORKLOAD STREQUAL "animation" AND s EQUAL 1)
+        string(JSON step GET "${json}" scenes ${s} cases ${c} animation step)
+        string(JSON edits GET "${json}" scenes ${s} cases ${c} animation edits_per_sequence)
+        string(JSON pairs GET "${json}" scenes ${s} cases ${c} animation step_lag_pairs)
+        string(JSON lag_type TYPE "${json}" scenes ${s} cases ${c} animation step_lag_correlation)
+        if(NOT animation STREQUAL "OBJECT" OR NOT step EQUAL 2 OR NOT edits EQUAL 1 OR NOT pairs EQUAL 2 OR
+           (NOT lag_type STREQUAL "NUMBER" AND NOT lag_type STREQUAL "NULL"))
+          message(FATAL_ERROR "Wrong animation step or step-lag population")
+        endif()
+        if(lag_type STREQUAL "NUMBER")
+          string(JSON lag GET "${json}" scenes ${s} cases ${c} animation step_lag_correlation)
+          if(lag LESS -1.00000001 OR lag GREATER 1.00000001)
+            message(FATAL_ERROR "Invalid step-lag correlation")
+          endif()
+        endif()
+      elseif(NOT animation STREQUAL "NULL")
+        message(FATAL_ERROR "Only animated moving scenes report animation")
       endif()
       if(s EQUAL 0)
         string(JSON checkpoints LENGTH "${json}" scenes ${s} cases ${c} convergence)
@@ -371,6 +395,7 @@ set(invalid_options
   "--restir-history-cap|0" "--restir-radius|33" "--benchmark-integrator|unknown"
   "--restir-proposal|unknown" "--restir-proposal|" "--restir-proposal|Power"
   "--restir-workload|unknown" "--restir-workload|" "--restir-workload|Mixed-boundaries"
+  "--restir-workload|Animation"
   "--restir-seed|-1" "--restir-seed|8388608" "--restir-seed|8388607" "--restir-seed|17junk"
   "--restir-reference-seed|16777215" "--restir-reference-seed|1073741824"
   "--restir-reference-seed|-1" "--restir-reference-seed|16777216junk"

@@ -40,7 +40,10 @@ limits; opt-in availability does not close the remaining investigations.
   suites; narrow glossy highlights are limited by rare-event variance.
   A [closed interreflecting room](../reports/2026-10-17-restir-interreflection.md),
   about half indirect light at four bounces, shows the same, with weaker
-  temporal correlation. Light/material animation and reuse cost remain.
+  temporal correlation. Under [light/material animation](../reports/2026-10-17-restir-animation.md)
+  history resets exactly at each edit with no reset-related ghosting, but each
+  reset replays random numbers, correlating reuse noise across edits. Reuse
+  cost remains.
   The experimental release gate validates the shipped snapshot; it does not
   substitute for these remaining transport investigations.
 
