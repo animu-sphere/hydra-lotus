@@ -216,7 +216,8 @@ ost renderer viewport -- --frames 8 --hidden
 ost validate --intent renderer-viewport
 ```
 
-The first run fetches GLFW and Dear ImGui. The viewport builds in a tree of its own
+The first run fetches GLFW and Dear ImGui (and, for the Hydra-enabled build,
+nativefiledialog-extended). The viewport builds in a tree of its own
 (`build/<target>--renderer-viewport`), so it leaves the default target's
 validation untouched, and that build has no OpenUSD dependency.
 
@@ -266,7 +267,7 @@ again after a change; the launcher above runs the executable just built
 | `--resize-test` | resize once after the second frame and fail unless the swapchain followed |
 | `--interaction-test` | apply the scene's scripted inputs and edits, one per frame from the second, and fail unless each restarts or continues the accumulation as it should |
 | `--allow-unavailable` | exit 77 instead of 1, with a `SKIP:` explanation, where no driver or device can present |
-| `--benchmark <file>` | write the run's frame counts, CPU and GPU times, swapchain and validation state as JSON (`lotus.viewport-benchmark/v1`) |
+| `--benchmark <file>` | write the run's frame counts, CPU and GPU times, each GPU pass's mean time, the latest scene update, renderer memory, swapchain and validation state as JSON (`lotus.viewport-benchmark/v1`) |
 
 The free camera follows usdview's bindings, without requiring Alt:
 
@@ -294,11 +295,41 @@ The Renderer window (Dear ImGui, drawn over the presented frame) changes the
 options above while the viewport runs: the integrator, the sample limit and
 accumulation, NEE/MIS, the ReSTIR mode and candidate count, temporal radiance
 reuse and its history length, and the presented product with its colour
-scale. It shows the extent, samples per pixel, the frame's wall time and its
-GPU time. Pointer and keyboard input over the window goes to it rather than
-the camera; it writes no files. The settings logic is
-`adapters/viewport/controls.{hpp,cpp}`, which `lotus-viewport-controls`
-covers without a window or GPU.
+scale. It shows the extent and samples per pixel. Pointer and keyboard input
+over the window goes to it rather than the camera; it writes no files. The
+settings logic is `adapters/viewport/controls.{hpp,cpp}`, which
+`lotus-viewport-controls` covers without a window or GPU.
+
+In the Hydra-enabled build the Renderer window's **Open USD...** button picks
+a stage (`.usd`, `.usda`, `.usdc`, `.usdz`) from the native file dialog, as
+hydra-merlin's viewport does, and renders it in the same window with the
+controls as they are; the built-in scene can open a stage the same way. A
+picked stage opens through the free camera at its start time code, with a new
+renderer, so its accumulation and history start again. A stage that does not
+open leaves the current one running and says why in the window.
+
+The Timing window (the timing HUD) shows, for the latest frames that ran the
+same passes (up to 32, started again when the controls change the passes):
+
+- the host's frame time (rendering and presenting, the developer UI
+  included; with vsync on it follows the display) and the GPU time of every
+  timed submission, each with a graph of the last 120 frames;
+- the GPU passes that ran, each with its share of the GPU time: the path
+  trace (with the wavefront kernels under it), the ReSTIR initial, temporal
+  and spatial passes, the temporal surfaces (primary surfaces and
+  reprojection) and temporal accumulation. Together they add up to the GPU
+  time. Denoising has no pass yet;
+- the latest scene update that submitted GPU work, and before which frame:
+  its upload, BLAS and TLAS build or refit times;
+- the reservoir, surface-history and radiance-history memory (device buffers
+  with their host mirrors, as the latest frame that used them reported it;
+  "retained" when the controls no longer use them, since the backend keeps
+  them allocated), the scene's backing memory and its BLAS and TLAS storage.
+
+The figures come from `adapters/viewport/timings.{hpp,cpp}`, which
+`lotus-viewport-timings` covers without a window or GPU, and `--benchmark`
+writes the run's means of the same passes
+([evidence](../reports/2026-10-18-viewport-timing.md)).
 
 Changing the integrator, the estimator or the candidate count restarts the
 accumulation; the sample limit and the presented product continue it.
@@ -326,8 +357,8 @@ built-in scene), `lotus-viewport-hydra`, `lotus-viewport-hydra-interaction`
 and `lotus-viewport-hydra-camera` (the smoke stage, Hydra-enabled build
 only) and `lotus-viewport-no-driver` (an explained skip with Vulkan driver discovery
 pointed at a missing manifest), each in the viewport's tree, plus the
-window-free `lotus-viewport-options`, `lotus-viewport-controls` and
-`lotus-viewport-camera` in every tree. The interaction tests also step
+window-free `lotus-viewport-options`, `lotus-viewport-controls`,
+`lotus-viewport-timings` and `lotus-viewport-camera` in every tree. The interaction tests also step
 through every renderer control and debug view.
 
 > ⚠️ On a Windows host whose MSVC prints Japanese, some objects record no

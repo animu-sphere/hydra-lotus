@@ -11,7 +11,10 @@
 
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace {
 
@@ -20,6 +23,46 @@ constexpr bool kHydra = true;
 #else
 constexpr bool kHydra = false;
 #endif
+
+// The options' scene, then each stage the developer UI opens, in one
+// window.
+int Run(const Lotus::viewport::Options& options,
+    const std::filesystem::path& shader_directory) {
+  using namespace Lotus::viewport;
+#if defined(LOTUS_VIEWPORT_HYDRA)
+  if (std::string error; !options.stage.empty() &&
+                         !OpenStage(options.stage, error)) {
+    std::cerr << "lotus-viewport: " << error << '\n';
+    return 1;
+  }
+#endif
+  std::string reason;
+  std::optional<ViewportWindow> window = OpenWindow(options, reason);
+  if (!window) {
+    return Unavailable(options, reason);
+  }
+#if defined(LOTUS_VIEWPORT_HYDRA)
+  window->open_stage = &OpenStage;
+#endif
+  Options run = options;
+  std::filesystem::path stage = options.stage;
+  for (;;) {
+#if defined(LOTUS_VIEWPORT_HYDRA)
+    const int result = stage.empty()
+                           ? RunBuiltinScene(run, *window, shader_directory)
+                           : RunHydraStage(run, *window, stage);
+#else
+    const int result = RunBuiltinScene(run, *window, shader_directory);
+#endif
+    if (!window->next_stage) {
+      return result;
+    }
+    stage = *std::exchange(window->next_stage, std::nullopt);
+    // A picked stage opens as a stage without options does.
+    run.camera.clear();
+    run.time.reset();
+  }
+}
 
 } // namespace
 
@@ -30,16 +73,12 @@ int main(int argc, char** argv) {
       std::cout << Lotus::viewport::Usage(kHydra);
       return 0;
     }
-    if (!options.stage.empty()) {
-#if defined(LOTUS_VIEWPORT_HYDRA)
-      return Lotus::viewport::RunHydraStage(options);
-#else
+    if (!kHydra && !options.stage.empty()) {
       std::cerr << "lotus-viewport: --usd needs a viewport built with "
                    "LOTUS_ENABLE_HYDRA2 (the viewport-usd intent)\n";
       return 1;
-#endif
     }
-    return Lotus::viewport::RunBuiltinScene(options,
+    return Run(options,
         std::filesystem::absolute(argv[0]).parent_path() / "shaders");
   } catch (const std::exception& fatal) {
     std::cerr << "lotus-viewport: " << fatal.what() << '\n';

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frame_loop.hpp"
+#include "timings.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -26,24 +27,8 @@ struct RunTotals {
   std::uint64_t last_cpu_ns = 0;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
+  TimingRecord timings;
 };
-
-// The scene pass's time covers the wavefront kernels, the reservoir passes
-// and, under reuse, the temporal surfaces that precede them; the temporal
-// passes otherwise, and radiance accumulation always, are a later
-// submission.
-double FrameGpuMs(const GpuFrameEvidence& frame) {
-  double total = frame.primary_ray_gpu_ms;
-  const TemporalProducts& temporal = frame.temporal;
-  if (temporal.timestamp_available) {
-    const bool reuse = frame.restir.temporal_row_pitch != 0;
-    if (!reuse) {
-      total += temporal.primary_surface_gpu_ms + temporal.reprojection_gpu_ms;
-    }
-    total += temporal.accumulation_gpu_ms;
-  }
-  return total;
-}
 
 template <typename Record>
 std::uint64_t Bytes(const std::vector<Record>& records) {
@@ -133,6 +118,39 @@ void WriteBenchmark(const std::filesystem::path& path,
                  ? 0.0
                  : totals.gpu_ms / static_cast<double>(totals.gpu_frames))
       << ",\n"
+      << "  \"gpu_pass_average_ms\": {";
+  // Each pass over the frames that ran it; null when none did.
+  const TimingRecord& timings = totals.timings;
+  for (std::size_t pass = 0; pass < kGpuPassCount; ++pass) {
+    out << (pass == 0 ? "" : ", ")
+        << JsonString(Name(static_cast<GpuPass>(pass))) << ": ";
+    if (timings.pass_frames()[pass] == 0) {
+      out << "null";
+    } else {
+      out << timings.pass_totals()[pass] /
+                 static_cast<double>(timings.pass_frames()[pass]);
+    }
+  }
+  const SceneUpdateTimes& update = timings.scene_update();
+  const MemoryUse& memory = timings.memory();
+  out << "},\n"
+      << "  \"scene_updates\": " << update.count << ",\n"
+      << "  \"last_scene_update\": ";
+  if (update.available) {
+    out << "{\"frame\": " << update.frame
+        << ", \"upload_gpu_ms\": " << update.upload_ms
+        << ", \"blas_gpu_ms\": " << update.blas_ms
+        << ", \"tlas_gpu_ms\": " << update.tlas_ms << "}";
+  } else {
+    out << "null";
+  }
+  out << ",\n"
+      << "  \"memory_bytes\": {\"reservoirs\": " << memory.reservoir_bytes
+      << ", \"surface_history\": " << memory.surface_history_bytes
+      << ", \"radiance_history\": " << memory.radiance_history_bytes
+      << ", \"scene_used\": " << memory.scene_used_bytes
+      << ", \"scene_reserved\": " << memory.scene_reserved_bytes
+      << ", \"acceleration\": " << memory.acceleration_bytes << "},\n"
       << "  \"readback_bytes\": " << totals.readback_bytes << ",\n"
       << "  \"validation_available\": "
       << (frame.validation_available ? "true" : "false") << ",\n"
@@ -280,7 +298,8 @@ std::vector<InteractionStep> ControlSteps(Controls& controls) {
   return steps;
 }
 
-UiStatus Status(const Scene& scene, const RunTotals& totals) {
+UiStatus Status(const Scene& scene, const RunTotals& totals,
+    std::string_view stage, bool can_open_stage) {
   UiStatus status;
   status.source = scene.source();
   status.scene = scene.Status();
@@ -288,11 +307,10 @@ UiStatus Status(const Scene& scene, const RunTotals& totals) {
   status.width = totals.width;
   status.height = totals.height;
   status.samples_per_pixel = totals.last.frame.samples_per_pixel;
-  status.frame_ms = static_cast<double>(totals.last_cpu_ns) / 1.0e6;
-  if (totals.last.frame.primary_ray_timestamp_available) {
-    status.gpu_ms = FrameGpuMs(totals.last.frame);
-  }
+  status.timings = &totals.timings;
   status.depth_range = scene.DepthRange();
+  status.stage = stage;
+  status.can_open_stage = can_open_stage;
   return status;
 }
 
@@ -351,6 +369,7 @@ std::optional<ViewportWindow> OpenWindow(const Options& options,
     std::string& reason) {
   ViewportWindow opened;
   opened.presentation.vsync = options.vsync;
+  opened.controls = options.controls;
   try {
     opened.window = Window::Create("lotus-viewport", options.width,
         options.height, options.visible, options.fullscreen);
@@ -368,7 +387,7 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
     Scene& scene, const std::string& stage) {
   Window& window = *viewport.window;
   DeveloperUi& ui = *viewport.ui;
-  Controls controls = options.controls;
+  Controls& controls = viewport.controls;
   RunTotals totals;
   std::vector<InteractionStep> steps;
   if (options.interaction_test) {
@@ -425,7 +444,18 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
       return 1;
     }
     const auto start = Clock::now();
-    (void)ui.Draw(controls, Status(scene, totals));
+    (void)ui.Draw(controls,
+        Status(scene, totals, stage, static_cast<bool>(viewport.open_stage)));
+    if (std::optional<std::filesystem::path> picked = ui.TakeStageRequest()) {
+      std::string open_error = "this build cannot open USD stages";
+      if (viewport.open_stage && viewport.open_stage(*picked, open_error)) {
+        viewport.next_stage = std::move(picked);
+        running = false;
+        break;
+      }
+      std::cerr << "lotus-viewport: " << open_error << '\n';
+      ui.SetStageError(open_error);
+    }
     const FramePlan plan = PlanFrame(controls, totals.frames,
         scene.DepthRange());
     FrameResult result;
@@ -451,6 +481,8 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
       ++totals.gpu_frames;
     }
     totals.readback_bytes += ReadbackBytes(result.frame);
+    totals.timings.Add(result.frame, result.scene_update, result.scene,
+        static_cast<double>(totals.last_cpu_ns) / 1.0e6);
     totals.width = width;
     totals.height = height;
     totals.last = std::move(result);

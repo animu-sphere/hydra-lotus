@@ -76,6 +76,8 @@ public:
       error = "GPU scene update failed: " + scene.detail;
       return false;
     }
+    result.scene_update = scene.timings;
+    result.scene = scene.stats;
     OffscreenTarget target;
     target.width = width;
     target.height = height;
@@ -124,20 +126,15 @@ private:
 
 } // namespace
 
-int RunBuiltinScene(const Options& options,
+int RunBuiltinScene(const Options& options, ViewportWindow& window,
     const std::filesystem::path& shader_directory) {
-  std::string error;
-  std::optional<ViewportWindow> window = OpenWindow(options, error);
-  if (!window) {
-    return Unavailable(options, error);
-  }
-
   // Destroyed before the window and its developer UI.
+  std::string error;
   FrameStatus status = FrameStatus::Fail;
   const RendererShaders shaders = ShadersIn(shader_directory);
   const std::unique_ptr<OffscreenRenderer> renderer = CreateOffscreenRenderer(
       shaders.vertex, shaders.fragment, status, error, shaders.ray_query,
-      &window->presentation);
+      &window.presentation);
   if (!renderer) {
     if (status == FrameStatus::Skip) {
       return Unavailable(options, error);
@@ -151,7 +148,7 @@ int RunBuiltinScene(const Options& options,
   }
 
   BuiltinScene scene(*renderer);
-  return RunFrameLoop(options, *window, scene, {});
+  return RunFrameLoop(options, window, scene, {});
 }
 
 } // namespace Lotus::viewport

@@ -37,11 +37,14 @@ developer UI switches the integrator, accumulation, NEE/MIS, ReSTIR and
 temporal radiance reuse while running, and presents the depth, normal,
 motion, temporal-validity and reservoir debug products from the GPU; reuse
 frames that are presented no longer read back their evidence products
-([evidence](../reports/2026-10-18-viewport-controls.md)).
-
-- [ ] **LOTUS-VIEWPORT-04 — Timing HUD.** Frame time; GPU path-trace, ReSTIR,
-  temporal and (once it exists) denoise pass times; sample count; scene/TLAS
-  update time; reservoir and history memory.
+([evidence](../reports/2026-10-18-viewport-controls.md)). A timing HUD shows
+the frame time, each GPU pass's time (path trace and wavefront kernels,
+ReSTIR, temporal), the sample count, the latest scene update's upload, BLAS
+and TLAS times and the reuse and scene memory, and the Hydra-enabled build
+opens stages from a native file dialog
+([evidence](../reports/2026-10-18-viewport-timing.md)). The step is complete
+and shipped in [v0.5.2](../releases/v0.5.2.md); denoise timing joins the HUD
+with LOTUS-SVGF-03.
 
 ### Step 3 — SVGF core
 

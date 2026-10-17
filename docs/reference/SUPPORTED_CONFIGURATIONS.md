@@ -49,6 +49,7 @@ physical-GPU rendering.
 | OpenUSD | 26.08 measured | Hydra adapter only; a real `lookdev` or `usd` runtime |
 | GLFW | 3.4 | standalone viewport only; `find_package`, else a pinned FetchContent |
 | Dear ImGui | 1.92.8 (commit `8936b58`) | standalone viewport's developer UI only; a pinned FetchContent, its MIT licence installed under `share/lotus/licenses/` |
+| nativefiledialog-extended | 1.3.0 (commit `3cd252a`) | Hydra-enabled standalone viewport's Open USD dialog only, the commit hydra-merlin pins; a pinned FetchContent, its zlib licence installed under `share/lotus/licenses/` |
 
 Ray-traced scene rendering requires `VK_KHR_ray_query`, `rayQuery`,
 acceleration structures, buffer device addresses, `fragmentStoresAndAtomics`

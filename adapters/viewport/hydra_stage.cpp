@@ -159,6 +159,12 @@ bool MightBeTimeVarying(const UsdStageRefPtr& stage) {
   return false;
 }
 
+// The stage OpenStage opened last, until RunHydraStage renders it.
+UsdStageRefPtr& OpenedStage() {
+  static UsdStageRefPtr stage;
+  return stage;
+}
+
 // The interaction test's session-layer prim.
 const SdfPath kInteractionPrim("/__lotusViewportInteraction");
 
@@ -270,6 +276,8 @@ public:
     engine_.Execute(render_index_.get(), &tasks_);
     frame.frame = render_delegate_.GetFrameEvidence();
     frame.present = render_delegate_.GetPresentEvidence();
+    frame.scene_update = render_delegate_.GetGpuSceneTimings();
+    frame.scene = render_delegate_.GetGpuSceneStats();
     // The delegate reports why it could not render through the evidence;
     // its Tf diagnostics say the same. A failed frame is a failure, not an
     // environment that cannot render.
@@ -590,30 +598,36 @@ private:
 
 } // namespace
 
-int RunHydraStage(const Options& options) {
-  const std::string stage_path = Utf8(options.stage);
-  const UsdStageRefPtr stage = UsdStage::Open(stage_path);
-  if (!stage) {
-    std::cerr << "lotus-viewport: could not open the USD stage " << stage_path
-              << '\n';
-    return 1;
+bool OpenStage(const std::filesystem::path& stage, std::string& error) {
+  const std::string stage_path = Utf8(stage);
+  UsdStageRefPtr opened = UsdStage::Open(stage_path);
+  if (!opened) {
+    error = "could not open the USD stage " + stage_path;
+    return false;
   }
-  std::string reason;
-  std::optional<ViewportWindow> window = OpenWindow(options, reason);
-  if (!window) {
-    return Unavailable(options, reason);
+  OpenedStage() = std::move(opened);
+  return true;
+}
+
+int RunHydraStage(const Options& options, ViewportWindow& window,
+    const std::filesystem::path& stage) {
+  const std::string stage_path = Utf8(stage);
+  const UsdStageRefPtr opened = std::exchange(OpenedStage(), nullptr);
+  if (!opened) {
+    std::cerr << "lotus-viewport: " << stage_path << " was not opened\n";
+    return 1;
   }
 
   // The scene owns the renderer, which goes before the window's UI.
   std::unique_ptr<HydraScene> scene;
   try {
-    scene = std::make_unique<HydraScene>(options, stage, window->presentation);
+    scene = std::make_unique<HydraScene>(options, opened, window.presentation);
   } catch (const std::exception& setup) {
     std::cerr << "lotus-viewport: " << setup.what() << '\n';
     return 1;
   }
   std::cout << "USD stage: " << stage_path << '\n';
-  const int result = RunFrameLoop(options, *window, *scene, stage_path);
+  const int result = RunFrameLoop(options, window, *scene, stage_path);
   if (scene->unavailable()) {
     return Unavailable(options, scene->unavailable_reason());
   }
