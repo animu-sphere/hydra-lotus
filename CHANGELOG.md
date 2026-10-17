@@ -19,6 +19,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   penalty to correlation rather than detectable bias
   ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [evidence](docs/reports/2026-10-16-restir-sequence-ensemble.md)).
+- Headless ReSTIR comparison cases report replication bias tests: noise-normalized
+  error per moving pose (each pose's frames across independent sequences) or
+  static sequence mean, within fixed bands, and per 8x8 tile mean, including each
+  pose's finite-reference noise; the budget reducer validates them. Four moving
+  suites show no reuse bias, ghosting or localized error distinguishable from
+  non-reusing estimators
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-17-restir-moving-bias.md)).
 
 ## [0.5.0] - 2026-10-16
 

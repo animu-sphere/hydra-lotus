@@ -34,8 +34,12 @@ limits; opt-in availability does not close the remaining investigations.
   The [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ensemble.md)
   attributes it to temporal correlation, not detectable bias, in that static
   fixture; the fixture's interreflection is too weak to count as multibounce
-  coverage. Moving-scene bias/ghosting, localized artifacts, scenes with
-  substantial interreflection and reuse cost remain.
+  coverage. [Replication bias tests](../reports/2026-10-17-restir-moving-bias.md)
+  find no moving-scene bias, ghosting or localized (band/tile) error
+  distinguishable from non-reusing estimators in the four bounded moving
+  suites; narrow glossy highlights are limited by rare-event variance.
+  Scenes with substantial interreflection, light/material animation and reuse
+  cost remain.
   The experimental release gate validates the shipped snapshot; it does not
   substitute for these remaining transport investigations.
 
