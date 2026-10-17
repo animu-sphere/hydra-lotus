@@ -257,16 +257,12 @@ private:
 // The backend's deterministic image of `snapshot` under `light_sampling`,
 // rendered in one call by a renderer of its own, rows flipped as Hydra
 // stores them.
-Image BackendImage(const std::filesystem::path& shaders,
+Image BackendImage(const Lotus::RendererShaders& shaders,
     const Lotus::FrameSnapshot& snapshot, Lotus::LightSampling light_sampling) {
   Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
   std::string error;
   const auto renderer = Lotus::CreateOffscreenRenderer(
-      (shaders / "triangle.vert.spv").string(),
-      (shaders / "triangle.frag.spv").string(), status, error,
-      {(shaders / "path_trace.vert.spv").string(),
-          (shaders / "path_trace.frag.spv").string(),
-          (shaders / "wavefront.comp.spv").string()});
+      shaders.vertex, shaders.fragment, status, error, shaders.ray_query);
   Check(renderer != nullptr, "could not create the backend renderer: " + error);
   Lotus::SceneExtraction extraction;
   const Lotus::GpuSceneEvidence scene =
@@ -499,7 +495,7 @@ int RunCpu(const UsdStageRefPtr& stage) {
   return 0;
 }
 
-int RunGpu(const UsdStageRefPtr& stage, const std::filesystem::path& shaders) {
+int RunGpu(const UsdStageRefPtr& stage, const Lotus::RendererShaders& shaders) {
   HdRenderSettingsMap settings;
   settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(kSamples);
   settings[kSampleIndexSetting] = VtValue(kSampleIndex);
@@ -548,14 +544,13 @@ int RunGpu(const UsdStageRefPtr& stage, const std::filesystem::path& shaders) {
 int main(int argc, char** argv) try {
   const bool gpu = argc == 2 && std::string_view(argv[1]) == "--gpu";
   const auto shaders =
-      std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+      Lotus::ShadersIn(std::filesystem::absolute(argv[0]).parent_path() / "shaders");
   if (gpu) {
     // Missing GPU capability is a CTest SKIP, never a passing GPU check.
     Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
     std::string error;
     const auto probe = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), status, error);
+        shaders.vertex, shaders.fragment, status, error);
     if (!probe) {
       std::cerr << error << '\n';
       return status == Lotus::FrameStatus::Skip ? 77 : 1;

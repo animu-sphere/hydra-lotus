@@ -30,13 +30,9 @@ int RunBuiltinScene(const Options& options,
 
   FrameStatus status = FrameStatus::Fail;
   std::string error;
-  const auto shader = [&](const char* name) {
-    return (shader_directory / name).string();
-  };
+  const RendererShaders shaders = ShadersIn(shader_directory);
   const std::unique_ptr<OffscreenRenderer> renderer = CreateOffscreenRenderer(
-      shader("triangle.vert.spv"), shader("triangle.frag.spv"), status, error,
-      {shader("path_trace.vert.spv"), shader("path_trace.frag.spv"),
-          shader("wavefront.comp.spv")},
+      shaders.vertex, shaders.fragment, status, error, shaders.ray_query,
       &presentation);
   if (!renderer) {
     if (status == FrameStatus::Skip) {

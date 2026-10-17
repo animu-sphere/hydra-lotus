@@ -398,12 +398,11 @@ int main(int argc, char** argv) try {
   const bool gpu = argc == 2 && std::string_view(argv[1]) == "--gpu";
   const auto directory = std::filesystem::absolute(argv[0]).parent_path();
   if (gpu) {
-    const auto shaders = directory / "shaders";
+    const auto shaders = Lotus::ShadersIn(directory / "shaders");
     Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
     std::string error;
     const auto probe = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), status, error);
+        shaders.vertex, shaders.fragment, status, error);
     if (!probe) {
       std::cerr << error << '\n';
       return status == Lotus::FrameStatus::Skip ? 77 : 1;

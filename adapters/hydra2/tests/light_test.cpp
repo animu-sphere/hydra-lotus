@@ -253,12 +253,12 @@ int Run(bool gpu) {
 int main(int argc, char** argv) try {
   const bool gpu = argc == 2 && std::string_view(argv[1]) == "--gpu";
   if (gpu) {
-    const auto shaders = std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+    const auto shaders =
+        Lotus::ShadersIn(std::filesystem::absolute(argv[0]).parent_path() / "shaders");
     Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
     std::string error;
     const auto probe = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), status, error);
+        shaders.vertex, shaders.fragment, status, error);
     if (!probe) {
       std::cerr << error << '\n';
       return status == Lotus::FrameStatus::Skip ? 77 : 1;

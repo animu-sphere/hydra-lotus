@@ -1382,12 +1382,11 @@ void TemporalOverflow(OffscreenRenderer& renderer, Integrator integrator) {
 } // namespace
 
 int main(int argc, char** argv) try {
-  const std::string vertex = argc > 1 ? argv[1] : "";
-  const std::string fragment = argc > 2 ? argv[2] : "";
-  RayQueryShaders shaders;
-  if (argc > 4) { shaders.vertex = argv[3]; shaders.fragment = argv[4]; }
-  if (argc > 5) shaders.wavefront = argv[5];
-  if (argc > 6) image_root = argv[6];
+  const RendererShaders shader_set = ShadersIn(argc > 1 ? argv[1] : "");
+  const std::string& vertex = shader_set.vertex;
+  const std::string& fragment = shader_set.fragment;
+  const RayQueryShaders& shaders = shader_set.ray_query;
+  if (argc > 2) image_root = argv[2];
   FrameStatus status; std::string detail;
   auto renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
   if (!renderer) {
@@ -1399,9 +1398,9 @@ int main(int argc, char** argv) try {
   }
   for (auto integrator : {Integrator::Reference, Integrator::Wavefront}) {
     // Fresh scene extraction and renderer ownership for each independent fixture.
-    const unsigned first_test = argc > 7 && std::string(argv[7]) == "--bsdf-only" ? 27U :
-        argc > 7 && std::string(argv[7]) == "--visibility-only" ? 25U :
-        argc > 7 && std::string(argv[7]) == "--spatial-only" ? 11U : 0U;
+    const unsigned first_test = argc > 3 && std::string(argv[3]) == "--bsdf-only" ? 27U :
+        argc > 3 && std::string(argv[3]) == "--visibility-only" ? 25U :
+        argc > 3 && std::string(argv[3]) == "--spatial-only" ? 11U : 0U;
     for (unsigned test = first_test; test < 31; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());

@@ -644,12 +644,12 @@ int main(int argc, char** argv) try {
   Contract();
   if (argc > 1 && std::string(argv[1]) == "--contract")
     return 0;
-  const auto shaders = std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+  const auto shaders =
+      Lotus::ShadersIn(std::filesystem::absolute(argv[0]).parent_path() / "shaders");
   Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
   std::string error;
   const auto probe = Lotus::CreateOffscreenRenderer(
-      (shaders / "triangle.vert.spv").string(),
-      (shaders / "triangle.frag.spv").string(), status, error);
+      shaders.vertex, shaders.fragment, status, error);
   if (!probe) {
     std::cerr << error << '\n';
     return status == Lotus::FrameStatus::Skip ? 77 : 1;

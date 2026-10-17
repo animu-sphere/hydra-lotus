@@ -1,12 +1,21 @@
-find_package(pxr CONFIG REQUIRED)
+include(LotusShaders)
 
-if(NOT LOTUS_WITH_VULKAN)
-  message(FATAL_ERROR
-    "LOTUS_ENABLE_HYDRA2 requires a Vulkan 1.3 SDK and slangc")
-endif()
+find_package(pxr CONFIG REQUIRED)
 if(NOT TARGET hd OR NOT TARGET hio OR NOT TARGET plug)
   message(FATAL_ERROR
     "The OpenUSD package must provide the hd, hio and plug CMake targets")
+endif()
+
+# The OpenUSD runtime root, whose bin/ and lib/ hold the DLLs that tests and
+# the viewport launcher put on PATH.
+if(PXR_INCLUDE_DIRS)
+  list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
+  get_filename_component(LOTUS_PXR_ROOT
+    "${_lotus_pxr_include}/.." ABSOLUTE)
+elseif(DEFINED pxr_DIR)
+  set(LOTUS_PXR_ROOT "${pxr_DIR}")
+else()
+  message(FATAL_ERROR "Could not derive the OpenUSD runtime root")
 endif()
 
 # The co-built runtime is implementation detail of the module. It is not an
@@ -20,6 +29,7 @@ target_link_libraries(lotus-hydra2-runtime
   PRIVATE
     Lotus::RenderExtraction
     Lotus::Vulkan
+    Lotus::Warnings
     hio
     ${CMAKE_DL_LIBS})
 target_compile_features(lotus-hydra2-runtime PUBLIC cxx_std_20)
@@ -30,28 +40,18 @@ target_compile_definitions(lotus-hydra2-runtime PRIVATE
 
 # The host-side OpenUSD libraries that a Hydra-enabled viewport links to open
 # a stage and drive the delegate in process (project layout section 4,
-# rule 4). Nothing else may link them outside this directory.
+# rule 4). Nothing else may link them outside this directory. Its
+# LOTUS_PXR_ROOT property is the OpenUSD runtime root such a host puts on PATH.
 add_library(lotus-hydra2-host-dependencies INTERFACE)
 target_link_libraries(lotus-hydra2-host-dependencies INTERFACE
   usd usdGeom usdImaging)
-
-# The OpenUSD runtime root, whose bin/ and lib/ hold the DLLs that tests and
-# the viewport launcher put on PATH.
-if(PXR_INCLUDE_DIRS)
-  list(GET PXR_INCLUDE_DIRS 0 _lotus_pxr_include)
-  get_filename_component(LOTUS_PXR_ROOT
-    "${_lotus_pxr_include}/.." ABSOLUTE)
-elseif(DEFINED pxr_DIR)
-  set(LOTUS_PXR_ROOT "${pxr_DIR}")
-else()
-  message(FATAL_ERROR "Could not derive the OpenUSD runtime root")
-endif()
-set(LOTUS_PXR_ROOT "${LOTUS_PXR_ROOT}" PARENT_SCOPE)
+set_target_properties(lotus-hydra2-host-dependencies PROPERTIES
+  LOTUS_PXR_ROOT "${LOTUS_PXR_ROOT}")
 
 add_library(hdLotus MODULE
   src/renderer_plugin.cpp
   resources/plugInfo.json.in)
-target_link_libraries(hdLotus PRIVATE lotus-hydra2-runtime hd)
+target_link_libraries(hdLotus PRIVATE lotus-hydra2-runtime hd Lotus::Warnings)
 target_compile_features(hdLotus PRIVATE cxx_std_20)
 target_compile_definitions(hdLotus PRIVATE
   NOMINMAX
@@ -66,35 +66,21 @@ set_target_properties(
   lotus-hydra2-runtime
   PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Plugin resources: plugInfo.json and the backend's shaders beside the module.
 set(LOTUS_HYDRA_LIBRARY_NAME
     "hdLotus${CMAKE_SHARED_MODULE_SUFFIX}")
 configure_file(resources/plugInfo.json.in
   "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json" @ONLY)
-
-add_dependencies(hdLotus lotus-renderer-shaders)
-# A shader change relinks, so the copies below follow it.
-set_property(TARGET hdLotus APPEND PROPERTY LINK_DEPENDS
-  "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-  "${LOTUS_WAVEFRONT_SPV}" "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}")
 add_custom_command(TARGET hdLotus POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:hdLotus>/resources"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
     "$<TARGET_FILE_DIR:hdLotus>/resources/plugInfo.json"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory
-    "$<TARGET_FILE_DIR:hdLotus>/shaders"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-    "${LOTUS_WAVEFRONT_SPV}" "$<TARGET_FILE_DIR:hdLotus>/shaders"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "${LOTUS_VERTEX_SPV}"
-    "$<TARGET_FILE_DIR:hdLotus>/shaders/triangle.vert.spv"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    "${LOTUS_FRAGMENT_SPV}"
-    "$<TARGET_FILE_DIR:hdLotus>/shaders/triangle.frag.spv"
   VERBATIM)
+lotus_stage_shaders(TARGET hdLotus)
 
+# Plugin install.
 set(LOTUS_HYDRA_INSTALL_DIR
     "${CMAKE_INSTALL_LIBDIR}/usd/hdLotus")
 install(TARGETS hdLotus
@@ -102,272 +88,11 @@ install(TARGETS hdLotus
   LIBRARY DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/resources")
-install(FILES "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
-  "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-  "${LOTUS_WAVEFRONT_SPV}"
-  DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/shaders")
+lotus_install_shaders(DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/shaders")
+# The stage the installed-tree usdview smoke opens.
 install(FILES tests/usdview-smoke.usda
   DESTINATION "${CMAKE_INSTALL_DATADIR}/lotus/tests")
 
 if(LOTUS_BUILD_TESTS)
-  add_executable(lotus-hydra2-probe tests/plugin_probe.cpp)
-  target_link_libraries(lotus-hydra2-probe PRIVATE hd plug)
-  target_compile_features(lotus-hydra2-probe PRIVATE cxx_std_20)
-  target_compile_definitions(lotus-hydra2-probe PRIVATE
-    NOMINMAX
-    _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-probe hdLotus)
-
-  add_executable(lotus-hydra2-render-buffer-test
-    tests/render_buffer_test.cpp)
-  target_link_libraries(lotus-hydra2-render-buffer-test
-    PRIVATE lotus-hydra2-runtime)
-  target_compile_features(lotus-hydra2-render-buffer-test PRIVATE cxx_std_20)
-  target_compile_definitions(lotus-hydra2-render-buffer-test PRIVATE
-    NOMINMAX
-    _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-
-  add_executable(lotus-hydra2-aov-test tests/aov_test.cpp)
-  target_link_libraries(lotus-hydra2-aov-test
-    PRIVATE lotus-hydra2-runtime Lotus::Vulkan)
-  target_compile_definitions(lotus-hydra2-aov-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-aov-test hdLotus)
-
-  add_executable(lotus-hydra2-mesh-test tests/mesh_test.cpp)
-  target_link_libraries(lotus-hydra2-mesh-test PRIVATE lotus-hydra2-runtime)
-  target_compile_definitions(lotus-hydra2-mesh-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-
-  # Only these tests read a USD stage: they sync one through UsdImaging.
-  add_executable(lotus-hydra2-instancer-test tests/instancer_test.cpp)
-  target_link_libraries(lotus-hydra2-instancer-test
-    PRIVATE lotus-hydra2-runtime usdImaging usdGeom usd sdf)
-  target_compile_definitions(lotus-hydra2-instancer-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-
-  add_executable(lotus-hydra2-render-pass-test tests/render_pass_test.cpp)
-  target_link_libraries(lotus-hydra2-render-pass-test
-    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usdGeom usd sdf)
-  target_compile_definitions(lotus-hydra2-render-pass-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-render-pass-test hdLotus)
-
-  add_executable(lotus-hydra2-material-test tests/material_test.cpp)
-  target_link_libraries(lotus-hydra2-material-test
-    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-material-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-material-test hdLotus)
-
-  add_executable(lotus-hydra2-normals-test tests/normals_test.cpp)
-  target_link_libraries(lotus-hydra2-normals-test
-    PRIVATE lotus-hydra2-runtime usdImaging usdGeom usd sdf)
-  target_compile_definitions(lotus-hydra2-normals-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-
-  add_executable(lotus-hydra2-texture-test tests/texture_test.cpp)
-  target_link_libraries(lotus-hydra2-texture-test
-    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf hio)
-  target_compile_definitions(lotus-hydra2-texture-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-texture-test hdLotus)
-
-  add_executable(lotus-hydra2-deterministic-test tests/deterministic_test.cpp)
-  target_link_libraries(lotus-hydra2-deterministic-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-deterministic-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-deterministic-test hdLotus)
-
-  add_executable(lotus-hydra2-integrator-test tests/integrator_test.cpp)
-  target_link_libraries(lotus-hydra2-integrator-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-integrator-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-integrator-test hdLotus)
-
-  add_executable(lotus-hydra2-temporal-test tests/temporal_test.cpp)
-  target_link_libraries(lotus-hydra2-temporal-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-temporal-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-temporal-test hdLotus)
-
-  add_executable(lotus-hydra2-restir-test tests/restir_test.cpp)
-  target_link_libraries(lotus-hydra2-restir-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-restir-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-restir-test hdLotus)
-
-  add_executable(lotus-hydra2-light-sampling-test tests/light_sampling_test.cpp)
-  target_link_libraries(lotus-hydra2-light-sampling-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-light-sampling-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-light-sampling-test hdLotus)
-
-  add_executable(lotus-hydra2-analytic-light-test tests/analytic_light_test.cpp)
-  target_link_libraries(lotus-hydra2-analytic-light-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderExtraction Lotus::Vulkan
-      usdImaging usdGeom usd sdf)
-  target_compile_definitions(lotus-hydra2-analytic-light-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-analytic-light-test hdLotus)
-
-  add_executable(lotus-hydra2-dome-texture-test tests/dome_texture_test.cpp
-    "${CMAKE_SOURCE_DIR}/adapters/headless/reference.cpp")
-  target_include_directories(lotus-hydra2-dome-texture-test
-    PRIVATE "${CMAKE_SOURCE_DIR}/adapters/headless")
-  target_link_libraries(lotus-hydra2-dome-texture-test
-    PRIVATE lotus-hydra2-runtime Lotus::RenderWorld Lotus::Vulkan usdImaging
-      usdGeom usd sdf)
-  target_compile_definitions(lotus-hydra2-dome-texture-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING
-    LOTUS_ASSETS_DIRECTORY="${CMAKE_SOURCE_DIR}/validation/assets")
-  add_dependencies(lotus-hydra2-dome-texture-test hdLotus)
-
-  add_executable(lotus-hydra2-light-test tests/light_test.cpp)
-  target_link_libraries(lotus-hydra2-light-test
-    PRIVATE lotus-hydra2-runtime Lotus::Vulkan usdImaging usd sdf)
-  target_compile_definitions(lotus-hydra2-light-test PRIVATE
-    NOMINMAX _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
-  add_dependencies(lotus-hydra2-light-test hdLotus)
-
-  set(_lotus_pxr_runtime_modifications
-    "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/bin"
-    "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/lib")
-
-  add_test(NAME lotus-renderer-plugin-discovery
-    COMMAND lotus-hydra2-probe --discovery
-      "$<TARGET_FILE_DIR:hdLotus>/resources")
-  add_test(NAME lotus-renderer-delegate-creation
-    COMMAND lotus-hydra2-probe --delegate
-      "$<TARGET_FILE_DIR:hdLotus>/resources")
-  add_test(NAME lotus-renderer-hydra-render-buffer
-    COMMAND lotus-hydra2-render-buffer-test)
-  add_test(NAME lotus-renderer-hydra-aov COMMAND lotus-hydra2-aov-test)
-  add_test(NAME lotus-renderer-hydra-mesh COMMAND lotus-hydra2-mesh-test)
-  add_test(NAME lotus-renderer-hydra-instancer
-    COMMAND lotus-hydra2-instancer-test)
-  add_test(NAME lotus-renderer-hydra-render-pass
-    COMMAND lotus-hydra2-render-pass-test)
-  add_test(NAME lotus-renderer-hydra-render-pass-gpu
-    COMMAND lotus-hydra2-render-pass-test --gpu)
-  add_test(NAME lotus-renderer-hydra-deterministic
-    COMMAND lotus-hydra2-deterministic-test)
-  add_test(NAME lotus-renderer-hydra-integrator
-    COMMAND lotus-hydra2-integrator-test)
-  add_test(NAME lotus-renderer-hydra-temporal-contract
-    COMMAND lotus-hydra2-temporal-test --contract)
-  add_test(NAME lotus-renderer-hydra-temporal-gpu
-    COMMAND lotus-hydra2-temporal-test --gpu)
-  add_test(NAME lotus-renderer-hydra-restir-contract
-    COMMAND lotus-hydra2-restir-test --contract)
-  add_test(NAME lotus-renderer-hydra-restir-gpu
-    COMMAND lotus-hydra2-restir-test --gpu)
-  add_test(NAME lotus-renderer-hydra-light-sampling
-    COMMAND lotus-hydra2-light-sampling-test)
-  add_test(NAME lotus-renderer-hydra-light COMMAND lotus-hydra2-light-test)
-  add_test(NAME lotus-renderer-hydra-light-gpu
-    COMMAND lotus-hydra2-light-test --gpu)
-  add_test(NAME lotus-renderer-hydra-dome-texture
-    COMMAND lotus-hydra2-dome-texture-test)
-  add_test(NAME lotus-renderer-hydra-dome-texture-gpu
-    COMMAND lotus-hydra2-dome-texture-test --gpu)
-  add_test(NAME lotus-renderer-hydra-analytic-lights
-    COMMAND lotus-hydra2-analytic-light-test)
-  add_test(NAME lotus-renderer-hydra-analytic-lights-gpu
-    COMMAND lotus-hydra2-analytic-light-test --gpu)
-  add_test(NAME lotus-renderer-hydra-material
-    COMMAND lotus-hydra2-material-test)
-  add_test(NAME lotus-renderer-hydra-material-gpu
-    COMMAND lotus-hydra2-material-test --gpu)
-  add_test(NAME lotus-renderer-hydra-normals
-    COMMAND lotus-hydra2-normals-test)
-  add_test(NAME lotus-renderer-hydra-texture
-    COMMAND lotus-hydra2-texture-test)
-  add_test(NAME lotus-renderer-hydra-texture-gpu
-    COMMAND lotus-hydra2-texture-test --gpu)
-  set_tests_properties(
-    lotus-renderer-hydra-aov
-    lotus-renderer-hydra-render-pass-gpu
-    lotus-renderer-hydra-deterministic
-    lotus-renderer-hydra-integrator
-    lotus-renderer-hydra-temporal-gpu
-    lotus-renderer-hydra-restir-gpu
-    lotus-renderer-hydra-light-sampling
-    lotus-renderer-hydra-light-gpu
-    lotus-renderer-hydra-analytic-lights-gpu
-    lotus-renderer-hydra-dome-texture-gpu
-    lotus-renderer-hydra-material-gpu
-    lotus-renderer-hydra-texture-gpu
-    PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
-  set_tests_properties(
-    lotus-renderer-plugin-discovery
-    lotus-renderer-delegate-creation
-    lotus-renderer-hydra-render-buffer
-    lotus-renderer-hydra-aov
-    lotus-renderer-hydra-mesh
-    lotus-renderer-hydra-instancer
-    lotus-renderer-hydra-render-pass
-    lotus-renderer-hydra-render-pass-gpu
-    lotus-renderer-hydra-deterministic
-    lotus-renderer-hydra-integrator
-    lotus-renderer-hydra-temporal-contract
-    lotus-renderer-hydra-restir-contract
-    lotus-renderer-hydra-temporal-gpu
-    lotus-renderer-hydra-restir-gpu
-    lotus-renderer-hydra-light-sampling
-    lotus-renderer-hydra-material
-    lotus-renderer-hydra-light
-    lotus-renderer-hydra-light-gpu
-    lotus-renderer-hydra-analytic-lights
-    lotus-renderer-hydra-analytic-lights-gpu
-    lotus-renderer-hydra-dome-texture
-    lotus-renderer-hydra-dome-texture-gpu
-    lotus-renderer-hydra-material-gpu
-    lotus-renderer-hydra-normals
-    lotus-renderer-hydra-texture
-    lotus-renderer-hydra-texture-gpu
-    PROPERTIES ENVIRONMENT_MODIFICATION
-      "${_lotus_pxr_runtime_modifications}")
-
-  find_package(Python3 COMPONENTS Interpreter QUIET)
-  find_program(LOTUS_TESTUSDVIEW testusdview
-    PATHS "${LOTUS_PXR_ROOT}/bin" NO_DEFAULT_PATH)
-  set(_lotus_has_display TRUE)
-  if(UNIX AND NOT APPLE AND NOT DEFINED ENV{DISPLAY} AND
-     NOT DEFINED ENV{WAYLAND_DISPLAY})
-    set(_lotus_has_display FALSE)
-  endif()
-  if(Python3_Interpreter_FOUND AND LOTUS_TESTUSDVIEW AND
-     _lotus_has_display)
-    add_test(NAME lotus-renderer-usdview-host
-      COMMAND "${CMAKE_COMMAND}"
-        "-DRENDERER_BUILD_DIR=${CMAKE_BINARY_DIR}"
-        "-DRENDERER_CONFIG=$<CONFIG>"
-        "-DRENDERER_STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/usdview-install"
-        "-DRENDERER_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
-        "-DRENDERER_INSTALL_DATADIR=${CMAKE_INSTALL_DATADIR}"
-        "-DRENDERER_PXR_ROOT=${LOTUS_PXR_ROOT}"
-        "-DRENDERER_PYTHON=${Python3_EXECUTABLE}"
-        "-DRENDERER_TESTUSDVIEW=${LOTUS_TESTUSDVIEW}"
-        "-DRENDERER_TEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/usdview_smoke_test.py"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_usdview_smoke.cmake")
-    set_tests_properties(lotus-renderer-usdview-host PROPERTIES
-      LABELS "host-smoke;gpu"
-      SKIP_REGULAR_EXPRESSION "SKIP usdview smoke:"
-      TIMEOUT 210
-      RUN_SERIAL TRUE)
-  else()
-    message(STATUS
-      "testusdview, matching Python, or a display is unavailable; usdview host evidence will be SKIP")
-  endif()
+  add_subdirectory(tests)
 endif()

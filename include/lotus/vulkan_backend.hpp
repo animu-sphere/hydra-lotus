@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
@@ -647,6 +648,19 @@ struct RayQueryShaders {
   // frames fail.
   std::string wavefront;
 };
+
+// The compiled shaders a renderer loads. The build stages them into a
+// `shaders/` directory beside each host and the install tree ships the same
+// layout, so a host names only that directory and never a shader file.
+struct RendererShaders {
+  std::string vertex;
+  std::string fragment;
+  RayQueryShaders ray_query;
+};
+
+// The backend's shader files in `directory`. It does not check that they
+// exist; CreateOffscreenRenderer reports a missing one.
+[[nodiscard]] RendererShaders ShadersIn(const std::filesystem::path& directory);
 
 // Creates the device and pipeline, enabling Vulkan and synchronization
 // validation capture whenever the loader/layer offers it. Returns nullptr

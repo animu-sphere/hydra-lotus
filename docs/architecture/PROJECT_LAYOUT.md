@@ -37,7 +37,7 @@ that moment every file is project-owned; the template is not re-applied.
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference; its separate benchmark mode writes timing JSON and PFM images ([scene reference](../reference/SCENE.md#fixed-benchmarks)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window presenting the renderer's progressive output: the headless reference scene by default, a USD stage through the Hydra runtime when built with `LOTUS_ENABLE_HYDRA2` as well ([building guide](../guides/BUILDING.md#the-standalone-viewport)); optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime`, `lotus-hydra2-host-dependencies` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); the interface target carries the host-side OpenUSD libraries for the Hydra-enabled viewport; optional (`LOTUS_ENABLE_HYDRA2`) |
-| `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_WITH_VULKAN` only, not installed); `validation/reference/` holds the committed reference images; `validation/assets/` holds third-party inputs (OpenUSD's Stinson Beach image) with their licence and a `manifest.json` of source, revision, size and SHA-256, which `lotus-validation-assets` checks |
+| `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_ENABLE_VULKAN` only, not installed); `validation/reference/` holds the committed reference images; `validation/assets/` holds third-party inputs (OpenUSD's Stinson Beach image) with their licence and a `manifest.json` of source, revision, size and SHA-256, which `lotus-validation-assets` checks |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
 is a classic `HdRenderDelegate` ([DESIGN_POLICY.md](../design/DESIGN_POLICY.md)
@@ -236,3 +236,38 @@ OpenStrata's plugin workspace generator is not used for this renderer
 ├── lib/usd/hdLotus/           hdLotus module, resources/plugInfo.json, shaders/   (Hydra build only)
 └── share/lotus/               openstrata.renderer.yaml, openstrata.scaffold.yaml, tests/usdview-smoke.usda
 ```
+
+## 7. Build structure
+
+Each directory owns its targets, finds its own dependencies and installs its
+own artifacts. The top-level `CMakeLists.txt` only declares the project,
+includes the shared modules and adds the directories.
+
+| Module or directory | Owns |
+| --- | --- |
+| `cmake/LotusOptions.cmake` | The `LOTUS_` options and their consistency checks |
+| `cmake/LotusWarnings.cmake` | `Lotus::Warnings`, the compiler policy every Lotus target links `PRIVATE` |
+| `cmake/LotusShaders.cmake` | `lotus_add_slang_shader`, `lotus_stage_shaders`, `lotus_install_shaders` |
+| `cmake/LotusInstall.cmake` | The SDK install (core and backend libraries, headers, OpenStrata descriptors) and the `Lotus` package export |
+| `backend/vulkan/` | Vulkan discovery; `backend/vulkan/shaders/` finds `slangc` and declares the shader graph and its `lotus-shaders` aggregate, and installs `bin/shaders/` |
+| `adapters/headless/`, `adapters/viewport/` | Their executables, staged resources and install rules; GLFW is found by the viewport |
+| `adapters/hydra2/` | OpenUSD discovery, the runtime, `hdLotus` and its resources and install; `adapters/hydra2/tests/` holds its CTests |
+
+1. A host never names a shader file. It depends on `lotus-shaders` through
+   `lotus_stage_shaders`, which copies the aggregate into `shaders/` beside
+   the host's binary, and passes that directory to `ShadersIn`
+   (`include/lotus/vulkan_backend.hpp`). A new shader is one
+   `lotus_add_slang_shader` call and one `ShadersIn` field in the backend.
+2. No directory exports variables to its parent (`PARENT_SCOPE`). A value
+   another directory needs is a target property, such as `lotus-shaders`'
+   `LOTUS_SHADER_OUTPUTS` or `lotus-hydra2-host-dependencies`'
+   `LOTUS_PXR_ROOT`.
+3. No global compile options or C++ standard: targets state
+   `cxx_std_20` and link `Lotus::Warnings`, so fetched dependencies keep
+   their own flags.
+4. An enabled option whose dependency is missing fails configuration.
+   `LOTUS_ENABLE_VULKAN=OFF` is the explicit CPU-only build.
+5. Renderer features (reuse modes, passes, denoisers) are runtime settings,
+   not CMake options.
+6. A helper removes repeated boilerplate and does one thing; a
+   `CMakeLists.txt` stays readable without knowing it.
