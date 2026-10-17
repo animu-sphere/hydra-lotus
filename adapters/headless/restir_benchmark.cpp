@@ -111,7 +111,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
                                 "[--restir-reference-seed <16777216..1073741823>] [--restir-bounces <1..64>] "
-                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres|interreflection>] "
+                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres|interreflection|animation>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -143,7 +143,8 @@ Options Parse(int argc, char** argv) {
         throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
     } else if (option == "--restir-workload") {
       if (value != "distant" && value != "mixed-boundaries" &&
-          value != "glossy-disocclusion" && value != "glossy-spheres" && value != "interreflection")
+          value != "glossy-disocclusion" && value != "glossy-spheres" && value != "interreflection" &&
+          value != "animation")
         throw std::invalid_argument("invalid reservoir workload: " + std::string(value));
       options.workload = value;
     } else if (option == "--benchmark-size")
@@ -201,17 +202,28 @@ struct Workload {
   std::string id;
   bool moving = false;
   bool exact_integral = true;
+  // Frames between light/material edits in an animated sequence, else zero.
+  unsigned step = 0;
   std::vector<FrameSnapshot> snapshots;
   std::array<double, 3> integral{};
 };
+
+// Light and material edits reset reservoir history; stepping them leaves
+// compatible frames between resets, so both resets and rebuilt history occur.
+unsigned AnimationStep(const Options& options) {
+  return std::max(2U, options.frames / 8);
+}
 
 Workload MakeMixedWorkload(const Options& options, bool moving) {
   const bool narrow = options.workload == "glossy-disocclusion";
   const bool spheres = options.workload == "glossy-spheres";
   const bool glossy = narrow || spheres;
+  const bool animated = options.workload == "animation";
   Workload result;
   result.moving = moving;
   result.exact_integral = false;
+  if (animated && moving)
+    result.step = AnimationStep(options);
   result.id = moving ? "mixed-area-environment-moving-boundaries-v1"
                      : "mixed-area-environment-boundaries-v1";
   if (glossy)
@@ -220,18 +232,29 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   if (spheres)
     result.id = moving ? "glossy-sphere-environment-camera-disocclusion-v1"
                        : "glossy-sphere-environment-static-v1";
+  if (animated)
+    result.id = moving ? "animated-area-environment-lights-materials-v1"
+                       : "animated-area-environment-static-v1";
   RenderWorld world;
   Material diffuse;
   diffuse.ior = spheres ? 1.5F : 1;
   if (spheres)
     diffuse.roughness = 0.18F;
   diffuse.base_color = {0.8F, 0.12F, 0.04F};
-  world.SetMaterial("/diffuse", diffuse);
   Material metal;
   metal.base_color = {0.06F, 0.3F, 0.85F};
   metal.metallic = 1;
   metal.roughness = narrow ? 0.08F : (spheres ? 0.5F : 0.35F);
-  world.SetMaterial("/metal", metal);
+  // Animation phase zero is the unedited fixture; sin(phase) scales every edit.
+  auto set_materials = [&](float phase) {
+    auto lambert = diffuse;
+    lambert.base_color[1] += 0.15F * (1 - std::cos(phase));
+    world.SetMaterial("/diffuse", lambert);
+    auto glossy_metal = metal;
+    glossy_metal.roughness += 0.2F * std::sin(phase);
+    world.SetMaterial("/metal", glossy_metal);
+  };
+  set_materials(0);
   // Adjacent materials meet at X=0 with a depth and geometric-normal step.
   world.SetMesh("/left", {{{-12, -12, -4}, {0, -12, -4}, {0, 12, -4}, {-12, 12, -4}},
                             {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
@@ -240,27 +263,33 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   world.SetMesh("/right", {{{0, -12, -3.6F}, {12, -12, right_far_z}, {12, 12, right_far_z}, {0, 12, -3.6F}},
                              {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   world.BindMaterial("/right", "/metal");
-  if (moving || glossy) {
+  if (moving || glossy || animated) {
     world.SetMesh("/blocker", {{{-0.45F, -1.4F, -2.5F}, {0.45F, -1.4F, -2.5F},
                                  {0.45F, 1.4F, -2.5F}, {-0.45F, 1.4F, -2.5F}},
                                 {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
     world.BindMaterial("/blocker", "/diffuse");
   }
-  for (unsigned i = 0; i < options.lights; ++i) {
-    const double phi = i * 2.399963229728653;
-    const double radius = 3 * std::sqrt((i + 0.5) / options.lights);
-    Light light;
-    light.shape = i % 2 ? (spheres ? LightShape::Sphere : LightShape::Disk) : LightShape::Rect;
-    light.radius = narrow ? 0.06F : (spheres ? 0.35F : 0.3F);
-    light.width = light.height = narrow ? 0.12F : 0.6F;
-    light.world_from_light = Translation(static_cast<float>(radius * std::cos(phi)), -1);
-    light.world_from_light[13] = static_cast<float>(radius * std::sin(phi));
-    // Preserve emitted power as the glossy fixture narrows the area lights.
-    const float scale = (narrow ? 2400.0F : 96.0F) / options.lights;
-    light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
-        scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
-    world.SetLight("/light/" + std::to_string(i), light);
-  }
+  // Animation rotates the light disk and reweights each light's power,
+  // changing both light domains and the power proposal's table.
+  auto set_lights = [&](float phase) {
+    for (unsigned i = 0; i < options.lights; ++i) {
+      const double phi = i * 2.399963229728653 + 0.6 * std::sin(phase);
+      const double radius = 3 * std::sqrt((i + 0.5) / options.lights);
+      Light light;
+      light.shape = i % 2 ? (spheres ? LightShape::Sphere : LightShape::Disk) : LightShape::Rect;
+      light.radius = narrow ? 0.06F : (spheres ? 0.35F : 0.3F);
+      light.width = light.height = narrow ? 0.12F : 0.6F;
+      light.world_from_light = Translation(static_cast<float>(radius * std::cos(phi)), -1);
+      light.world_from_light[13] = static_cast<float>(radius * std::sin(phi));
+      // Preserve emitted power as the glossy fixture narrows the area lights.
+      const float scale = (narrow ? 2400.0F : 96.0F) / options.lights *
+                          static_cast<float>(1 + 0.75 * std::sin(phase) * std::cos(1.7 * i));
+      light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
+          scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
+      world.SetLight("/light/" + std::to_string(i), light);
+    }
+  };
+  set_lights(0);
   // Procedural HDR lat-long image: broad colour variation plus a bright patch.
   // No external asset, filtering or licence dependency enters this fixture.
   Texture environment;
@@ -282,7 +311,14 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   for (unsigned f = 0; f < options.frames; ++f) {
     Camera camera;
     camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
-    if (moving) {
+    if (moving && animated) {
+      // Fixed camera and geometry: only the stepped edits change the scene.
+      if (f && f % result.step == 0) {
+        const float phase = static_cast<float>(2 * kPi * f / options.frames);
+        set_lights(phase);
+        set_materials(phase);
+      }
+    } else if (moving) {
       const float phase = static_cast<float>(2 * kPi * f / options.frames);
       if (glossy) {
         // Camera-only motion: the foreground stays fixed, exposing parallax
@@ -566,7 +602,8 @@ std::vector<Region> Regions(const Options& options) {
     return ReplicationBiasStatistics::Band{eighth * options.size / 8, (eighth + 2) * options.size / 8};
   };
   std::vector<Region> result{{"center-boundary-band-v1", band(3)}};
-  if (options.workload == "glossy-disocclusion" || options.workload == "glossy-spheres")
+  if (options.workload == "glossy-disocclusion" || options.workload == "glossy-spheres" ||
+      options.workload == "animation")
     result.push_back({"right-glossy-band-v1", band(5)});
   if (options.workload == "glossy-spheres")
     result.push_back({"left-dielectric-band-v1", band(1)});
@@ -699,6 +736,10 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   // Static: one replication per sequence mean. Moving: per pose, one per sequence.
   std::vector<ReplicationBiasStatistics> replication_bias(work.moving ? options.frames : 1,
       ReplicationBiasStatistics(options.size, options.size));
+  // Animated: frames one edit step apart, paired within each sequence.
+  std::vector<ReplicationCorrelationStatistics> step_correlation(
+      work.step ? options.frames - work.step : 0, ReplicationCorrelationStatistics(ensemble.size()));
+  std::vector<std::vector<double>> sequence_residuals(work.step ? options.frames : 0);
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence) {
     std::vector<double> accumulated(ensemble.size());
     TemporalResidualStatistics residual_statistics(ensemble.size());
@@ -711,9 +752,12 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       Require(frame.frames_rendered == 1, "measurement did not submit one sample");
       Require(frame.restir.available == (mode.candidates != 0), "wrong reservoir availability");
       if (reuse) {
-        Require(frame.temporal.history_available == (f != 0) && !frame.temporal.radiance_available,
+        // Only the sequence cut and each light/material edit reset history.
+        // The fresh-batch RNG then restarts at the fixed base index.
+        const bool reset = f == 0 || (work.step && f % work.step == 0);
+        Require(frame.temporal.history_available == !reset && !frame.temporal.radiance_available,
             "unexpected reset or radiance accumulation during sequence");
-        Require(frame.restir.history_available == (mode.temporal && f != 0), "unexpected reservoir history reset");
+        Require(frame.restir.history_available == (mode.temporal && !reset), "unexpected reservoir history reset");
         for (const auto& record : frame.restir.temporal) {
           surface_pixels += (record.reservoir.flags & 1) != 0;
           reused_pixels += record.previous_index != UINT32_MAX;
@@ -731,6 +775,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       residual_statistics.Add(residual);
       if (work.moving)
         replication_bias[f].Add(residual);
+      if (work.step)
+        sequence_residuals[f] = residual;
       if (f != 0) {
         std::vector<double> residual_delta(ensemble.size()), zero(ensemble.size());
         for (std::size_t i = 0; i < ensemble.size(); ++i)
@@ -778,6 +824,8 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
       metadata_bytes = std::max(metadata_bytes, frame.temporal.surface_bytes +
                                                     frame.temporal.validity_bytes + frame.temporal.metadata_bytes);
     }
+    for (std::size_t pair = 0; pair < step_correlation.size(); ++pair)
+      step_correlation[pair].Add(sequence_residuals[pair], sequence_residuals[pair + work.step]);
     residual_mean.push_back(residual_statistics.MeanRmse());
     residual_centered.push_back(residual_statistics.CenteredRmse());
     residual_lag1.push_back(residual_statistics.Lag1Autocorrelation());
@@ -907,6 +955,25 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Mode& 
   }
   out << ",\"replication_bias\":";
   WriteReplicationBias(out, work, baseline, replication_bias, regions, bands);
+  out << ",\"animation\":";
+  if (!work.step)
+    out << "null";
+  else {
+    ReplicationCorrelationStatistics::Sums pooled;
+    for (const auto& pair : step_correlation) {
+      const auto sums = pair.Summarize();
+      pooled.cross += sums.cross;
+      pooled.first += sums.first;
+      pooled.second += sums.second;
+    }
+    out << "{\"step\":" << work.step << ",\"edits_per_sequence\":" << (options.frames - 1) / work.step
+        << ",\"step_lag_pairs\":" << step_correlation.size() << ",\"step_lag_correlation\":";
+    if (const auto correlation = ReplicationCorrelationStatistics::Correlation(pooled))
+      out << *correlation;
+    else
+      out << "null";
+    out << '}';
+  }
   out << ",\"render_update_wall_ms\":";
   Series(out, wall);
   out << ",\"scene_gpu_ms\":";
@@ -1053,6 +1120,7 @@ int RestirBenchmarkMain(int argc, char** argv) {
            "\"temporal_residuals\":\"One entry per independent sequence. Residual is fresh RGB minus the matched reference at fixed screen coordinates. Sequence mean RMS retains persistent error; centered RMS removes each component's sequence mean. Lag-one sample autocorrelation uses the full centered sum of squares; null for zero variance. Short sequences, motion and finite reference noise limit interpretation; no effective sample count is inferred.\","
            "\"sequence_ensemble\":\"Static only; null when moving. Per-component statistics across independent sequences, averaged over components. Frame variance is the mean within-sequence sample variance; sequence mean variance is the across-sequence sample variance of each sequence's mean. Variance inflation is frames times their ratio (one for uncorrelated frames) and effective frames is frames divided by it. Grand mean MSE is the squared error of the mean of all sequences, equal to the ensemble MSE. Its expected value without bias is grand mean noise (sequence mean variance over sequences) plus reference noise (squared split RMS over four, zero for an exact integral). Noise-normalized MSE near one is consistent with no detectable bias; excess MSE estimates squared bias and can be negative. Pixels are pooled, so spatially correlated or heavy-tailed noise widens its uncertainty; no confidence interval is asserted.\","
            "\"replication_bias\":\"Independent replications sharing each pose's reference: sequence means when static, each pose's frame across sequences when moving. Grand mean MSE is the squared error of their mean; expected noise without bias is their across-replication variance over the replication count plus the reference's per-component variance, (a-b)^2/4 from its halves. Poses pool by mean. Regions are fixed screen bands. Tile z divides each 8x8 tile's mean error by its expected noise, from replicated tile means and independent reference pixels; beyond_3 counts |z| > 3 among defined tests. Many tests make some large |z| expected without bias; no confidence interval is asserted.\","
+           "\"animation\":\"Animated moving scenes only, else null. Lights and materials change every step frames, resetting reservoir and shared temporal history; reuse frames then restart the fresh-batch RNG at the fixed base index. Step-lag correlation pairs each sequence's residuals step frames apart, centers each component across sequences (removing persistent error and reference noise) and pools co-moments over components and pairs. Near zero means independent sampling noise; replayed random numbers raise it. Not a bias test.\","
            "\"reference_split_rmse\":\"Difference of disjoint equal-spp NEE/MIS halves; the stored reference is their mean. Reference noise is not subtracted.\","
            "\"memory\":\"Fresh renderer per case. Reservoir and metadata bytes include host mirrors; scene pool backing excludes targets. Total VRAM is unavailable.\","
            "\"timestamps\":\"Unavailable or inapplicable GPU series and cumulative times are null.\"},\"scenes\":[";
