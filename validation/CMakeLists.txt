@@ -1,3 +1,8 @@
+# The GPU checks below link the Vulkan loader directly.
+if(LOTUS_ENABLE_VULKAN)
+  find_package(Vulkan 1.3 REQUIRED)
+endif()
+
 configure_file(
   run-install-smoke.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/run-install-smoke.cmake"
@@ -17,46 +22,49 @@ add_test(NAME lotus-renderer-core-boundary-discovery
     -P "${CMAKE_CURRENT_SOURCE_DIR}/core-boundary-test.cmake")
 
 add_executable(lotus-viewport-camera-test viewport-camera-test.cpp)
-target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction)
+target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
 add_executable(lotus-viewport-options-test viewport-options-test.cpp
   ../adapters/viewport/options.cpp)
+target_link_libraries(lotus-viewport-options-test PRIVATE Lotus::Warnings)
 target_compile_features(lotus-viewport-options-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-options COMMAND lotus-viewport-options-test)
 
 add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
-target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction)
+target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
 add_test(NAME lotus-renderer-scene-mesh COMMAND lotus-render-world-mesh-test)
 
 add_executable(lotus-scene-update-test scene-update-test.cpp)
-target_link_libraries(lotus-scene-update-test PRIVATE Lotus::RenderExtraction)
+target_link_libraries(lotus-scene-update-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
 add_test(NAME lotus-renderer-scene-update COMMAND lotus-scene-update-test)
 
 add_executable(lotus-temporal-test temporal-test.cpp)
-target_link_libraries(lotus-temporal-test PRIVATE Lotus::Vulkan)
+target_link_libraries(lotus-temporal-test PRIVATE Lotus::Vulkan Lotus::Warnings)
 add_test(NAME lotus-renderer-temporal COMMAND lotus-temporal-test)
 
 add_executable(lotus-reservoir-test reservoir-test.cpp)
-target_link_libraries(lotus-reservoir-test PRIVATE Lotus::Vulkan)
+target_link_libraries(lotus-reservoir-test PRIVATE Lotus::Vulkan Lotus::Warnings)
 add_test(NAME lotus-renderer-reservoir COMMAND lotus-reservoir-test)
 
 add_executable(lotus-restir-statistics-test restir-statistics-test.cpp)
+target_link_libraries(lotus-restir-statistics-test PRIVATE Lotus::Warnings)
 target_compile_features(lotus-restir-statistics-test PRIVATE cxx_std_20)
 add_test(NAME lotus-renderer-restir-statistics COMMAND lotus-restir-statistics-test)
 
 add_executable(lotus-temporal-gpu-test temporal-gpu-test.cpp)
-target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan)
-if(LOTUS_WITH_VULKAN)
-  add_dependencies(lotus-temporal-gpu-test lotus-renderer-shaders)
-  add_test(NAME lotus-renderer-temporal-gpu COMMAND lotus-temporal-gpu-test
-    "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
-    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}" "${LOTUS_WAVEFRONT_SPV}")
+target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan Lotus::Warnings)
+if(LOTUS_ENABLE_VULKAN)
+  # The GPU checks load the backend's shaders from its build directory.
+  set(_shaders "$<TARGET_PROPERTY:lotus-shaders,LOTUS_SHADER_DIRECTORY>")
+  add_dependencies(lotus-temporal-gpu-test lotus-shaders)
+  add_test(NAME lotus-renderer-temporal-gpu
+    COMMAND lotus-temporal-gpu-test "${_shaders}")
   add_test(NAME lotus-renderer-temporal-gpu-no-driver
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-temporal-gpu-test>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/temporal-no-driver"
-      "-DARGUMENTS=${LOTUS_VERTEX_SPV};${LOTUS_FRAGMENT_SPV};${LOTUS_RAY_VERTEX_SPV};${LOTUS_RAY_FRAGMENT_SPV};${LOTUS_WAVEFRONT_SPV}"
+      "-DARGUMENTS=${_shaders}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
 else()
   add_test(NAME lotus-renderer-temporal-gpu COMMAND lotus-temporal-gpu-test)
@@ -64,18 +72,16 @@ endif()
 set_tests_properties(lotus-renderer-temporal-gpu PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(lotus-restir-gpu-test restir-gpu-test.cpp ../adapters/headless/reference.cpp)
-target_link_libraries(lotus-restir-gpu-test PRIVATE Lotus::Vulkan)
-if(LOTUS_WITH_VULKAN)
-  add_dependencies(lotus-restir-gpu-test lotus-renderer-shaders)
+target_link_libraries(lotus-restir-gpu-test PRIVATE Lotus::Vulkan Lotus::Warnings)
+if(LOTUS_ENABLE_VULKAN)
+  add_dependencies(lotus-restir-gpu-test lotus-shaders)
   add_test(NAME lotus-renderer-restir-gpu COMMAND lotus-restir-gpu-test
-    "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
-    "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}" "${LOTUS_WAVEFRONT_SPV}"
-    "${CMAKE_BINARY_DIR}/restir-initial-images")
+    "${_shaders}" "${CMAKE_BINARY_DIR}/restir-initial-images")
   add_test(NAME lotus-renderer-restir-gpu-no-driver
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-restir-gpu-test>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-no-driver"
-      "-DARGUMENTS=${LOTUS_VERTEX_SPV};${LOTUS_FRAGMENT_SPV};${LOTUS_RAY_VERTEX_SPV};${LOTUS_RAY_FRAGMENT_SPV};${LOTUS_WAVEFRONT_SPV}"
+      "-DARGUMENTS=${_shaders}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
 else()
   add_test(NAME lotus-renderer-restir-gpu COMMAND lotus-restir-gpu-test)
@@ -128,7 +134,7 @@ add_test(NAME lotus-renderer-benchmark-mis
     -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
 set_tests_properties(lotus-renderer-benchmark-mis PROPERTIES RUN_SERIAL TRUE)
 
-if(LOTUS_WITH_VULKAN)
+if(LOTUS_ENABLE_VULKAN)
   add_test(NAME lotus-renderer-benchmark-no-driver
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
@@ -136,7 +142,7 @@ if(LOTUS_WITH_VULKAN)
       -DNO_DRIVER=ON
       -P "${CMAKE_CURRENT_SOURCE_DIR}/benchmark-test.cmake")
   add_executable(lotus-acceleration-compaction-test acceleration-compaction-test.cpp)
-  target_link_libraries(lotus-acceleration-compaction-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
+  target_link_libraries(lotus-acceleration-compaction-test PRIVATE Lotus::Vulkan Vulkan::Vulkan Lotus::Warnings)
   add_test(NAME lotus-renderer-acceleration-compaction COMMAND lotus-acceleration-compaction-test)
   set_tests_properties(lotus-renderer-acceleration-compaction PROPERTIES SKIP_RETURN_CODE 77)
   add_test(NAME lotus-renderer-acceleration-compaction-no-driver
@@ -145,10 +151,10 @@ if(LOTUS_WITH_VULKAN)
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compaction-no-driver"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
   add_executable(lotus-memory-ranges-test memory-ranges-test.cpp)
-  target_link_libraries(lotus-memory-ranges-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
+  target_link_libraries(lotus-memory-ranges-test PRIVATE Lotus::Vulkan Vulkan::Vulkan Lotus::Warnings)
   add_test(NAME lotus-renderer-memory-ranges COMMAND lotus-memory-ranges-test)
   add_executable(lotus-memory-pool-test memory-pool-test.cpp)
-  target_link_libraries(lotus-memory-pool-test PRIVATE Lotus::Vulkan Vulkan::Vulkan)
+  target_link_libraries(lotus-memory-pool-test PRIVATE Lotus::Vulkan Vulkan::Vulkan Lotus::Warnings)
   add_test(NAME lotus-renderer-memory-pool COMMAND lotus-memory-pool-test)
   set_tests_properties(lotus-renderer-memory-pool PROPERTIES SKIP_RETURN_CODE 77)
   add_test(NAME lotus-renderer-memory-pool-no-driver
@@ -160,7 +166,7 @@ if(LOTUS_WITH_VULKAN)
   add_executable(lotus-synchronization-validation-test
     synchronization-validation-test.cpp)
   target_link_libraries(lotus-synchronization-validation-test PRIVATE
-    Vulkan::Vulkan Lotus::RenderExtraction)
+    Vulkan::Vulkan Lotus::RenderExtraction Lotus::Warnings)
   add_test(NAME lotus-renderer-synchronization-validation
     COMMAND lotus-synchronization-validation-test)
   set_tests_properties(lotus-renderer-synchronization-validation PROPERTIES
@@ -234,7 +240,7 @@ foreach(integrator reference wavefront)
         -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
   endforeach()
 endforeach()
-if(LOTUS_WITH_VULKAN)
+if(LOTUS_ENABLE_VULKAN)
   add_test(NAME lotus-renderer-restir-benchmark-no-driver
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"

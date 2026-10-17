@@ -23,6 +23,24 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   sRGB swapchain; `OffscreenTarget::read_back` skips the colour and depth
   readback. `HdLotusRenderDelegate::SetPresentation` presents a render pass
   whose colour binding has no render buffer.
+- `ShadersIn` names the backend's shader files in a directory, so hosts pass
+  only the `shaders/` directory beside them.
+
+### Changed
+
+- The build follows component ownership
+  ([PROJECT_LAYOUT.md §7](docs/architecture/PROJECT_LAYOUT.md#7-build-structure)):
+  `backend/vulkan/shaders/` owns the shader graph behind one `lotus-shaders`
+  target, which every host stages and installs through `cmake/LotusShaders.cmake`
+  instead of listing SPIR-V files; the Hydra CTests moved to
+  `adapters/hydra2/tests/`; compiler warnings and the C++ standard are target
+  properties (`Lotus::Warnings`) instead of global flags; options, install and
+  package export live in `cmake/`. The installed tree is unchanged.
+- `LOTUS_ENABLE_VULKAN=ON` (the default) now fails configuration when the
+  Vulkan 1.3 SDK or `slangc` is missing, instead of building without the
+  backend. Set it `OFF` for a CPU-only build, as the `ci-core` intent does.
+- `lotus-temporal-gpu-test` and `lotus-restir-gpu-test` take the shader
+  directory instead of five shader paths.
 
 ### Removed
 

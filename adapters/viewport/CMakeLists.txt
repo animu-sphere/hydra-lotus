@@ -2,11 +2,10 @@
 # validation contract: composition evidence stays owned by the headless
 # adapter. GLFW builds C sources when fetched.
 enable_language(C)
+include(LotusShaders)
 
-if(NOT LOTUS_WITH_VULKAN)
-  message(FATAL_ERROR
-    "LOTUS_ENABLE_VIEWPORT requires a Vulkan 1.3 SDK and slangc")
-endif()
+# The window layer creates its Vulkan surface itself.
+find_package(Vulkan 1.3 REQUIRED)
 
 # GLFW is the native window boundary. Prefer an installed package; otherwise
 # fetch the pinned 3.4 release so every build compiles the same sources.
@@ -41,7 +40,8 @@ target_link_libraries(lotus-viewport PRIVATE
   Lotus::RenderExtraction
   Lotus::Vulkan
   Vulkan::Vulkan
-  glfw)
+  glfw
+  Lotus::Warnings)
 target_compile_features(lotus-viewport PRIVATE cxx_std_20)
 
 # A Hydra-enabled build opens USD stages: it drives the co-built Hydra
@@ -51,6 +51,7 @@ if(LOTUS_ENABLE_HYDRA2)
   target_link_libraries(lotus-viewport PRIVATE
     lotus-hydra2-runtime
     lotus-hydra2-host-dependencies)
+  get_target_property(_pxr_root lotus-hydra2-host-dependencies LOTUS_PXR_ROOT)
   target_compile_definitions(lotus-viewport PRIVATE
     LOTUS_VIEWPORT_HYDRA=1
     NOMINMAX
@@ -62,28 +63,14 @@ if(LOTUS_ENABLE_HYDRA2)
     file(GENERATE
       OUTPUT "$<TARGET_FILE_DIR:lotus-viewport>/run-lotus-viewport.cmd"
       CONTENT
-        "@echo off\r\nsetlocal\r\nset \"PATH=${LOTUS_PXR_ROOT}/bin;${LOTUS_PXR_ROOT}/lib;%PATH%\"\r\n\"$<TARGET_FILE:lotus-viewport>\" %*\r\nexit /b %ERRORLEVEL%\r\n"
+        "@echo off\r\nsetlocal\r\nset \"PATH=${_pxr_root}/bin;${_pxr_root}/lib;%PATH%\"\r\n\"$<TARGET_FILE:lotus-viewport>\" %*\r\nexit /b %ERRORLEVEL%\r\n"
       TARGET lotus-viewport)
   endif()
 endif()
 
-set(_lotus_viewport_shaders
-  "${LOTUS_VERTEX_SPV}" "${LOTUS_FRAGMENT_SPV}"
-  "${LOTUS_RAY_VERTEX_SPV}" "${LOTUS_RAY_FRAGMENT_SPV}"
-  "${LOTUS_WAVEFRONT_SPV}")
-add_dependencies(lotus-viewport lotus-renderer-shaders)
-# A shader change relinks, so the copies below follow it.
-set_property(TARGET lotus-viewport APPEND PROPERTY LINK_DEPENDS
-  ${_lotus_viewport_shaders})
-add_custom_command(TARGET lotus-viewport POST_BUILD
-  COMMAND "${CMAKE_COMMAND}" -E make_directory
-    "$<TARGET_FILE_DIR:lotus-viewport>/shaders"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-    ${_lotus_viewport_shaders}
-    "$<TARGET_FILE_DIR:lotus-viewport>/shaders"
-  VERBATIM)
+lotus_stage_shaders(TARGET lotus-viewport)
 
-# The installed tree reuses bin/shaders written by the project install rules.
+# The installed tree reuses the bin/shaders the backend installs.
 install(TARGETS lotus-viewport
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
@@ -112,7 +99,7 @@ if(LOTUS_BUILD_TESTS)
     set_tests_properties(lotus-viewport-present lotus-viewport-hydra
       lotus-viewport-no-driver PROPERTIES
       ENVIRONMENT_MODIFICATION
-        "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/bin;PATH=path_list_prepend:${LOTUS_PXR_ROOT}/lib")
+        "PATH=path_list_prepend:${_pxr_root}/bin;PATH=path_list_prepend:${_pxr_root}/lib")
   endif()
   # Presentation shares the GPU and the desktop; keep it serial.
   set_tests_properties(${_lotus_viewport_gpu_tests} PROPERTIES

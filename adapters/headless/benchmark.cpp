@@ -322,14 +322,11 @@ Result Measure(const std::string& id, const Options& options,
   Result result;
   result.id = id;
   try {
-    const auto shaders = executable / "shaders";
+    const auto shaders = Lotus::ShadersIn(executable / "shaders");
     FrameStatus setup = FrameStatus::Fail;
     std::string why;
     auto renderer = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(), (shaders / "triangle.frag.spv").string(),
-        setup, why, {(shaders / "path_trace.vert.spv").string(),
-                       (shaders / "path_trace.frag.spv").string(),
-                       (shaders / "wavefront.comp.spv").string()});
+        shaders.vertex, shaders.fragment, setup, why, shaders.ray_query);
     if (!renderer) { result.status = setup; result.detail = why; return result; }
     const auto capability = renderer->RayQueryCapability();
     if (!capability.available) {

@@ -4964,19 +4964,15 @@ int main(int argc, char** argv) {
                        draw.draw_count == 1 && draw.triangle_count == 1;
 
   const Lotus::BackendCapability capability = Lotus::ProbeVulkanBackend();
-  const std::filesystem::path shader_directory = executable_directory / "shaders";
+  const Lotus::RendererShaders shaders = Lotus::ShadersIn(executable_directory / "shaders");
   Lotus::OffscreenTarget target;
   target.width = 64;
   target.height = 64;
   Lotus::FrameStatus setup_status = Lotus::FrameStatus::Fail;
   std::string setup_error;
   const std::unique_ptr<Lotus::OffscreenRenderer> renderer =
-      Lotus::CreateOffscreenRenderer(
-          (shader_directory / "triangle.vert.spv").string(),
-          (shader_directory / "triangle.frag.spv").string(), setup_status,
-          setup_error, {(shader_directory / "path_trace.vert.spv").string(),
-                           (shader_directory / "path_trace.frag.spv").string(),
-                           (shader_directory / "wavefront.comp.spv").string()});
+      Lotus::CreateOffscreenRenderer(shaders.vertex, shaders.fragment, setup_status,
+          setup_error, shaders.ray_query);
   if (!write_reference.empty()) {
     if (!renderer) {
       std::cerr << "cannot create the renderer: " << setup_error << '\n';

@@ -711,16 +711,15 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
 int main(int argc, char** argv) try {
   Lotus::FrameStatus status;
   std::string detail;
-  const std::string vertex = argc == 6 ? argv[1] : "";
-  const std::string fragment = argc == 6 ? argv[2] : "";
-  Lotus::RayQueryShaders shaders;
-  if (argc == 6)
-    shaders = {argv[3], argv[4], argv[5]};
-  // The Vulkan-disabled build has no shader artifacts.
-  if (argc != 6 && !Lotus::ProbeVulkanBackend().available) {
+  // The Vulkan-disabled build has no shader directory.
+  if (argc != 2 && !Lotus::ProbeVulkanBackend().available) {
     std::cout << "SKIP: " << Lotus::ProbeVulkanBackend().detail << '\n';
     return 77;
   }
+  const Lotus::RendererShaders shader_set = Lotus::ShadersIn(argc == 2 ? argv[1] : "");
+  const std::string& vertex = shader_set.vertex;
+  const std::string& fragment = shader_set.fragment;
+  const Lotus::RayQueryShaders& shaders = shader_set.ray_query;
   auto renderer = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
   if (!renderer) {
     std::cout << (status == Lotus::FrameStatus::Skip ? "SKIP: " : "FAIL: ") << detail << '\n';

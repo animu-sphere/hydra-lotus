@@ -782,15 +782,12 @@ public:
     }
 
     if (!renderer_) {
-      const std::filesystem::path shaders = PluginDirectory() / "shaders";
+      const Lotus::RendererShaders shaders =
+          Lotus::ShadersIn(PluginDirectory() / "shaders");
       Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
       std::string error;
-      renderer_ = Lotus::CreateOffscreenRenderer(
-          (shaders / "triangle.vert.spv").string(),
-          (shaders / "triangle.frag.spv").string(), status, error,
-          {(shaders / "path_trace.vert.spv").string(),
-              (shaders / "path_trace.frag.spv").string(),
-              (shaders / "wavefront.comp.spv").string()},
+      renderer_ = Lotus::CreateOffscreenRenderer(shaders.vertex,
+          shaders.fragment, status, error, shaders.ray_query,
           presentation_ ? &*presentation_ : nullptr);
       if (!renderer_) {
         TF_RUNTIME_ERROR("Lotus could not create its Vulkan renderer: %s",

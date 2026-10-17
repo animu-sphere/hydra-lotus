@@ -11,7 +11,9 @@ and what it was measured on is
 
 - `ost` 0.23.14 or newer (`ost --version`).
 - A Vulkan SDK that provides Vulkan 1.3 and `slangc` (bundled from 1.3.296).
-  Without it the build still succeeds, and the GPU checks report `SKIP`.
+  Without it configuration fails; a CPU-only build sets
+  `LOTUS_ENABLE_VULKAN=OFF`, as [core CI](#ci-contracts) does, and its GPU
+  checks report `SKIP`.
 - CMake 3.24 or newer, Ninja, and a C++20 compiler. On Windows, `ost` loads
   the MSVC environment itself.
 
@@ -275,8 +277,11 @@ tree.
 The project is an ordinary CMake project. `ost` adds the runtime prefix, the
 generator and the evidence bookkeeping. The options are `LOTUS_ENABLE_VULKAN`
 (default `ON`), `LOTUS_ENABLE_HYDRA2`, `LOTUS_ENABLE_VIEWPORT` and
-`LOTUS_BUILD_TESTS` (default `ON`). A plain-CMake tree is validated with
-`ost validate --build-dir <dir>`, which does not claim `ost` built it.
+`LOTUS_BUILD_TESTS` (default `ON`). An enabled option whose dependency is
+missing fails configuration. A plain-CMake tree is validated with
+`ost validate --build-dir <dir>`, which does not claim `ost` built it. Which
+directory owns which part of the build is
+[PROJECT_LAYOUT.md §7](../architecture/PROJECT_LAYOUT.md#7-build-structure).
 
 ## CI contracts
 

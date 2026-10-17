@@ -520,12 +520,11 @@ int main(int argc, char** argv) try {
   if (gpu) {
     // Missing GPU capability is a CTest SKIP, never a passing GPU check.
     const auto shaders =
-        std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+        Lotus::ShadersIn(std::filesystem::absolute(argv[0]).parent_path() / "shaders");
     Lotus::FrameStatus status;
     std::string error;
     const auto renderer = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), status, error);
+        shaders.vertex, shaders.fragment, status, error);
     if (!renderer) {
       std::cerr << error << '\n';
       return status == Lotus::FrameStatus::Skip ? 77 : 1;

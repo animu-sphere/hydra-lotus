@@ -44,7 +44,7 @@ physical-GPU rendering.
 | `ost` | 0.23.14 or newer | the version the project was generated and validated with |
 | CMake | 3.24 or newer | measured with 4.4 |
 | C++ | C++20 | |
-| Vulkan | 1.3 device, loader and headers | without them the GPU checks report an explained `SKIP`, not a failure |
+| Vulkan | 1.3 SDK (loader and headers) and device | the SDK is required unless `LOTUS_ENABLE_VULKAN=OFF`; without a device or driver the GPU checks report an explained `SKIP`, not a failure |
 | `slangc` | bundled with the Vulkan SDK from 1.3.296 | found through `VULKAN_SDK`, then `PATH` |
 | OpenUSD | 26.08 measured | Hydra adapter only; a real `lookdev` or `usd` runtime |
 | GLFW | 3.4 | standalone viewport only; `find_package`, else a pinned FetchContent |

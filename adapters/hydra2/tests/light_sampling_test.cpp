@@ -224,16 +224,12 @@ private:
 // pass traced) under `light_sampling`, rendered in one call by a renderer
 // of its own into the target the pass configured, with rows flipped as
 // Hydra stores them.
-Image BackendImage(const std::filesystem::path& shaders,
+Image BackendImage(const Lotus::RendererShaders& shaders,
     const Lotus::FrameSnapshot& snapshot, Lotus::LightSampling light_sampling) {
   Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
   std::string error;
   const auto renderer = Lotus::CreateOffscreenRenderer(
-      (shaders / "triangle.vert.spv").string(),
-      (shaders / "triangle.frag.spv").string(), status, error,
-      {(shaders / "path_trace.vert.spv").string(),
-          (shaders / "path_trace.frag.spv").string(),
-          (shaders / "wavefront.comp.spv").string()});
+      shaders.vertex, shaders.fragment, status, error, shaders.ray_query);
   Check(renderer != nullptr, "could not create the backend renderer: " + error);
   Lotus::SceneExtraction extraction;
   const Lotus::GpuSceneEvidence scene =
@@ -303,13 +299,12 @@ int main(int, char** argv) try {
   // Missing GPU capability is a CTest SKIP, never a passing GPU check.
   // Without ray queries Hydra draws the bootstrap, which has no samples.
   const auto shaders =
-      std::filesystem::absolute(argv[0]).parent_path() / "shaders";
+      Lotus::ShadersIn(std::filesystem::absolute(argv[0]).parent_path() / "shaders");
   {
     Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
     std::string error;
     const auto probe = Lotus::CreateOffscreenRenderer(
-        (shaders / "triangle.vert.spv").string(),
-        (shaders / "triangle.frag.spv").string(), status, error);
+        shaders.vertex, shaders.fragment, status, error);
     if (!probe) {
       std::cerr << error << '\n';
       return status == Lotus::FrameStatus::Skip ? 77 : 1;

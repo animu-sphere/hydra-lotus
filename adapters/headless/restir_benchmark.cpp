@@ -489,11 +489,9 @@ Workload MakeWorkload(const Options& options, bool moving) {
 
 std::unique_ptr<OffscreenRenderer> Renderer(const std::filesystem::path& executable,
     FrameStatus& status, std::string& detail) {
-  const auto shaders = executable / "shaders";
-  auto renderer = CreateOffscreenRenderer((shaders / "triangle.vert.spv").string(),
-      (shaders / "triangle.frag.spv").string(), status, detail,
-      {(shaders / "path_trace.vert.spv").string(), (shaders / "path_trace.frag.spv").string(),
-          (shaders / "wavefront.comp.spv").string()});
+  const auto shaders = ShadersIn(executable / "shaders");
+  auto renderer = CreateOffscreenRenderer(
+      shaders.vertex, shaders.fragment, status, detail, shaders.ray_query);
   if (renderer) {
     const auto capability = renderer->RayQueryCapability();
     if (!capability.available) {
