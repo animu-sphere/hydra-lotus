@@ -374,6 +374,23 @@ metal lobes, more oblique receiver normals and the sphere's distinct
 reservoir-area/NEE-cone mappings. Both scenes default to one scattering bounce and
 finite NEE/MIS references. The static camera matches the first moving pose.
 
+`--restir-workload interreflection` selects `interreflection-room-static-v1`
+and `interreflection-room-moving-block-v1`: a closed room spanning X and Y in
+[-2, 2] and Z in [-7, 1] around the camera, with albedo-0.8 white floor,
+ceiling, back and front walls, a red (0.8, 0.15, 0.1) left wall and a green
+(0.15, 0.7, 0.2) right wall. A white Lambert block stands at X in [-1.3, -0.3],
+Z in [-5.5, -4.5], and a roughness-0.3 metal block with F0 (0.9, 0.75, 0.5) at
+X in [0.4, 1.4], Z in [-4.2, -3.2]. Lights cycle rect (0.24 sides), disk and
+sphere (radius 0.12) in a radius-1.5 golden-angle disk at Y = 1.85 around
+Z = -4, rects and disks facing the floor, with indexed radiance scaled by
+`480 / light_count`. No path escapes, so indirect light is a large share of
+each pixel at depth: run it with `--restir-bounces` above one. In the moving
+scene the camera translates by `0.3 sin(phase)` in X and the metal block by
+`0.8 (sin 0.3 - sin(phase + 0.3))`; this nonemissive rigid placement retains
+reservoir history. The static scene is the first moving pose. Both use finite
+NEE/MIS references and fixed bands `center-boundary-band-v1` and
+`left-red-wall-band-v1` (the leftmost quarter).
+
 Each scene identifies its `error_reference`: the static distant plane uses
 `independent-lambert-integral`; moving scenes and the mixed/glossy static scenes
 use `finite-spp-nee-mis`, with null exact-integral fields. Their static convergence
@@ -403,7 +420,7 @@ Defaults and accepted CLI ranges:
 | `--restir-seed` | 17 | 0–8388607; full measured range must end below warmup |
 | `--restir-reference-seed` | 16777216 | 16777216–1073741823; base index for the finite reference |
 | `--restir-bounces` | 1 | 1–64 scattering events, shared by measured and reference rendering |
-| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres` |
+| `--restir-workload` | `distant` | `distant`, `mixed-boundaries`, `glossy-disocclusion`, `glossy-spheres`, `interreflection` |
 | `--restir-lights` | 128 | 2–4096 |
 | `--restir-reference-samples` | 256 | 16–4096 per reference half |
 | `--restir-candidates` | `1,2,8` | distinct comma-separated counts, each 1–64 |
@@ -572,7 +589,9 @@ workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
 variants check the alternate scene identities, finite-reference labelling,
 boundary metrics and all reservoir modes under both integrators. The `-glossy`
-variants check the camera-disocclusion suite and both regional measurements.
+variants check the camera-disocclusion suite and both regional measurements. The
+four-bounce `-interreflection` variants check the closed-room identities,
+the red-wall band and the static control against the first moving pose.
 The Vulkan-only
 `lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. These
 checks assert no timing and may run concurrently under `ost test --jobs N`.

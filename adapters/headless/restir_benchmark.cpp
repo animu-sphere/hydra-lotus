@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 
 namespace LotusHeadless {
 namespace {
@@ -110,7 +111,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-warmup <0..64>] [--restir-sequences <2..64>] "
                                 "[--restir-seed <0..8388607>] "
                                 "[--restir-reference-seed <16777216..1073741823>] [--restir-bounces <1..64>] "
-                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres>] "
+                                "[--restir-workload <distant|mixed-boundaries|glossy-disocclusion|glossy-spheres|interreflection>] "
                                 "[--restir-lights <2..4096>] [--restir-reference-samples <16..4096>] "
                                 "[--restir-candidates <comma-separated 1..64>] "
                                 "[--restir-proposal <power-alias|uniform|power-uniform>] "
@@ -142,7 +143,7 @@ Options Parse(int argc, char** argv) {
         throw std::invalid_argument("invalid reservoir proposal: " + std::string(value));
     } else if (option == "--restir-workload") {
       if (value != "distant" && value != "mixed-boundaries" &&
-          value != "glossy-disocclusion" && value != "glossy-spheres")
+          value != "glossy-disocclusion" && value != "glossy-spheres" && value != "interreflection")
         throw std::invalid_argument("invalid reservoir workload: " + std::string(value));
       options.workload = value;
     } else if (option == "--benchmark-size")
@@ -305,7 +306,99 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
   return result;
 }
 
+// Axis-aligned box from its minimum and maximum corners, twelve triangles.
+MeshGeometry Box(std::array<float, 3> low, std::array<float, 3> high) {
+  MeshGeometry box;
+  for (unsigned i = 0; i < 8; ++i)
+    box.positions.push_back({i & 1 ? high[0] : low[0], i & 2 ? high[1] : low[1], i & 4 ? high[2] : low[2]});
+  box.triangles = {{0, 1, 3}, {0, 3, 2}, {4, 6, 7}, {4, 7, 5}, {0, 4, 5}, {0, 5, 1},
+      {2, 3, 7}, {2, 7, 6}, {0, 2, 6}, {0, 6, 4}, {1, 5, 7}, {1, 7, 3}};
+  box.source_faces = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5};
+  return box;
+}
+
+MeshGeometry Quad(std::array<float, 3> a, std::array<float, 3> b, std::array<float, 3> c, std::array<float, 3> d) {
+  return {{a, b, c, d}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}};
+}
+
+// A closed room: every escaping path meets another high-albedo surface, so
+// indirect light is a large share of each pixel. The moving variant moves
+// only the camera and a nonemissive metal block, retaining reservoir history.
+Workload MakeInterreflectionWorkload(const Options& options, bool moving) {
+  Workload result;
+  result.moving = moving;
+  result.exact_integral = false;
+  result.id = moving ? "interreflection-room-moving-block-v1" : "interreflection-room-static-v1";
+  RenderWorld world;
+  auto lambert = [&](const char* id, std::array<float, 3> albedo) {
+    Material material;
+    material.ior = 1;
+    material.base_color = albedo;
+    world.SetMaterial(id, material);
+  };
+  lambert("/white", {0.8F, 0.8F, 0.8F});
+  lambert("/red", {0.8F, 0.15F, 0.1F});
+  lambert("/green", {0.15F, 0.7F, 0.2F});
+  Material metal;
+  metal.base_color = {0.9F, 0.75F, 0.5F};
+  metal.metallic = 1;
+  metal.roughness = 0.3F;
+  world.SetMaterial("/metal", metal);
+  constexpr float x = 2, y = 2, back = -7, front = 1;
+  const std::array<std::tuple<const char*, MeshGeometry, const char*>, 6> walls{{
+      {"/floor", Quad({-x, -y, back}, {x, -y, back}, {x, -y, front}, {-x, -y, front}), "/white"},
+      {"/ceiling", Quad({-x, y, back}, {-x, y, front}, {x, y, front}, {x, y, back}), "/white"},
+      {"/back", Quad({-x, -y, back}, {-x, y, back}, {x, y, back}, {x, -y, back}), "/white"},
+      {"/front", Quad({-x, -y, front}, {x, -y, front}, {x, y, front}, {-x, y, front}), "/white"},
+      {"/left", Quad({-x, -y, back}, {-x, -y, front}, {-x, y, front}, {-x, y, back}), "/red"},
+      {"/right", Quad({x, -y, back}, {x, y, back}, {x, y, front}, {x, -y, front}), "/green"}}};
+  for (const auto& [id, geometry, material] : walls) {
+    world.SetMesh(id, geometry, {});
+    world.BindMaterial(id, material);
+  }
+  world.SetMesh("/tall", Box({-1.3F, -y, -5.5F}, {-0.3F, 0.4F, -4.5F}), {});
+  world.BindMaterial("/tall", "/white");
+  world.SetMesh("/block", Box({0.4F, -y, -4.2F}, {1.4F, -1, -3.2F}), {});
+  world.BindMaterial("/block", "/metal");
+  for (unsigned i = 0; i < options.lights; ++i) {
+    const double phi = i * 2.399963229728653;
+    const double radius = 1.5 * std::sqrt((i + 0.5) / options.lights);
+    Light light;
+    light.shape = i % 3 == 0 ? LightShape::Rect : i % 3 == 1 ? LightShape::Disk : LightShape::Sphere;
+    light.radius = 0.12F;
+    light.width = light.height = 0.24F;
+    // Rects and disks emit from their -Z side; turn it towards the floor.
+    light.world_from_light[5] = 0;
+    light.world_from_light[6] = -1;
+    light.world_from_light[9] = 1;
+    light.world_from_light[10] = 0;
+    light.world_from_light[12] = static_cast<float>(radius * std::cos(phi));
+    light.world_from_light[13] = 1.85F;
+    light.world_from_light[14] = static_cast<float>(-4 + radius * std::sin(phi));
+    const float scale = 480.0F / options.lights;
+    light.radiance = {scale * (0.2F + (i % 7) * 0.2F),
+        scale * (0.1F + (i % 5) * 0.3F), scale * (0.3F + (i % 3) * 0.4F)};
+    world.SetLight("/light/" + std::to_string(i), light);
+  }
+  for (unsigned f = 0; f < options.frames; ++f) {
+    Camera camera;
+    camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
+    if (moving) {
+      const float phase = static_cast<float>(2 * kPi * f / options.frames);
+      camera.view[12] = 0.3F * std::sin(phase);
+      MeshInstance instance;
+      instance.world_from_object = Translation(-0.8F * std::sin(phase + 0.3F) + 0.8F * std::sin(0.3F));
+      world.SetMeshInstance("/block", instance);
+    }
+    world.SetCamera(camera);
+    result.snapshots.push_back(world.Commit());
+  }
+  return result;
+}
+
 Workload MakeWorkload(const Options& options, bool moving) {
+  if (options.workload == "interreflection")
+    return MakeInterreflectionWorkload(options, moving);
   if (options.workload != "distant")
     return MakeMixedWorkload(options, moving);
   Workload result;
@@ -465,7 +558,7 @@ struct Region {
   ReplicationBiasStatistics::Band band;
 };
 
-// Fixed screen bands: center boundaries, right metal, left dielectric.
+// Fixed screen bands: center boundaries, right metal, left dielectric or red wall.
 std::vector<Region> Regions(const Options& options) {
   if (options.workload == "distant")
     return {};
@@ -477,6 +570,8 @@ std::vector<Region> Regions(const Options& options) {
     result.push_back({"right-glossy-band-v1", band(5)});
   if (options.workload == "glossy-spheres")
     result.push_back({"left-dielectric-band-v1", band(1)});
+  if (options.workload == "interreflection")
+    result.push_back({"left-red-wall-band-v1", band(0)});
   return result;
 }
 

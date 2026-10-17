@@ -27,6 +27,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   non-reusing estimators
   ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [evidence](docs/reports/2026-10-17-restir-moving-bias.md)).
+- Headless ReSTIR comparison `interreflection` workload: a closed high-albedo room
+  where indirect light is about half of each pixel at four bounces; reuse shows no
+  bias, ghosting or localized error distinguishable from non-reusing estimators
+  ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
+  [evidence](docs/reports/2026-10-17-restir-interreflection.md)).
 - `scripts/restir_campaign.py` runs a JSON plan of headless ReSTIR invocations
   with resumable, command-checked reports, a manifest and optional concurrency
   (labelled, and excluded from timing evidence)

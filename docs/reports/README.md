@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-17-restir-interreflection.md](2026-10-17-restir-interreflection.md) | Closed-room four-bounce workload (indirect about half of each pixel): replication bias tests show no reuse mode distinguishable from NEE/MIS or initial-only, no motion-speed dependence, weaker static temporal correlation; integrators byte identical; [summary data](2026-10-17-restir-interreflection.json). |
 | [2026-10-17-restir-moving-bias.md](2026-10-17-restir-moving-bias.md) | Per-pose, band and 8x8-tile replication bias tests in four moving suites: no reuse mode distinguishable from NEE/MIS or initial-only, no motion-speed (ghosting) dependence; narrow-glossy resolution limited by rare-event variance, confirmed with an independent reference; [summary data](2026-10-17-restir-moving-bias.json). |
 | [2026-10-16-restir-sequence-ensemble.md](2026-10-16-restir-sequence-ensemble.md) | Across-sequence variance inflation and noise-normalized bias decomposition: the static temporal-reuse penalty is correlation (inflation 2.34 at cap 32, falling with the cap), not detectable bias; history-cap sweep and one-bounce control; [summary data](2026-10-16-restir-sequence-ensemble.json). |
 | [2026-10-16-restir-convergence.md](2026-10-16-restir-convergence.md) | Configurable transport depth/reference seeds, four-bounce static/moving measurements with independent reference groups, persistent temporal-reuse error penalty and saved-image isolation checks; [summary data](2026-10-16-restir-convergence.json). |
