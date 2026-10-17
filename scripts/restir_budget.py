@@ -172,6 +172,79 @@ def sequence_ensemble(runs, procedure, static, splits):
     return result
 
 
+def replication_bias(runs, procedure, static, splits, region_keys):
+    if all("replication_bias" not in run for run in runs):
+        return None  # Older reports predate the replication bias test.
+    require(all(isinstance(run.get("replication_bias"), dict) for run in runs),
+            "replication bias measurements must be present in every run")
+    poses = 1 if static else procedure["frames"]
+    measurements = [run["replication_bias"] for run in runs]
+    for run, value, split in zip(runs, measurements, splits):
+        require(value["replication"] == ("sequence-mean" if static else "pose-frame") and
+                value["replications"] == procedure["sequences"] and value["poses"] == poses,
+                "wrong replication bias population")
+        series = {key: value[key] for key in ("pose_grand_mean_mse", "pose_noise_mse", "pose_reference_noise_mse")}
+        for key, entries in series.items():
+            require(isinstance(entries, list) and len(entries) == poses, "wrong replication bias pose population")
+            for entry in entries:
+                number(entry)
+        for pose, reference in enumerate(series["pose_reference_noise_mse"]):
+            require(close(reference, 0 if split is None else split[pose] ** 2 / 4),
+                    "replication reference noise disagrees with split RMS")
+            require(series["pose_noise_mse"][pose] >= reference * (1 - 1e-6),
+                    "replication noise is below its reference noise")
+        for key, pooled in (("grand_mean_mse", "pose_grand_mean_mse"), ("noise_mse", "pose_noise_mse"),
+                            ("reference_noise_mse", "pose_reference_noise_mse")):
+            require(close(number(value[key]), statistics.mean(series[pooled])),
+                    "replication bias pooling disagrees with its poses")
+        mse, noise = value["grand_mean_mse"], value["noise_mse"]
+        # Static replications average to the ensemble image; moving ones to
+        # the final pose's ensemble image.
+        require(close(series["pose_grand_mean_mse"][-1], run["ensemble_rmse"] ** 2),
+                "replication bias disagrees with the ensemble error")
+        ensemble = run.get("sequence_ensemble")
+        if static and ensemble is not None:
+            require(close(noise, ensemble["grand_mean_noise_mse"] + ensemble["reference_noise_mse"]),
+                    "replication noise disagrees with the sequence ensemble")
+        require(type(value["excess_mse"]) in (int, float) and math.isfinite(value["excess_mse"]) and
+                math.isclose(value["excess_mse"], mse - noise, rel_tol=0,
+                             abs_tol=1e-6 * max(mse, noise) + 1e-15),
+                "replication excess MSE disagrees with its decomposition")
+        normalized = value["noise_normalized_mse"]
+        require((normalized is None) == (noise == 0) and
+                (normalized is None or close(number(normalized), mse / noise)),
+                "replication noise-normalized MSE disagrees with its decomposition")
+        require([(r["id"], r["pixels"]) for r in value["regions"]] == region_keys,
+                "replication bias regions differ from ensemble regions")
+        for region in value["regions"]:
+            ratio = region["noise_normalized_mse"]
+            require((ratio is None) == (number(region["noise_mse"]) == 0) and
+                    (ratio is None or close(number(ratio), number(region["grand_mean_mse"]) / region["noise_mse"])),
+                    "region noise-normalized MSE disagrees with its decomposition")
+        tiles = value["tiles"]
+        tests, beyond, largest = tiles["tests"], tiles["beyond_3"], tiles["max"]
+        require(tiles["size"] == 8 and type(tests) is int and type(beyond) is int and 0 <= beyond <= tests,
+                "invalid tile test counts")
+        require((largest is None) == (tests == 0), "largest tile z must exist exactly when tests are defined")
+        if largest is not None:
+            z = largest["z"]
+            require(type(z) in (int, float) and math.isfinite(z) and
+                    type(largest["pose"]) is int and 0 <= largest["pose"] < poses and
+                    (abs(z) > 3) == (beyond > 0), "invalid largest tile z")
+    result = {key: [value[key] for value in measurements]
+              for key in ("grand_mean_mse", "noise_mse", "reference_noise_mse", "noise_normalized_mse",
+                          "excess_mse", "pose_grand_mean_mse", "pose_noise_mse")}
+    ratios = result["noise_normalized_mse"]
+    result["noise_normalized_mse_summary"] = population(ratios) if all(r is not None for r in ratios) else None
+    result["regions"] = [{"id": region_id, "pixels": pixels,
+                          "noise_normalized_mse": [v["regions"][i]["noise_normalized_mse"] for v in measurements]}
+                         for i, (region_id, pixels) in enumerate(region_keys)]
+    result["tiles"] = [value["tiles"] for value in measurements]
+    largest = [abs(t["max"]["z"]) for t in result["tiles"] if t["max"] is not None]
+    result["max_abs_tile_z"] = max(largest) if largest else None
+    return result
+
+
 def summarize(reports, targets):
     require(len(reports) >= 2, "at least two independent reports are required")
     require(bool(targets), "at least one quality target is required")
@@ -267,6 +340,9 @@ def summarize(reports, targets):
                                 "ensemble_rmse": population([r["ensemble_rmse"] for r in region_runs]),
                                 "signed_mean_error_rgb": [r["signed_mean_error_rgb"] for r in region_runs]})
             result["regions"] = regions
+            result["replication_bias"] = replication_bias(
+                runs, procedure, static, splits if reference == "finite-spp-nee-mis" else [None] * len(runs),
+                region_keys)
             if static:
                 budgets = []
                 for target in targets:
@@ -293,6 +369,7 @@ def summarize(reports, targets):
                       "replication": "Populations are across separate invocations. Frames within a reused sequence are correlated. Shared references are not independent replications.",
                       "temporal_residuals": "Run/sequence populations retain undefined zero-variance correlations as null. Centering removes persistent error, which remains in sequence_mean_rmse. Motion and finite references affect interpretation; no effective sample count is inferred.",
                       "sequence_ensemble": "Static only. Inflation compares across-sequence variance of sequence means with within-sequence frame variance; noise-normalized MSE compares the grand mean error with its expected noise, including finite-reference noise. Values near one are consistent with uncorrelated frames and with no detectable bias respectively; neither is a confidence bound.",
+                      "replication_bias": "Static replications are sequence means; moving replications are each pose's frame across sequences. Noise-normalized MSE compares the replications' mean error with its expected noise, including each pose's reference noise, over the image and fixed bands. Tile z tests each 8x8 tile mean; with many tests some large |z| is expected without bias. Not a confidence bound.",
                       "missing": "Unreached budgets or unavailable GPU timestamps are null. Aggregate times/ratios require every run; no successful-subset averages.",
                       "timing": "Scene GPU time includes reservoir/metadata passes and excludes updates/readback. Dynamic clocks and validation limit inference.",
                       "moving": "Moving poses have no convergence budget. Finite ensemble and tile errors do not establish bias bounds."},

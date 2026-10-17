@@ -185,6 +185,106 @@ class BudgetTests(unittest.TestCase):
                 case["sequence_ensemble"] = None
         self.assertIsNone(summarize(reports, [.25])["scenes"][0]["cases"][0]["sequence_ensemble"])
 
+    @staticmethod
+    def with_replication_bias(split=None, moving=False):
+        reports = [report(), report(262165)]
+        poses = 4 if moving else 1
+        for run in reports:
+            scene = run["scenes"][0]
+            scene["moving"] = moving
+            if split is not None:
+                scene["error_reference"] = "finite-spp-nee-mis"
+                scene["reference_split_rmse"] = [split] * poses
+            reference = 0 if split is None else split * split / 4
+            for case in scene["cases"]:
+                if moving:
+                    case["convergence"] = None
+                case["regions"] = [{"id": "boundary", "pixels": 64, "ensemble_rmse": .3,
+                                    "signed_mean_error_rgb": [-.1, .2, .05]}]
+                # ensemble_rmse .1: the final pose's grand mean MSE is .01.
+                grand = [.02] * (poses - 1) + [.01]
+                noise = [.004 + reference] * poses
+                case["replication_bias"] = {
+                    "replication": "pose-frame" if moving else "sequence-mean", "replications": 2,
+                    "poses": poses, "grand_mean_mse": sum(grand) / poses, "noise_mse": noise[0],
+                    "reference_noise_mse": reference, "noise_normalized_mse": sum(grand) / poses / noise[0],
+                    "excess_mse": sum(grand) / poses - noise[0], "pose_grand_mean_mse": grand,
+                    "pose_noise_mse": noise, "pose_reference_noise_mse": [reference] * poses,
+                    "regions": [{"id": "boundary", "pixels": 64, "grand_mean_mse": .02, "noise_mse": .01,
+                                 "noise_normalized_mse": 2.0}],
+                    "tiles": {"size": 8, "tests": 12 * poses, "beyond_3": 1,
+                              "max": {"pose": poses - 1, "x": 1, "y": 0, "channel": 2, "z": -3.5}}}
+        return reports
+
+    def test_replication_bias_survives_reduction(self):
+        for split in (None, .04):
+            for moving in (False, True):
+                if moving and split is None:
+                    continue  # Moving workloads always use a finite reference.
+                with self.subTest(split=split, moving=moving):
+                    bias = summarize(self.with_replication_bias(split, moving), [.25])["scenes"][0]["cases"][1][
+                        "replication_bias"]
+                    poses = 4 if moving else 1
+                    expected = (.02 * (poses - 1) + .01) / poses / (.004 + (split or 0) ** 2 / 4)
+                    self.assertAlmostEqual(bias["noise_normalized_mse_summary"]["mean"], expected)
+                    self.assertEqual(len(bias["pose_grand_mean_mse"][0]), poses)
+                    self.assertEqual(bias["regions"], [{"id": "boundary", "pixels": 64,
+                                                        "noise_normalized_mse": [2.0, 2.0]}])
+                    self.assertEqual(bias["max_abs_tile_z"], 3.5)
+        self.assertIsNone(summarize([report(), report(262165)], [.25])["scenes"][0]["cases"][0]["replication_bias"])
+        # Zero expected noise leaves the ratio and its summary undefined.
+        reports = self.with_replication_bias()
+        for run in reports:
+            run["scenes"][0]["cases"][0]["replication_bias"].update(
+                noise_mse=0, pose_noise_mse=[0], noise_normalized_mse=None, excess_mse=.01,
+                tiles={"size": 8, "tests": 0, "beyond_3": 0, "max": None})
+        bias = summarize(reports, [.25])["scenes"][0]["cases"][0]["replication_bias"]
+        self.assertIsNone(bias["noise_normalized_mse_summary"])
+        self.assertIsNone(bias["max_abs_tile_z"])
+
+    def test_replication_bias_rejects_inconsistent_measurements(self):
+        tile = {"size": 8, "tests": 12, "beyond_3": 1, "max": {"pose": 0, "x": 1, "y": 0, "channel": 2, "z": -3.5}}
+        for field, invalid in (("replication", "pose-frame"), ("replications", 4), ("poses", 4),
+                               ("pose_grand_mean_mse", [.01, .01]), ("pose_grand_mean_mse", [.02]),
+                               ("grand_mean_mse", .02), ("noise_mse", .003), ("reference_noise_mse", .001),
+                               ("pose_reference_noise_mse", [.001]), ("excess_mse", 0.0),
+                               ("noise_normalized_mse", 1.0), ("noise_normalized_mse", None),
+                               ("regions", []), ("tiles", dict(tile, beyond_3=13)),
+                               ("tiles", dict(tile, max=None)), ("tiles", dict(tile, beyond_3=0)),
+                               ("tiles", dict(tile, max=dict(tile["max"], pose=1))),
+                               ("tiles", dict(tile, size=4))):
+            with self.subTest(field=field, invalid=invalid):
+                reports = self.with_replication_bias(.04)
+                reports[1]["scenes"][0]["cases"][1]["replication_bias"][field] = invalid
+                with self.assertRaises((ValueError, KeyError, TypeError)):
+                    summarize(reports, [.25])
+        # Pose noise cannot fall below the reference noise it includes.
+        reports = self.with_replication_bias(.04)
+        for run in reports:
+            run["scenes"][0]["cases"][1]["replication_bias"].update(
+                noise_mse=.0001, pose_noise_mse=[.0001], noise_normalized_mse=100.0, excess_mse=.0099)
+        with self.assertRaisesRegex(ValueError, "below its reference"):
+            summarize(reports, [.25])
+        reports = self.with_replication_bias(.04)
+        for run in reports:
+            run["scenes"][0]["cases"][0]["regions"][0]["id"] = "other"
+        with self.assertRaisesRegex(ValueError, "regions differ"):
+            summarize(reports, [.25])
+        reports = self.with_replication_bias()
+        del reports[1]["scenes"][0]["cases"][0]["replication_bias"]
+        with self.assertRaisesRegex(ValueError, "every run"):
+            summarize(reports, [.25])
+        # Static replication noise must equal the sequence ensemble's noise.
+        reports = self.with_replication_bias()
+        for run in reports:
+            run["scenes"][0]["cases"][0]["sequence_ensemble"] = {
+                "sequences": 2, "frames": 4, "frame_variance": .02, "sequence_mean_variance": .01,
+                "variance_inflation": 2.0, "effective_frames": 2.0, "grand_mean_mse": .01,
+                "grand_mean_noise_mse": .005, "reference_noise_mse": 0, "noise_normalized_mse": 2.0,
+                "excess_mse": .005}
+        with self.assertRaisesRegex(ValueError, "sequence ensemble"):
+            summarize(reports, [.25])
+
     def test_finite_reference_and_boundary_regions_survive_reduction(self):
         reports = [report(), report(262165)]
         for run in reports:

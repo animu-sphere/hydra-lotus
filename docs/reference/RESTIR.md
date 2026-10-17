@@ -23,6 +23,10 @@ equal-quality speedup. The [sequence-ensemble measurements](../reports/2026-10-1
 attribute that penalty to temporally correlated reservoirs (fewer effective
 independent frames, decreasing with the history cap) rather than detectable bias,
 in that static fixture only. The
+[replication bias measurements](../reports/2026-10-17-restir-moving-bias.md)
+find no moving-scene, band or tile error distinguishable from non-reusing
+estimators in the four bounded moving suites, at their resolution, with
+narrow-glossy highlights limited by rare-event variance. The
 [complementary BSDF measurements](../reports/2026-10-16-restir-bsdf-partition.md)
 reduce a reproduced narrow-glossy gap, but do not establish general
 unbiasedness, improved convergence or absence of ghosting. Finite references,
@@ -525,6 +529,44 @@ of freedom. CTest checks presence, populations and the exact-integral zero
 reference noise; `lotus-renderer-restir-statistics` checks the decomposition
 against an independent definition.
 
+Every case also records `replication_bias`, which applies the same
+replication test to moving poses and to localized regions. Replications are
+independent images sharing one reference: each sequence's mean residual image
+in static scenes (`replication: "sequence-mean"`, one pose), or each pose's
+fresh residual from every sequence in moving scenes (`"pose-frame"`, one pose
+per frame). Moving histories differ between poses, but every sequence reaches a
+pose through the same motion, so its frames across sequences are independent
+and share the pose's reference. For each pose, `pose_grand_mean_mse` is the
+squared error of the replications' mean, averaged over components, and
+`pose_noise_mse` its expectation without bias: the across-replication sample
+variance over the replication count plus the reference's per-component
+variance, estimated as `(a - b)^2 / 4` from the two halves.
+`pose_reference_noise_mse` is that reference term, equal to the pose's squared
+split RMS over four (zero for the exact integral). Pooled fields average the
+poses; `noise_normalized_mse` and `excess_mse` are defined as for the sequence
+ensemble. Static pooled values equal the sequence ensemble's grand mean MSE and
+expected noise; a moving case's final pose equals its ensemble MSE.
+
+`regions` repeat the pooled test within each fixed screen band of the case's
+`regions`. `tiles` tests each 8x8 tile's mean residual per channel and pose:
+`z` divides the replications' mean tile error by the square root of its expected
+noise, from the across-replication variance of tile means (so spatial
+correlation between neighbouring pixels is included) plus the summed reference
+pixel variances over the squared pixel count (reference pixels are independent).
+`tests` counts defined tests (zero expected noise is skipped), `beyond_3` those
+with `|z| > 3`, and `max` identifies the largest `|z|` by pose, tile column/row
+and channel, or is null. Without bias, about 0.27% of approximately normal tests
+exceed three and the largest `|z|` grows with the number of tests, so a single
+large value is not a detection. Sample variances from few replications, heavy
+tails and the noisy reference estimate widen the tails; no confidence interval is
+asserted. A pose or tile test sees persistent error only at the resolution its
+noise allows: a localized error that changes sign over a tile, or a bias smaller
+than its noise, can pass. Moving storage grows with frames times image size, like
+the per-pose references. CTest checks populations, region identities, tile
+counts and reference-noise presence; `lotus-renderer-restir-statistics` compares
+the test with a direct definition, including a partial tile and a detected
+persistent error.
+
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
 static integral means, output images and CLI preservation. The `-mixed`
@@ -566,7 +608,11 @@ undefined correlation entries; their means, variance decomposition and static
 convergence consistency are validated. Sequence ensembles are retained per
 run, with inflation and noise-normalized summaries only when every run defines
 them; their identities with the ensemble error, split RMS and each other are
-validated, and moving cases must report null. Missing measurements in every run
+validated, and moving cases must report null. Replication bias tests are
+retained per run, with per-pose series, band ratios, tile counts and the largest
+tile `|z|` across runs; their pooling, reference noise against each pose's split,
+final-pose ensemble identity and agreement with the static sequence ensemble are
+validated. Missing measurements in every run
 produce null for older reports; mixing measured and unmeasured runs rejects.
 Mismatched reference kinds or regions reject. Older v1 distant reports
 without explicit labels/regions remain supported. A budget against a finite
