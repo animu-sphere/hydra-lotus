@@ -38,8 +38,9 @@ limits; opt-in availability does not close the remaining investigations.
   find no moving-scene bias, ghosting or localized (band/tile) error
   distinguishable from non-reusing estimators in the four bounded moving
   suites; narrow glossy highlights are limited by rare-event variance.
-  Scenes with substantial interreflection, light/material animation and reuse
-  cost remain.
+  A [closed interreflecting room](../reports/2026-10-17-restir-interreflection.md),
+  about half indirect light at four bounces, shows the same, with weaker
+  temporal correlation. Light/material animation and reuse cost remain.
   The experimental release gate validates the shipped snapshot; it does not
   substitute for these remaining transport investigations.
 
