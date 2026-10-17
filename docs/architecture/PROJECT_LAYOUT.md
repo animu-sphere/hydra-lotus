@@ -177,7 +177,7 @@ target before it is split into targets.
 
 ```text
 adapters/{headless,viewport,hydra2}
-        │
+        │        (viewport ──→ hydra2 runtime, Hydra-enabled viewport build only)
         ▼
 backend/vulkan ──→ core/render-extraction ──→ core/render-world
 ```
@@ -192,8 +192,14 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
    need no manual registration. It rejects foreign dependency tokens; it is
    a source check, not a C++ type-system proof.
 3. A backend depends on `core/`, never on an adapter or on another backend.
-4. OpenUSD appears only under `adapters/hydra2/`. GLFW appears only under
-   `adapters/viewport/`.
+4. OpenUSD appears only under `adapters/hydra2/`, with one edge out of it:
+   a viewport built with both `LOTUS_ENABLE_VIEWPORT` and
+   `LOTUS_ENABLE_HYDRA2` may link `lotus-hydra2-runtime` and the host-side
+   OpenUSD libraries (`usd`, `usdGeom`, `usdImaging`) that `adapters/hydra2/`
+   exports for it, to open a USD stage
+   ([DES-Q8](../design/DESIGN_POLICY.md#53-open-questions)). The default
+   viewport build has no OpenUSD dependency, and nothing else links the Hydra
+   runtime. GLFW appears only under `adapters/viewport/`.
 5. No target links a sibling renderer or a format repository
    ([integration scope §4](../design/INTEGRATION_SCOPE_POLICY.md#4-dependency-rules)).
 

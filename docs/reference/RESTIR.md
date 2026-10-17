@@ -35,8 +35,8 @@ frames-since-reset dependence; reuse noise stays correlated across edits (see
 reduce a reproduced narrow-glossy gap, but do not establish general
 unbiasedness, improved convergence or absence of ghosting. Finite references,
 bounded fixtures and shared integrator draws limit those conclusions.
-Broader artifact/bias coverage and reuse cost/correlation investigations
-remain in the [execution plan](../roadmap/current.md#execution-order).
+The remaining reset checks and the reuse-cost / equal-quality decision are in
+the [execution plan](../roadmap/current.md#step-1--restir-di-closure).
 
 ## Record and operations
 

@@ -7,48 +7,136 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-The experimental ReSTIR snapshot and release verification are recorded in
-[the release record](../releases/v0.5.0.md) and
-[release gate](../reports/2026-10-16-v0.5.0-release-gate.md).
-Phase and release status belong to the
-[canonical table](README.md#status-at-a-glance).
-The [reservoir reference](../reference/RESTIR.md) owns current behavior and
-limits; opt-in availability does not close the remaining investigations.
+The [v0.6.0 plan](README.md#v060--interactive-rendering) sets the order
+below; scope and exit criteria are the
+[roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap). The experimental
+ReSTIR snapshot is recorded in [the release record](../releases/v0.5.0.md) and
+[release gate](../reports/2026-10-16-v0.5.0-release-gate.md), and the
+[reservoir reference](../reference/RESTIR.md) owns current behavior and
+limits. Step 1 comes first and is kept short.
 
-- [ ] **LOTUS-RESTIR-05 — Complete ReSTIR DI exit evidence.**
-  Broaden bias/artifact and convergence assessment beyond the bounded
-  one-bounce glossy fixtures, including broader glossy and multibounce
-  scenes. Investigate the static temporal-reuse convergence penalty in the
-  [rough dielectric/sphere-light fixture](../reports/2026-10-16-restir-glossy-spheres.md),
-  distinguish persistent error from finite-reference and rare-event variance,
-  and assess temporal correlation and ghosting. Address reuse cost and
-  demonstrate any equal-quality speedup with repeated measurements against
-  NEE/MIS under both integrators before recording a phase-exit scope review.
-  Existing [quality budgets](../reports/2026-10-15-restir-budgets.md),
-  [boundary measurements](../reports/2026-10-15-restir-boundaries.md),
-  [residual correlations](../reports/2026-10-16-restir-correlation.md) and
-  [complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md)
-  are the starting evidence, including their adverse results and limits.
-  The [four-bounce/reference-sensitivity measurement](../reports/2026-10-16-restir-convergence.md)
-  reproduces the static reuse penalty with independent finite-reference groups.
-  The [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ensemble.md)
-  attributes it to temporal correlation, not detectable bias, in that static
-  fixture; the fixture's interreflection is too weak to count as multibounce
-  coverage. [Replication bias tests](../reports/2026-10-17-restir-moving-bias.md)
-  find no moving-scene bias, ghosting or localized (band/tile) error
-  distinguishable from non-reusing estimators in the four bounded moving
-  suites; narrow glossy highlights are limited by rare-event variance.
-  A [closed interreflecting room](../reports/2026-10-17-restir-interreflection.md),
-  about half indirect light at four bounces, shows the same, with weaker
-  temporal correlation. Under [light/material animation](../reports/2026-10-17-restir-animation.md)
-  history resets exactly at each edit with no reset-related ghosting, but each
-  reset replays random numbers, correlating reuse noise across edits. Reuse
-  cost remains.
-  The experimental release gate validates the shipped snapshot; it does not
-  substitute for these remaining transport investigations.
+### Step 1 — ReSTIR DI closure
 
-Denoising, spectral research, production material expansion and broad
-platform/backend expansion retain their separate phase assignments.
+The remaining Renderer Phase 5 work is limited to the two tasks below and the
+exit review; no other ReSTIR DI fixture is added
+([stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)).
+The starting evidence, including its adverse results and limits:
+[quality budgets](../reports/2026-10-15-restir-budgets.md),
+[boundaries](../reports/2026-10-15-restir-boundaries.md),
+[residual correlations](../reports/2026-10-16-restir-correlation.md),
+[complementary BSDF comparisons](../reports/2026-10-16-restir-bsdf-partition.md),
+the [rough dielectric/sphere-light fixture](../reports/2026-10-16-restir-glossy-spheres.md),
+[four-bounce/reference sensitivity](../reports/2026-10-16-restir-convergence.md),
+the [sequence-ensemble decomposition](../reports/2026-10-16-restir-sequence-ensemble.md)
+(the static temporal penalty is correlation, not detectable bias),
+[replication bias tests](../reports/2026-10-17-restir-moving-bias.md)
+(no moving-scene bias, ghosting or localized error in four moving suites;
+narrow glossy highlights limited by rare-event variance), a
+[closed interreflecting room](../reports/2026-10-17-restir-interreflection.md)
+and [light/material animation](../reports/2026-10-17-restir-animation.md).
+
+- [ ] **LOTUS-RESTIR-05A — Animated lighting/material reset validation.**
+  Confirm that light, material and emissive-state animation keeps the history
+  lifecycle and invalidation contract; this is a contract check, not a
+  convergence campaign. Required: no stale reservoir is reused, reset
+  classification is deterministic, the reference and wavefront integrators
+  agree, Hydra applies the same reset policy, and validation is clean.
+  [Light/material animation](../reports/2026-10-17-restir-animation.md)
+  already shows exact resets with no reset-related ghosting under both
+  integrators, headless; emissive-state changes and the Hydra path remain.
+  Fresh batches replaying random numbers after each reset is
+  [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the
+  denoiser rather than here.
+- [ ] **LOTUS-RESTIR-05B — Reuse cost and equal-quality decision.**
+  On representative workloads, under both integrators, compare NEE/MIS,
+  initial-only, temporal-only, spatial-only and combined reuse on GPU time,
+  time to a target quality, memory and temporal stability, with repeated
+  measurements (timings run alone, `--jobs 1`). ReSTIR need not win: what is
+  required is the decision of where it is worth using and where NEE/MIS is,
+  and a negative result closes the phase too.
+- [ ] **LOTUS-RESTIR-06 — Renderer Phase 5 exit review.** A report that
+  records, per representative workload, whether there is an equal-quality
+  speedup, plus the known bad cases, correlation cost and unsupported
+  conditions; states the default renderer path and when to choose ReSTIR;
+  and updates the [reservoir reference](../reference/RESTIR.md) and the
+  [canonical status](README.md#status-at-a-glance). The experimental release
+  gate validated the shipped snapshot; it is not this review.
+
+### Step 2 — Viewport foundation
+
+`lotus-viewport` becomes the
+[renderer frontend](../design/ROADMAP_POLICY.md#standalone-viewport-frontend)
+for everyday use; it does not become a UI framework.
+
+- [ ] **LOTUS-VIEWPORT-01 — Presentation loop and scene loading.**
+  A stable swapchain lifecycle, resize, basic fullscreen/windowed operation,
+  a predictable present loop and validation-clean presentation, replacing
+  the bootstrap triangle with the renderer's progressive output. Open a USD
+  stage the way [`hydra-merlin`'s viewport](https://github.com/animu-sphere/hydra-merlin/blob/main/docs/guides/viewport.md#opening-usd-stages)
+  does ([DES-Q8](../design/DESIGN_POLICY.md#53-open-questions),
+  [layout edge](../architecture/PROJECT_LAYOUT.md#4-dependency-directions)):
+  with `LOTUS_ENABLE_HYDRA2` the viewport links `lotus-hydra2-runtime` and
+  a host-dependency interface target exported by `adapters/hydra2/`, creates
+  the render delegate directly and drives it with `HdRenderIndex`,
+  `UsdImagingDelegate`, `HdEngine` and its own task; normal frames present
+  from the backend without a CPU readback. The default viewport build stays
+  OpenUSD-free. Add an OpenStrata intent for the Hydra-enabled viewport, a
+  generated Windows launcher that puts the OpenUSD runtime on `PATH` for the
+  process only, and scripted CTests (`--hidden`, `--frames`, validation,
+  a resize test, an explained SKIP without a device, `--usd <stage>` and a
+  benchmark JSON), with and without a stage.
+- [ ] **LOTUS-VIEWPORT-02 — Camera and accumulation.** Orbit, pan and dolly;
+  authored camera selection; accumulation restarted on camera change; scene
+  dirty updates applied.
+- [ ] **LOTUS-VIEWPORT-03 — Run-time renderer controls and debug views.**
+  Switch the reference/wavefront integrator, spp and accumulation, NEE/MIS,
+  ReSTIR off/initial/temporal/spatial/combined and temporal radiance reuse
+  while running. Show beauty, depth, normal, motion vector, temporal validity
+  and reservoir validity/age/weight from the existing AOVs and debug products,
+  without new viewport-only renderer state. The controls are a Dear ImGui
+  developer UI, as in `hydra-merlin`'s viewport, with the settings logic in
+  sources that a GPU-free unit test covers.
+- [ ] **LOTUS-VIEWPORT-04 — Timing HUD.** Frame time; GPU path-trace, ReSTIR,
+  temporal and (once it exists) denoise pass times; sample count; scene/TLAS
+  update time; reservoir and history memory.
+
+### Step 3 — SVGF core
+
+The [SVGF-class baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline)
+is built and compared with references headless before it reaches the viewport.
+
+- [ ] **LOTUS-SVGF-01 — Temporal accumulation, moments and variance.**
+  Reprojection and history validation through the existing temporal
+  infrastructure, temporal accumulation, first/second moments and variance
+  estimation, with timestamps and debug products (raw radiance, reprojected
+  history, validity, history length, moments, variance, rejection reason).
+  The input is noisy radiance and shared surface metadata, with no ReSTIR
+  coupling. Decide [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions).
+- [ ] **LOTUS-SVGF-02 — Edge-aware filtering and reference comparison.**
+  À-trous filtering guided by depth, normals, motion, stable identity and
+  luminance variance, and the final composite. Compare raw low spp, temporal
+  accumulation alone and the filtered output with a high-spp reference on
+  RMS/MSE, temporal residual, disocclusion response, static convergence and
+  moving-camera stability, under both integrators, with deterministic
+  validation.
+
+### Step 4 — SVGF in the viewport
+
+- [ ] **LOTUS-SVGF-03 — Viewport integration.** Denoiser toggle at run time,
+  raw/filtered comparison, history and variance views, and live denoise
+  timing.
+
+### Step 5 — Release gate
+
+- [ ] **LOTUS-RELEASE-02 — Interactive rendering release gate.** Headless
+  correctness, an interactive viewport smoke test, the installed Hydra
+  regression, Renderer Phase 5 closure evidence, deterministic denoiser
+  validation, GPU timings, clean validation and synchronization, and the
+  package/release gate ([releasing](../guides/RELEASING.md)).
+
+What v0.6.0 leaves for later is listed with its
+[plan](README.md#v060--interactive-rendering); those items keep their phase
+assignments.
 
 ## Performance baseline and foundation release
 
