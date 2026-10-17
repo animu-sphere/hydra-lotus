@@ -30,7 +30,7 @@ The default validation loop is:
 
 ```sh
 ost build --jobs auto
-ost test
+ost test --jobs 8
 ost validate --strict-renderer-evidence
 ```
 

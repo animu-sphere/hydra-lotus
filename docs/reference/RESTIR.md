@@ -532,8 +532,28 @@ variants check the alternate scene identities, finite-reference labelling,
 boundary metrics and all reservoir modes under both integrators. The `-glossy`
 variants check the camera-disocclusion suite and both regional measurements.
 The Vulkan-only
-`lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. Measured
-evidence belongs in [reports](../reports/README.md).
+`lotus-renderer-restir-benchmark-no-driver` checks explained SKIPs. These
+checks assert no timing and may run concurrently under `ost test --jobs N`.
+Measured evidence belongs in [reports](../reports/README.md).
+
+### Campaigns
+
+`scripts/restir_campaign.py <plan.json> [--jobs N] [--dry-run]` runs a set of
+invocations from one JSON plan (executable, output directory, label, shared
+`defaults` and per-run option overrides; the script documents the format),
+writing `<output>/<name>.json`, its log and a `campaign.json` manifest of
+commands, wall times and statuses. A passing report produced by the same
+command is kept, so an interrupted or extended campaign reruns only missing,
+failed or changed runs.
+
+Each invocation's frames are small and synchronous, so the GPU is mostly
+idle and concurrent invocations overlap well: four concurrent 32x32 runs
+finished in 44% of their serial time, eight in 38%. Validation layer
+overhead, a third of a 64-sequence run, also overlaps. Images and
+statistics depend only on the seeds, but timings are shared with concurrent
+work: `--jobs` above one appends `; jobs=N` to every label, and timing or
+cost evidence must use `--jobs 1`. Reducers that require identical labels
+therefore reject a mix of serial and concurrent runs.
 
 ### Repeated quality budgets
 

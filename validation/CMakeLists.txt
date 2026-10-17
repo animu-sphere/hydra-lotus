@@ -75,7 +75,7 @@ if(LOTUS_WITH_VULKAN)
 else()
   add_test(NAME lotus-renderer-restir-gpu COMMAND lotus-restir-gpu-test)
 endif()
-set_tests_properties(lotus-renderer-restir-gpu PROPERTIES SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+set_tests_properties(lotus-renderer-restir-gpu PROPERTIES SKIP_RETURN_CODE 77)
 
 # The committed third-party validation assets match their manifest.
 add_test(NAME lotus-validation-assets
@@ -167,6 +167,9 @@ if(LOTUS_WITH_VULKAN)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/synchronization-no-driver-test.cmake")
 endif()
 
+# ReSTIR checks assert reports and validation messages, never timing, so they
+# may share the GPU under `ost test --jobs N`. The fixed performance baseline
+# and install tree above stay serial.
 foreach(integrator reference wavefront)
   add_test(NAME lotus-renderer-restir-controls-${integrator}
     COMMAND "${CMAKE_COMMAND}"
@@ -174,35 +177,30 @@ foreach(integrator reference wavefront)
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-controls-${integrator}"
       "-DINTEGRATOR=${integrator}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-controls-test.cmake")
-  set_tests_properties(lotus-renderer-restir-controls-${integrator} PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}"
       "-DINTEGRATOR=${integrator}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  set_tests_properties(lotus-renderer-restir-benchmark-${integrator} PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}-mixed
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-mixed"
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=mixed-boundaries
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-mixed PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}-glossy
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-glossy"
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-disocclusion
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-glossy PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}-spheres
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-spheres"
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-spheres PROPERTIES RUN_SERIAL TRUE)
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}-multibounce
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
@@ -210,7 +208,6 @@ foreach(integrator reference wavefront)
       "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
       -DBOUNCES=4 -DREFERENCE_SEED=18874368
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-multibounce PROPERTIES RUN_SERIAL TRUE)
   foreach(proposal uniform power-uniform)
     add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
       COMMAND "${CMAKE_COMMAND}"
@@ -218,7 +215,6 @@ foreach(integrator reference wavefront)
         "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-${proposal}"
         "-DINTEGRATOR=${integrator}" "-DPROPOSAL=${proposal}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-    set_tests_properties(lotus-renderer-restir-benchmark-${integrator}-${proposal} PROPERTIES RUN_SERIAL TRUE)
   endforeach()
 endforeach()
 if(LOTUS_WITH_VULKAN)
