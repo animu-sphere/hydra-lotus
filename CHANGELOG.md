@@ -27,6 +27,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   non-reusing estimators
   ([contract](docs/reference/RESTIR.md#headless-reservoir-comparison),
   [evidence](docs/reports/2026-10-17-restir-moving-bias.md)).
+- `scripts/restir_campaign.py` runs a JSON plan of headless ReSTIR invocations
+  with resumable, command-checked reports, a manifest and optional concurrency
+  (labelled, and excluded from timing evidence)
+  ([contract](docs/reference/RESTIR.md#campaigns)).
+
+### Changed
+
+- ReSTIR CTest checks no longer run serially; they assert no timing, and
+  `ost test --jobs 8` reduces the managed core suite from 859 to 228 seconds on
+  the reference host ([building](docs/guides/BUILDING.md#the-default-build--no-openusd)).
 
 ## [0.5.0] - 2026-10-16
 
