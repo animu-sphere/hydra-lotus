@@ -263,6 +263,10 @@ which puts the OpenUSD runtime's DLLs on `PATH` for that process only:
 run-lotus-viewport.cmd --usd path/to/stage.usda
 ```
 
+On the measured NVIDIA driver a launch can stop at frame 2 with
+`VK_ERROR_DEVICE_LOST`; launch it again
+([limitation](../reference/SUPPORTED_CONFIGURATIONS.md#driver-limitations)).
+
 `ost renderer viewport --intent viewport-usd` launches the copy that the
 `lotus-renderer-usdview-host` test installs in that tree
 (`adapters/hydra2/usdview-install/bin/`), which is stale until that test runs
