@@ -53,13 +53,17 @@ is built and compared with references headless before it reaches the viewport.
 Its regression tests stay small and its quality study is a research-tier
 campaign and a report, by the [test policy](../design/TEST_POLICY.md#8-svgf).
 
-- [ ] **LOTUS-SVGF-01 — Temporal accumulation, moments and variance.**
-  Reprojection and history validation through the existing temporal
-  infrastructure, temporal accumulation, first/second moments and variance
-  estimation, with timestamps and debug products (raw radiance, reprojected
-  history, validity, history length, moments, variance, rejection reason).
-  The input is noisy radiance and shared surface metadata, with no ReSTIR
-  coupling. Decide [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions).
+The temporal radiance accumulation keeps its batches' luminance moments,
+and a variance pass estimates each pixel's variance, temporally from four
+batches of history and with SVGF's spatial estimate before; raw radiance,
+reprojected history, validity, history length, moments, variance and
+rejection reasons are products, with their GPU times, from noisy radiance and
+shared surface metadata alone
+([evidence](../reports/2026-10-18-svgf-moments-variance.md),
+[contract](../reference/TEMPORAL.md#luminance-moments-and-variance)).
+[DES-Q7](../design/DESIGN_POLICY.md#53-open-questions) is resolved: every
+reset keeps restarting the RNG.
+
 - [ ] **LOTUS-SVGF-02 — Edge-aware filtering and reference comparison.**
   À-trous filtering guided by depth, normals, motion, stable identity and
   luminance variance, and the final composite. Compare raw low spp, temporal

@@ -159,6 +159,13 @@ FragmentOutput fragment_main(VertexOutput input) {
     output.depth = 1.0;
     return output;
   }
+  if (kPass == 10) {
+    EstimateTemporalVariance(input.position.xy);
+    FragmentOutput output;
+    output.color = float4(0.0);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == 4 || kPass == 5) {
     if (kPass == 4)
       WriteTemporalSurface(input.ndc, input.position.xy);

@@ -90,11 +90,18 @@ struct TemporalProducts {
   std::uint64_t validity_bytes = 0;
   std::uint64_t metadata_bytes = 0;
   bool radiance_available = false;
+  // Accumulated colour, history length, luminance moments and variance.
+  // A pixel's reprojected history is previous_radiance[validity.previous_index].
   std::vector<TemporalRadiancePixel> radiance;
   std::vector<TemporalRadiancePixel> previous_radiance;
   std::uint32_t radiance_row_pitch = 0;
+  // The raw radiance: this frame's fresh RGBA batch mean, top-left rows.
+  std::vector<std::array<float, 4>> batch;
   double accumulation_gpu_ms = 0.0;
-  // Two history buffers, their readback mirror, and a fresh RGBA batch buffer.
+  // The variance pass, after the accumulation pass.
+  double variance_gpu_ms = 0.0;
+  // Two history buffers, their readback mirror, and a fresh RGBA batch
+  // buffer with its readback mirror.
   std::uint64_t radiance_bytes = 0;
   // RNG start and fresh samples in this frame, independent of history length.
   std::uint32_t batch_sample_index = 0;

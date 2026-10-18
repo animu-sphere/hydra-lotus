@@ -73,17 +73,26 @@ public bool TemporalSampleHistory(uint index, uint64_t instance_id,
       temporal_surface[index].material_id == material_id;
 }
 
+// Mirrors TemporalRadiancePixel; scalar moments keep the 32-byte layout
+// (a float2 would align to offset 24).
 struct TemporalRadiancePixel {
   float4 color;
   uint sample_count;
-  uint reserved0;
-  uint reserved1;
-  uint reserved2;
+  float first_moment;
+  float second_moment;
+  float variance;
 };
 [[vk::binding(13, 0)]] StructuredBuffer<float4> temporal_batch;
 [[vk::binding(14, 0)]] RWStructuredBuffer<TemporalRadiancePixel> temporal_radiance;
 [[vk::binding(15, 0)]] StructuredBuffer<TemporalRadiancePixel> temporal_old_radiance;
 
+// Mirrors TemporalLuminance.
+float Luminance(float4 color) {
+  return 0.2126 * color.x + 0.7152 * color.y + 0.0722 * color.z;
+}
+
+// The batch's luminance moments are blended with the colour's weights. The
+// variance pass, which needs every pixel's moments, writes the variance.
 public float4 AccumulateTemporalRadiance(float2 pixel) {
   const uint index = uint(pixel.y) * temporal_frame.history.y + uint(pixel.x);
   TemporalRadiancePixel output = {};
@@ -91,19 +100,94 @@ public float4 AccumulateTemporalRadiance(float2 pixel) {
   const uint cap = temporal_frame.radiance.z;
   if ((temporal_surface[index].flags & 1u) != 0) {
     output.sample_count = min(temporal_frame.radiance.y, cap);
+    const float luminance = Luminance(output.color);
+    float2 moments = float2(luminance, luminance * luminance);
     const TemporalValidityPixel validity = temporal_validity[index];
     if (validity.valid != 0) {
       const TemporalRadiancePixel old = temporal_old_radiance[validity.previous_index];
       const uint kept = min(old.sample_count, cap - output.sample_count);
-      if (kept != 0 && all(isfinite(old.color))) {
+      const float2 old_moments = float2(old.first_moment, old.second_moment);
+      if (kept != 0 && all(isfinite(old.color)) && all(isfinite(old_moments))) {
         const uint count = kept + output.sample_count;
-        output.color += (old.color - output.color) * (float(kept) / float(count));
+        const float blend = float(kept) / float(count);
+        output.color += (old.color - output.color) * blend;
+        moments += (old_moments - moments) * blend;
         output.sample_count = count;
       }
     }
+    output.first_moment = moments.x;
+    output.second_moment = moments.y;
   }
   temporal_radiance[index] = output;
   return output.color;
+}
+
+// Usable neighbours for the variance estimate: a history on the same
+// placement. Histories exist only on primary hits.
+bool VarianceNeighbour(int2 q, uint64_t instance_id) {
+  const uint2 extent = temporal_frame.history.yz;
+  if (any(q < 0) || q.x >= int(extent.x) || q.y >= int(extent.y))
+    return false;
+  const uint index = uint(q.y) * extent.x + uint(q.x);
+  return temporal_radiance[index].sample_count != 0 &&
+      temporal_surface[index].instance_id == instance_id;
+}
+
+float VarianceDepthStep(int2 a, int2 b, float depth, uint64_t instance_id) {
+  const uint width = temporal_frame.history.y;
+  float step = -1.0; // No usable neighbour yet.
+  if (VarianceNeighbour(a, instance_id))
+    step = abs(depth - temporal_surface[uint(a.y) * width + uint(a.x)].normal_depth.w);
+  if (VarianceNeighbour(b, instance_id)) {
+    const float other = abs(depth - temporal_surface[uint(b.y) * width + uint(b.x)].normal_depth.w);
+    step = step < 0.0 ? other : min(step, other);
+  }
+  return max(step, 0.0);
+}
+
+// Mirrors EstimateTemporalVariance: temporal variance from a long history,
+// SVGF's edge-aware 7x7 moments estimate, scaled up, from a short one. Only
+// the variance word is written; neighbours read the other words.
+public void EstimateTemporalVariance(float2 pixel) {
+  const uint width = temporal_frame.history.y;
+  const int2 p = int2(pixel);
+  const uint index = uint(p.y) * width + uint(p.x);
+  const TemporalRadiancePixel center = temporal_radiance[index];
+  float variance = 0.0;
+  if (center.sample_count != 0) {
+    const float batches = float(center.sample_count) /
+        float(min(temporal_frame.radiance.y, temporal_frame.radiance.z));
+    if (batches >= 4.0) {
+      variance = max(0.0, center.second_moment - center.first_moment * center.first_moment);
+    } else {
+      const TemporalPixel s = temporal_surface[index];
+      const float depth = s.normal_depth.w;
+      const float phi = max(VarianceDepthStep(p - int2(1, 0), p + int2(1, 0), depth, s.instance_id) +
+          VarianceDepthStep(p - int2(0, 1), p + int2(0, 1), depth, s.instance_id), 1.0e-8) * 3.0;
+      float weight_sum = 0.0;
+      float2 sum = float2(0.0);
+      for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+          const int2 q = p + int2(dx, dy);
+          if (!VarianceNeighbour(q, s.instance_id))
+            continue;
+          const uint qi = uint(q.y) * width + uint(q.x);
+          const float4 n = temporal_surface[qi].normal_depth;
+          const TemporalRadiancePixel neighbour = temporal_radiance[qi];
+          const float distance = sqrt(float(dx * dx + dy * dy));
+          const float wz = dx == 0 && dy == 0 ? 0.0 : abs(depth - n.w) / (phi * distance);
+          const float wn = pow(saturate(dot(s.normal_depth.xyz, n.xyz)), 128.0);
+          const float wl = abs(center.first_moment - neighbour.first_moment) / 10.0;
+          const float w = exp(-(wl + wz)) * wn;
+          sum += w * float2(neighbour.first_moment, neighbour.second_moment);
+          weight_sum += w;
+        }
+      }
+      const float2 m = sum / max(weight_sum, 1.0e-6);
+      variance = max(0.0, m.y - m.x * m.x) * (4.0 / batches);
+    }
+  }
+  temporal_radiance[index].variance = variance;
 }
 
 // TemporalRejection's stable numeric codes. This contract contains no

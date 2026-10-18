@@ -16,6 +16,14 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   ([guide](docs/guides/BUILDING.md#test-tiers)).
 - The `research` build intent (`LOTUS_RESEARCH_TESTS=ON`) registers the
   research tier.
+- Temporal radiance keeps the first and second moments of each batch's
+  luminance, and a variance pass estimates each pixel's luminance variance:
+  temporally from four batches of history, with SVGF's edge-aware 7x7
+  spatial estimate before
+  ([reference](docs/reference/TEMPORAL.md#luminance-moments-and-variance)).
+  `TemporalRadiancePixel`'s reserved words became `moments` and `variance`;
+  `TemporalProducts` adds the raw radiance `batch` and `variance_gpu_ms`;
+  `TemporalLuminance` and `EstimateTemporalVariance` are the CPU oracle.
 
 ### Changed
 
@@ -26,6 +34,8 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   checks.
 - Renderer CI skips the core and Hydra cells for a pull request that changes
   only documentation; main pushes, dispatches and release calls always build.
+- Temporal radiance memory is 160 bytes per pixel (was 144), the raw batch's
+  host mirror added; the temporal timestamp pool has eight queries.
 
 ## [0.5.2] - 2026-10-18
 
