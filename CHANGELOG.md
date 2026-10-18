@@ -7,6 +7,18 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
+The interactive rendering release completes the v0.6.0 plan: Renderer
+Phase 6's SVGF-class denoiser estimates illumination moments and variance and
+filters the accumulated radiance with an edge-aware à-trous filter under both
+integrators, compared with a high-spp reference and checked against a CPU
+oracle at every pixel; the standalone viewport switches it at run time,
+presents its inputs beside the filtered image and times it; Hydra hosts reach
+it through `lotus:filterIterations`. Tests carry tiers, and Renderer Phase
+5's campaign variants move to a research tier. See the
+[release record](docs/releases/v0.6.0.md).
+
 ### Added
 
 - A [test policy](docs/design/TEST_POLICY.md): every CTest carries one tier

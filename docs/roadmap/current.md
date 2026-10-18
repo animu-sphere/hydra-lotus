@@ -7,9 +7,12 @@ represented by its [evidence](../reports/README.md) and
 
 ## Execution order
 
-The [v0.6.0 plan](README.md#v060--interactive-rendering) sets the order
+The [v0.6.0 plan](README.md#v060--interactive-rendering) set the order
 below; scope and exit criteria are the
-[roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap).
+[roadmap policy's](../design/ROADMAP_POLICY.md#4-roadmap). Every step is
+complete and shipped in [v0.6.0](../releases/v0.6.0.md). The next phase,
+Renderer Phase 7, has no release target yet; its plan starts from the
+[canonical status](README.md#status-at-a-glance).
 
 ### Step 1 — ReSTIR DI closure
 
@@ -94,11 +97,12 @@ The step is complete.
 
 ### Step 5 — Release gate
 
-- [ ] **LOTUS-RELEASE-02 — Interactive rendering release gate.** Headless
-  correctness, an interactive viewport smoke test, the installed Hydra
-  regression, Renderer Phase 5 closure evidence, deterministic denoiser
-  validation, GPU timings, clean validation and synchronization, and the
-  package/release gate ([releasing](../guides/RELEASING.md)).
+Headless correctness, an interactive viewport smoke test with the
+denoiser, the installed Hydra regression, Renderer Phase 5 closure evidence,
+deterministic denoiser validation, GPU timings, clean validation and
+synchronization, and the package/release gate passed
+([release gate](../reports/2026-10-18-v0.6.0-release-gate.md),
+[releasing](../guides/RELEASING.md)). The step is complete.
 
 What v0.6.0 leaves for later is listed with its
 [plan](README.md#v060--interactive-rendering); those items keep their phase
