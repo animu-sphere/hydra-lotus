@@ -9,6 +9,7 @@
 #include "presentation.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -702,16 +703,45 @@ PresentEvidence Presentation::Present(const PresentSource& source,
   barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-  VkImageBlit blit{};
-  blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.srcOffsets[1] = {static_cast<std::int32_t>(source.extent.width),
-      static_cast<std::int32_t>(source.extent.height), 1};
-  blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.dstOffsets[1] = {static_cast<std::int32_t>(extent_.width),
-      static_cast<std::int32_t>(extent_.height), 1};
-  vkCmdBlitImage(command_, view ? view_image_ : source.color,
-      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
-      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+  // A split view blits the view's left columns and the colour's right ones,
+  // each scaled as the whole frame is.
+  const auto columns = [](std::uint32_t width, float split) {
+    return static_cast<std::int32_t>(
+        std::lround(static_cast<double>(width) * split));
+  };
+  const float split = view ? std::clamp(source.view.split, 0.0F, 1.0F) : 0.0F;
+  std::int32_t source_split = columns(source.extent.width, split);
+  std::int32_t target_split = columns(extent_.width, split);
+  // Both parts empty or neither, so that every target column is written.
+  const auto source_width = static_cast<std::int32_t>(source.extent.width);
+  const auto target_width = static_cast<std::int32_t>(extent_.width);
+  if (source_split == 0 || target_split == 0) {
+    source_split = target_split = 0;
+  } else if (source_split == source_width || target_split == target_width) {
+    source_split = source_width;
+    target_split = target_width;
+  }
+  const auto blit = [&](VkImage image, std::int32_t source_begin,
+                        std::int32_t source_end, std::int32_t target_begin,
+                        std::int32_t target_end) {
+    if (source_begin >= source_end || target_begin >= target_end) {
+      return;
+    }
+    VkImageBlit region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffsets[0] = {source_begin, 0, 0};
+    region.srcOffsets[1] = {source_end,
+        static_cast<std::int32_t>(source.extent.height), 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstOffsets[0] = {target_begin, 0, 0};
+    region.dstOffsets[1] = {target_end,
+        static_cast<std::int32_t>(extent_.height), 1};
+    vkCmdBlitImage(command_, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
+        VK_FILTER_NEAREST);
+  };
+  blit(view_image_, 0, source_split, 0, target_split);
+  blit(source.color, source_split, source_width, target_split, target_width);
   barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   if (overlay_pass_ != VK_NULL_HANDLE) {

@@ -41,9 +41,29 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   ([reference](docs/reference/TEMPORAL.md#headless-svgf-comparison),
   [evidence](docs/reports/2026-10-18-svgf-filter.md)); the `research` tier
   runs it under both integrators.
+- `lotus-viewport` runs the denoiser: `--denoise`, `--filter-iterations`,
+  F2 and the developer UI switch it and its iteration count at run time
+  without resetting the history; the `raw`, `accumulated`, `history-length`
+  and `variance` views show its inputs, `--split` (or **Split**) shows a view
+  beside the filtered image, and the timing HUD and `--benchmark` report the
+  variance and filter passes and the filter's memory
+  ([usage](docs/guides/BUILDING.md#the-standalone-viewport),
+  [evidence](docs/reports/2026-10-18-svgf-viewport.md)).
+- `DebugView` adds `RawRadiance`, `AccumulatedRadiance`, `HistoryLength` and
+  `Variance`, presented from the latest radiance frame's GPU buffers, and
+  `PresentView::split` presents a view beside the frame's colour.
+- The Hydra render setting `lotus:filterIterations` filters `lotus:temporal`'s
+  colour ([reference](docs/reference/TEMPORAL.md#hydra-controls-and-debug-aovs)).
 
 ### Changed
 
+- The à-trous filter reads compact per-pixel guides (identity, depth and
+  shading normal) and its first input, which the variance pass writes on a
+  filtered frame, instead of the surface and radiance records: 2.4 ms for
+  five iterations at 1280x720 (was 11.6 ms), with the same output. Its
+  buffer is 48 bytes per pixel (was 32).
+- The viewport's GPU frame time counts the variance pass, which it left out
+  since the pass was added.
 - Renderer Phase 5's reservoir benchmark workload and proposal variants and
   procedure controls (18 CTests) moved to the research tier; the default
   suite keeps the reservoir arithmetic, the GPU reservoir lifecycle, the

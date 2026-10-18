@@ -12,14 +12,30 @@ bool Reuses(const Controls& controls) noexcept {
          controls.restir == RestirMode::Combined;
 }
 
+// The denoiser filters the temporal radiance, which it needs.
+bool AccumulatesRadiance(const Controls& controls) noexcept {
+  return controls.temporal_radiance || controls.denoise;
+}
+
 // Reuse traces one fresh sample per frame, whatever `accumulate` says.
 bool FreshBatch(const Controls& controls) noexcept {
-  return Reuses(controls) || controls.temporal_radiance;
+  return Reuses(controls) || AccumulatesRadiance(controls);
 }
 
 bool TemporalView(DebugView view) noexcept {
   return view == DebugView::Depth || view == DebugView::Normal ||
          view == DebugView::Motion || view == DebugView::TemporalValidity;
+}
+
+bool RadianceView(DebugView view) noexcept {
+  return view == DebugView::RawRadiance ||
+         view == DebugView::AccumulatedRadiance ||
+         view == DebugView::HistoryLength || view == DebugView::Variance;
+}
+
+bool ReservoirView(DebugView view) noexcept {
+  return view == DebugView::ReservoirValidity ||
+         view == DebugView::ReservoirAge || view == DebugView::ReservoirWeight;
 }
 
 struct Named {
@@ -31,7 +47,8 @@ constexpr Named kRestirNames[] = {{"off", 0}, {"initial", 1},
     {"temporal", 2}, {"spatial", 3}, {"combined", 4}};
 constexpr Named kViewNames[] = {{"beauty", 0}, {"depth", 1}, {"normal", 2},
     {"motion", 3}, {"temporal-validity", 4}, {"reservoir-validity", 5},
-    {"reservoir-age", 6}, {"reservoir-weight", 7}};
+    {"reservoir-age", 6}, {"reservoir-weight", 7}, {"raw", 8},
+    {"accumulated", 9}, {"history-length", 10}, {"variance", 11}};
 constexpr Named kIntegratorNames[] = {{"reference", 0}, {"wavefront", 1}};
 
 template <std::size_t N>
@@ -57,8 +74,10 @@ std::optional<Enum> Parse(const Named (&names)[N], std::string_view name) {
 } // namespace
 
 bool ViewAvailable(const Controls& controls, DebugView view) {
-  return view < DebugView::ReservoirValidity ||
-         controls.restir != RestirMode::Off;
+  if (ReservoirView(view)) {
+    return controls.restir != RestirMode::Off;
+  }
+  return !RadianceView(view) || AccumulatesRadiance(controls);
 }
 
 bool Progressive(const Controls& controls) {
@@ -87,9 +106,13 @@ FramePlan PlanFrame(const Controls& controls, std::uint64_t frame,
   if (!controls.accumulate && !FreshBatch(controls)) {
     settings.sample_index = static_cast<std::uint32_t>(frame);
   }
-  plan.temporal.accumulate_radiance = controls.temporal_radiance;
+  plan.temporal.accumulate_radiance = AccumulatesRadiance(controls);
   plan.temporal.max_history_samples =
       std::clamp(controls.history_samples, 1U, 65536U);
+  if (controls.denoise) {
+    plan.temporal.filter_iterations = std::clamp(
+        controls.filter_iterations, 1U, kTemporalFilterMaxIterations);
+  }
   plan.temporal_frame = FreshBatch(controls) || TemporalView(controls.view);
 
   PresentView& present = plan.present;
@@ -108,8 +131,18 @@ FramePlan PlanFrame(const Controls& controls, std::uint64_t frame,
   case DebugView::ReservoirWeight:
     present.range = controls.weight_log10;
     break;
+  case DebugView::HistoryLength:
+    present.range = {0.0F,
+        static_cast<float>(plan.temporal.max_history_samples)};
+    break;
+  case DebugView::Variance:
+    present.range = controls.variance_log10;
+    break;
   default:
     break;
+  }
+  if (controls.split && present.view != DebugView::Beauty) {
+    present.split = std::clamp(controls.split_position, 0.0F, 1.0F);
   }
   return plan;
 }

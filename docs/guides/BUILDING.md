@@ -285,8 +285,11 @@ again after a change; the launcher above runs the executable just built
 | `--nee on\|off` | next event estimation with MIS, on by default; off leaves BSDF sampling alone |
 | `--restir off\|initial\|temporal\|spatial\|combined` | reservoir direct lighting at the camera surface, off by default |
 | `--temporal-radiance` | reuse each pixel's radiance history |
+| `--denoise` | filter the temporal radiance with SVGF's edge-aware à-trous filter; turns temporal radiance on |
+| `--filter-iterations N` | the filter's à-trous iterations, 1–8, 5 by default |
 | `--no-accumulation` | trace one fresh sample per pixel every frame |
-| `--view <name>` | the product to present: `beauty`, `depth`, `normal`, `motion`, `temporal-validity`, `reservoir-validity`, `reservoir-age`, `reservoir-weight` (the last three need `--restir`) |
+| `--view <name>` | the product to present: `beauty`, `depth`, `normal`, `motion`, `temporal-validity`, `raw`, `accumulated`, `history-length`, `variance` (these four need `--temporal-radiance` or `--denoise`), `reservoir-validity`, `reservoir-age`, `reservoir-weight` (these three need `--restir`) |
+| `--split` | present the view on the left half and beauty on the right |
 | `--vsync on\|off` | FIFO, or immediate (else mailbox) presentation |
 | `--frames N`, `--hidden` | scripted runs: exit after N presented frames, without showing the window |
 | `--validate` | fail unless the Khronos validation layer captured the run; captured messages fail every run |
@@ -307,6 +310,7 @@ The free camera follows usdview's bindings, without requiring Alt:
 | Left, Right | one time code back or forward, within an authored time range |
 | R | reload the stage's layers |
 | F1 | hide or show the developer UI |
+| F2 | switch the denoiser on or off |
 | F11, Esc | fullscreen, exit |
 
 C, the arrows and R act on USD stages only. Navigating while looking through
@@ -320,8 +324,9 @@ time code that changes nothing continues it.
 The Renderer window (Dear ImGui, drawn over the presented frame) changes the
 options above while the viewport runs: the integrator, the sample limit and
 accumulation, NEE/MIS, the ReSTIR mode and candidate count, temporal radiance
-reuse and its history length, and the presented product with its colour
-scale. It shows the extent and samples per pixel. Pointer and keyboard input
+reuse and its history length, the denoiser and its iteration count, and the
+presented product with its colour scale and an optional split at a chosen
+position. It shows the extent and samples per pixel. Pointer and keyboard input
 over the window goes to it rather than the camera; it writes no files. The
 settings logic is `adapters/viewport/controls.{hpp,cpp}`, which
 `lotus-viewport-controls` covers without a window or GPU.
@@ -343,12 +348,14 @@ same passes (up to 32, started again when the controls change the passes):
 - the GPU passes that ran, each with its share of the GPU time: the path
   trace (with the wavefront kernels under it), the ReSTIR initial, temporal
   and spatial passes, the temporal surfaces (primary surfaces and
-  reprojection) and temporal accumulation. Together they add up to the GPU
-  time. Denoising has no pass yet;
+  reprojection), temporal accumulation, the variance estimate and the
+  denoise filter (its à-trous iterations and composite). Together they add
+  up to the GPU time;
 - the latest scene update that submitted GPU work, and before which frame:
   its upload, BLAS and TLAS build or refit times;
-- the reservoir, surface-history and radiance-history memory (device buffers
-  with their host mirrors, as the latest frame that used them reported it;
+- the reservoir, surface-history, radiance-history and denoise-filter memory
+  (device buffers with their host mirrors, as the latest frame that used
+  them reported it;
   "retained" when the controls no longer use them, since the backend keeps
   them allocated), the scene's backing memory and its BLAS and TLAS storage.
 
@@ -370,6 +377,19 @@ debug product on the GPU (`Lotus::DebugView`); nothing is read back, the
 temporal and reservoir products included
 ([evidence](../reports/2026-10-18-viewport-controls.md)).
 
+The denoiser filters the temporal radiance, so it traces one fresh sample a
+frame and turns temporal radiance on while it runs; switching it, or
+changing its iteration count, keeps the history, since the filter never
+writes into it. Its inputs have views of their own: `raw` is the frame's
+fresh sample before any reuse, `accumulated` the temporal mean before the
+filter, `history-length` each pixel's samples of history (to the history
+length's full scale) and `variance` the illumination luminance variance that
+steers the filter, on a log10 scale; beauty is the filtered image. With
+**Split**, the view fills the frame left of the divider and beauty the
+rest, so `raw` or `accumulated` against beauty compares the filter's input
+and output on the same frame
+([evidence](../reports/2026-10-18-svgf-viewport.md)).
+
 The presented image is the linear radiance encoded as sRGB and clamped, with
 no exposure or tone mapping. The title bar shows the scene, the camera and time code, the
 integrator, estimator and view, device, extent, samples per pixel and the
@@ -385,7 +405,8 @@ only) and `lotus-viewport-no-driver` (an explained skip with Vulkan driver disco
 pointed at a missing manifest), each in the viewport's tree, plus the
 window-free `lotus-viewport-options`, `lotus-viewport-controls`,
 `lotus-viewport-timings` and `lotus-viewport-camera` in every tree. The interaction tests also step
-through every renderer control and debug view.
+through every renderer control and debug view, the denoiser and the split
+view included.
 
 > ⚠️ On a Windows host whose MSVC prints Japanese, some objects record no
 > header dependencies, and editing a header does not rebuild them. Delete

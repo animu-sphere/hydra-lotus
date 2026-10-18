@@ -18,6 +18,7 @@ owns delivery status.
 | `lotus:historySamples` | int, 32 | Effective history cap, clamped to [1, 65536] |
 | `lotus:historyKey` | int, 0 | Caller compatibility token, clamped to nonnegative; a change resets history |
 | `lotus:historyReset` | int, 0 | Change this counter to declare one camera cut; the new value is consumed only by a successful temporal frame |
+| `lotus:filterIterations` | int, 0 | [Edge-aware filter](#edge-aware-filtering) iterations over `lotus:temporal`'s colour, clamped to [0, 8]; unused without `lotus:temporal`, and a change never resets history |
 
 Temporal colour and the render pass remain unconverged so hosts keep drawing
 fresh batches. `convergedSamplesPerPixel` continues to control progressive
@@ -457,12 +458,27 @@ converges to the temporal mean rather than to a blurred image. The filtered
 output is never history, so its bias does not accumulate.
 
 `FilterTemporalRadiance` in `temporal.hpp` is the CPU oracle, in the GPU's
-float arithmetic. Each iteration is a fullscreen pass that reads the
-previous one from a persistent ping-pong buffer of two halves (32 bytes per
-pixel, `filter_bytes`), the draw's first instance giving the iteration; the
-last also composites into the colour attachment. `filter_gpu_ms` times
+float arithmetic. On a filtered frame the variance pass also writes the
+first iteration's input (illumination and the variance of its mean) and a
+16-byte guide per pixel: its placement identity, depth and shading normal,
+or a mark for a pixel without a history. Each iteration is a fullscreen
+pass that reads only its taps' guides and the previous iteration's values,
+from a persistent buffer of two ping-pong halves and the guides (48 bytes
+per pixel, `filter_bytes`), the draw's first instance giving the iteration;
+the last also composites into the colour attachment. `filter_gpu_ms` times
 every iteration and the composite with the ninth and tenth queries of the
-temporal pool. `filter_iterations` reports the frame's count.
+temporal pool; `variance_gpu_ms` includes writing the guides.
+`filter_iterations` reports the frame's count.
+
+`OffscreenRenderer::Present` shows the filter's inputs from the latest
+radiance frame's GPU buffers, without reading them back: `RawRadiance` (the
+fresh batch), `AccumulatedRadiance` (the unfiltered temporal mean),
+`HistoryLength` and `Variance` (`DebugView`), and `PresentView::split`
+shows a view beside the colour, the filtered composite when the frame
+filtered. `lotus-viewport` switches the filter, its iteration count and
+these views at run time and times the variance and filter passes in its
+HUD ([usage](../guides/BUILDING.md#the-standalone-viewport),
+[evidence](../reports/2026-10-18-svgf-viewport.md)).
 
 ### Headless SVGF comparison
 

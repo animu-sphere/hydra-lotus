@@ -147,8 +147,37 @@ int main() {
         "temporal radiance: the temporal submission follows the scene pass");
     Check(Near(times.pass(GpuPass::PathTrace), 0.5) &&
               Near(times.pass(GpuPass::TemporalAccumulation), 0.2) &&
+              Near(times.pass(GpuPass::TemporalVariance), 0.0) &&
+              !times.ran(GpuPass::TemporalFilter) &&
               Near(PassSum(times), times.gpu_ms),
         "temporal radiance: the passes add up to the GPU time");
+
+    // The denoiser: variance and filter join the temporal submission.
+    frame.temporal.variance_gpu_ms = 0.04;
+    frame.temporal.filter_iterations = 5;
+    frame.temporal.filter_gpu_ms = 0.6;
+    frame.temporal.radiance_bytes = 5000;
+    frame.temporal.filter_bytes = 800;
+    const FrameTimes denoised = MeasureFrame(frame, 3.0);
+    Check(Near(denoised.gpu_ms, 1.49) &&
+              Near(denoised.pass(GpuPass::TemporalVariance), 0.04) &&
+              Near(denoised.pass(GpuPass::TemporalFilter), 0.6) &&
+              Near(PassSum(denoised), denoised.gpu_ms),
+        "denoise: variance and filter add up to the GPU time");
+    TimingRecord record;
+    record.Add(frame, {}, {}, 3.0);
+    Check(record.memory().filter_bytes == 800 &&
+              record.memory().filter_current &&
+              record.memory().radiance_history_bytes == 5000,
+        "denoise memory");
+    frame.temporal.filter_iterations = 0;
+    frame.temporal.filter_bytes = 0;
+    record.Add(frame, {}, {}, 3.0);
+    Check(record.mean_frames() == 1 &&
+              record.memory().filter_bytes == 800 &&
+              !record.memory().filter_current,
+        "switching the filter off starts the mean again and retains its "
+        "buffer");
   }
 
   {

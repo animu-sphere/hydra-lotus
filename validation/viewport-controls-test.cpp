@@ -132,6 +132,62 @@ int main() {
   Check(Plan(controls).present.range == controls.weight_log10,
       "weight spans its decades");
 
+  // The denoiser filters the temporal radiance, which it turns on; the
+  // radiance views need one of the two.
+  controls = defaults;
+  controls.denoise = true;
+  const FramePlan denoised = Plan(controls, 4);
+  Check(denoised.temporal_frame && denoised.temporal.accumulate_radiance &&
+            denoised.temporal.filter_iterations ==
+                Lotus::kTemporalFilterIterations &&
+            denoised.settings.sample_index == 0 && !Progressive(controls),
+      "denoise renders filtered fresh temporal frames");
+  controls.filter_iterations = 0;
+  Check(Plan(controls).temporal.filter_iterations == 1,
+      "filter iterations clamp to 1");
+  controls.filter_iterations = 99;
+  Check(Plan(controls).temporal.filter_iterations ==
+            Lotus::kTemporalFilterMaxIterations,
+      "filter iterations clamp to the maximum");
+  controls = defaults;
+  controls.temporal_radiance = true;
+  Check(Plan(controls).temporal.filter_iterations == 0,
+      "temporal radiance alone does not filter");
+  for (const DebugView view : {DebugView::RawRadiance,
+           DebugView::AccumulatedRadiance, DebugView::HistoryLength,
+           DebugView::Variance}) {
+    controls = defaults;
+    controls.view = view;
+    Check(!ViewAvailable(controls, view) &&
+              Plan(controls).present.view == DebugView::Beauty,
+        std::string(Name(view)) + " falls back without temporal radiance");
+    controls.temporal_radiance = true;
+    Check(ViewAvailable(controls, view) &&
+              Plan(controls).present.view == view,
+        std::string(Name(view)) + " presents temporal radiance");
+    controls.temporal_radiance = false;
+    controls.denoise = true;
+    Check(ViewAvailable(controls, view) &&
+              Plan(controls).present.view == view,
+        std::string(Name(view)) + " presents the denoiser's input");
+  }
+  controls.view = DebugView::HistoryLength;
+  controls.history_samples = 12;
+  Check(Plan(controls).present.range[1] == 12.0F,
+      "history length spans the history samples");
+  controls.view = DebugView::Variance;
+  Check(Plan(controls).present.range == controls.variance_log10,
+      "variance spans its decades");
+  Check(Plan(controls).present.split == 1.0F,
+      "without a split the view fills the frame");
+  controls.split = true;
+  controls.split_position = 0.25F;
+  Check(Plan(controls).present.split == 0.25F, "the split position");
+  controls.split_position = 2.0F;
+  Check(Plan(controls).present.split == 1.0F, "the split clamps");
+  controls.view = DebugView::Beauty;
+  Check(Plan(controls).present.split == 1.0F, "beauty is not split");
+
   // Restarts follow the backend's accumulation key.
   Controls after = defaults;
   after.integrator = Integrator::Wavefront;
@@ -164,6 +220,10 @@ int main() {
   after.accumulate = false;
   Check(Restarts(defaults, after) && Restarts(after, defaults),
       "accumulation off restarts, and so does turning it on");
+  after = defaults;
+  after.denoise = true;
+  Check(Restarts(defaults, after) && Restarts(after, defaults),
+      "the denoiser leaves the progressive accumulation");
 
   for (const RestirMode mode : Lotus::viewport::kRestirModes) {
     Check(Lotus::viewport::ParseRestirMode(Name(mode)) == mode,

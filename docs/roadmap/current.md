@@ -43,8 +43,8 @@ ReSTIR, temporal), the sample count, the latest scene update's upload, BLAS
 and TLAS times and the reuse and scene memory, and the Hydra-enabled build
 opens stages from a native file dialog
 ([evidence](../reports/2026-10-18-viewport-timing.md)). The step is complete
-and shipped in [v0.5.2](../releases/v0.5.2.md); denoise timing joins the HUD
-with LOTUS-SVGF-03.
+and shipped in [v0.5.2](../releases/v0.5.2.md); denoise timing joined the
+HUD with [step 4](#step-4--svgf-in-the-viewport).
 
 ### Step 3 — SVGF core
 
@@ -78,9 +78,19 @@ identical outputs, reproduced bit for bit
 
 ### Step 4 — SVGF in the viewport
 
-- [ ] **LOTUS-SVGF-03 — Viewport integration.** Denoiser toggle at run time,
-  raw/filtered comparison, history and variance views, and live denoise
-  timing.
+The viewport switches the denoiser and its iteration count at run time
+(F2 or the developer UI) without resetting the history, presents the raw
+radiance, the unfiltered temporal mean, the history length and the variance
+from the GPU, and splits the frame to compare any of them with the filtered
+image. The HUD times the variance and filter passes and shows the filter's
+memory, and Hydra hosts reach the filter through `lotus:filterIterations`.
+Compact per-pixel guides cut the filter from 11.6 to 2.4 ms at 1280x720,
+reproducing the CPU oracle as before
+([evidence](../reports/2026-10-18-svgf-viewport.md),
+[usage](../guides/BUILDING.md#the-standalone-viewport)). With it Renderer
+Phase 6 meets its
+[exit criteria](../reports/2026-10-18-svgf-viewport.md#renderer-phase-6-exit).
+The step is complete.
 
 ### Step 5 — Release gate
 

@@ -43,12 +43,23 @@ struct Controls {
   bool temporal_radiance = false;
   // Effective samples a pixel's radiance history keeps, 1..65536.
   std::uint32_t history_samples = 32;
+  // SVGF: the edge-aware filter over the temporal radiance, which it turns
+  // on. Switching it never resets the history.
+  bool denoise = false;
+  // A-trous iterations, 1..kTemporalFilterMaxIterations.
+  std::uint32_t filter_iterations = kTemporalFilterIterations;
   DebugView view = DebugView::Beauty;
+  // Show the view left of `split_position` (a fraction of the width) and
+  // beauty right of it, as a comparison.
+  bool split = false;
+  float split_position = 0.5F;
   // The colour maps' spans: motion in pixels at full saturation, age in
-  // frames at full heat, and log10 of the contribution weight.
+  // frames at full heat, log10 of the contribution weight and log10 of the
+  // illumination variance. History length spans the history samples.
   float motion_pixels = 8.0F;
   float age_frames = 32.0F;
   std::array<float, 2> weight_log10{-2.0F, 2.0F};
+  std::array<float, 2> variance_log10{-4.0F, 1.0F};
 
   bool operator==(const Controls&) const = default;
 };
@@ -66,7 +77,8 @@ struct FramePlan {
 };
 
 // Whether `view` has its product under `controls`: the reservoir views
-// need reservoirs; every other view is always available.
+// need reservoirs, the radiance views temporal radiance or the denoiser;
+// every other view is always available.
 [[nodiscard]] bool ViewAvailable(const Controls& controls, DebugView view);
 
 // Whether the renderer adds each frame's sample to the accumulation
@@ -81,7 +93,8 @@ struct FramePlan {
 // Whether the frame after a change from `before` to `after` starts the
 // accumulation again (1 sample per pixel) rather than adding to it: always
 // without a progressive accumulation, and when the change reaches the
-// backend's accumulation key (integrator, estimator, candidates).
+// backend's accumulation key (integrator, estimator, candidates). The
+// temporal radiance history behind a fresh batch is the backend's to keep.
 [[nodiscard]] bool Restarts(const Controls& before, const Controls& after);
 
 // Names, as the command line and the developer UI spell them.
@@ -95,9 +108,11 @@ struct FramePlan {
 inline constexpr std::array<RestirMode, 5> kRestirModes{RestirMode::Off,
     RestirMode::Initial, RestirMode::Temporal, RestirMode::Spatial,
     RestirMode::Combined};
-inline constexpr std::array<DebugView, 8> kDebugViews{DebugView::Beauty,
+inline constexpr std::array<DebugView, 12> kDebugViews{DebugView::Beauty,
     DebugView::Depth, DebugView::Normal, DebugView::Motion,
-    DebugView::TemporalValidity, DebugView::ReservoirValidity,
+    DebugView::TemporalValidity, DebugView::RawRadiance,
+    DebugView::AccumulatedRadiance, DebugView::HistoryLength,
+    DebugView::Variance, DebugView::ReservoirValidity,
     DebugView::ReservoirAge, DebugView::ReservoirWeight};
 
 } // namespace Lotus::viewport

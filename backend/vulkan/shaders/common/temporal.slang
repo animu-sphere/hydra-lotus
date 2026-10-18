@@ -15,7 +15,7 @@ struct TemporalConstants {
   // absolute/relative depth tolerance, normal cosine, max pixel motion.
   float4 validation;
   uint4 history; // x: preceding frame available; y/z: full target extent.
-  uint4 radiance; // enabled, fresh samples, bounded history samples, reserved
+  uint4 radiance; // enabled, fresh samples, bounded history samples, filter iterations
 };
 [[vk::binding(8, 0)]] ConstantBuffer<TemporalConstants> temporal_frame;
 
@@ -191,9 +191,27 @@ float VarianceDepthStep(int2 a, int2 b, float depth, uint64_t instance_id) {
   return max(step, 0.0);
 }
 
+// The filter's buffer: two ping-pong halves of width*height records of
+// illumination and the variance of its luminance, then a guide of
+// width*height records. Iteration i reads half i % 2 and writes half
+// (i + 1) % 2; the variance pass writes half 0 and the guide. Guides are
+// stored bit for bit (asfloat), never computed with as floats.
+[[vk::binding(21, 0)]] RWStructuredBuffer<float4> temporal_filter;
+
+uint4 FilterGuide(uint index) {
+  return asuint(temporal_filter[2 * temporal_frame.history.y * temporal_frame.history.z + index]);
+}
+
+// A guide is the instance identity (x, y), the depth (z) and the packed
+// shading normal (w) of a pixel with a history, so that a tap reads one
+// 16-byte record rather than the surface and radiance records. Depths are
+// positive; this one marks a pixel without a history.
+static const uint kNoFilterGuide = 0xFFFFFFFFu;
+
 // Mirrors EstimateTemporalVariance: temporal variance from a long history,
 // SVGF's edge-aware 7x7 moments estimate, scaled up, from a short one. Only
-// the variance word is written; neighbours read the other words.
+// the variance word is written; neighbours read the other words. Before a
+// filtered frame's iterations it also writes their input and guides.
 public void EstimateTemporalVariance(float2 pixel) {
   const uint width = temporal_frame.history.y;
   const int2 p = int2(pixel);
@@ -234,23 +252,51 @@ public void EstimateTemporalVariance(float2 pixel) {
     }
   }
   temporal_radiance[index].variance = variance;
+  if (temporal_frame.radiance.w == 0)
+    return;
+  // Iteration 0's input: the illumination and the variance of its mean,
+  // variance / b for b batches of history.
+  const uint pixels = width * temporal_frame.history.z;
+  float4 input = float4(0.0);
+  uint4 guide = uint4(0u, 0u, kNoFilterGuide, 0u);
+  if (center.sample_count != 0) {
+    const TemporalPixel s = temporal_surface[index];
+    const float batches = float(center.sample_count) /
+        float(min(temporal_frame.radiance.y, temporal_frame.radiance.z));
+    input = float4(Demodulate(center.color.xyz, s.albedo), variance / batches);
+    guide = uint4(uint(s.instance_id), uint(s.instance_id >> 32), asuint(s.normal_depth.w),
+        s.shading_normal);
+  }
+  temporal_filter[index] = input;
+  temporal_filter[2 * pixels + index] = asfloat(guide);
 }
 
-// The filter's two ping-pong halves of width*height records: illumination
-// and the variance of its luminance. Iteration i writes half i % 2.
-[[vk::binding(21, 0)]] RWStructuredBuffer<float4> temporal_filter;
-
-// Iteration 0 reads the accumulated radiance: its illumination and the
-// variance of its mean, variance / b for b batches of history.
 float4 FilterInput(uint index, uint iteration) {
-  if (iteration != 0) {
-    const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
-    return temporal_filter[((iteration - 1) & 1) * pixels + index];
+  const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
+  return temporal_filter[(iteration & 1) * pixels + index];
+}
+
+// Mirrors VarianceNeighbour from the guides: a history on the same placement.
+bool FilterNeighbour(int2 q, uint2 instance, out uint4 guide) {
+  guide = uint4(0u, 0u, kNoFilterGuide, 0u);
+  const uint2 extent = temporal_frame.history.yz;
+  if (any(q < 0) || q.x >= int(extent.x) || q.y >= int(extent.y))
+    return false;
+  guide = FilterGuide(uint(q.y) * extent.x + uint(q.x));
+  return guide.z != kNoFilterGuide && all(guide.xy == instance);
+}
+
+// Mirrors VarianceDepthStep from the guides.
+float FilterDepthStep(int2 a, int2 b, float depth, uint2 instance) {
+  float step = -1.0; // No usable neighbour yet.
+  uint4 guide;
+  if (FilterNeighbour(a, instance, guide))
+    step = abs(depth - asfloat(guide.z));
+  if (FilterNeighbour(b, instance, guide)) {
+    const float other = abs(depth - asfloat(guide.z));
+    step = step < 0.0 ? other : min(step, other);
   }
-  const TemporalRadiancePixel r = temporal_radiance[index];
-  const float batches = float(r.sample_count) /
-      float(min(temporal_frame.radiance.y, temporal_frame.radiance.z));
-  return float4(Demodulate(r.color.xyz, temporal_surface[index].albedo), r.variance / batches);
+  return max(step, 0.0);
 }
 
 static const float kFilterKernel[3] = {0.375, 0.25, 0.0625};
@@ -261,15 +307,17 @@ static const float kFilterKernel[3] = {0.375, 0.25, 0.0625};
 float4 FilterIteration(int2 p, uint iteration) {
   const uint width = temporal_frame.history.y;
   const uint index = uint(p.y) * width + uint(p.x);
-  if (temporal_radiance[index].sample_count == 0)
+  const uint4 center = FilterGuide(index);
+  if (center.z == kNoFilterGuide)
     return float4(0.0);
-  const TemporalPixel s = temporal_surface[index];
+  const uint2 instance = center.xy;
+  uint4 guide;
   float gaussian = 0.0;
   float gaussian_weight = 0.0;
   for (int dy = -1; dy <= 1; ++dy) {
     for (int dx = -1; dx <= 1; ++dx) {
       const int2 q = p + int2(dx, dy);
-      if (!VarianceNeighbour(q, s.instance_id))
+      if (!FilterNeighbour(q, instance, guide))
         continue;
       const float k = (dx == 0 ? 0.5 : 0.25) * (dy == 0 ? 0.5 : 0.25);
       gaussian += k * FilterInput(uint(q.y) * width + uint(q.x), iteration).w;
@@ -277,10 +325,10 @@ float4 FilterIteration(int2 p, uint iteration) {
     }
   }
   const float phi_l = 4.0 * sqrt(max(gaussian / gaussian_weight, 0.0) + 1.0e-10);
-  const float depth = s.normal_depth.w;
-  const float phi_z = max(VarianceDepthStep(p - int2(1, 0), p + int2(1, 0), depth, s.instance_id) +
-      VarianceDepthStep(p - int2(0, 1), p + int2(0, 1), depth, s.instance_id), 1.0e-8);
-  const float3 normal = UnpackNormal(s.shading_normal);
+  const float depth = asfloat(center.z);
+  const float phi_z = max(FilterDepthStep(p - int2(1, 0), p + int2(1, 0), depth, instance) +
+      FilterDepthStep(p - int2(0, 1), p + int2(0, 1), depth, instance), 1.0e-8);
+  const float3 normal = UnpackNormal(center.w);
   const float luminance = Luminance(float4(FilterInput(index, iteration).xyz, 0.0));
   const int step = 1 << iteration;
   float3 sum = float3(0.0);
@@ -289,16 +337,16 @@ float4 FilterIteration(int2 p, uint iteration) {
   for (int ty = -2; ty <= 2; ++ty) {
     for (int tx = -2; tx <= 2; ++tx) {
       const int2 q = p + int2(tx, ty) * step;
-      if (!VarianceNeighbour(q, s.instance_id))
+      if (!FilterNeighbour(q, instance, guide))
         continue;
       const uint qi = uint(q.y) * width + uint(q.x);
       const float4 value = FilterInput(qi, iteration);
       float w = kFilterKernel[abs(tx)] * kFilterKernel[abs(ty)];
       if (tx != 0 || ty != 0) {
         const float distance = float(step) * sqrt(float(tx * tx + ty * ty));
-        const float wz = abs(depth - temporal_surface[qi].normal_depth.w) / (phi_z * distance);
+        const float wz = abs(depth - asfloat(guide.z)) / (phi_z * distance);
         const float wl = abs(luminance - Luminance(float4(value.xyz, 0.0))) / phi_l;
-        const float3 other = UnpackNormal(temporal_surface[qi].shading_normal);
+        const float3 other = UnpackNormal(guide.w);
         const float wn = pow(saturate(dot(normal, other)), 128.0);
         w = w * exp(-(wl + wz)) * wn;
       }
@@ -313,7 +361,7 @@ float4 FilterIteration(int2 p, uint iteration) {
 public void FilterTemporalRadiance(float2 pixel, uint iteration) {
   const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
   const int2 p = int2(pixel);
-  temporal_filter[(iteration & 1) * pixels + uint(p.y) * temporal_frame.history.y + uint(p.x)] =
+  temporal_filter[((iteration + 1) & 1) * pixels + uint(p.y) * temporal_frame.history.y + uint(p.x)] =
       FilterIteration(p, iteration);
 }
 

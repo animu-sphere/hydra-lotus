@@ -88,6 +88,18 @@ int main() {
   Check(Parse({"--view", "temporal-validity"}).controls.view ==
             DebugView::TemporalValidity,
       "a temporal view without reuse");
+  Check(!initial.denoise && !initial.split &&
+            initial.filter_iterations == Lotus::kTemporalFilterIterations,
+      "the denoiser is off by default");
+  const auto denoise = Parse({"--denoise", "--filter-iterations", "3",
+      "--view", "variance", "--split"});
+  Check(denoise.controls.denoise && denoise.controls.filter_iterations == 3 &&
+            denoise.controls.view == DebugView::Variance &&
+            denoise.controls.split,
+      "denoiser controls");
+  Check(Parse({"--temporal-radiance", "--view", "raw"}).controls.view ==
+            DebugView::RawRadiance,
+      "a radiance view with temporal radiance");
   Check(Parse({"--fullscreen"}).fullscreen, "fullscreen");
   Check(Parse({"--help"}).help, "help");
 
@@ -119,6 +131,11 @@ int main() {
   Check(Rejects({"--view", "albedo"}), "view name");
   Check(Rejects({"--view", "reservoir-weight"}),
       "a reservoir view without reservoirs");
+  Check(Rejects({"--view", "history-length"}),
+      "a radiance view without temporal radiance");
+  Check(Rejects({"--filter-iterations", "0"}), "zero filter iterations");
+  Check(Rejects({"--filter-iterations", "9"}), "too many filter iterations");
+  Check(Rejects({"--split"}), "a split without a view");
   Check(Rejects({"--bogus"}), "unknown option");
   Check(Lotus::viewport::Usage(true).find("--usd <stage>") !=
             std::string::npos,

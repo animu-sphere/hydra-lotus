@@ -109,6 +109,9 @@ public:
   // default); lotus:historySamples bounds its effective sample count.
   // lotus:historyKey changes compatibility; changing lotus:historyReset
   // cuts history once, on the next successful temporal frame.
+  // lotus:filterIterations (0 by default, clamped to [0, 8]) filters
+  // lotus:temporal's colour with SVGF's edge-aware a-trous filter; the
+  // history stays unfiltered, so changing it never resets the history.
   // lotus:restir selects primary direct-light reservoirs, overriding
   // lotus:lightSampling. Candidate/count/radius settings are bounded;
   // lotus:restirTemporal and lotus:restirSpatial select continuous reuse
@@ -136,7 +139,8 @@ public:
   void SetPresentation(const Lotus::PresentOptions& presentation);
   // What a presenting pass shows (Lotus::OffscreenRenderer::Present). A
   // temporal debug view renders the pass through RenderTemporalScene, for
-  // its primary-surface products; a reservoir view needs lotus:restir.
+  // its primary-surface products; a radiance view needs lotus:temporal and
+  // a reservoir view lotus:restir.
   void SetPresentView(const Lotus::PresentView& view);
   // The latest presenting pass's presentation; empty before the first.
   [[nodiscard]] Lotus::PresentEvidence GetPresentEvidence();

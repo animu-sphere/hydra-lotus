@@ -100,6 +100,14 @@ Options ParseOptions(int argc, const char* const* argv) {
       result.controls.restir = *mode;
     } else if (option == "--temporal-radiance") {
       result.controls.temporal_radiance = true;
+    } else if (option == "--denoise") {
+      result.controls.denoise = true;
+    } else if (option == "--filter-iterations") {
+      result.controls.filter_iterations = static_cast<std::uint32_t>(
+          ReadUnsigned(next(), option, kTemporalFilterMaxIterations));
+      if (result.controls.filter_iterations == 0) {
+        throw std::invalid_argument("--filter-iterations must be at least 1");
+      }
     } else if (option == "--no-accumulation") {
       result.controls.accumulate = false;
     } else if (option == "--view") {
@@ -107,10 +115,12 @@ Options ParseOptions(int argc, const char* const* argv) {
       if (!view) {
         throw std::invalid_argument(
             "--view must be beauty, depth, normal, motion, "
-            "temporal-validity, reservoir-validity, reservoir-age or "
-            "reservoir-weight");
+            "temporal-validity, raw, accumulated, history-length, variance, "
+            "reservoir-validity, reservoir-age or reservoir-weight");
       }
       result.controls.view = *view;
+    } else if (option == "--split") {
+      result.controls.split = true;
     } else if (option == "--hidden") {
       result.visible = false;
     } else if (option == "--fullscreen") {
@@ -165,7 +175,12 @@ Options ParseOptions(int argc, const char* const* argv) {
     throw std::invalid_argument("--camera and --time need --usd");
   }
   if (!ViewAvailable(result.controls, result.controls.view)) {
-    throw std::invalid_argument("the reservoir views need --restir");
+    throw std::invalid_argument(
+        "the reservoir views need --restir; the radiance views need "
+        "--temporal-radiance or --denoise");
+  }
+  if (result.controls.split && result.controls.view == DebugView::Beauty) {
+    throw std::invalid_argument("--split needs a --view other than beauty");
   }
   return result;
 }
@@ -188,10 +203,16 @@ std::string Usage(bool hydra) {
       "  --restir off|initial|temporal|spatial|combined\n"
       "                           reservoir direct lighting (default off)\n"
       "  --temporal-radiance      reuse each pixel's radiance history\n"
+      "  --denoise                SVGF-filter the temporal radiance (turns\n"
+      "                           it on)\n"
+      "  --filter-iterations N    a-trous iterations, 1-8 (default 5)\n"
       "  --no-accumulation        one fresh sample per pixel every frame\n"
       "  --view <name>            beauty, depth, normal, motion,\n"
-      "                           temporal-validity, reservoir-validity,\n"
-      "                           reservoir-age or reservoir-weight\n"
+      "                           temporal-validity, raw, accumulated,\n"
+      "                           history-length, variance,\n"
+      "                           reservoir-validity, reservoir-age or\n"
+      "                           reservoir-weight\n"
+      "  --split                  the view left, beauty right\n"
       "  --vsync on|off           FIFO, or immediate/mailbox present\n"
       "  --frames N               exit after N presented frames\n"
       "  --hidden                 do not show the window\n"
@@ -206,7 +227,7 @@ std::string Usage(bool hydra) {
       "selects the next authored camera, Left/Right step the time code and\n"
       "R reloads the layers. F11 toggles fullscreen; Esc or closing the\n"
       "window exits. The Renderer window changes the settings above while\n"
-      "the viewport runs; F1 hides and shows it.\n";
+      "the viewport runs; F1 hides and shows it, F2 switches the denoiser.\n";
   return usage;
 }
 

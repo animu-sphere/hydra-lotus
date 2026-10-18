@@ -265,6 +265,7 @@ const TfToken kTemporalSetting("lotus:temporal");
 const TfToken kHistorySamplesSetting("lotus:historySamples");
 const TfToken kHistoryKeySetting("lotus:historyKey");
 const TfToken kHistoryResetSetting("lotus:historyReset");
+const TfToken kFilterIterationsSetting("lotus:filterIterations");
 const TfToken kMotionAov("lotus:motion");
 const TfToken kHistoryLengthAov("lotus:historyLength");
 const TfToken kHistoryValidityAov("lotus:historyValidity");
@@ -770,7 +771,7 @@ public:
     // The temporal debug views present the primary-surface products.
     const bool present_temporal =
         present && present_view_.view != Lotus::DebugView::Beauty &&
-        present_view_.view < Lotus::DebugView::ReservoirValidity;
+        present_view_.view <= Lotus::DebugView::TemporalValidity;
     const bool temporal_products = temporal.accumulate_radiance || reservoir_reuse ||
                                    present_temporal ||
                                    std::any_of(bindings.begin(), bindings.end(), [](const auto& binding) {
@@ -1905,6 +1906,12 @@ private:
         delegate.GetRenderSetting<int>(kHistorySamplesSetting, 32), 1, 65536));
     temporal.history_key = static_cast<std::uint64_t>(std::max(
         delegate.GetRenderSetting<int>(kHistoryKeySetting, 0), 0));
+    // The filter needs the accumulation; without it the setting is unused.
+    if (temporal.accumulate_radiance) {
+      temporal.filter_iterations = static_cast<std::uint32_t>(std::clamp(
+          delegate.GetRenderSetting<int>(kFilterIterationsSetting, 0), 0,
+          static_cast<int>(Lotus::kTemporalFilterMaxIterations)));
+    }
     state_->Render(*render_pass_state, Settings(), temporal,
         delegate.GetRenderSetting<int>(kHistoryResetSetting, 0),
         temporal_view_,
@@ -2459,7 +2466,9 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
       {"Temporal radiance accumulation", kTemporalSetting, VtValue(false)},
       {"Temporal history samples", kHistorySamplesSetting, VtValue(32)},
       {"Temporal history compatibility key", kHistoryKeySetting, VtValue(0)},
-      {"Temporal history reset counter", kHistoryResetSetting, VtValue(0)}};
+      {"Temporal history reset counter", kHistoryResetSetting, VtValue(0)},
+      {"Temporal filter iterations (SVGF)", kFilterIterationsSetting,
+          VtValue(0)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {
