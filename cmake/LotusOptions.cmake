@@ -22,6 +22,9 @@ if("viewport" IN_LIST OST_RENDERER_ADAPTERS)
     "Build the optional GLFW/Vulkan viewport adapter" FORCE)
 endif()
 option(LOTUS_BUILD_TESTS "Build renderer contract and install-tree tests" ON)
+# Research-tier tests re-run closed research procedures; the `research`
+# intent registers them (docs/design/TEST_POLICY.md).
+option(LOTUS_RESEARCH_TESTS "Register research-tier CTests" OFF)
 
 foreach(_adapter IN ITEMS HYDRA2 VIEWPORT)
   if(LOTUS_ENABLE_${_adapter} AND NOT LOTUS_ENABLE_VULKAN)

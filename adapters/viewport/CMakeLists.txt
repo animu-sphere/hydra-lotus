@@ -179,10 +179,12 @@ if(LOTUS_BUILD_TESTS)
   endif()
   # Presentation shares the GPU and the desktop; keep it serial.
   set_tests_properties(${_lotus_viewport_gpu_tests} PROPERTIES
-    LABELS "gpu;viewport;presentation"
+    LABELS "viewport;presentation"
     SKIP_RETURN_CODE 77
     RUN_SERIAL TRUE
     TIMEOUT 120)
   set_tests_properties(lotus-viewport-no-driver PROPERTIES
     LABELS "viewport;presentation")
+  lotus_test_tier(gpu ${_lotus_viewport_gpu_tests})
+  lotus_test_tier(fast lotus-viewport-no-driver)
 endif()

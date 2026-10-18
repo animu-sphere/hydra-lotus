@@ -129,14 +129,14 @@ The same module owns the rough dielectric/metal, rect/sphere-light workload
 pair and its additional left dielectric screen-band errors.
 `validation/restir-benchmark-test.cmake` checks both integrators, all three
 candidate proposals and capability handling, with a Vulkan-only missing-driver
-regression. Proposal selection and marginal densities live in
+regression; the workload and proposal variants are research-tier tests. Proposal selection and marginal densities live in
 `shaders/common/scene.slang`; the plain-C++ `RestirProposal` selector stays in
 `PathTracingSettings`. No new library target is introduced.
 
 The same headless module selects measured/reference scattering depth and the
 finite-reference seed. `validation/restir-controls-test.cmake` checks default
 procedures, reference-seed isolation from measured radiance, and the effect of
-scattering depth on saved images under both integrators.
+scattering depth on saved images under both integrators (research tier).
 
 `scripts/restir_budget.py` reduces repeated headless comparison reports into
 observed static quality budgets and moving error summaries. It uses Python's
@@ -209,6 +209,7 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
 | Build | How | Runtime profile | OpenUSD |
 | --- | --- | --- | --- |
 | default | `ost build` | `core` (from `openstrata.toml`) | none |
+| research-tier tests | `ost build --intent research` | `core` | none |
 | core CI | `ost build --without-runtime --intent ci-core` | none; Vulkan disabled | none |
 | Hydra adapter | `ost build --profile lookdev --intent hydra` | `lookdev` or `usd` (a real runtime) | yes |
 | standalone viewport | `ost renderer viewport` | `core` | none |
@@ -216,13 +217,15 @@ backend/vulkan ──→ core/render-extraction ──→ core/render-world
 
 The `hydra` intent is declared in `openstrata.toml`
 (`LOTUS_ENABLE_HYDRA2=ON`), and so is `viewport-usd`
-(`LOTUS_ENABLE_HYDRA2=ON`, `LOTUS_ENABLE_VIEWPORT=ON`). `ost renderer view` requests the same adapter
+(`LOTUS_ENABLE_HYDRA2=ON`, `LOTUS_ENABLE_VIEWPORT=ON`), and `research`
+(`LOTUS_RESEARCH_TESTS=ON`, the [research tier](../design/TEST_POLICY.md#2-tiers)). `ost renderer view` requests the same adapter
 through `OST_RENDERER_ADAPTERS=hydra2`.
 
 `openstrata.ci.yaml` owns the CI cells and runtime artifact pins. The registered
 external workflow `.github/workflows/renderer-ci.yml` consumes their resolved
 values through `ost ci matrix`, runs both cells on Windows hosted runners for
-PRs, main pushes and manual dispatch, and uploads reports and test logs.
+PRs (except those changing only documentation), main pushes and manual
+dispatch, and uploads reports and test logs.
 OpenStrata's plugin workspace generator is not used for this renderer
 ([measured limitations](../reports/2026-10-04-foundation-ci.md)).
 
@@ -247,6 +250,7 @@ includes the shared modules and adds the directories.
 | Module or directory | Owns |
 | --- | --- |
 | `cmake/LotusOptions.cmake` | The `LOTUS_` options and their consistency checks |
+| `cmake/LotusTesting.cmake` | `lotus_test_tier`, which gives a CTest its [tier](../design/TEST_POLICY.md#2-tiers) |
 | `cmake/LotusWarnings.cmake` | `Lotus::Warnings`, the compiler policy every Lotus target links `PRIVATE` |
 | `cmake/LotusShaders.cmake` | `lotus_add_slang_shader`, `lotus_stage_shaders`, `lotus_install_shaders` |
 | `cmake/LotusInstall.cmake` | The SDK install (core and backend libraries, headers, OpenStrata descriptors) and the `Lotus` package export |

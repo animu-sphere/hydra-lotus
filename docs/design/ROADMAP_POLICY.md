@@ -468,7 +468,8 @@ Lotus tests the renderer's architecture as well as its images.
 | Performance | repeatable baseline before Renderer Phase 2, then tracked across changes: GPU frame time; samples/s; rays/s; primary rays/s; shadow rays/s; queue occupancy; VRAM usage; BLAS / TLAS build time; scene upload time |
 
 A measurement is a [report](../reports/); the documentation guidelines say
-what a report names.
+what a report names. Where each check runs, and which become permanent tests,
+is the [test policy](TEST_POLICY.md).
 
 ## 8. Milestones
 

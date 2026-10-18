@@ -631,8 +631,12 @@ definition.
 
 CTest `lotus-renderer-restir-benchmark-reference` and `-wavefront` check both
 workloads, candidate/mode populations, fresh memory accounting, history,
-static integral means, output images and CLI preservation. The `-mixed`
-variants check the alternate scene identities, finite-reference labelling,
+static integral means, output images and CLI preservation. The remaining
+checks in this paragraph are Renderer Phase 5's campaign procedures, in the
+[research tier](../design/TEST_POLICY.md#2-tiers): the `research` build
+intent registers them, alongside `lotus-renderer-restir-controls-reference`
+and `-wavefront`, and the `-uniform` and `-power-uniform` proposal variants.
+The `-mixed` variants check the alternate scene identities, finite-reference labelling,
 boundary metrics and all reservoir modes under both integrators. The `-glossy`
 variants check the camera-disocclusion suite and both regional measurements. The
 four-bounce `-interreflection` variants check the closed-room identities,

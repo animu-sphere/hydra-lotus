@@ -119,7 +119,7 @@ add_test(NAME lotus-renderer-hydra-texture
   COMMAND lotus-hydra2-texture-test)
 add_test(NAME lotus-renderer-hydra-texture-gpu
   COMMAND lotus-hydra2-texture-test --gpu)
-set_tests_properties(
+set(_lotus_hydra_gpu_tests
   lotus-renderer-hydra-aov
   lotus-renderer-hydra-render-pass-gpu
   lotus-renderer-hydra-deterministic
@@ -131,12 +131,17 @@ set_tests_properties(
   lotus-renderer-hydra-analytic-lights-gpu
   lotus-renderer-hydra-dome-texture-gpu
   lotus-renderer-hydra-material-gpu
-  lotus-renderer-hydra-texture-gpu
-  PROPERTIES LABELS "gpu" SKIP_RETURN_CODE 77)
-# Every test above loads the OpenUSD runtime's DLLs.
+  lotus-renderer-hydra-texture-gpu)
+set_tests_properties(${_lotus_hydra_gpu_tests} PROPERTIES SKIP_RETURN_CODE 77)
+# Every test above loads the OpenUSD runtime's DLLs; the rest need no device.
 get_directory_property(_lotus_hydra_tests TESTS)
-set_tests_properties(${_lotus_hydra_tests} PROPERTIES ENVIRONMENT_MODIFICATION
+set_tests_properties(${_lotus_hydra_tests} PROPERTIES LABELS hydra
+  ENVIRONMENT_MODIFICATION
   "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/bin;PATH=path_list_prepend:${LOTUS_PXR_ROOT}/lib")
+set(_lotus_hydra_fast_tests ${_lotus_hydra_tests})
+list(REMOVE_ITEM _lotus_hydra_fast_tests ${_lotus_hydra_gpu_tests})
+lotus_test_tier(gpu ${_lotus_hydra_gpu_tests})
+lotus_test_tier(fast ${_lotus_hydra_fast_tests})
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 find_program(LOTUS_TESTUSDVIEW testusdview
@@ -161,10 +166,11 @@ if(Python3_Interpreter_FOUND AND LOTUS_TESTUSDVIEW AND
       "-DRENDERER_TEST_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/usdview_smoke_test.py"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/run_usdview_smoke.cmake")
   set_tests_properties(lotus-renderer-usdview-host PROPERTIES
-    LABELS "host-smoke;gpu"
+    LABELS "host-smoke;hydra"
     SKIP_REGULAR_EXPRESSION "SKIP usdview smoke:"
     TIMEOUT 210
     RUN_SERIAL TRUE)
+  lotus_test_tier(gpu lotus-renderer-usdview-host)
 else()
   message(STATUS
     "testusdview, matching Python, or a display is unavailable; usdview host evidence will be SKIP")

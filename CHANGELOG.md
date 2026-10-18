@@ -7,6 +7,26 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- A [test policy](docs/design/TEST_POLICY.md): every CTest carries one tier
+  label — `fast` (no Vulkan device), `gpu` (renders when a device is present)
+  or `research` (a closed campaign's procedures) — given with
+  `lotus_test_tier`, and `lotus-test-tiers` fails a test with none or several
+  ([guide](docs/guides/BUILDING.md#test-tiers)).
+- The `research` build intent (`LOTUS_RESEARCH_TESTS=ON`) registers the
+  research tier.
+
+### Changed
+
+- Renderer Phase 5's reservoir benchmark workload and proposal variants and
+  procedure controls (18 CTests) moved to the research tier; the default
+  suite keeps the reservoir arithmetic, the GPU reservoir lifecycle, the
+  distant reservoir benchmark under both integrators and the Hydra reservoir
+  checks.
+- Renderer CI skips the core and Hydra cells for a pull request that changes
+  only documentation; main pushes, dispatches and release calls always build.
+
 ## [0.5.2] - 2026-10-18
 
 The viewport foundation release makes `lotus-viewport` the renderer's

@@ -49,6 +49,18 @@ ost build --without-runtime --intent ci-core --jobs auto
 ost test --without-runtime --intent ci-core
 ```
 
+For changes to code a closed research campaign measured, such as the
+reservoir passes or the reservoir benchmark, also run the research tier:
+
+```sh
+ost build --intent research --jobs auto
+ost test --intent research --jobs 8
+```
+
+Every new CTest takes one tier with `lotus_test_tier`; the
+[test policy](docs/design/TEST_POLICY.md) says which, and what a permanent
+test must justify.
+
 Report missing capabilities and checks you could not run. A GPU or runtime
 SKIP explains coverage; it does not establish rendering correctness.
 The build guide documents the Windows incremental-header rebuild limitation.

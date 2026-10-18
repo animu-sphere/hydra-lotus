@@ -22,6 +22,7 @@ include(LotusWarnings)
 
 if(LOTUS_BUILD_TESTS)
   include(CTest)
+  include(LotusTesting)
 endif()
 
 add_subdirectory(core/render-world)
