@@ -287,7 +287,7 @@ validity pass and excludes host writes and readback. Unavailable timestamps
 report false/zero. `validity_bytes` counts the persistent device output and
 host readback mirror (32 bytes per pixel), separately from `surface_bytes`.
 The two passes have explicit shader-write/read and transfer/readback barriers.
-The validity pipeline and six-query timestamp pool are created at renderer
+The validity pipeline and eight-query timestamp pool are created at renderer
 initialization; fixed extents reuse buffers and resize replaces them.
 History is published only after both passes, readbacks and timestamps succeed.
 No transport, reservoir or denoiser state enters validity.
@@ -351,20 +351,58 @@ remain per-frame controls and do not reset the stream globally.
 
 `TemporalProducts::radiance` and `previous_radiance` are 32-byte
 `TemporalRadiancePixel` debug records: linear RGBA `color`, uint32
-`sample_count` and three zero reserved words. The rows are top-left and
-`radiance_row_pitch` is width * 32. Previous records are absent on a reset.
-The colour attachment receives the temporal mean; the D32 attachment keeps
-ordinary primary depth. `radiance_available` is false in metadata-only mode.
+`sample_count` (the history length), the luminance `moments` and their
+`variance` ([below](#luminance-moments-and-variance)). The rows are top-left
+and `radiance_row_pitch` is width * 32. Previous records are absent on a
+reset; a pixel's reprojected history is
+`previous_radiance[validity[i].previous_index]` wherever a fetch took place.
+`batch` is the raw radiance: the fresh RGBA batch mean the accumulation read,
+16 bytes per pixel in the same rows. The colour attachment receives the
+temporal mean; the D32 attachment keeps ordinary primary depth.
+`radiance_available` is false in metadata-only mode.
 
-`accumulation_gpu_ms` uses a separate timestamp pair in the persistent
-six-query pool, with the existing `timestamp_available` flag. It measures
-the accumulation draw, excluding batch copy, transport and readbacks.
-`radiance_bytes` counts two device history buffers, their two-buffer host
-readback mirror and the fresh RGBA device batch: 144 bytes per pixel. These
-buffers persist at a fixed extent and are replaced on resize; returned
-evidence vectors and Vulkan allocation alignment are outside this accounting.
-The pipeline is created at renderer initialization. History and RNG state
-publish only after the passes, readbacks and timestamps succeed.
+`accumulation_gpu_ms` and `variance_gpu_ms` use separate timestamp pairs in
+the persistent eight-query pool, with the existing `timestamp_available`
+flag. They measure the accumulation and variance draws, excluding batch
+copy, transport and readbacks. `radiance_bytes` counts two device history
+buffers, their two-buffer host readback mirror, and the fresh RGBA device
+batch with its host mirror: 160 bytes per pixel. These buffers persist at a
+fixed extent and are replaced on resize; returned evidence vectors and
+Vulkan allocation alignment are outside this accounting. The pipelines are
+created at renderer initialization. History and RNG state publish only after
+the passes, readbacks and timestamps succeed.
+
+### Luminance moments and variance
+
+The accumulation also keeps the first two moments of each fresh batch mean's
+luminance, `L = 0.2126 R + 0.7152 G + 0.0722 B` of the linear colour
+(`TemporalLuminance`): a fresh history starts at `(L, L^2)`, and an accepted
+one blends its previous moments with the colour's weights `n` and `h`.
+Misses and pixels outside the windows have zero moments. Previous moments
+that are not finite are not reused, like a non-finite previous colour. The
+inputs are the noisy radiance and the shared surface metadata only: the
+moments do not depend on the integrator, the light estimator or reservoirs.
+
+A fourth fullscreen pass, after every pixel's moments exist, writes
+`variance`: an estimate of the variance of one fresh batch mean's luminance.
+With `b = sample_count / min(batch_samples, max_history_samples)` batches of
+history:
+
+- `b >= 4` (`kTemporalVarianceBatches`): the temporal variance
+  `max(0, m2 - m1^2)`. It divides by the batches, not one fewer, as SVGF does.
+- `b < 4`, including every rejected or reset pixel: SVGF's spatial estimate.
+  The moments of the 7x7 neighbourhood's histories on the same placement are
+  averaged with weight `exp(-(|m1 - m1_q| / 10 + |z - z_q| / (phi * d))) *
+  max(0, n . n_q)^128`, where `z` is linear depth, `n` the geometric normal,
+  `d` the pixel distance and `phi` three times the local depth gradient (per
+  axis the smaller step to a usable neighbour, the two axes summed). Their
+  variance is scaled by `4 / b`, so short histories err on the noisy side.
+- Pixels without a history have zero variance.
+
+The accumulated colour's own variance is about `variance / b`; the filter
+that consumes these products (LOTUS-SVGF-02) decides how it uses them.
+`EstimateTemporalVariance` in `temporal.hpp` is the CPU oracle over the same
+records; the GPU test compares every pixel of every radiance frame with it.
 
 Nearest history fetch, geometric rejection and bounded weighting supply this
 foundation. There is no radiance neighbourhood clamp, history filtering,
@@ -399,6 +437,9 @@ fresh batches, static convergence with progressive transport, and moving
 sequences with 256-sample reference images, including cap saturation,
 disocclusion, global resets and failed-call recovery
 ([radiance evidence](../reports/2026-10-12-temporal-radiance.md)).
+It compares every moment with the independent batches and every variance
+with the CPU oracle, and requires both the temporal and spatial estimates
+([moments and variance evidence](../reports/2026-10-18-svgf-moments-variance.md)).
 History filtering remains outside this implementation. Hydra controls and
 AOV bindings are described [above](#hydra-controls-and-debug-aovs).
 Geometry deformation is conservatively rejected.

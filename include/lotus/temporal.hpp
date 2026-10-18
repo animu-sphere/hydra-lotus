@@ -170,8 +170,35 @@ struct TemporalRadiancePixel {
   std::array<float, 4> color{};
   // Zero on misses and outside the data window; such pixels never reuse.
   std::uint32_t sample_count = 0;
-  std::array<std::uint32_t, 3> reserved{};
+  // First and second moments of each fresh batch mean's luminance
+  // (TemporalLuminance), weighted as the colour is.
+  std::array<float, 2> moments{};
+  // Estimated variance of one fresh batch mean's luminance
+  // (EstimateTemporalVariance); zero where sample_count is zero.
+  float variance = 0.0F;
 };
+
+// Rec. 709 luminance of linear RGB, as the GPU moments use it.
+[[nodiscard]] float TemporalLuminance(const std::array<float, 4>& color);
+
+// Histories this many batches long use their temporal variance; shorter ones
+// estimate it from the surrounding pixels' moments.
+inline constexpr std::uint32_t kTemporalVarianceBatches = 4;
+
+// CPU oracle for the GPU variance pass at pixel (x, y). A history of
+// b = sample_count / min(batch_samples, max_history_samples) batches has
+// variance max(0, m2 - m1^2) when b >= kTemporalVarianceBatches. A shorter
+// history uses SVGF's estimate: the moments of the 7x7 neighbourhood's
+// histories on the same placement, weighted by geometric normal (cosine to
+// the 128th power), linear depth (against three times the local depth
+// gradient per pixel of distance) and first-moment luminance (difference
+// over 10), times kTemporalVarianceBatches / b. Spans hold width*height
+// records of one frame; batch_samples is the frame's fresh batch.
+[[nodiscard]] float EstimateTemporalVariance(
+    std::span<const TemporalPixel> surface,
+    std::span<const TemporalRadiancePixel> radiance, std::uint32_t x,
+    std::uint32_t y, std::uint32_t width, std::uint32_t height,
+    std::uint32_t batch_samples, std::uint32_t max_history_samples);
 
 // CPU oracle for the GPU's nearest-pixel backward fetch (floor of the
 // continuous previous pixel). History must contain width*height records,

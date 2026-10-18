@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/vulkan_backend.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -466,6 +467,8 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   std::uint32_t next_index = settings.sample_index;
   std::uint64_t compared = 0, reused = 0, rejected_hits = 0;
   double max_blend_error = 0, moving_mse = 0, fresh_moving_mse = 0;
+  double max_moment_error = 0, max_variance_error = 0;
+  std::uint64_t temporal_variance = 0, spatial_variance = 0;
   std::uint32_t moving_comparisons = 0;
   auto Fresh = [&](std::uint32_t index, std::uint32_t samples) {
     auto path = settings;
@@ -493,7 +496,8 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
     Check(product.radiance_available && product.radiance.size() == target.width * target.height &&
               product.radiance_row_pitch == target.width * sizeof(TemporalRadiancePixel),
         "radiance debug layout");
-    Check(product.radiance_bytes == std::uint64_t{target.width} * target.height * 144, "radiance memory");
+    Check(product.radiance_bytes == std::uint64_t{target.width} * target.height * 160, "radiance memory");
+    Check(product.batch.size() == product.radiance.size(), "raw radiance layout");
     Check(product.batch_samples == std::min(samples, settings.max_samples == 0 ? samples : settings.max_samples),
         "fresh batch sample count");
     if (!product.history_available)
@@ -522,8 +526,39 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
         ++reused;
       } else if (hit)
         ++rejected_hits;
-      Check(actual.sample_count == fresh_count + kept && actual.reserved == std::array<std::uint32_t, 3>{},
-          "bounded history sample count");
+      Check(actual.sample_count == fresh_count + kept, "bounded history sample count");
+      for (unsigned c = 0; c < 4; ++c)
+        Check(std::abs(product.batch[i][c] - batch[i * 4 + c]) < 0.00002,
+            "raw radiance differs from independent fresh batch");
+      // Luminance moments blend with the colour's weights; misses have none.
+      const double luminance = TemporalLuminance(
+          {batch[i * 4], batch[i * 4 + 1], batch[i * 4 + 2], batch[i * 4 + 3]});
+      for (unsigned m = 0; m < 2; ++m) {
+        const double fresh_moment = m == 0 ? luminance : luminance * luminance;
+        const double expected = !hit ? 0.0 : kept == 0 ? fresh_moment
+            : (fresh_moment * fresh_count + double(old->moments[m]) * kept) / (fresh_count + kept);
+        const double error = std::abs(actual.moments[m] - expected);
+        max_moment_error = std::max(max_moment_error, error / std::max(1.0, std::abs(expected)));
+        Check(std::isfinite(actual.moments[m]) && error < 0.00002 * std::max(1.0, std::abs(expected)),
+            "luminance moments differ from independent fresh batches");
+      }
+      Check(actual.moments[1] >= actual.moments[0] * actual.moments[0] * (1 - 0.00001F) - 0.000001F,
+          "second moment below the squared first moment");
+      const auto x = static_cast<std::uint32_t>(i % target.width);
+      const auto y = static_cast<std::uint32_t>(i / target.width);
+      const float variance = EstimateTemporalVariance(product.current, product.radiance, x, y,
+          target.width, target.height, product.batch_samples, temporal.max_history_samples);
+      const double tolerance = 0.0001 * variance + 0.0001 * (1.0 + std::abs(actual.moments[1]));
+      max_variance_error = std::max(max_variance_error, double(std::abs(actual.variance - variance)));
+      Check(std::isfinite(actual.variance) && actual.variance >= 0 &&
+                std::abs(actual.variance - variance) <= tolerance,
+          "GPU variance differs from CPU oracle");
+      if (actual.sample_count != 0) {
+        const auto batches = double(actual.sample_count) /
+                             std::min(product.batch_samples, temporal.max_history_samples);
+        ++(batches >= kTemporalVarianceBatches ? temporal_variance : spatial_variance);
+      } else
+        Check(actual.variance == 0, "variance without history");
       for (unsigned c = 0; c < 4; ++c) {
         const double expected = kept == 0 ? batch[i * 4 + c] : (double(batch[i * 4 + c]) * fresh_count + double(old->color[c]) * kept) / (fresh_count + kept);
         const double error = std::abs(actual.color[c] - expected);
@@ -562,8 +597,26 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   // Unbounded-by-cap static phase: fresh disjoint RNG batches must converge
   // to the same mean as ordinary progressive transport of all 16 samples.
   GpuFrameEvidence stationary;
-  for (unsigned i = 0; i < 8; ++i)
+  GpuFrameEvidence first_batch;
+  for (unsigned i = 0; i < 8; ++i) {
     stationary = Render(2);
+    if (i == 0)
+      first_batch = stationary;
+  }
+  // Observed, not asserted: the first frame's boosted spatial estimate and
+  // the eight-batch temporal variance of the same static view.
+  auto MeanVariance = [](const TemporalProducts& products) {
+    double sum = 0;
+    std::uint64_t count = 0;
+    for (const auto& p : products.radiance)
+      if (p.sample_count != 0) {
+        sum += p.variance;
+        ++count;
+      }
+    return count == 0 ? 0.0 : sum / count;
+  };
+  const double spatial_mean = MeanVariance(first_batch.temporal);
+  const double temporal_mean = MeanVariance(stationary.temporal);
   const auto progressive = Colors(Fresh(settings.sample_index, 16));
   const auto image = Colors(stationary);
   double static_error = 0;
@@ -689,6 +742,11 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
     if (disocclusion.temporal.validity[i].rejection == TemporalRejection::InstanceChanged) {
       ++exposed;
       Check(disocclusion.temporal.radiance[i].sample_count == 1, "ghost foreground history on exposed surface");
+      const auto& moments = disocclusion.temporal.radiance[i].moments;
+      const auto luminance = TemporalLuminance(disocclusion.temporal.batch[i]);
+      Check(std::abs(moments[0] - luminance) <= 0.00002F * luminance &&
+                std::abs(moments[1] - luminance * luminance) <= 0.00004F * luminance * luminance,
+          "ghost foreground moments on exposed surface");
     }
   }
   Check(exposed > 0, "moving foreground exercised no disocclusion");
@@ -697,14 +755,22 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Reset(TemporalResetReason::SceneChanged);
   for (const auto& p : preceding->temporal.radiance)
     Check(p.sample_count == 0, "empty scene retained radiance history");
-  Check(preceding->temporal.accumulation_gpu_ms >= 0, "invalid accumulation timestamp");
+  Check(preceding->temporal.accumulation_gpu_ms >= 0 && preceding->temporal.variance_gpu_ms >= 0,
+      "invalid accumulation timestamp");
+  Check(temporal_variance > 0 && spatial_variance > 0, "variance estimates not both exercised");
   std::cout << (integrator == Integrator::Reference ? "reference" : "wavefront")
             << " radiance PASS; compared_pixels=" << compared << " reused=" << reused
             << " rejected_hits=" << rejected_hits << " static_max_error=" << static_error
             << " max_blend_error=" << max_blend_error << " moving_mse=" << moving_mse / moving_comparisons
             << " fresh_moving_mse=" << fresh_moving_mse / moving_comparisons
             << " disoccluded_pixels=" << exposed << " accumulation_gpu_ms=" << stationary.temporal.accumulation_gpu_ms
+            << " variance_gpu_ms=" << stationary.temporal.variance_gpu_ms
             << " radiance_bytes=" << stationary.temporal.radiance_bytes << '\n';
+  std::cout << "moments/variance PASS; max_moment_rel_error=" << max_moment_error
+            << " max_variance_error=" << max_variance_error << " temporal_variance_pixels=" << temporal_variance
+            << " spatial_variance_pixels=" << spatial_variance
+            << " static_first_frame_mean_variance=" << spatial_mean
+            << " static_eight_batch_mean_variance=" << temporal_mean << '\n';
 }
 } // namespace
 

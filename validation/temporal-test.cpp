@@ -2,6 +2,7 @@
 #include <lotus/temporal.hpp>
 #include "../backend/vulkan/temporal_metadata.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -489,6 +490,84 @@ void PixelFetch() {
       "malformed history extent accepted");
 }
 
+void Variance() {
+  using namespace Lotus;
+  auto Close = [](float actual, double expected, const char* message) {
+    Check(std::isfinite(actual) &&
+              std::abs(actual - expected) <= 0.0001 * std::max(1.0, std::abs(expected)),
+        message);
+  };
+  Close(TemporalLuminance({1, 0, 0, 1}) + TemporalLuminance({0, 1, 0, 0}) +
+            TemporalLuminance({0, 0, 1, 0}),
+      1, "luminance weights do not sum to one");
+  TemporalPixel plane;
+  plane.normal_depth = {0, 0, 1, 4};
+  plane.instance_id = 1;
+  plane.flags = 7;
+  auto History = [](std::uint32_t count, float m1, float m2) {
+    TemporalRadiancePixel pixel;
+    pixel.sample_count = count;
+    pixel.moments = {m1, m2};
+    return pixel;
+  };
+  // A long history keeps its own temporal variance, clamped at zero.
+  std::vector<TemporalPixel> surface(9 * 5, plane);
+  std::vector<TemporalRadiancePixel> radiance(9 * 5, History(2, 7, 60));
+  radiance[2 * 9 + 4] = History(8, 1, 1.5F);
+  Close(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 2, 32), 0.5,
+      "long history ignored its moments");
+  radiance[2 * 9 + 4] = History(8, 2, 3.9F);
+  Check(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 2, 32) == 0,
+      "negative temporal variance");
+  // A short history in a uniform neighbourhood: the shared moments' variance,
+  // scaled by batches 4 / 1.
+  std::fill(radiance.begin(), radiance.end(), History(2, 1, 1.25F));
+  Close(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 2, 32), 1,
+      "uniform spatial variance");
+  Close(EstimateTemporalVariance(surface, radiance, 0, 0, 9, 5, 2, 32), 1,
+      "corner spatial variance");
+  // Two batches halve the boost; a batch above the cap counts as one batch.
+  std::fill(radiance.begin(), radiance.end(), History(4, 1, 1.25F));
+  Close(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 2, 32), 0.5,
+      "batch count boost");
+  std::fill(radiance.begin(), radiance.end(), History(32, 1, 1.25F));
+  Close(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 64, 32), 1,
+      "capped batch history length");
+  // Other placements, facing-away normals and misses do not contribute.
+  std::fill(radiance.begin(), radiance.end(), History(2, 9, 200));
+  for (std::size_t i = 0; i < surface.size(); ++i) {
+    if (i % 3 == 0)
+      surface[i].instance_id = 2;
+    else if (i % 3 == 1)
+      surface[i].normal_depth = {0, 0, -1, 4};
+    else
+      radiance[i].sample_count = 0;
+  }
+  surface[2 * 9 + 4] = plane;
+  radiance[2 * 9 + 4] = History(2, 1, 1.5F);
+  Close(EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 2, 32), 2,
+      "spatial estimate used another surface");
+  radiance[0].sample_count = 0;
+  Check(EstimateTemporalVariance(surface, radiance, 0, 0, 9, 5, 2, 32) == 0,
+      "miss has variance");
+  Check(EstimateTemporalVariance(surface, radiance, 9, 0, 9, 5, 2, 32) == 0 &&
+            EstimateTemporalVariance(surface, {}, 4, 2, 9, 5, 2, 32) == 0 &&
+            EstimateTemporalVariance(surface, radiance, 4, 2, 9, 5, 0, 32) == 0,
+      "malformed variance input");
+  // Luminance and depth weights on a depth ramp: the depth step is 0.1 per
+  // pixel, so phi is 0.3 and each neighbour's depth term is 1/3.
+  std::vector<TemporalPixel> ramp(3, plane);
+  ramp[1].normal_depth[3] = 4.1F;
+  ramp[2].normal_depth[3] = 4.2F;
+  const std::vector<TemporalRadiancePixel> moments{
+      History(1, 2, 5), History(1, 1, 2), History(1, 2, 5)};
+  const double w = std::exp(-(0.1 + 1.0 / 3.0));
+  const double m1 = (1 + 2 * w * 2) / (1 + 2 * w);
+  const double m2 = (2 + 2 * w * 5) / (1 + 2 * w);
+  Close(EstimateTemporalVariance(ramp, moments, 1, 0, 3, 1, 1, 32), (m2 - m1 * m1) * 4,
+      "edge-stopping weights");
+}
+
 } // namespace
 
 int main() try {
@@ -497,7 +576,8 @@ int main() try {
   Validity(Reprojection());
   WindowsAndIdentities();
   PixelFetch();
-  std::cout << "temporal lifecycle, correspondence, reprojection and rejection PASS\n";
+  Variance();
+  std::cout << "temporal lifecycle, correspondence, reprojection, rejection and variance PASS\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

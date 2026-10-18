@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace Lotus {
@@ -297,6 +298,73 @@ TemporalValidityPixel ReprojectTemporalHistory(const TemporalPixel& current,
   output.rejection = ValidateTemporalHistory(reprojection, surface, old_surface, settings);
   output.valid = output.rejection == TemporalRejection::None ? 1u : 0u;
   return output;
+}
+
+float TemporalLuminance(const std::array<float, 4>& color) {
+  return 0.2126F * color[0] + 0.7152F * color[1] + 0.0722F * color[2];
+}
+
+// Float arithmetic in the GPU pass's order; see temporal.slang.
+float EstimateTemporalVariance(std::span<const TemporalPixel> surface,
+    std::span<const TemporalRadiancePixel> radiance, std::uint32_t x,
+    std::uint32_t y, std::uint32_t width, std::uint32_t height,
+    std::uint32_t batch_samples, std::uint32_t max_history_samples) {
+  const std::uint64_t pixels = std::uint64_t{width} * height;
+  if (x >= width || y >= height || surface.size() != pixels ||
+      radiance.size() != pixels || batch_samples == 0 || max_history_samples == 0)
+    return 0.0F;
+  const std::size_t index = std::size_t{y} * width + x;
+  const auto& center = radiance[index];
+  if (center.sample_count == 0)
+    return 0.0F;
+  const float batches = static_cast<float>(center.sample_count) /
+                        static_cast<float>(std::min(batch_samples, max_history_samples));
+  if (batches >= static_cast<float>(kTemporalVarianceBatches))
+    return std::max(0.0F, center.moments[1] - center.moments[0] * center.moments[0]);
+  const auto& s = surface[index];
+  const float depth = s.normal_depth[3];
+  const auto Usable = [&](std::int64_t qx, std::int64_t qy) {
+    return qx >= 0 && qy >= 0 && qx < width && qy < height &&
+           radiance[qy * width + qx].sample_count != 0 &&
+           surface[qy * width + qx].instance_id == s.instance_id;
+  };
+  // Per axis, the smaller depth step to a usable neighbour; zero without one.
+  const auto Step = [&](std::int64_t ax, std::int64_t ay, std::int64_t bx, std::int64_t by) {
+    float step = std::numeric_limits<float>::infinity();
+    if (Usable(ax, ay))
+      step = std::min(step, std::abs(depth - surface[ay * width + ax].normal_depth[3]));
+    if (Usable(bx, by))
+      step = std::min(step, std::abs(depth - surface[by * width + bx].normal_depth[3]));
+    return std::isinf(step) ? 0.0F : step;
+  };
+  const std::int64_t px = x, py = y;
+  const float phi = std::max(Step(px - 1, py, px + 1, py) + Step(px, py - 1, px, py + 1),
+                        1.0e-8F) * 3.0F;
+  float weight_sum = 0.0F;
+  std::array<float, 2> sum{};
+  for (std::int64_t dy = -3; dy <= 3; ++dy) {
+    for (std::int64_t dx = -3; dx <= 3; ++dx) {
+      if (!Usable(px + dx, py + dy))
+        continue;
+      const std::size_t q = static_cast<std::size_t>((py + dy) * width + px + dx);
+      const auto& n = surface[q].normal_depth;
+      const float distance = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+      const float wz = dx == 0 && dy == 0 ? 0.0F : std::abs(depth - n[3]) / (phi * distance);
+      const float cosine = s.normal_depth[0] * n[0] + s.normal_depth[1] * n[1] +
+                           s.normal_depth[2] * n[2];
+      const float wn = std::pow(std::clamp(cosine, 0.0F, 1.0F), 128.0F);
+      const float wl = std::abs(center.moments[0] - radiance[q].moments[0]) / 10.0F;
+      const float w = std::exp(-(wl + wz)) * wn;
+      sum[0] += w * radiance[q].moments[0];
+      sum[1] += w * radiance[q].moments[1];
+      weight_sum += w;
+    }
+  }
+  weight_sum = std::max(weight_sum, 1.0e-6F);
+  const float m1 = sum[0] / weight_sum;
+  const float m2 = sum[1] / weight_sum;
+  return std::max(0.0F, m2 - m1 * m1) *
+         (static_cast<float>(kTemporalVarianceBatches) / batches);
 }
 
 } // namespace Lotus
