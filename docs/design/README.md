@@ -9,3 +9,4 @@ in [reference](../reference/README.md); phase and release status belongs in the
 | [DESIGN_POLICY.md](DESIGN_POLICY.md) | Renderer purpose, boundaries, light transport design and decision principles. |
 | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) | Renderer phase goals, scope, exit criteria and validation strategy. |
 | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) | Repository ownership and consumption of external contracts. |
+| [TEST_POLICY.md](TEST_POLICY.md) | Test tiers, where each runs, budgets, and admitting and retiring tests. |

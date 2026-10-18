@@ -199,66 +199,51 @@ endif()
 
 # ReSTIR checks assert reports and validation messages, never timing, so they
 # may share the GPU under `ost test --jobs N`. The fixed performance baseline
-# and install tree above stay serial.
+# and install tree above stay serial. The distant workload checks the
+# benchmark's report, reuse modes and CLI under both integrators.
 foreach(integrator reference wavefront)
-  add_test(NAME lotus-renderer-restir-controls-${integrator}
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-controls-${integrator}"
-      "-DINTEGRATOR=${integrator}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-controls-test.cmake")
   add_test(NAME lotus-renderer-restir-benchmark-${integrator}
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}"
       "-DINTEGRATOR=${integrator}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-mixed
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-mixed"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=mixed-boundaries
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-glossy
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-glossy"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-disocclusion
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-spheres
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-spheres"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-multibounce
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-multibounce"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=glossy-spheres
-      -DBOUNCES=4 -DREFERENCE_SEED=18874368
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-interreflection
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-interreflection"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=interreflection -DBOUNCES=4
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  add_test(NAME lotus-renderer-restir-benchmark-${integrator}-animation
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-animation"
-      "-DINTEGRATOR=${integrator}" -DWORKLOAD=animation
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
-  foreach(proposal uniform power-uniform)
-    add_test(NAME lotus-renderer-restir-benchmark-${integrator}-${proposal}
+  lotus_test_tier(gpu lotus-renderer-restir-benchmark-${integrator})
+endforeach()
+# Renderer Phase 5's campaign workloads, proposals and procedure controls.
+# Their conclusions are in the reports; the research tier re-runs them when
+# the reservoir code or the benchmark changes.
+if(LOTUS_RESEARCH_TESTS)
+  foreach(integrator reference wavefront)
+    add_test(NAME lotus-renderer-restir-controls-${integrator}
       COMMAND "${CMAKE_COMMAND}"
         "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
-        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-${proposal}"
-        "-DINTEGRATOR=${integrator}" "-DPROPOSAL=${proposal}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-controls-${integrator}"
+        "-DINTEGRATOR=${integrator}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-controls-test.cmake")
+    lotus_test_tier(research lotus-renderer-restir-controls-${integrator})
+    foreach(variant
+        "mixed|-DWORKLOAD=mixed-boundaries"
+        "glossy|-DWORKLOAD=glossy-disocclusion"
+        "spheres|-DWORKLOAD=glossy-spheres"
+        "multibounce|-DWORKLOAD=glossy-spheres;-DBOUNCES=4;-DREFERENCE_SEED=18874368"
+        "interreflection|-DWORKLOAD=interreflection;-DBOUNCES=4"
+        "animation|-DWORKLOAD=animation"
+        "uniform|-DPROPOSAL=uniform"
+        "power-uniform|-DPROPOSAL=power-uniform")
+      string(REPLACE "|" ";" variant "${variant}")
+      list(POP_FRONT variant suffix)
+      set(name lotus-renderer-restir-benchmark-${integrator}-${suffix})
+      add_test(NAME ${name}
+        COMMAND "${CMAKE_COMMAND}"
+          "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+          "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-${integrator}-${suffix}"
+          "-DINTEGRATOR=${integrator}" ${variant}
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
+      lotus_test_tier(research ${name})
+    endforeach()
   endforeach()
-endforeach()
+endif()
 if(LOTUS_ENABLE_VULKAN)
   add_test(NAME lotus-renderer-restir-benchmark-no-driver
     COMMAND "${CMAKE_COMMAND}"
@@ -266,3 +251,37 @@ if(LOTUS_ENABLE_VULKAN)
       "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/restir-benchmark-no-driver"
       -DNO_DRIVER=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/restir-benchmark-test.cmake")
 endif()
+
+# Tiers (docs/design/TEST_POLICY.md): `fast` needs no Vulkan device; `gpu`
+# renders on one when present and otherwise reports an explained SKIP.
+lotus_test_tier(fast
+  lotus-renderer-core-boundary lotus-renderer-core-boundary-discovery
+  lotus-viewport-camera lotus-viewport-options lotus-viewport-controls
+  lotus-viewport-timings lotus-renderer-scene-mesh lotus-renderer-scene-update
+  lotus-renderer-temporal lotus-renderer-reservoir lotus-renderer-restir-statistics
+  lotus-validation-assets lotus-renderer-host-capability-gate)
+lotus_test_tier(gpu
+  lotus-renderer-temporal-gpu lotus-renderer-restir-gpu lotus-renderer-evidence
+  lotus-renderer-install-tree lotus-renderer-benchmark
+  lotus-renderer-benchmark-wavefront lotus-renderer-benchmark-mis)
+if(LOTUS_ENABLE_VULKAN)
+  lotus_test_tier(fast
+    lotus-renderer-temporal-gpu-no-driver lotus-renderer-restir-gpu-no-driver
+    lotus-renderer-benchmark-no-driver lotus-renderer-acceleration-compaction-no-driver
+    lotus-renderer-memory-ranges lotus-renderer-memory-pool-no-driver
+    lotus-renderer-synchronization-no-driver lotus-renderer-restir-benchmark-no-driver)
+  lotus_test_tier(gpu
+    lotus-renderer-acceleration-compaction lotus-renderer-memory-pool
+    lotus-renderer-synchronization-validation)
+endif()
+
+# Every registered test, in every directory, has exactly one tier. The
+# validation directory is added last, so the whole tree is registered here.
+add_test(NAME lotus-test-tiers
+  COMMAND "${CMAKE_COMMAND}"
+    "-DCTEST=${CMAKE_CTEST_COMMAND}"
+    "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+    "-DCONFIG=$<CONFIG>"
+    "-DRESEARCH=${LOTUS_RESEARCH_TESTS}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/test-tiers-test.cmake")
+lotus_test_tier(fast lotus-test-tiers)

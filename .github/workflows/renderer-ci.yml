@@ -32,7 +32,38 @@ jobs:
         run: |
           python scripts/check_docs.py
           python -m unittest discover -s scripts -p 'test_*.py'
+  # A pull request that changes only documentation skips the builds; main
+  # pushes, dispatches and release calls always build.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.paths.outputs.build }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Classify the changed paths
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          build=true
+          if [ "$EVENT" = pull_request ] && [ -z "$RELEASE_VERSION" ]; then
+            changed=$(git diff --name-only "$BASE...$HEAD")
+            printf '%s\n' "$changed"
+            if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -Ev '^docs/|^[^/]+\.md$' > /dev/null; then
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "build=$build"
   core:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
@@ -86,6 +117,8 @@ jobs:
             build/**/renderer*report.json
             build/**/Testing/Temporary/
   hydra:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:

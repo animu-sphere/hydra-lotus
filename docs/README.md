@@ -28,6 +28,7 @@ and the document is a bug. When a summary disagrees with
 | --- | --- |
 | Purpose, principles, renderer architecture, light transport design | [design/DESIGN_POLICY.md](design/DESIGN_POLICY.md) |
 | Renderer Phase 0–10: goals, scope, exit criteria; milestones; testing strategy | [design/ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
+| Test tiers, where each runs, admitting and retiring tests | [design/TEST_POLICY.md](design/TEST_POLICY.md) |
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/README.md) |

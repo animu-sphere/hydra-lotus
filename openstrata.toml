@@ -16,6 +16,10 @@ cache = { LOTUS_ENABLE_HYDRA2 = { type = "BOOL", value = true } }
 [build.intents.viewport-usd]
 cache = { LOTUS_ENABLE_HYDRA2 = { type = "BOOL", value = true }, LOTUS_ENABLE_VIEWPORT = { type = "BOOL", value = true } }
 
+# The default build plus the research-tier CTests (docs/design/TEST_POLICY.md).
+[build.intents.research]
+cache = { LOTUS_RESEARCH_TESTS = { type = "BOOL", value = true } }
+
 # CI proves the core and install tree on a host with no GPU SDK or runtime.
 [build.intents.ci-core]
 cache = { LOTUS_ENABLE_VULKAN = { type = "BOOL", value = false } }

@@ -26,9 +26,10 @@ ost validate
 ```
 
 `ost test --jobs` takes a number (not `auto`). The GPU checks that assert no
-timing share the device, so eight jobs ran the core suite in 228 seconds
-instead of 859 serially on an RTX A5000 with validation layers enabled. The
-fixed performance baseline and install-tree checks still run alone.
+timing share the device; the fixed performance baseline and install-tree
+checks still run alone. The default suite's
+[measured times](../reports/2026-10-18-test-tiers.md#results) are in the
+test-tier report.
 
 `ost build` runs `lotus-headless`, which renders the bootstrap frame 1,000
 times, checks primary-ray barycentrics and depth against CPU projections and
@@ -52,6 +53,27 @@ files:
 
 ```sh
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-reference validation/reference
+```
+
+## Test tiers
+
+Every CTest carries one [tier](../design/TEST_POLICY.md#2-tiers) label:
+`fast` (no Vulkan device needed), `gpu` (renders when a device is present)
+or `research` (Renderer Phase 5's campaign procedures).
+`lotus-test-tiers` fails when a test has no tier or more than one. The
+default build registers `fast` and `gpu`; the `research` intent adds the
+research tier:
+
+```sh
+ost build --intent research --jobs auto
+ost test --intent research --jobs 8
+```
+
+`ost test` selects tests only by name (`--filter`). To run one tier or one
+area (`hydra`, `viewport`), call CTest on the build directory:
+
+```sh
+ctest --test-dir build/cy2026-windows-x86_64-py313-core -L fast
 ```
 
 ## Fixed performance baseline
@@ -388,6 +410,8 @@ ost ci matrix --cell hydra-windows --json
 ```
 
 The source workflow runs on pull requests, main pushes and manual dispatch.
+Its `changes` job skips the core and Hydra cells for a pull request that
+changes only `docs/` and top-level Markdown; every other event builds both.
 Its runtime pins live in `openstrata.ci.yaml`; `ost ci validate` also checks
 that the external workflow consumes them and uses the declared CLI version.
 Do not generate a plugin workspace workflow for this renderer: the generated

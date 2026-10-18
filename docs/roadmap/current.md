@@ -50,6 +50,8 @@ with LOTUS-SVGF-03.
 
 The [SVGF-class baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline)
 is built and compared with references headless before it reaches the viewport.
+Its regression tests stay small and its quality study is a research-tier
+campaign and a report, by the [test policy](../design/TEST_POLICY.md#8-svgf).
 
 - [ ] **LOTUS-SVGF-01 — Temporal accumulation, moments and variance.**
   Reprojection and history validation through the existing temporal
