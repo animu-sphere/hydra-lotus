@@ -513,7 +513,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
       composite = FilterTemporalRadiance(product.current, product.radiance, target.width, target.height,
           product.batch_samples, temporal.max_history_samples, temporal.filter_iterations);
       Check(composite.size() == product.radiance.size(), "filter oracle rejected the frame");
-      Check(product.filter_bytes == std::uint64_t{target.width} * target.height * 32, "filter memory");
+      Check(product.filter_bytes == std::uint64_t{target.width} * target.height * 48, "filter memory");
       filter_gpu_ms = std::max(filter_gpu_ms, product.filter_gpu_ms);
       ++filtered;
     }

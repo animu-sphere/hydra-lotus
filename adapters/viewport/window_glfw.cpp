@@ -205,6 +205,8 @@ private:
       return Key::Fullscreen;
     case GLFW_KEY_F1:
       return Key::ToggleUi;
+    case GLFW_KEY_F2:
+      return Key::ToggleDenoise;
     case GLFW_KEY_F:
       return Key::Frame;
     case GLFW_KEY_C:

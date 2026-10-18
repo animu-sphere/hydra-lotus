@@ -38,8 +38,11 @@ enum class GpuPass : std::size_t {
   // Primary surfaces and reprojection.
   TemporalSurfaces,
   TemporalAccumulation,
+  TemporalVariance,
+  // The denoiser's a-trous iterations and composite.
+  TemporalFilter,
 };
-inline constexpr std::size_t kGpuPassCount = 10;
+inline constexpr std::size_t kGpuPassCount = 12;
 
 // Whether the pass is a part of the path trace rather than a pass of its own.
 [[nodiscard]] bool PartOfPathTrace(GpuPass pass) noexcept;
@@ -93,6 +96,9 @@ struct MemoryUse {
   // Radiance history, its host mirror and the fresh batch.
   std::uint64_t radiance_history_bytes = 0;
   bool radiance_history_current = false;
+  // The denoiser's ping-pong buffer, allocated by the first filtered frame.
+  std::uint64_t filter_bytes = 0;
+  bool filter_current = false;
   // The scene's backing memory (GpuMemoryStats) and its BLASes and TLAS.
   std::uint64_t scene_used_bytes = 0;
   std::uint64_t scene_reserved_bytes = 0;

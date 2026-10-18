@@ -97,6 +97,8 @@ void WriteBenchmark(const std::filesystem::path& path,
       << ", \"restir_candidates\": " << controls.restir_candidates
       << ", \"temporal_radiance\": "
       << (controls.temporal_radiance ? "true" : "false")
+      << ", \"denoise\": " << (controls.denoise ? "true" : "false")
+      << ", \"filter_iterations\": " << controls.filter_iterations
       << ", \"accumulate\": " << (controls.accumulate ? "true" : "false")
       << ", \"view\": " << JsonString(Name(controls.view)) << "},\n"
       << "  \"frames\": " << totals.frames << ",\n"
@@ -148,6 +150,7 @@ void WriteBenchmark(const std::filesystem::path& path,
       << "  \"memory_bytes\": {\"reservoirs\": " << memory.reservoir_bytes
       << ", \"surface_history\": " << memory.surface_history_bytes
       << ", \"radiance_history\": " << memory.radiance_history_bytes
+      << ", \"filter\": " << memory.filter_bytes
       << ", \"scene_used\": " << memory.scene_used_bytes
       << ", \"scene_reserved\": " << memory.scene_reserved_bytes
       << ", \"acceleration\": " << memory.acceleration_bytes << "},\n"
@@ -172,6 +175,7 @@ std::string Title(const Scene& scene, const RunTotals& totals,
                : controls.nee ? std::string("nee")
                               : std::string("bsdf"))
         << (controls.temporal_radiance ? " temporal-radiance" : "")
+        << (controls.denoise ? " denoise" : "")
         << (controls.view != DebugView::Beauty
                    ? " | " + std::string(Name(controls.view))
                    : std::string())
@@ -291,8 +295,21 @@ std::vector<InteractionStep> ControlSteps(Controls& controls) {
   step("ReSTIR off", [](Controls& c) { c.restir = RestirMode::Off; });
   step("temporal radiance", [](Controls& c) { c.temporal_radiance = true; });
   view(DebugView::Motion);
-  step("temporal radiance off",
+  step("denoise", [](Controls& c) { c.denoise = true; });
+  for (const DebugView shown : {DebugView::RawRadiance,
+           DebugView::AccumulatedRadiance, DebugView::HistoryLength,
+           DebugView::Variance}) {
+    view(shown);
+  }
+  step("split view", [](Controls& c) { c.split = true; });
+  step("1 filter iteration", [](Controls& c) { c.filter_iterations = 1; });
+  step("temporal radiance off, still denoised",
       [](Controls& c) { c.temporal_radiance = false; });
+  step("denoise off", [](Controls& c) {
+    c.denoise = false;
+    c.view = DebugView::Beauty;
+    c.split = false;
+  });
   step("accumulation off", [](Controls& c) { c.accumulate = false; });
   step("the run's controls", [initial](Controls& c) { c = initial; });
   return steps;
@@ -421,6 +438,8 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
         window.SetFullscreen(!window.fullscreen());
       } else if (key && event.key == Key::ToggleUi) {
         ui.ToggleVisible();
+      } else if (key && event.key == Key::ToggleDenoise) {
+        controls.denoise = !controls.denoise;
       } else if ((key && ui.WantsKeyboard()) || (pointer && ui.WantsPointer())) {
         // The developer UI has it; a release still ends a scene drag.
       } else if (event.type != EventType::Resize) {
@@ -472,6 +491,15 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
     if (result.present.status == FrameStatus::Fail) {
       std::cerr << "lotus-viewport: presentation failed: "
                 << result.present.detail << '\n';
+      return 1;
+    }
+    // The scene, through Hydra too, must filter as the controls ask.
+    if (result.frame.temporal.filter_iterations !=
+        plan.temporal.filter_iterations) {
+      std::cerr << "lotus-viewport: frame " << totals.frames + 1 << " ran "
+                << result.frame.temporal.filter_iterations
+                << " filter iterations, the controls asked for "
+                << plan.temporal.filter_iterations << '\n';
       return 1;
     }
     ++totals.frames;

@@ -1091,6 +1091,7 @@ public:
     // RenderTemporalScene marks its temporal products once they exist.
     presentable_ = trace;
     temporal_presentable_ = false;
+    radiance_presentable_ = false;
     if (!restir)
       restir_presentable_ = RestirPresentable::None;
     else if (samples_to_add != 0)
@@ -1573,9 +1574,11 @@ public:
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
-    // Two ping-pong halves of illumination and variance, 16 bytes each.
+    // Two ping-pong halves of illumination and variance and the guides, 16
+    // bytes per pixel each.
+    const VkDeviceSize filter_bytes = radiance_bytes / 2 * 3;
     if (filter_iterations != 0 &&
-        !EnsureTemporalBuffer(temporal_filter_, radiance_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, detail)) {
+        !EnsureTemporalBuffer(temporal_filter_, filter_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1596,7 +1599,7 @@ public:
         requested.validation.max_motion_pixels};
     constants.history = {frame.previous ? 1u : 0u, target.width, target.height, 0u};
     constants.radiance = {accumulate ? 1u : 0u, frame_count,
-        requested.max_history_samples, 0u};
+        requested.max_history_samples, filter_iterations};
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail) ||
         (!instances.empty() && !WriteTemporalBuffer(temporal_instances_, instances.data(),
                                    instances.size() * sizeof(instances[0]), detail))) {
@@ -1637,7 +1640,7 @@ public:
       vkUpdateDescriptorSets(device_, 3, radiance_writes, 0, nullptr);
     }
     if (filter_iterations != 0) {
-      const VkDescriptorBufferInfo filter{temporal_filter_.buffer, 0, radiance_bytes};
+      const VkDescriptorBufferInfo filter{temporal_filter_.buffer, 0, filter_bytes};
       VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
       write.dstSet = ray_descriptor_;
       write.dstBinding = 21;
@@ -1772,6 +1775,7 @@ public:
     }
     // Publish only after submission, readback and timestamps all succeeded.
     temporal_presentable_ = true;
+    radiance_presentable_ = accumulate;
     temporal_history_ = std::move(next_history);
     temporal_identities_ = std::move(next_identities);
     temporal_transport_key_ = fresh_batch ? std::optional{radiance_key} : std::nullopt;
@@ -2314,6 +2318,21 @@ public:
         source.stride = view.view == DebugView::TemporalValidity
                             ? sizeof(TemporalValidityPixel) / 16
                             : sizeof(TemporalPixel) / 16;
+        break;
+      case DebugView::RawRadiance:
+      case DebugView::AccumulatedRadiance:
+      case DebugView::HistoryLength:
+      case DebugView::Variance:
+        if (!temporal_presentable_ || !radiance_presentable_)
+          return Fail("the latest frame wrote no temporal radiance; render "
+                      "it with accumulate_radiance");
+        if (view.view == DebugView::RawRadiance) {
+          source.product = temporal_batch_.buffer;
+          source.stride = sizeof(std::array<float, 4>) / 16;
+        } else {
+          source.product = temporal_radiance_[1 - temporal_write_].buffer;
+          source.stride = sizeof(TemporalRadiancePixel) / 16;
+        }
         break;
       default:
         if (restir_presentable_ == RestirPresentable::None)
@@ -3558,9 +3577,11 @@ private:
   // Whether the latest frame was a scene frame, which Present copies.
   bool presentable_ = false;
   // Which debug products Present may show: the temporal surfaces and
-  // validity after a RenderTemporalScene frame; the initial or the reused
-  // reservoirs after a RestirInitial frame.
+  // validity after a RenderTemporalScene frame, and its radiance products
+  // when it accumulated radiance; the initial or the reused reservoirs after
+  // a RestirInitial frame.
   bool temporal_presentable_ = false;
+  bool radiance_presentable_ = false;
   enum class RestirPresentable { None, Initial, Reuse };
   RestirPresentable restir_presentable_ = RestirPresentable::None;
 };

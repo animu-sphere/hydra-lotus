@@ -4,8 +4,9 @@
 // display colour in an RGBA16F image, which the presentation blits to the
 // swapchain as it blits the scene colour. The product is read as raw uint4
 // words at its record stride, so one binding serves every record layout;
-// the layouts mirror TemporalPixel, TemporalValidityPixel, RestirPixel and
-// RestirHistoryRecord in the backend.
+// the layouts mirror TemporalPixel, TemporalValidityPixel, RestirPixel,
+// RestirHistoryRecord, the fresh RGBA batch and TemporalRadiancePixel in the
+// backend.
 
 // Mirrors DebugView.
 static const uint kDepth = 1;
@@ -15,11 +16,16 @@ static const uint kTemporalValidity = 4;
 static const uint kReservoirValidity = 5;
 static const uint kReservoirAge = 6;
 static const uint kReservoirWeight = 7;
+static const uint kRawRadiance = 8;
+static const uint kAccumulatedRadiance = 9;
+static const uint kHistoryLength = 10;
+static const uint kVariance = 11;
 
 struct ViewConstants {
   uint view;
   // Record stride in uint4 words: 4 for TemporalPixel, 1 for
-  // TemporalValidityPixel, 3 for RestirPixel, 12 for RestirHistoryRecord.
+  // TemporalValidityPixel, 3 for RestirPixel, 12 for RestirHistoryRecord,
+  // 1 for the fresh batch, 2 for TemporalRadiancePixel.
   uint stride;
   uint width;
   uint height;
@@ -110,11 +116,32 @@ float3 Reservoir(uint base) {
   return Heat((log10(max(weight, 1.0e-30)) - constants.range.x) / span);
 }
 
+// Radiance views write linear colour, which the blit encodes as it encodes
+// Beauty; the colour maps write display colours, decoded.
+float3 Radiance(uint base) {
+  if (constants.view == kRawRadiance)
+    return min(asfloat(source[base].xyz), 65504.0);
+  const uint sample_count = source[base + 1].x;
+  if (constants.view == kAccumulatedRadiance)
+    return min(asfloat(source[base].xyz), 65504.0);
+  if (sample_count == 0)
+    return float3(0.0);
+  if (constants.view == kHistoryLength)
+    return Decode(Heat(float(sample_count) / max(constants.range.y, 1.0)));
+  const float variance = asfloat(source[base + 1].w);
+  const float span = max(constants.range.y - constants.range.x, 1.0e-6);
+  return Decode(Heat((log10(max(variance, 1.0e-30)) - constants.range.x) / span));
+}
+
 [numthreads(8, 8, 1)]
 void present_main(uint3 id: SV_DispatchThreadID) {
   if (id.x >= constants.width || id.y >= constants.height)
     return;
   const uint base = (id.y * constants.width + id.x) * constants.stride;
+  if (constants.view >= kRawRadiance) {
+    output[id.xy] = float4(Radiance(base), 1.0);
+    return;
+  }
   float3 display;
   if (constants.view <= kMotion)
     display = Surface(base);

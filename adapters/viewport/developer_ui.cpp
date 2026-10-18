@@ -104,6 +104,14 @@ const char* Label(DebugView view) {
     return "Reservoir age";
   case DebugView::ReservoirWeight:
     return "Reservoir weight";
+  case DebugView::RawRadiance:
+    return "Raw radiance";
+  case DebugView::AccumulatedRadiance:
+    return "Accumulated (unfiltered)";
+  case DebugView::HistoryLength:
+    return "History length";
+  case DebugView::Variance:
+    return "Variance";
   }
   return "?";
 }
@@ -130,6 +138,10 @@ const char* Label(GpuPass pass) {
     return "Temporal surfaces";
   case GpuPass::TemporalAccumulation:
     return "Temporal accumulation";
+  case GpuPass::TemporalVariance:
+    return "Variance";
+  case GpuPass::TemporalFilter:
+    return "Denoise filter";
   }
   return "?";
 }
@@ -263,6 +275,7 @@ public:
       DrawRenderer(controls, status);
       DrawTiming(controls, status);
     }
+    DrawSplit(controls);
     ImGui::Render();
     drawn_ = true;
     return !(controls == before);
@@ -371,7 +384,7 @@ private:
     const bool fresh = controls.restir == RestirMode::Temporal ||
                        controls.restir == RestirMode::Spatial ||
                        controls.restir == RestirMode::Combined ||
-                       controls.temporal_radiance;
+                       controls.temporal_radiance || controls.denoise;
     ImGui::BeginDisabled(fresh);
     ImGui::Checkbox("Accumulate", &controls.accumulate);
     ImGui::EndDisabled();
@@ -401,10 +414,29 @@ private:
     ImGui::EndDisabled();
 
     ImGui::SeparatorText("Temporal radiance");
-    ImGui::Checkbox("Reuse history", &controls.temporal_radiance);
-    ImGui::BeginDisabled(!controls.temporal_radiance);
+    // The denoiser needs the history; the checkbox shows that it is on.
+    bool reuse = controls.temporal_radiance || controls.denoise;
+    ImGui::BeginDisabled(controls.denoise);
+    if (ImGui::Checkbox("Reuse history", &reuse)) {
+      controls.temporal_radiance = reuse;
+    }
+    ImGui::EndDisabled();
+    if (controls.denoise) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("(the denoiser's input)");
+    }
+    ImGui::BeginDisabled(!reuse);
     SliderUnsigned("History samples", controls.history_samples, 1, 1024,
         ImGuiSliderFlags_Logarithmic);
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Denoise (SVGF)");
+    ImGui::Checkbox("Filter", &controls.denoise);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(F2; keeps the history)");
+    ImGui::BeginDisabled(!controls.denoise);
+    SliderUnsigned("Iterations", controls.filter_iterations, 1,
+        static_cast<int>(kTemporalFilterMaxIterations));
     ImGui::EndDisabled();
 
     ImGui::SeparatorText("View");
@@ -420,9 +452,30 @@ private:
       ImGui::EndCombo();
     }
     DrawViewDetail(controls, status);
+    ImGui::BeginDisabled(controls.view == DebugView::Beauty);
+    ImGui::Checkbox("Split", &controls.split);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(view left, beauty right)");
+    ImGui::BeginDisabled(!controls.split);
+    ImGui::SliderFloat("Position", &controls.split_position, 0.0F, 1.0F,
+        "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::TextDisabled("F1 hides the developer UI");
     ImGui::End();
+  }
+
+  // The split view's divider, under the windows.
+  static void DrawSplit(const Controls& controls) {
+    const FramePlan plan = PlanFrame(controls, 0, {});
+    if (plan.present.view == DebugView::Beauty || plan.present.split >= 1.0F) {
+      return;
+    }
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float x = std::round(display.x * plan.present.split);
+    ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x, 0.0F),
+        ImVec2(x, display.y), IM_COL32(255, 255, 255, 160), 1.0F);
   }
 
   // The timing HUD: the recent frames' mean host and GPU times, pass by
@@ -519,6 +572,7 @@ private:
           memory.surface_history_current);
       MemoryRow("Radiance history", memory.radiance_history_bytes,
           memory.radiance_history_current);
+      MemoryRow("Denoise filter", memory.filter_bytes, memory.filter_current);
       std::snprintf(value, sizeof(value), "%.2f MiB",
           Mebibytes(memory.scene_used_bytes));
       std::snprintf(detail, sizeof(detail), "of %.2f reserved",
@@ -533,7 +587,9 @@ private:
   static void DrawViewDetail(Controls& controls, const UiStatus& status) {
     if (!ViewAvailable(controls, controls.view)) {
       ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.1F, 1.0F),
-          "Needs reservoirs; showing beauty");
+          controls.view < DebugView::RawRadiance
+              ? "Needs reservoirs; showing beauty"
+              : "Needs temporal radiance; showing beauty");
       return;
     }
     switch (controls.view) {
@@ -578,6 +634,22 @@ private:
       ImGui::DragFloatRange2("log10 W", &controls.weight_log10[0],
           &controls.weight_log10[1], 0.05F, -12.0F, 12.0F, "%.2f", "%.2f",
           ImGuiSliderFlags_AlwaysClamp);
+      break;
+    case DebugView::RawRadiance:
+      ImGui::TextUnformatted("this frame's fresh batch, before any reuse");
+      break;
+    case DebugView::AccumulatedRadiance:
+      ImGui::TextUnformatted("the temporal mean, before the filter");
+      break;
+    case DebugView::HistoryLength:
+      ImGui::Text("samples, blue 0 to red %u (history samples)",
+          std::clamp(controls.history_samples, 1U, 65536U));
+      break;
+    case DebugView::Variance:
+      ImGui::DragFloatRange2("log10 variance", &controls.variance_log10[0],
+          &controls.variance_log10[1], 0.05F, -12.0F, 12.0F, "%.2f", "%.2f",
+          ImGuiSliderFlags_AlwaysClamp);
+      ImGui::TextDisabled("illumination luminance; black without history");
       break;
     default:
       break;

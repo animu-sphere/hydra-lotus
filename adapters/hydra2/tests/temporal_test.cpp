@@ -117,6 +117,7 @@ const TfToken kTemporal("lotus:temporal");
 const TfToken kCap("lotus:historySamples");
 const TfToken kKey("lotus:historyKey");
 const TfToken kReset("lotus:historyReset");
+const TfToken kFilter("lotus:filterIterations");
 const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
     TfToken("lotus:historyLength"), TfToken("lotus:historyValidity"),
     TfToken("lotus:historyRejection")};
@@ -124,9 +125,9 @@ const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
 void Contract() {
   HdLotusRenderDelegate delegate;
   const auto descriptors = delegate.GetRenderSettingDescriptors();
-  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 4>{{
+  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 5>{{
            {kTemporal, VtValue(false)}, {kCap, VtValue(32)},
-           {kKey, VtValue(0)}, {kReset, VtValue(0)}}}) {
+           {kKey, VtValue(0)}, {kReset, VtValue(0)}, {kFilter, VtValue(0)}}}) {
     Check(std::any_of(descriptors.begin(), descriptors.end(),
               [&](const auto& d) { return d.key == key && d.defaultValue == value; }),
         "missing temporal setting/default: " + key.GetString());
@@ -378,6 +379,19 @@ void Sequence(bool wavefront) {
   session.Setting(kWavefrontSetting, VtValue(wavefront));
   session.Render(R::RenderSettingsChanged);
 
+  // The filter changes the colour, never the history.
+  session.Setting(kFilter, VtValue(5));
+  {
+    TfErrorMark errors;
+    const auto filtered = session.Frame();
+    Check(errors.IsClean() && filtered.status == Lotus::FrameStatus::Pass &&
+              filtered.temporal.filter_iterations == 5 &&
+              filtered.temporal.reset_reason == R::None,
+        "lotus:filterIterations did not filter, or reset history");
+  }
+  session.Setting(kFilter, VtValue(0));
+  session.Render(R::None);
+
   // Rejected bindings consume neither the reset counter nor the RNG range.
   session.Setting(kReset, VtValue(2));
   session.ColorClear(false);
@@ -392,11 +406,14 @@ void Sequence(bool wavefront) {
       "rejected pass consumed reset/RNG");
   session.Render(R::None);
 
-  // Debug AOVs request metadata while progressive transport remains selectable.
+  // Debug AOVs request metadata while progressive transport remains
+  // selectable; the filter is unused without the accumulation.
   session.Setting(kTemporal, VtValue(false));
+  session.Setting(kFilter, VtValue(3));
   session.Render(R::None, false);
   session.Render(R::None, false);
   session.Render(R::None, false);
+  session.Setting(kFilter, VtValue(0));
   session.Setting(kTemporal, VtValue(true));
   session.Render(R::RenderSettingsChanged);
   session.Move("/World/Panel", GfVec3d(0.4, 0, 0));

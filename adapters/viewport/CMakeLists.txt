@@ -141,7 +141,7 @@ if(LOTUS_BUILD_TESTS)
   # Scripted navigation, scene edits and every renderer control and debug
   # view, each of which must restart (or continue) the accumulation.
   set(_lotus_viewport_interaction
-    --hidden --frames 40 --vsync off --validate --interaction-test
+    --hidden --frames 48 --vsync off --validate --interaction-test
     --allow-unavailable)
   add_test(NAME lotus-viewport-interaction
     COMMAND lotus-viewport ${_lotus_viewport_interaction})

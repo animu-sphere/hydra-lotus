@@ -111,7 +111,8 @@ struct TemporalProducts {
   std::uint32_t filter_iterations = 0;
   // Every iteration and the composite.
   double filter_gpu_ms = 0.0;
-  // The filter's persistent ping-pong buffer, zero until a frame filters.
+  // The filter's persistent ping-pong halves and guides, zero until a frame
+  // filters.
   std::uint64_t filter_bytes = 0;
 };
 
@@ -278,12 +279,27 @@ enum class DebugView {
   // the resolved contribution weight W, as log10(W) from blue at range[0]
   // to red at range[1]; dark red where no sample was selected.
   ReservoirWeight,
+  // Temporal radiance products (accumulate_radiance), as linear colours
+  // like Beauty, or black where a pixel has no history: the raw radiance,
+  // this frame's fresh batch mean;
+  RawRadiance,
+  // the accumulated temporal mean, before the edge-aware filter;
+  AccumulatedRadiance,
+  // the history length (sample_count), from blue at 0 to red at range[1];
+  HistoryLength,
+  // the illumination luminance variance, as log10 from blue at range[0] to
+  // red at range[1].
+  Variance,
 };
 
 // Present's choice of view, and the values its colour map spans.
 struct PresentView {
   DebugView view = DebugView::Beauty;
   std::array<float, 2> range{0.0F, 1.0F};
+  // The fraction of the width, from the left, that shows the view; the
+  // rest shows the frame's colour, as Beauty. 1 shows the view alone.
+  // Clamped to [0, 1]; ignored by Beauty.
+  float split = 1.0F;
 };
 
 // The display colour TemporalValidity shows for each TemporalRejection

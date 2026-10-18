@@ -397,6 +397,8 @@ private:
     set("lotus:temporal", VtValue(plan.temporal.accumulate_radiance));
     set("lotus:historySamples",
         VtValue(static_cast<int>(plan.temporal.max_history_samples)));
+    set("lotus:filterIterations",
+        VtValue(static_cast<int>(plan.temporal.filter_iterations)));
     render_delegate_.SetPresentView(plan.present);
   }
 

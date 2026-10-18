@@ -43,8 +43,8 @@ std::vector<float> Ordered(const std::vector<std::array<float, 2>>& ring,
 
 // The scene pass's time covers the wavefront kernels, the reservoir passes
 // and, under reuse, the temporal surfaces that precede them; the temporal
-// passes otherwise, and radiance accumulation always, are a later
-// submission.
+// passes otherwise, and radiance accumulation, variance and the filter
+// always, are a later submission.
 double FrameGpuMs(const GpuFrameEvidence& frame) {
   double total = frame.primary_ray_gpu_ms;
   const TemporalProducts& temporal = frame.temporal;
@@ -53,7 +53,8 @@ double FrameGpuMs(const GpuFrameEvidence& frame) {
     if (!reuse) {
       total += temporal.primary_surface_gpu_ms + temporal.reprojection_gpu_ms;
     }
-    total += temporal.accumulation_gpu_ms;
+    total += temporal.accumulation_gpu_ms + temporal.variance_gpu_ms +
+             temporal.filter_gpu_ms;
   }
   return total;
 }
@@ -86,6 +87,10 @@ std::string_view Name(GpuPass pass) {
     return "temporal_surfaces";
   case GpuPass::TemporalAccumulation:
     return "temporal_accumulation";
+  case GpuPass::TemporalVariance:
+    return "temporal_variance";
+  case GpuPass::TemporalFilter:
+    return "temporal_filter";
   }
   return "?";
 }
@@ -127,6 +132,10 @@ FrameTimes MeasureFrame(const GpuFrameEvidence& frame, double frame_ms) {
     }
     if (temporal.radiance_available) {
       set(GpuPass::TemporalAccumulation, temporal.accumulation_gpu_ms);
+      set(GpuPass::TemporalVariance, temporal.variance_gpu_ms);
+    }
+    if (temporal.filter_iterations != 0) {
+      set(GpuPass::TemporalFilter, temporal.filter_gpu_ms);
     }
   }
   set(GpuPass::PathTrace, path_trace);
@@ -184,6 +193,10 @@ void TimingRecord::Add(const GpuFrameEvidence& frame,
   memory_.radiance_history_current = temporal.radiance_available;
   if (temporal.radiance_available) {
     memory_.radiance_history_bytes = temporal.radiance_bytes;
+  }
+  memory_.filter_current = temporal.filter_iterations != 0;
+  if (temporal.filter_bytes != 0) {
+    memory_.filter_bytes = temporal.filter_bytes;
   }
   memory_.scene_used_bytes = scene.memory.used_bytes;
   memory_.scene_reserved_bytes = scene.memory.reserved_bytes;
