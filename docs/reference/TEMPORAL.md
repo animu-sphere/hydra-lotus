@@ -196,6 +196,8 @@ not primary surfaces, consistent with ordinary scene depth.
 | `instance_id` | Renderer-stream-local nonzero 64-bit placement identity; zero for a miss |
 | `material_id` | Renderer-stream-local nonzero identity of the binding and effective material/used texture resources; zero for a miss |
 | `flags` | Bit 0 hit; bit 1 rigid placement correspondence; bit 2 unchanged effective material |
+| `albedo` | The material's base colour at the hit, after texture lookups, clamped to [0, 1] as unorm8 R, G, B in bits 0–23 (`UnpackTemporalAlbedo`) |
+| `shading_normal` | The shading normal facing the camera (authored, computed or mapped), octahedral snorm16 x and y in the low and high half (`UnpackTemporalNormal`) |
 | `motion_depth.xy` | Backward motion, previous pixel minus current pixel, in pixels |
 | `motion_depth.z` | Expected positive depth of this surface in the previous camera |
 | `motion_depth.w` | 1 for a successful projection within the previous clip volume/image/data window; 0 otherwise |
@@ -287,7 +289,7 @@ validity pass and excludes host writes and readback. Unavailable timestamps
 report false/zero. `validity_bytes` counts the persistent device output and
 host readback mirror (32 bytes per pixel), separately from `surface_bytes`.
 The two passes have explicit shader-write/read and transfer/readback barriers.
-The validity pipeline and eight-query timestamp pool are created at renderer
+The validity pipeline and ten-query timestamp pool are created at renderer
 initialization; fixed extents reuse buffers and resize replaces them.
 History is published only after both passes, readbacks and timestamps succeed.
 No transport, reservoir or denoiser state enters validity.
@@ -351,8 +353,9 @@ remain per-frame controls and do not reset the stream globally.
 
 `TemporalProducts::radiance` and `previous_radiance` are 32-byte
 `TemporalRadiancePixel` debug records: linear RGBA `color`, uint32
-`sample_count` (the history length), the luminance `moments` and their
-`variance` ([below](#luminance-moments-and-variance)). The rows are top-left
+`sample_count` (the history length), the illumination luminance `moments`
+and their `variance` ([below](#luminance-moments-and-variance)), all
+unfiltered. The rows are top-left
 and `radiance_row_pitch` is width * 32. Previous records are absent on a
 reset; a pixel's reprojected history is
 `previous_radiance[validity[i].previous_index]` wherever a fetch took place.
@@ -362,7 +365,7 @@ temporal mean; the D32 attachment keeps ordinary primary depth.
 `radiance_available` is false in metadata-only mode.
 
 `accumulation_gpu_ms` and `variance_gpu_ms` use separate timestamp pairs in
-the persistent eight-query pool, with the existing `timestamp_available`
+the persistent ten-query pool, with the existing `timestamp_available`
 flag. They measure the accumulation and variance draws, excluding batch
 copy, transport and readbacks. `radiance_bytes` counts two device history
 buffers, their two-buffer host readback mirror, and the fresh RGBA device
@@ -375,9 +378,14 @@ the passes, readbacks and timestamps succeed.
 ### Luminance moments and variance
 
 The accumulation also keeps the first two moments of each fresh batch mean's
-luminance, `L = 0.2126 R + 0.7152 G + 0.0722 B` of the linear colour
-(`TemporalLuminance`): a fresh history starts at `(L, L^2)`, and an accepted
-one blends its previous moments with the colour's weights `n` and `h`.
+illumination luminance: the colour demodulated by the primary surface's
+`albedo`, each channel divided by the albedo's or left unchanged where that
+channel is zero (`DemodulateTemporalColor`), then
+`L = 0.2126 R + 0.7152 G + 0.0722 B` (`TemporalLuminance`). A fresh history
+starts at `(L, L^2)`, and an accepted one blends its previous moments with
+the colour's weights `n` and `h`. Demodulation keeps texture contrast out of
+the variance; the moments of a textured surface measure its lighting
+noise.
 Misses and pixels outside the windows have zero moments. Previous moments
 that are not finite are not reused, like a non-finite previous colour. The
 inputs are the noisy radiance and the shared surface metadata only: the
@@ -399,10 +407,99 @@ history:
   variance is scaled by `4 / b`, so short histories err on the noisy side.
 - Pixels without a history have zero variance.
 
-The accumulated colour's own variance is about `variance / b`; the filter
-that consumes these products (LOTUS-SVGF-02) decides how it uses them.
+The accumulated colour's own variance is about `variance / b`, which is
+what the [filter](#edge-aware-filtering) starts from.
 `EstimateTemporalVariance` in `temporal.hpp` is the CPU oracle over the same
 records; the GPU test compares every pixel of every radiance frame with it.
+
+### Edge-aware filtering
+
+`TemporalFrameSettings::filter_iterations` (default 0, at most
+`kTemporalFilterMaxIterations`, 8) runs SVGF's edge-aware a-trous filter
+over the accumulated radiance after the variance pass; SVGF uses
+`kTemporalFilterIterations`, 5. It requires `accumulate_radiance`; other
+settings fail before advancing history. The filter reads this frame's
+records only and writes nothing back into the history, so `radiance`,
+`previous_radiance` and the moments stay unfiltered and changing the
+iteration count, or switching the filter off, never resets the stream. With
+any iterations the colour attachment holds the filtered composite.
+
+For each pixel with a history the filter starts from its illumination
+(`DemodulateTemporalColor` of the accumulated colour) and the variance of its
+mean's luminance, `variance / b`. Iteration `i` averages a 5x5 B3-spline
+footprint (`3/8, 1/4, 1/16` per axis) whose taps lie `2^i` pixels apart,
+over histories on the same placement only, each tap weighted by
+
+`exp(-(|l - l_q| / (4 sqrt(g + 1e-10)) + |z - z_q| / (phi * d))) * max(0, n . n_q)^128`
+
+where `l` is the illumination luminance, `g` the 3x3 Gaussian of the
+variance over usable neighbours, `z` linear depth, `phi` the local depth
+gradient (per axis the smaller step to a usable neighbour, the two axes
+summed), `d` the tap's pixel distance and `n` the shading normal. Variances
+combine with the squared weights, so each iteration's luminance test
+tightens as the noise falls. The composite multiplies the last iteration's
+illumination by the albedo again (`RemodulateTemporalColor`) and keeps the
+accumulated alpha; misses and pixels outside the windows keep the
+accumulated colour. Motion and disocclusion reach the filter through the
+history: a rejected pixel restarts at one batch with the boosted spatial
+variance, so it is filtered hardest.
+
+| Decision | Here | SVGF |
+| --- | --- | --- |
+| History | Unfiltered temporal mean | The first iteration's output is fed back |
+| Luminance test | Variance of the accumulated mean, `variance / b` | Per-sample variance |
+| Neighbours | Same placement (stable identity) only | Depth and normal tests only |
+| Normal | Shading normal; geometric in the variance estimate | G-buffer normal |
+
+Without feedback the history converges to the unbiased mean, and with the
+variance of the mean the filter fades as the history grows: a static view
+converges to the temporal mean rather than to a blurred image. The filtered
+output is never history, so its bias does not accumulate.
+
+`FilterTemporalRadiance` in `temporal.hpp` is the CPU oracle, in the GPU's
+float arithmetic. Each iteration is a fullscreen pass that reads the
+previous one from a persistent ping-pong buffer of two halves (32 bytes per
+pixel, `filter_bytes`), the draw's first instance giving the iteration; the
+last also composites into the colour attachment. `filter_gpu_ms` times
+every iteration and the composite with the ninth and tenth queries of the
+temporal pool. `filter_iterations` reports the frame's count.
+
+### Headless SVGF comparison
+
+`lotus-headless --benchmark-svgf <json-path>` compares the fresh batch
+(raw), the temporal mean and the filtered composite of the same renders
+with a high-spp reference. Its workload, `svgf-room`, is a closed room lit
+by an emissive ceiling panel, with a checker-textured floor, a white box and
+a rough metal block: a static view, and a moving one that pans the camera
+and slides the block. Every pose's reference is the mean of two disjoint
+halves from the reference integrator, NEE/MIS, which also estimate its
+noise. Each sequence starts with a camera cut and a disjoint sample range;
+the first is then rendered again and must reproduce every output bit for
+bit (`deterministic`).
+
+| Option | Default | Range |
+| --- | --- | --- |
+| `--benchmark-integrator` | `reference` | `reference`, `wavefront` |
+| `--benchmark-size` | 128 | 16–512 (square) |
+| `--benchmark-frames` | 32 | 4–256 |
+| `--svgf-sequences` | 4 | 2–64 |
+| `--svgf-batch` (fresh samples per frame) | 1 | 1–64 |
+| `--svgf-history-cap` | 32 | 1–65536 |
+| `--svgf-iterations` | 5 | 1–8 |
+| `--svgf-bounces` | 4 | 1–64 |
+| `--svgf-seed` | 17 | 0–8388607 |
+| `--svgf-reference-seed` | 16777216 | 16777216–1073741823 |
+| `--svgf-reference-samples` (per half) | 1024 | 16–8192 |
+
+Per workload and output the report gives the MSE per frame and its mean,
+the frame-delta MSE (the change of each pixel's error from the previous
+frame: flicker and lag), the MSE by history length in batches (the response
+after disocclusion or rejection) and the last frame's squared error of the
+sequences' mean, split into expected noise and an estimate of squared bias.
+`metric_notes` in the report defines each; it asserts no quality or speed
+threshold. Its PFMs are the reference and the three outputs of the first
+sequence's last frame. The `research` tier runs a small configuration under
+both integrators (`lotus-renderer-svgf-benchmark-*`).
 
 Nearest history fetch, geometric rejection and bounded weighting supply this
 foundation. There is no radiance neighbourhood clamp, history filtering,
@@ -440,7 +537,10 @@ disocclusion, global resets and failed-call recovery
 It compares every moment with the independent batches and every variance
 with the CPU oracle, and requires both the temporal and spatial estimates
 ([moments and variance evidence](../reports/2026-10-18-svgf-moments-variance.md)).
-History filtering remains outside this implementation. Hydra controls and
+It alternates the filter's iteration count from frame to frame, compares
+every filtered pixel with the CPU oracle, and checks the albedo and shading
+normal products ([filter evidence](../reports/2026-10-18-svgf-filter.md)).
+The filter is not history: nothing filtered is reused. Hydra controls and
 AOV bindings are described [above](#hydra-controls-and-debug-aovs).
 Geometry deformation is conservatively rejected.
-No ReSTIR or denoiser state is introduced.
+No ReSTIR state is introduced, and the filter keeps none across frames.

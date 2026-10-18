@@ -568,6 +568,133 @@ void Variance() {
       "edge-stopping weights");
 }
 
+// Octahedral snorm16, as the primary-surface pass packs shading normals.
+std::uint32_t PackNormal(std::array<float, 3> n) {
+  const float sum = std::abs(n[0]) + std::abs(n[1]) + std::abs(n[2]);
+  float x = n[0] / sum, y = n[1] / sum;
+  if (n[2] < 0) {
+    const float fx = (1 - std::abs(y)) * (x >= 0 ? 1.0F : -1.0F);
+    const float fy = (1 - std::abs(x)) * (y >= 0 ? 1.0F : -1.0F);
+    x = fx;
+    y = fy;
+  }
+  const auto q = [](float v) {
+    return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::lround(std::clamp(v, -1.0F, 1.0F) * 32767))) & 0xFFFFU;
+  };
+  return q(x) | q(y) << 16;
+}
+
+void Filter() {
+  using namespace Lotus;
+  auto Close = [](float actual, double expected, const char* message) {
+    if (!std::isfinite(actual) || std::abs(actual - expected) > 0.00001 * std::max(1.0, std::abs(expected))) {
+      std::cerr << message << ": actual=" << actual << " expected=" << expected << '\n';
+      throw std::runtime_error(message);
+    }
+  };
+  const auto albedo = UnpackTemporalAlbedo(153u | 102u << 8 | 51u << 16);
+  Close(albedo[0], 0.6, "albedo red");
+  Close(albedo[1], 0.4, "albedo green");
+  Close(albedo[2], 0.2, "albedo blue");
+  const std::array<std::array<float, 3>, 7> normals{{{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {0, -1, 0},
+      {0.6F, 0.48F, -0.64F}, {-0.36F, 0.48F, 0.8F}, {-0.6F, -0.64F, -0.48F}}};
+  for (const auto& n : normals) {
+    const auto unpacked = UnpackTemporalNormal(PackNormal(n));
+    for (std::size_t c = 0; c < 3; ++c)
+      Check(std::abs(unpacked[c] - n[c]) < 0.0001F, "octahedral normal round trip");
+  }
+  // A zero albedo channel leaves the colour; others divide and multiply.
+  const std::uint32_t partial = 51u | 255u << 16;
+  const auto illumination = DemodulateTemporalColor({1, 2, 3, 0.5F}, partial);
+  Close(illumination[0], 5, "demodulated red");
+  Close(illumination[1], 2, "zero albedo channel demodulated");
+  Close(illumination[2], 3, "unit albedo channel");
+  Close(illumination[3], 0.5, "demodulation changed alpha");
+  const auto color = RemodulateTemporalColor(illumination, partial);
+  for (std::size_t c = 0; c < 4; ++c)
+    Close(color[c], std::array<float, 4>{1, 2, 3, 0.5F}[c], "remodulation round trip");
+
+  // A textured plane under uniform illumination: a checker of two albedos.
+  constexpr std::uint32_t W = 9, H = 7;
+  TemporalPixel plane;
+  plane.normal_depth = {0, 0, 1, 4};
+  plane.instance_id = 1;
+  plane.flags = 7;
+  plane.shading_normal = PackNormal({0, 0, 1});
+  std::vector<TemporalPixel> surface(W * H, plane);
+  std::vector<TemporalRadiancePixel> radiance(W * H);
+  const std::array<float, 3> light{2, 1, 0.5F};
+  auto Lit = [&](std::size_t i, const std::array<float, 3>& value) {
+    const auto a = UnpackTemporalAlbedo(surface[i].albedo);
+    radiance[i].color = {value[0] * a[0], value[1] * a[1], value[2] * a[2], 0.75F};
+  };
+  for (std::size_t i = 0; i < radiance.size(); ++i) {
+    surface[i].albedo = (i % 2 ? 51u : 204u) * 0x010101u;
+    radiance[i].sample_count = 2;
+    radiance[i].variance = 0.3F;
+    Lit(i, light);
+  }
+  for (std::uint32_t iterations = 1; iterations <= kTemporalFilterIterations; ++iterations) {
+    const auto output = FilterTemporalRadiance(surface, radiance, W, H, 2, 32, iterations);
+    Check(output.size() == radiance.size(), "filter rejected valid records");
+    for (std::size_t i = 0; i < output.size(); ++i)
+      for (std::size_t c = 0; c < 4; ++c)
+        Close(output[i][c], radiance[i].color[c], "uniform illumination changed under texture");
+  }
+  Check(FilterTemporalRadiance(surface, radiance, W, H, 2, 32, 0).empty() &&
+            FilterTemporalRadiance(surface, radiance, W, H, 2, 32, kTemporalFilterMaxIterations + 1).empty() &&
+            FilterTemporalRadiance(surface, radiance, W, H + 1, 2, 32, 1).empty() &&
+            FilterTemporalRadiance(surface, radiance, W, H, 0, 32, 1).empty(),
+      "malformed filter input");
+
+  // Pixels without a history keep their colour and are no one's neighbour;
+  // nor are other placements.
+  radiance[3 * W + 4].sample_count = 0;
+  radiance[3 * W + 4].color = {1000, 1000, 1000, 1};
+  for (std::size_t i = 0; i < surface.size(); ++i)
+    if (i % W >= 6) {
+      surface[i].instance_id = 2;
+      Lit(i, {9, 9, 9});
+    }
+  auto output = FilterTemporalRadiance(surface, radiance, W, H, 2, 32, kTemporalFilterIterations);
+  for (std::size_t i = 0; i < output.size(); ++i)
+    for (std::size_t c = 0; c < 4; ++c)
+      Close(output[i][c], radiance[i].color[c], "filter mixed a miss or another placement");
+
+  // Large variance leaves only the B3-spline footprint: one bright pixel in
+  // the centre of a unit field keeps (3/8)^2 of its excess.
+  surface.assign(W * H, plane);
+  for (auto& s : surface)
+    s.albedo = 0xFFFFFFu;
+  for (std::size_t i = 0; i < radiance.size(); ++i) {
+    radiance[i].sample_count = 2;
+    radiance[i].variance = 1.0e12F;
+    radiance[i].color = {1, 1, 1, 1};
+  }
+  radiance[3 * W + 4].color = {2, 2, 2, 1};
+  output = FilterTemporalRadiance(surface, radiance, W, H, 2, 32, 1);
+  Close(output[3 * W + 4][0], 1 + 9.0 / 64, "B3-spline footprint");
+  // Without variance the luminance difference stops every neighbour.
+  for (auto& p : radiance)
+    p.variance = 0;
+  output = FilterTemporalRadiance(surface, radiance, W, H, 2, 32, kTemporalFilterIterations);
+  for (std::size_t i = 0; i < output.size(); ++i)
+    Close(output[i][0], radiance[i].color[0], "noise-free detail was blurred");
+  // Depth and normal steps stop the filter however large the variance: a
+  // fold in depth along x, a crease in normals along y.
+  for (std::size_t i = 0; i < radiance.size(); ++i) {
+    radiance[i].variance = 1.0e12F;
+    const bool right = i % W >= 4, bottom = i / W >= 3;
+    surface[i].normal_depth[3] = right ? 8.0F : 4.0F;
+    surface[i].shading_normal = PackNormal(bottom ? std::array<float, 3>{0, 1, 0} : std::array<float, 3>{0, 0, 1});
+    const float value = 1.0F + (right ? 2.0F : 0.0F) + (bottom ? 4.0F : 0.0F);
+    radiance[i].color = {value, value, value, 1};
+  }
+  output = FilterTemporalRadiance(surface, radiance, W, H, 2, 32, kTemporalFilterIterations);
+  for (std::size_t i = 0; i < output.size(); ++i)
+    Close(output[i][0], radiance[i].color[0], "filter crossed a depth or normal edge");
+}
+
 } // namespace
 
 int main() try {
@@ -577,7 +704,8 @@ int main() try {
   WindowsAndIdentities();
   PixelFetch();
   Variance();
-  std::cout << "temporal lifecycle, correspondence, reprojection, rejection and variance PASS\n";
+  Filter();
+  std::cout << "temporal lifecycle, correspondence, reprojection, rejection, variance and filter PASS\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

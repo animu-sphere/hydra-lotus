@@ -243,6 +243,17 @@ if(LOTUS_RESEARCH_TESTS)
       lotus_test_tier(research ${name})
     endforeach()
   endforeach()
+  # Renderer Phase 6's SVGF comparison: raw, temporal and filtered radiance
+  # against a high-spp reference, rendered twice for determinism.
+  foreach(integrator reference wavefront)
+    add_test(NAME lotus-renderer-svgf-benchmark-${integrator}
+      COMMAND "${CMAKE_COMMAND}"
+        "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/svgf-benchmark-${integrator}"
+        "-DINTEGRATOR=${integrator}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/svgf-benchmark-test.cmake")
+    lotus_test_tier(research lotus-renderer-svgf-benchmark-${integrator})
+  endforeach()
 endif()
 if(LOTUS_ENABLE_VULKAN)
   add_test(NAME lotus-renderer-restir-benchmark-no-driver

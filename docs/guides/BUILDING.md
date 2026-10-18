@@ -59,7 +59,7 @@ build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-
 
 Every CTest carries one [tier](../design/TEST_POLICY.md#2-tiers) label:
 `fast` (no Vulkan device needed), `gpu` (renders when a device is present)
-or `research` (Renderer Phase 5's campaign procedures).
+or `research` (the campaign procedures of Renderer Phases 5 and 6).
 `lotus-test-tiers` fails when a test has no tier or more than one. The
 default build registers `fast` and `gpu`; the `research` intent adds the
 research tier:

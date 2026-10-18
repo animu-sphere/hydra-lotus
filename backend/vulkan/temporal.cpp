@@ -304,6 +304,73 @@ float TemporalLuminance(const std::array<float, 4>& color) {
   return 0.2126F * color[0] + 0.7152F * color[1] + 0.0722F * color[2];
 }
 
+std::array<float, 3> UnpackTemporalAlbedo(std::uint32_t albedo) {
+  return {static_cast<float>(albedo & 0xFFU) / 255.0F,
+      static_cast<float>((albedo >> 8) & 0xFFU) / 255.0F,
+      static_cast<float>((albedo >> 16) & 0xFFU) / 255.0F};
+}
+
+// Octahedral decoding, as temporal.slang's UnpackNormal.
+std::array<float, 3> UnpackTemporalNormal(std::uint32_t normal) {
+  const float x = std::max(static_cast<float>(static_cast<std::int16_t>(normal & 0xFFFFU)) / 32767.0F, -1.0F);
+  const float y = std::max(static_cast<float>(static_cast<std::int16_t>(normal >> 16)) / 32767.0F, -1.0F);
+  std::array<float, 3> n{x, y, 1.0F - std::abs(x) - std::abs(y)};
+  const float fold = std::max(-n[2], 0.0F);
+  n[0] += n[0] >= 0.0F ? -fold : fold;
+  n[1] += n[1] >= 0.0F ? -fold : fold;
+  const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  return {n[0] / length, n[1] / length, n[2] / length};
+}
+
+std::array<float, 4> DemodulateTemporalColor(const std::array<float, 4>& color, std::uint32_t albedo) {
+  const auto factor = UnpackTemporalAlbedo(albedo);
+  auto result = color;
+  for (std::size_t c = 0; c < 3; ++c)
+    if (factor[c] > 0.0F)
+      result[c] = color[c] / factor[c];
+  return result;
+}
+
+std::array<float, 4> RemodulateTemporalColor(const std::array<float, 4>& illumination, std::uint32_t albedo) {
+  const auto factor = UnpackTemporalAlbedo(albedo);
+  auto result = illumination;
+  for (std::size_t c = 0; c < 3; ++c)
+    if (factor[c] > 0.0F)
+      result[c] = illumination[c] * factor[c];
+  return result;
+}
+
+namespace {
+
+// One frame's records as the variance and filter passes see them: a pixel is
+// usable when it has a history on the given placement.
+struct Neighbourhood {
+  std::span<const TemporalPixel> surface;
+  std::span<const TemporalRadiancePixel> radiance;
+  std::int64_t width = 0, height = 0;
+
+  bool Usable(std::int64_t x, std::int64_t y, std::uint64_t instance_id) const {
+    return x >= 0 && y >= 0 && x < width && y < height &&
+           radiance[y * width + x].sample_count != 0 &&
+           surface[y * width + x].instance_id == instance_id;
+  }
+
+  // Along one axis, the smaller depth step to a usable neighbour; zero
+  // without one.
+  float Step(std::int64_t x, std::int64_t y, std::int64_t dx, std::int64_t dy) const {
+    const auto& s = surface[y * width + x];
+    float step = std::numeric_limits<float>::infinity();
+    for (const std::int64_t sign : {-1, 1}) {
+      const std::int64_t qx = x + sign * dx, qy = y + sign * dy;
+      if (Usable(qx, qy, s.instance_id))
+        step = std::min(step, std::abs(s.normal_depth[3] - surface[qy * width + qx].normal_depth[3]));
+    }
+    return std::isinf(step) ? 0.0F : step;
+  }
+};
+
+} // namespace
+
 // Float arithmetic in the GPU pass's order; see temporal.slang.
 float EstimateTemporalVariance(std::span<const TemporalPixel> surface,
     std::span<const TemporalRadiancePixel> radiance, std::uint32_t x,
@@ -323,28 +390,14 @@ float EstimateTemporalVariance(std::span<const TemporalPixel> surface,
     return std::max(0.0F, center.moments[1] - center.moments[0] * center.moments[0]);
   const auto& s = surface[index];
   const float depth = s.normal_depth[3];
-  const auto Usable = [&](std::int64_t qx, std::int64_t qy) {
-    return qx >= 0 && qy >= 0 && qx < width && qy < height &&
-           radiance[qy * width + qx].sample_count != 0 &&
-           surface[qy * width + qx].instance_id == s.instance_id;
-  };
-  // Per axis, the smaller depth step to a usable neighbour; zero without one.
-  const auto Step = [&](std::int64_t ax, std::int64_t ay, std::int64_t bx, std::int64_t by) {
-    float step = std::numeric_limits<float>::infinity();
-    if (Usable(ax, ay))
-      step = std::min(step, std::abs(depth - surface[ay * width + ax].normal_depth[3]));
-    if (Usable(bx, by))
-      step = std::min(step, std::abs(depth - surface[by * width + bx].normal_depth[3]));
-    return std::isinf(step) ? 0.0F : step;
-  };
+  const Neighbourhood around{surface, radiance, width, height};
   const std::int64_t px = x, py = y;
-  const float phi = std::max(Step(px - 1, py, px + 1, py) + Step(px, py - 1, px, py + 1),
-                        1.0e-8F) * 3.0F;
+  const float phi = std::max(around.Step(px, py, 1, 0) + around.Step(px, py, 0, 1), 1.0e-8F) * 3.0F;
   float weight_sum = 0.0F;
   std::array<float, 2> sum{};
   for (std::int64_t dy = -3; dy <= 3; ++dy) {
     for (std::int64_t dx = -3; dx <= 3; ++dx) {
-      if (!Usable(px + dx, py + dy))
+      if (!around.Usable(px + dx, py + dy, s.instance_id))
         continue;
       const std::size_t q = static_cast<std::size_t>((py + dy) * width + px + dx);
       const auto& n = surface[q].normal_depth;
@@ -365,6 +418,97 @@ float EstimateTemporalVariance(std::span<const TemporalPixel> surface,
   const float m2 = sum[1] / weight_sum;
   return std::max(0.0F, m2 - m1 * m1) *
          (static_cast<float>(kTemporalVarianceBatches) / batches);
+}
+
+// Float arithmetic in the GPU passes' order; see temporal.slang.
+std::vector<std::array<float, 4>> FilterTemporalRadiance(
+    std::span<const TemporalPixel> surface,
+    std::span<const TemporalRadiancePixel> radiance, std::uint32_t width,
+    std::uint32_t height, std::uint32_t batch_samples,
+    std::uint32_t max_history_samples, std::uint32_t iterations) {
+  const std::uint64_t pixels = std::uint64_t{width} * height;
+  if (surface.size() != pixels || radiance.size() != pixels || batch_samples == 0 ||
+      max_history_samples == 0 || iterations == 0 || iterations > kTemporalFilterMaxIterations)
+    return {};
+  const Neighbourhood around{surface, radiance, width, height};
+  const float batch = static_cast<float>(std::min(batch_samples, max_history_samples));
+  // Illumination and the variance of its mean's luminance.
+  std::vector<std::array<float, 4>> input(pixels), output(pixels);
+  for (std::size_t i = 0; i < pixels; ++i) {
+    if (radiance[i].sample_count == 0)
+      continue;
+    const float batches = static_cast<float>(radiance[i].sample_count) / batch;
+    input[i] = DemodulateTemporalColor(radiance[i].color, surface[i].albedo);
+    input[i][3] = radiance[i].variance / batches;
+  }
+  constexpr float kKernel[3] = {0.375F, 0.25F, 0.0625F};
+  const auto Luminance = [](const std::array<float, 4>& value) {
+    return TemporalLuminance({value[0], value[1], value[2], 0.0F});
+  };
+  for (std::uint32_t iteration = 0; iteration < iterations; ++iteration) {
+    const std::int64_t step = std::int64_t{1} << iteration;
+    for (std::int64_t py = 0; py < height; ++py) {
+      for (std::int64_t px = 0; px < width; ++px) {
+        const std::size_t index = static_cast<std::size_t>(py * width + px);
+        output[index] = {};
+        if (radiance[index].sample_count == 0)
+          continue;
+        const auto& s = surface[index];
+        float gaussian = 0.0F, gaussian_weight = 0.0F;
+        for (std::int64_t dy = -1; dy <= 1; ++dy) {
+          for (std::int64_t dx = -1; dx <= 1; ++dx) {
+            if (!around.Usable(px + dx, py + dy, s.instance_id))
+              continue;
+            const float k = (dx == 0 ? 0.5F : 0.25F) * (dy == 0 ? 0.5F : 0.25F);
+            gaussian += k * input[static_cast<std::size_t>((py + dy) * width + px + dx)][3];
+            gaussian_weight += k;
+          }
+        }
+        const float phi_l = 4.0F * std::sqrt(std::max(gaussian / gaussian_weight, 0.0F) + 1.0e-10F);
+        const float phi_z = std::max(around.Step(px, py, 1, 0) + around.Step(px, py, 0, 1), 1.0e-8F);
+        const auto normal = UnpackTemporalNormal(s.shading_normal);
+        const float luminance = Luminance(input[index]);
+        std::array<float, 3> sum{};
+        float variance = 0.0F, weight_sum = 0.0F;
+        for (std::int64_t ty = -2; ty <= 2; ++ty) {
+          for (std::int64_t tx = -2; tx <= 2; ++tx) {
+            const std::int64_t qx = px + tx * step, qy = py + ty * step;
+            if (!around.Usable(qx, qy, s.instance_id))
+              continue;
+            const std::size_t q = static_cast<std::size_t>(qy * width + qx);
+            const auto& value = input[q];
+            float w = kKernel[std::abs(tx)] * kKernel[std::abs(ty)];
+            if (tx != 0 || ty != 0) {
+              const float distance = static_cast<float>(step) * std::sqrt(static_cast<float>(tx * tx + ty * ty));
+              const float wz = std::abs(s.normal_depth[3] - surface[q].normal_depth[3]) / (phi_z * distance);
+              const float wl = std::abs(luminance - Luminance(value)) / phi_l;
+              const auto other = UnpackTemporalNormal(surface[q].shading_normal);
+              const float cosine = normal[0] * other[0] + normal[1] * other[1] + normal[2] * other[2];
+              const float wn = std::pow(std::clamp(cosine, 0.0F, 1.0F), 128.0F);
+              w = w * std::exp(-(wl + wz)) * wn;
+            }
+            for (std::size_t c = 0; c < 3; ++c)
+              sum[c] += w * value[c];
+            variance += w * w * value[3];
+            weight_sum += w;
+          }
+        }
+        output[index] = {sum[0] / weight_sum, sum[1] / weight_sum, sum[2] / weight_sum,
+            variance / (weight_sum * weight_sum)};
+      }
+    }
+    input.swap(output);
+  }
+  // The composite: the last iteration's illumination, remodulated.
+  for (std::size_t i = 0; i < pixels; ++i) {
+    if (radiance[i].sample_count == 0) {
+      output[i] = radiance[i].color;
+      continue;
+    }
+    output[i] = RemodulateTemporalColor({input[i][0], input[i][1], input[i][2], radiance[i].color[3]},
+        surface[i].albedo);
+  }
+  return output;
 }
 
 } // namespace Lotus
