@@ -84,6 +84,17 @@ Linux, macOS, AMD and Intel GPUs are not measured.
   OpenStrata environment detection; an incremental build with missing
   dependency records is not sufficient evidence for a header change.
 
+## Driver limitations
+
+- On the measured NVIDIA RTX A5000 with driver 597.16, the standalone
+  viewport loses the device at its second frame in about half of its
+  launches (fewer with the validation layer installed): the first ray-query
+  submission after a present faults in driver-managed memory. A launch that
+  passes its second frame keeps running, and headless and Hydra offscreen
+  rendering, which do not present, are unaffected. The
+  [device-loss report](../reports/2026-10-18-viewport-device-loss.md) holds
+  the measurements; no application-side cause or workaround was found.
+
 ## Foundation bootstrap limitations
 
 - Standalone presentation remains a bootstrap triangle, one frame in flight
