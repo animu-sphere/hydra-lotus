@@ -1,0 +1,534 @@
+{
+ "schema": "lotus-svgf-comparison-summary-v1",
+ "date": "2026-10-18",
+ "source_reports": [
+  "build/svgf-campaign/svgf-reference.json",
+  "build/svgf-campaign/svgf-wavefront.json"
+ ],
+ "build": {
+  "label": "main be7df4d plus LOTUS-SVGF-02; Release; 2026-10-18",
+  "compiler": "MSVC 19.51.36256.0",
+  "configuration": "Release",
+  "system": "Windows AMD64"
+ },
+ "device": {
+  "name": "NVIDIA RTX A5000",
+  "api": "1.4.329",
+  "driver": "2504261632",
+  "validation_available": true
+ },
+ "procedure": {
+  "reference_integrator": "reference",
+  "light_sampling": "nee-mis",
+  "workload": "svgf-room",
+  "width": 128,
+  "height": 128,
+  "frames": 32,
+  "sequences": 8,
+  "fresh_samples_per_frame": 1,
+  "history_cap": 32,
+  "filter_iterations": 5,
+  "max_bounces": 4,
+  "sample_index": 17,
+  "sequence_stride": 65537,
+  "reference_seed": 16777216,
+  "reference_samples_per_half": 1024,
+  "reference_halves": 2,
+  "integrators": [
+   "reference",
+   "wavefront"
+  ]
+ },
+ "integrators_identical_outputs": true,
+ "metric_notes": {
+  "outputs": "One render per frame: raw is its fresh batch, temporal the bounded temporal mean (the history), filtered the a-trous composite of that mean. The filter never feeds back into history.",
+  "mse": "RGB squared error against the pose's reference, every pixel, averaged over sequences and then frames. Finite reference noise (reference_noise_mse) is included, not subtracted.",
+  "frame_delta_mse": "Temporal residual: each frame's error minus the previous frame's at the same pixel, squared. It measures flicker and lag; the cut frame has none.",
+  "history_buckets": "Squared error by the pixel's history length in batches, frames after the cut pooled: the response after disocclusion or rejection.",
+  "last_frame_ensemble": "The last frame across independent sequences. Mean MSE is the squared error of their mean; noise is its expected sampling part; excess estimates the squared bias, and can be negative.",
+  "deterministic": "The first sequence rendered again from a new cut reproduced every raw, temporal and filtered value bit for bit.",
+  "gpu_ms_median": "Per frame, with whatever validation layers are active; filter covers every iteration and the composite.",
+  "first_frame_temporal_below_filtered": "First frame index whose temporal-mean MSE is below the filtered MSE; null if never.",
+  "gpu_ms_median_observed": "Validation layer active, GPU clocks not locked; observations, not costs."
+ },
+ "scenes": [
+  {
+   "id": "svgf-room-static-v1",
+   "moving": false,
+   "deterministic": {
+    "reference": true,
+    "wavefront": true
+   },
+   "reference_noise_mse": 0.000171771,
+   "first_frame_temporal_below_filtered": 13,
+   "outputs": {
+    "raw": {
+     "mse": 0.355519,
+     "rmse": 0.596254,
+     "mse_first_frame": 0.363402,
+     "mse_last_frame": 0.370871,
+     "mse_by_frame": [
+      0.363402,
+      0.351092,
+      0.346827,
+      0.342587,
+      0.35358,
+      0.360145,
+      0.344277,
+      0.370001,
+      0.351402,
+      0.329346,
+      0.374589,
+      0.349268,
+      0.34489,
+      0.351473,
+      0.367936,
+      0.357999,
+      0.359171,
+      0.358208,
+      0.376912,
+      0.362145,
+      0.363417,
+      0.362275,
+      0.351117,
+      0.335658,
+      0.366493,
+      0.358719,
+      0.355333,
+      0.335838,
+      0.362286,
+      0.353458,
+      0.34588,
+      0.370871
+     ],
+     "frame_delta_mse": 0.708744,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 0,
+       "mse": null
+      },
+      {
+       "batches": "2-3",
+       "pixels": 262144,
+       "mse": 0.348959
+      },
+      {
+       "batches": "4-7",
+       "pixels": 524288,
+       "mse": 0.350147
+      },
+      {
+       "batches": "8+",
+       "pixels": 3276800,
+       "mse": 0.356587
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.0447322,
+      "noise_mse": 0.0465913,
+      "reference_noise_mse": 0.000171771,
+      "excess_mse": -0.00203092
+     }
+    },
+    "temporal": {
+     "mse": 0.0460149,
+     "rmse": 0.214511,
+     "mse_first_frame": 0.363402,
+     "mse_last_frame": 0.0113267,
+     "mse_by_frame": [
+      0.363402,
+      0.183258,
+      0.118406,
+      0.0905124,
+      0.0740128,
+      0.0620355,
+      0.0518462,
+      0.045131,
+      0.040165,
+      0.0360206,
+      0.0330299,
+      0.0307349,
+      0.0280404,
+      0.0259066,
+      0.0244188,
+      0.0223766,
+      0.0212053,
+      0.0195836,
+      0.0184466,
+      0.0178532,
+      0.0171015,
+      0.0165114,
+      0.0159327,
+      0.0151513,
+      0.0144362,
+      0.0137878,
+      0.0132656,
+      0.0127574,
+      0.0122172,
+      0.0119635,
+      0.0116413,
+      0.0113267
+     ],
+     "frame_delta_mse": 0.0109387,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 0,
+       "mse": null
+      },
+      {
+       "batches": "2-3",
+       "pixels": 262144,
+       "mse": 0.150832
+      },
+      {
+       "batches": "4-7",
+       "pixels": 524288,
+       "mse": 0.0696017
+      },
+      {
+       "batches": "8+",
+       "pixels": 3276800,
+       "mse": 0.0211602
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.00130588,
+      "noise_mse": 0.00143154,
+      "reference_noise_mse": 0.000171771,
+      "excess_mse": -0.000297426
+     }
+    },
+    "filtered": {
+     "mse": 0.0305399,
+     "rmse": 0.174757,
+     "mse_first_frame": 0.088228,
+     "mse_last_frame": 0.0180661,
+     "mse_by_frame": [
+      0.088228,
+      0.064219,
+      0.0515341,
+      0.0475139,
+      0.0440846,
+      0.0410629,
+      0.0373477,
+      0.0346872,
+      0.0325983,
+      0.0311688,
+      0.0296045,
+      0.0286676,
+      0.0279324,
+      0.0273597,
+      0.0267027,
+      0.0263195,
+      0.0253314,
+      0.0244076,
+      0.0237447,
+      0.0229107,
+      0.0221053,
+      0.0218024,
+      0.0215846,
+      0.0211692,
+      0.0207336,
+      0.0204682,
+      0.0199837,
+      0.01963,
+      0.0191686,
+      0.0187539,
+      0.0183864,
+      0.0180661
+     ],
+     "frame_delta_mse": 0.000842512,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 0,
+       "mse": null
+      },
+      {
+       "batches": "2-3",
+       "pixels": 262144,
+       "mse": 0.0578766
+      },
+      {
+       "batches": "4-7",
+       "pixels": 524288,
+       "mse": 0.0425023
+      },
+      {
+       "batches": "8+",
+       "pixels": 3276800,
+       "mse": 0.0241315
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.016256,
+      "noise_mse": 0.000258578,
+      "reference_noise_mse": 0.000171771,
+      "excess_mse": 0.0158257
+     }
+    }
+   },
+   "gpu_ms_median_observed": {
+    "reference": {
+     "primary_surface": 0.213568,
+     "reprojection": 0.084992,
+     "accumulation": 0.070656,
+     "variance": 0.0256,
+     "filter": 0.969728
+    },
+    "wavefront": {
+     "primary_surface": 0.217376,
+     "reprojection": 0.089088,
+     "accumulation": 0.074752,
+     "variance": 0.027648,
+     "filter": 1.160192
+    }
+   },
+   "memory": {
+    "radiance_bytes": 2621440,
+    "filter_bytes": 524288
+   }
+  },
+  {
+   "id": "svgf-room-moving-camera-block-v1",
+   "moving": true,
+   "deterministic": {
+    "reference": true,
+    "wavefront": true
+   },
+   "reference_noise_mse": 0.000171748,
+   "first_frame_temporal_below_filtered": null,
+   "outputs": {
+    "raw": {
+     "mse": 0.353827,
+     "rmse": 0.594833,
+     "mse_first_frame": 0.363402,
+     "mse_last_frame": 0.34751,
+     "mse_by_frame": [
+      0.363402,
+      0.357279,
+      0.347771,
+      0.366268,
+      0.347215,
+      0.38374,
+      0.369815,
+      0.366841,
+      0.358168,
+      0.352295,
+      0.380144,
+      0.361132,
+      0.354482,
+      0.378013,
+      0.354761,
+      0.349975,
+      0.349404,
+      0.374593,
+      0.379077,
+      0.338073,
+      0.335954,
+      0.353943,
+      0.362313,
+      0.352023,
+      0.334092,
+      0.343801,
+      0.326438,
+      0.33315,
+      0.360787,
+      0.324074,
+      0.315917,
+      0.34751
+     ],
+     "frame_delta_mse": 0.709048,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 218800,
+       "mse": 0.350058
+      },
+      {
+       "batches": "2-3",
+       "pixels": 496728,
+       "mse": 0.333258
+      },
+      {
+       "batches": "4-7",
+       "pixels": 750288,
+       "mse": 0.318498
+      },
+      {
+       "batches": "8+",
+       "pixels": 2597416,
+       "mse": 0.367799
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.0468471,
+      "noise_mse": 0.0429518,
+      "reference_noise_mse": 0.000150532,
+      "excess_mse": 0.00374468
+     }
+    },
+    "temporal": {
+     "mse": 0.0798195,
+     "rmse": 0.282523,
+     "mse_first_frame": 0.363402,
+     "mse_last_frame": 0.0389989,
+     "mse_by_frame": [
+      0.363402,
+      0.198935,
+      0.146004,
+      0.107395,
+      0.0864199,
+      0.0848015,
+      0.0823736,
+      0.0852243,
+      0.0622705,
+      0.05217,
+      0.0729389,
+      0.0744459,
+      0.0605548,
+      0.0531074,
+      0.042488,
+      0.0528723,
+      0.0611781,
+      0.0699942,
+      0.0722896,
+      0.0682025,
+      0.0588749,
+      0.0555438,
+      0.06948,
+      0.0749115,
+      0.0543035,
+      0.039995,
+      0.0670077,
+      0.0556502,
+      0.0565381,
+      0.0459028,
+      0.0399503,
+      0.0389989
+     ],
+     "frame_delta_mse": 0.126022,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 218800,
+       "mse": 0.350058
+      },
+      {
+       "batches": "2-3",
+       "pixels": 496728,
+       "mse": 0.156809
+      },
+      {
+       "batches": "4-7",
+       "pixels": 750288,
+       "mse": 0.0672084
+      },
+      {
+       "batches": "8+",
+       "pixels": 2597416,
+       "mse": 0.0316644
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.00906557,
+      "noise_mse": 0.00427619,
+      "reference_noise_mse": 0.000150532,
+      "excess_mse": 0.00463885
+     }
+    },
+    "filtered": {
+     "mse": 0.0390943,
+     "rmse": 0.197723,
+     "mse_first_frame": 0.088228,
+     "mse_last_frame": 0.0294864,
+     "mse_by_frame": [
+      0.088228,
+      0.0662915,
+      0.0559634,
+      0.0482822,
+      0.0445924,
+      0.0431995,
+      0.0421211,
+      0.0399009,
+      0.0363753,
+      0.034421,
+      0.0358118,
+      0.0353144,
+      0.0363026,
+      0.0347051,
+      0.0322383,
+      0.0333147,
+      0.0341009,
+      0.036541,
+      0.0368379,
+      0.037438,
+      0.0367012,
+      0.036449,
+      0.0336343,
+      0.0374979,
+      0.0340647,
+      0.0328367,
+      0.0313421,
+      0.0341437,
+      0.0332603,
+      0.0308091,
+      0.0288106,
+      0.0294864
+     ],
+     "frame_delta_mse": 0.047074,
+     "history_buckets": [
+      {
+       "batches": "1",
+       "pixels": 218800,
+       "mse": 0.129332
+      },
+      {
+       "batches": "2-3",
+       "pixels": 496728,
+       "mse": 0.065319
+      },
+      {
+       "batches": "4-7",
+       "pixels": 750288,
+       "mse": 0.0354996
+      },
+      {
+       "batches": "8+",
+       "pixels": 2597416,
+       "mse": 0.0250366
+      }
+     ],
+     "last_frame_ensemble": {
+      "mean_mse": 0.0282641,
+      "noise_mse": 0.00017461,
+      "reference_noise_mse": 0.000150532,
+      "excess_mse": 0.027939
+     }
+    }
+   },
+   "gpu_ms_median_observed": {
+    "reference": {
+     "primary_surface": 0.209504,
+     "reprojection": 0.086016,
+     "accumulation": 0.06656,
+     "variance": 0.188416,
+     "filter": 0.973824
+    },
+    "wavefront": {
+     "primary_surface": 0.19376,
+     "reprojection": 0.084992,
+     "accumulation": 0.072704,
+     "variance": 0.160768,
+     "filter": 0.877568
+    }
+   },
+   "memory": {
+    "radiance_bytes": 2621440,
+    "filter_bytes": 524288
+   }
+  }
+ ]
+}

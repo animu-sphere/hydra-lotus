@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include <lotus/render_world.hpp>
 
@@ -50,6 +51,11 @@ struct TemporalFrameSettings {
   // Effective samples retained per pixel, including the current batch.
   // Must be in [1, 65536] when accumulation is enabled.
   std::uint32_t max_history_samples = 32;
+  // Edge-aware a-trous iterations over the accumulated radiance
+  // (FilterTemporalRadiance); zero leaves the colour unfiltered. Requires
+  // accumulate_radiance and at most kTemporalFilterMaxIterations. The
+  // history stays unfiltered, so changing it never resets the stream.
+  std::uint32_t filter_iterations = 0;
 };
 
 struct TemporalFrame {
@@ -154,7 +160,13 @@ struct TemporalPixel {
   std::uint64_t material_id = 0;
   // bit 0: hit; bit 1: rigid correspondence; bit 2: unchanged material.
   std::uint32_t flags = 0;
-  std::array<std::uint32_t, 3> reserved{};
+  // The material's base colour at the hit, after texture lookups, as
+  // unorm8 R, G, B in bits 0-23 (UnpackTemporalAlbedo).
+  std::uint32_t albedo = 0;
+  // The shading normal facing the camera, octahedral snorm16 x in bits
+  // 0-15 and y in bits 16-31 (UnpackTemporalNormal).
+  std::uint32_t shading_normal = 0;
+  std::uint32_t reserved = 0;
 };
 
 struct TemporalValidityPixel {
@@ -170,16 +182,29 @@ struct TemporalRadiancePixel {
   std::array<float, 4> color{};
   // Zero on misses and outside the data window; such pixels never reuse.
   std::uint32_t sample_count = 0;
-  // First and second moments of each fresh batch mean's luminance
-  // (TemporalLuminance), weighted as the colour is.
+  // First and second moments of each fresh batch mean's illumination
+  // luminance (TemporalLuminance of DemodulateTemporalColor), weighted as
+  // the colour is.
   std::array<float, 2> moments{};
-  // Estimated variance of one fresh batch mean's luminance
+  // Estimated variance of one fresh batch mean's illumination luminance
   // (EstimateTemporalVariance); zero where sample_count is zero.
   float variance = 0.0F;
 };
 
 // Rec. 709 luminance of linear RGB, as the GPU moments use it.
 [[nodiscard]] float TemporalLuminance(const std::array<float, 4>& color);
+
+// TemporalPixel's packed material inputs. Normals are unit length.
+[[nodiscard]] std::array<float, 3> UnpackTemporalAlbedo(std::uint32_t albedo);
+[[nodiscard]] std::array<float, 3> UnpackTemporalNormal(std::uint32_t normal);
+
+// Illumination: each colour channel over the albedo's, or unchanged where
+// that albedo channel is zero. Alpha is kept. Moments, variance and the
+// filter work on it; RemodulateTemporalColor undoes it.
+[[nodiscard]] std::array<float, 4> DemodulateTemporalColor(
+    const std::array<float, 4>& color, std::uint32_t albedo);
+[[nodiscard]] std::array<float, 4> RemodulateTemporalColor(
+    const std::array<float, 4>& illumination, std::uint32_t albedo);
 
 // Histories this many batches long use their temporal variance; shorter ones
 // estimate it from the surrounding pixels' moments.
@@ -199,6 +224,27 @@ inline constexpr std::uint32_t kTemporalVarianceBatches = 4;
     std::span<const TemporalRadiancePixel> radiance, std::uint32_t x,
     std::uint32_t y, std::uint32_t width, std::uint32_t height,
     std::uint32_t batch_samples, std::uint32_t max_history_samples);
+
+// SVGF's iteration count; at most kTemporalFilterMaxIterations run.
+inline constexpr std::uint32_t kTemporalFilterIterations = 5;
+inline constexpr std::uint32_t kTemporalFilterMaxIterations = 8;
+
+// CPU oracle for the GPU filter and composite, in its float arithmetic.
+// Each pixel with a history starts from its illumination and the variance
+// of its mean, variance / b for b batches of history. Iteration i averages
+// a 5x5 B3-spline footprint with taps 2^i pixels apart over histories on
+// the same placement, weighted by shading normal (cosine to the 128th
+// power), linear depth (against the local depth gradient per pixel of
+// distance) and illumination luminance (against four standard deviations
+// of the 3x3 Gaussian-filtered variance); variances combine with squared
+// weights. The composite remodulates by the albedo and keeps the
+// accumulated alpha; pixels without a history keep the accumulated colour.
+// Returns width*height RGBA values; empty for malformed input.
+[[nodiscard]] std::vector<std::array<float, 4>> FilterTemporalRadiance(
+    std::span<const TemporalPixel> surface,
+    std::span<const TemporalRadiancePixel> radiance, std::uint32_t width,
+    std::uint32_t height, std::uint32_t batch_samples,
+    std::uint32_t max_history_samples, std::uint32_t iterations);
 
 // CPU oracle for the GPU's nearest-pixel backward fetch (floor of the
 // continuous previous pixel). History must contain width*height records,

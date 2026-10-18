@@ -98,7 +98,9 @@ static_assert(sizeof(TemporalValidityPixel) == 16 &&
               offsetof(TemporalValidityPixel, previous_index) == 8);
 static_assert(sizeof(TemporalPixel) == 64 &&
               offsetof(TemporalPixel, instance_id) == 32 &&
-              offsetof(TemporalPixel, flags) == 48);
+              offsetof(TemporalPixel, flags) == 48 &&
+              offsetof(TemporalPixel, albedo) == 52 &&
+              offsetof(TemporalPixel, shading_normal) == 56);
 
 struct TemporalBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
@@ -182,8 +184,12 @@ constexpr std::uint32_t kRestirInitialPass = 7;
 constexpr std::uint32_t kRestirTemporalPass = 8;
 constexpr std::uint32_t kRestirSpatialPass = 9;
 constexpr std::uint32_t kTemporalVariancePass = 10;
-// Surface, validity, accumulation and variance pass timestamp pairs.
-constexpr std::uint32_t kTemporalTimestampQueries = 8;
+// A-trous iterations, and the last one with the composite; the draw's first
+// instance is the iteration.
+constexpr std::uint32_t kTemporalFilterPass = 11;
+constexpr std::uint32_t kTemporalCompositePass = 12;
+// Surface, validity, accumulation, variance and filter timestamp pairs.
+constexpr std::uint32_t kTemporalTimestampQueries = 10;
 
 // Rigid placements and cameras may move; edits that can alter illumination
 // anywhere reset radiance globally, including indirect/emissive changes.
@@ -642,6 +648,8 @@ public:
       vkDestroyPipeline(device_, temporal_validity_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_accumulation_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_variance_pipeline_, nullptr);
+      vkDestroyPipeline(device_, temporal_filter_pipeline_, nullptr);
+      vkDestroyPipeline(device_, temporal_composite_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_temporal_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_spatial_pipeline_, nullptr);
@@ -765,7 +773,13 @@ public:
               temporal_accumulation_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kTemporalVariancePass, false, false},
-              temporal_variance_pipeline_, detail))
+              temporal_variance_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kTemporalFilterPass, false, false},
+              temporal_filter_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kTemporalCompositePass, true, false},
+              temporal_composite_pipeline_, detail))
         return false;
       if (!CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRestirInitialPass, false, false},
@@ -1160,6 +1174,7 @@ public:
       DestroyTemporalBuffer(buffer);
     DestroyTemporalBuffer(temporal_radiance_readback_);
     DestroyTemporalBuffer(temporal_batch_);
+    DestroyTemporalBuffer(temporal_filter_);
     DestroyTemporalBuffer(temporal_constants_);
     DestroyTemporalBuffer(temporal_instances_);
     temporal_width_ = temporal_height_ = 0;
@@ -1470,6 +1485,10 @@ public:
                           settings.output != SceneOutput::Radiance || !target.clear_color_enabled))
       return Evidence(FrameStatus::Fail,
           "temporal radiance requires Radiance, colour clears and history samples in [1, 65536]");
+    const std::uint32_t filter_iterations = requested.filter_iterations;
+    if (filter_iterations > kTemporalFilterMaxIterations || (filter_iterations != 0 && !accumulate))
+      return Evidence(FrameStatus::Fail,
+          "temporal filtering requires radiance accumulation and at most 8 iterations");
     auto next_history = temporal_history_;
     auto next_identities = temporal_identities_;
     auto frame_settings = requested;
@@ -1554,6 +1573,12 @@ public:
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
+    // Two ping-pong halves of illumination and variance, 16 bytes each.
+    if (filter_iterations != 0 &&
+        !EnsureTemporalBuffer(temporal_filter_, radiance_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, detail)) {
+      failure_ = detail;
+      return Evidence(FrameStatus::Fail, detail);
+    }
     const auto viewport = DisplayViewport(target);
     const auto scissor = DataScissor(target);
     TemporalConstants constants{};
@@ -1611,6 +1636,16 @@ public:
       }
       vkUpdateDescriptorSets(device_, 3, radiance_writes, 0, nullptr);
     }
+    if (filter_iterations != 0) {
+      const VkDescriptorBufferInfo filter{temporal_filter_.buffer, 0, radiance_bytes};
+      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      write.dstSet = ray_descriptor_;
+      write.dstBinding = 21;
+      write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      write.pBufferInfo = &filter;
+      vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
     restir_history_available_ = reuse && frame.previous.has_value();
     restir_spatial_active_ = settings.restir_spatial;
     if (reservoirs && !EnsureRestirHistory(target, detail)) {
@@ -1632,7 +1667,7 @@ public:
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
-    if (!RecordTemporal(target, frame.previous.has_value(), accumulate,
+    if (!RecordTemporal(target, frame.previous.has_value(), accumulate, filter_iterations,
             target.read_back, bytes, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
@@ -1702,10 +1737,15 @@ public:
       products.radiance_bytes = radiance_bytes * 4 + temporal_batch_.bytes * 2;
       products.batch_samples = evidence.samples_per_pixel;
       products.batch_sample_index = batch_settings.sample_index;
+      products.filter_iterations = filter_iterations;
+      products.filter_bytes = temporal_filter_.bytes;
     }
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
       std::uint64_t ticks[kTemporalTimestampQueries]{};
-      const std::uint32_t queries = accumulate ? kTemporalTimestampQueries : 4u;
+      // Only the passes recorded this frame wrote their queries.
+      const std::uint32_t queries = filter_iterations != 0 ? kTemporalTimestampQueries
+                                    : accumulate           ? 8u
+                                                           : 4u;
       if (!VulkanOk(vkGetQueryPoolResults(device_, temporal_timestamps_, 0, queries,
                         sizeof(ticks), ticks, sizeof(ticks[0]),
                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
@@ -1726,6 +1766,9 @@ public:
         products.variance_gpu_ms = static_cast<double>((ticks[7] - ticks[6]) & mask) *
                                    device_properties_.limits.timestampPeriod / 1'000'000.0;
       }
+      if (filter_iterations != 0)
+        products.filter_gpu_ms = static_cast<double>((ticks[9] - ticks[8]) & mask) *
+                                 device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
     // Publish only after submission, readback and timestamps all succeeded.
     temporal_presentable_ = true;
@@ -1817,7 +1860,8 @@ public:
   // Without `read_back` the products stay on the GPU: the surfaces,
   // validity and radiance are not copied to their host mirrors.
   bool RecordTemporal(const OffscreenTarget& target, bool previous,
-      bool accumulate, bool read_back, VkDeviceSize bytes, std::string& detail) {
+      bool accumulate, std::uint32_t filter_iterations, bool read_back,
+      VkDeviceSize bytes, std::string& detail) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!VulkanOk(vkBeginCommandBuffer(command_, &begin),
             "vkBeginCommandBuffer(temporal)", detail))
@@ -1888,6 +1932,30 @@ public:
       vkCmdEndRenderPass(command_);
       if (temporal_timestamps_ != VK_NULL_HANDLE)
         vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 7);
+    }
+    if (filter_iterations != 0) {
+      if (temporal_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, temporal_timestamps_, 8);
+      // Each iteration reads its neighbours' variance and the preceding
+      // iteration's output; the last one writes the colour attachment.
+      for (std::uint32_t iteration = 0; iteration < filter_iterations; ++iteration) {
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            iteration + 1 == filter_iterations ? temporal_composite_pipeline_ : temporal_filter_pipeline_);
+        vkCmdSetViewport(command_, 0, 1, &full_viewport);
+        vkCmdSetScissor(command_, 0, 1, &full_scissor);
+        vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+        vkCmdPushConstants(command_, ray_layout_, kRayStages, 0, sizeof(RayConstants), &ray_constants_);
+        vkCmdDraw(command_, 3, 1, 0, iteration);
+        vkCmdEndRenderPass(command_);
+      }
+      if (temporal_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 9);
     }
     if (!read_back)
       return VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer(temporal)", detail);
@@ -2604,7 +2672,7 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[21]{};
+    VkDescriptorSetLayoutBinding bindings[22]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -2638,7 +2706,7 @@ private:
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (std::uint32_t index = 8; index < 21; ++index) {
+    for (std::uint32_t index = 8; index < 22; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = index == 8
                                            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -2648,17 +2716,17 @@ private:
     }
     for (unsigned index = 16; index < 21; ++index)
       bindings[index].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-    std::array<VkDescriptorBindingFlags, 21> binding_flags{};
+    std::array<VkDescriptorBindingFlags, 22> binding_flags{};
     for (unsigned index = 0; index < binding_flags.size(); ++index)
       if (index == 0 || index == 3 || index >= 7)
         binding_flags[index] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 21;
+    flags.bindingCount = 22;
     flags.pBindingFlags = binding_flags.data();
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 21;
+    layout.bindingCount = 22;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -2670,7 +2738,7 @@ private:
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 15}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 6;
@@ -3417,6 +3485,8 @@ private:
   VkPipeline temporal_validity_pipeline_ = VK_NULL_HANDLE;
   VkPipeline temporal_accumulation_pipeline_ = VK_NULL_HANDLE;
   VkPipeline temporal_variance_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline temporal_filter_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline temporal_composite_pipeline_ = VK_NULL_HANDLE;
   VkQueryPool temporal_timestamps_ = VK_NULL_HANDLE;
   VkPipeline restir_pipeline_ = VK_NULL_HANDLE;
   VkPipeline restir_temporal_pipeline_ = VK_NULL_HANDLE;
@@ -3445,6 +3515,7 @@ private:
   std::array<TemporalBuffer, 2> temporal_radiance_{};
   TemporalBuffer temporal_radiance_readback_;
   TemporalBuffer temporal_batch_;
+  TemporalBuffer temporal_filter_;
   TemporalBuffer temporal_constants_;
   TemporalBuffer temporal_instances_;
   std::uint32_t temporal_width_ = 0;

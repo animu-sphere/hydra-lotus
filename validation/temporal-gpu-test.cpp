@@ -437,6 +437,14 @@ std::vector<float> Colors(const Lotus::GpuFrameEvidence& frame) {
   return values;
 }
 
+// The unfiltered temporal mean, whichever filter setting produced the frame.
+std::vector<float> TemporalColors(const Lotus::GpuFrameEvidence& frame) {
+  std::vector<float> values;
+  for (const auto& p : frame.temporal.radiance)
+    values.insert(values.end(), p.color.begin(), p.color.end());
+  return values;
+}
+
 void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
     Lotus::OffscreenRenderer& reference, Lotus::Integrator integrator) {
   using namespace Lotus;
@@ -467,8 +475,12 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   std::uint32_t next_index = settings.sample_index;
   std::uint64_t compared = 0, reused = 0, rejected_hits = 0;
   double max_blend_error = 0, moving_mse = 0, fresh_moving_mse = 0;
-  double max_moment_error = 0, max_variance_error = 0;
-  std::uint64_t temporal_variance = 0, spatial_variance = 0;
+  double max_moment_error = 0, max_variance_error = 0, max_filter_error = 0;
+  std::uint64_t temporal_variance = 0, spatial_variance = 0, filtered = 0;
+  double filter_gpu_ms = 0;
+  // The filter changes from frame to frame without resetting the history:
+  // off, SVGF's iterations, off, and the composite alone.
+  constexpr std::uint32_t kFilterCycle[4] = {0, kTemporalFilterIterations, 0, 1};
   std::uint32_t moving_comparisons = 0;
   auto Fresh = [&](std::uint32_t index, std::uint32_t samples) {
     auto path = settings;
@@ -489,10 +501,22 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
     snapshot = world.Commit();
     Check(renderer.UpdateScene(extraction.Update(snapshot)).status == FrameStatus::Pass, "temporal upload");
     Check(reference.UpdateScene(reference_extraction.Update(snapshot)).status == FrameStatus::Pass, "reference upload");
+    temporal.filter_iterations = kFilterCycle[temporal.frame_index % 4];
     auto frame = renderer.RenderTemporalScene(snapshot, target, samples, temporal, settings);
     Check(frame.status == FrameStatus::Pass, frame.detail.c_str());
     Check(frame.validation_message_count == 0, frame.validation_detail.c_str());
     const auto& product = frame.temporal;
+    Check(product.filter_iterations == temporal.filter_iterations, "filter iterations not reported");
+    // The composite against the CPU oracle over this frame's own records.
+    std::vector<std::array<float, 4>> composite;
+    if (temporal.filter_iterations != 0) {
+      composite = FilterTemporalRadiance(product.current, product.radiance, target.width, target.height,
+          product.batch_samples, temporal.max_history_samples, temporal.filter_iterations);
+      Check(composite.size() == product.radiance.size(), "filter oracle rejected the frame");
+      Check(product.filter_bytes == std::uint64_t{target.width} * target.height * 32, "filter memory");
+      filter_gpu_ms = std::max(filter_gpu_ms, product.filter_gpu_ms);
+      ++filtered;
+    }
     Check(product.radiance_available && product.radiance.size() == target.width * target.height &&
               product.radiance_row_pitch == target.width * sizeof(TemporalRadiancePixel),
         "radiance debug layout");
@@ -530,9 +554,17 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
       for (unsigned c = 0; c < 4; ++c)
         Check(std::abs(product.batch[i][c] - batch[i * 4 + c]) < 0.00002,
             "raw radiance differs from independent fresh batch");
-      // Luminance moments blend with the colour's weights; misses have none.
-      const double luminance = TemporalLuminance(
-          {batch[i * 4], batch[i * 4 + 1], batch[i * 4 + 2], batch[i * 4 + 3]});
+      // Without authored normals the shading normal is the geometric one.
+      if (hit) {
+        const auto normal = UnpackTemporalNormal(product.current[i].shading_normal);
+        for (unsigned c = 0; c < 3; ++c)
+          Check(std::abs(normal[c] - product.current[i].normal_depth[c]) < 0.0002F,
+              "shading normal product differs from the geometric normal");
+      }
+      // Illumination luminance moments blend with the colour's weights;
+      // misses have none.
+      const double luminance = TemporalLuminance(DemodulateTemporalColor(
+          {batch[i * 4], batch[i * 4 + 1], batch[i * 4 + 2], batch[i * 4 + 3]}, product.current[i].albedo));
       for (unsigned m = 0; m < 2; ++m) {
         const double fresh_moment = m == 0 ? luminance : luminance * luminance;
         const double expected = !hit ? 0.0 : kept == 0 ? fresh_moment
@@ -564,7 +596,19 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
         const double error = std::abs(actual.color[c] - expected);
         max_blend_error = std::max(max_blend_error, error);
         Check(std::isfinite(actual.color[c]) && error < 0.00002, "temporal blend differs from independent fresh batch");
-        Near(output[i * 4 + c], actual.color[c], "colour attachment differs from temporal history");
+        if (composite.empty()) {
+          Near(output[i * 4 + c], actual.color[c], "colour attachment differs from temporal history");
+        } else {
+          const double expected_filtered = composite[i][c];
+          const double filter_error = std::abs(output[i * 4 + c] - expected_filtered);
+          max_filter_error = std::max(max_filter_error, filter_error / std::max(1.0, std::abs(expected_filtered)));
+          if (!std::isfinite(output[i * 4 + c]) ||
+              filter_error > 0.0002 * std::max(1.0, std::abs(expected_filtered))) {
+            std::cerr << "pixel " << i << " channel " << c << " iterations " << temporal.filter_iterations
+                      << ": actual=" << output[i * 4 + c] << " expected=" << expected_filtered << '\n';
+            throw std::runtime_error("filtered composite differs from CPU oracle");
+          }
+        }
       }
       ++compared;
     }
@@ -581,7 +625,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   auto MeasureMotion = [&] {
     const auto frame = Render(2);
     Check(frame.temporal.history_available, "motion reset radiance globally");
-    const auto truth = Colors(Fresh(8192, 256)), image = Colors(frame);
+    const auto truth = Colors(Fresh(8192, 256)), image = TemporalColors(frame);
     const auto fresh = Colors(Fresh(frame.temporal.batch_sample_index, 2));
     double squared = 0, fresh_squared = 0;
     for (std::size_t i = 0; i < image.size(); ++i)
@@ -618,13 +662,16 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   const double spatial_mean = MeanVariance(first_batch.temporal);
   const double temporal_mean = MeanVariance(stationary.temporal);
   const auto progressive = Colors(Fresh(settings.sample_index, 16));
-  const auto image = Colors(stationary);
+  const auto image = TemporalColors(stationary);
   double static_error = 0;
   for (std::size_t i = 0; i < image.size(); ++i)
     static_error = std::max(static_error, std::abs(double(image[i]) - progressive[i]));
   Check(static_error < 0.00002, "static temporal convergence differs from progressive reference");
   for (const auto& p : stationary.temporal.radiance)
     Check(p.sample_count == 16, "static counts did not grow");
+  // The base colour (0.6, 0.4, 0.2) as unorm8.
+  for (const auto& p : stationary.temporal.current)
+    Check(p.albedo == (153u | 102u << 8 | 51u << 16), "albedo product differs from the base colour");
   for (unsigned i = 0; i < 10; ++i)
     (void)Render(2); // Reach and exceed the cap; the oracle checks each blend.
   (void)Render(64);  // A batch larger than the cap replaces the old mean.
@@ -704,6 +751,12 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail, "zero history cap");
   bad.max_history_samples = 65537;
   Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail, "oversized history cap");
+  bad = temporal;
+  bad.filter_iterations = kTemporalFilterMaxIterations + 1;
+  Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail, "too many filter iterations");
+  bad.filter_iterations = 1;
+  bad.accumulate_radiance = false;
+  Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail, "filter without radiance");
   auto diagnostic = settings;
   diagnostic.output = SceneOutput::Albedo;
   Check(renderer.RenderTemporalScene(snapshot, target, 1, temporal, diagnostic).status == FrameStatus::Fail, "diagnostic radiance accumulation");
@@ -714,6 +767,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Check(Render().temporal.history_available, "failed radiance call consumed history");
   // Mode changes and ordinary rendering break radiance reuse explicitly.
   temporal.accumulate_radiance = false;
+  temporal.filter_iterations = 0;
   const auto metadata = renderer.RenderTemporalScene(snapshot, target, 1, temporal, settings);
   Check(metadata.status == FrameStatus::Pass && !metadata.temporal.radiance_available, "metadata-only mode");
   ++temporal.frame_index;
@@ -743,7 +797,8 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
       ++exposed;
       Check(disocclusion.temporal.radiance[i].sample_count == 1, "ghost foreground history on exposed surface");
       const auto& moments = disocclusion.temporal.radiance[i].moments;
-      const auto luminance = TemporalLuminance(disocclusion.temporal.batch[i]);
+      const auto luminance = TemporalLuminance(
+          DemodulateTemporalColor(disocclusion.temporal.batch[i], disocclusion.temporal.current[i].albedo));
       Check(std::abs(moments[0] - luminance) <= 0.00002F * luminance &&
                 std::abs(moments[1] - luminance * luminance) <= 0.00004F * luminance * luminance,
           "ghost foreground moments on exposed surface");
@@ -758,6 +813,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Check(preceding->temporal.accumulation_gpu_ms >= 0 && preceding->temporal.variance_gpu_ms >= 0,
       "invalid accumulation timestamp");
   Check(temporal_variance > 0 && spatial_variance > 0, "variance estimates not both exercised");
+  Check(filtered > 0 && filter_gpu_ms > 0, "filter not exercised or untimed");
   std::cout << (integrator == Integrator::Reference ? "reference" : "wavefront")
             << " radiance PASS; compared_pixels=" << compared << " reused=" << reused
             << " rejected_hits=" << rejected_hits << " static_max_error=" << static_error
@@ -771,6 +827,8 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
             << " spatial_variance_pixels=" << spatial_variance
             << " static_first_frame_mean_variance=" << spatial_mean
             << " static_eight_batch_mean_variance=" << temporal_mean << '\n';
+  std::cout << "filter PASS; filtered_frames=" << filtered << " max_filter_rel_error=" << max_filter_error
+            << " max_filter_gpu_ms=" << filter_gpu_ms << '\n';
 }
 } // namespace
 

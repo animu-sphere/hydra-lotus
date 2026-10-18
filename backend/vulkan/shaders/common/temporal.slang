@@ -42,9 +42,9 @@ public struct TemporalPixel {
   public uint64_t instance_id;
   public uint64_t material_id;
   public uint flags;
-  public uint reserved0;
-  public uint reserved1;
-  public uint reserved2;
+  public uint albedo;
+  public uint shading_normal;
+  public uint reserved;
 };
 [[vk::binding(10, 0)]] RWStructuredBuffer<TemporalPixel> temporal_surface;
 [[vk::binding(11, 0)]] StructuredBuffer<TemporalPixel> temporal_previous;
@@ -91,8 +91,53 @@ float Luminance(float4 color) {
   return 0.2126 * color.x + 0.7152 * color.y + 0.0722 * color.z;
 }
 
-// The batch's luminance moments are blended with the colour's weights. The
-// variance pass, which needs every pixel's moments, writes the variance.
+// TemporalPixel's packed material inputs; UnpackTemporalAlbedo and
+// UnpackTemporalNormal decode them on the CPU.
+uint PackAlbedo(float3 color) {
+  const uint3 q = uint3(round(saturate(color) * 255.0));
+  return q.x | (q.y << 8) | (q.z << 16);
+}
+
+float3 UnpackAlbedo(uint albedo) {
+  return float3(float(albedo & 0xffu), float((albedo >> 8) & 0xffu),
+      float((albedo >> 16) & 0xffu)) / 255.0;
+}
+
+uint PackNormal(float3 normal) {
+  float2 e = normal.xy / (abs(normal.x) + abs(normal.y) + abs(normal.z));
+  if (normal.z < 0.0)
+    e = (1.0 - abs(e.yx)) * float2(e.x >= 0.0 ? 1.0 : -1.0, e.y >= 0.0 ? 1.0 : -1.0);
+  const int2 q = int2(round(clamp(e, -1.0, 1.0) * 32767.0));
+  return (uint(q.x) & 0xffffu) | (uint(q.y) << 16);
+}
+
+float3 UnpackNormal(uint normal) {
+  const float2 e = max(float2(float(int(normal << 16) >> 16), float(int(normal) >> 16)) / 32767.0, -1.0);
+  float3 n = float3(e, 1.0 - abs(e.x) - abs(e.y));
+  const float fold = max(-n.z, 0.0);
+  n.x += n.x >= 0.0 ? -fold : fold;
+  n.y += n.y >= 0.0 ? -fold : fold;
+  return n / sqrt(dot(n, n));
+}
+
+// Mirrors DemodulateTemporalColor and RemodulateTemporalColor: a zero
+// albedo channel leaves the colour.
+float3 Demodulate(float3 color, uint albedo) {
+  const float3 a = UnpackAlbedo(albedo);
+  return float3(a.x > 0.0 ? color.x / a.x : color.x, a.y > 0.0 ? color.y / a.y : color.y,
+      a.z > 0.0 ? color.z / a.z : color.z);
+}
+
+float3 Remodulate(float3 illumination, uint albedo) {
+  const float3 a = UnpackAlbedo(albedo);
+  return float3(a.x > 0.0 ? illumination.x * a.x : illumination.x,
+      a.y > 0.0 ? illumination.y * a.y : illumination.y,
+      a.z > 0.0 ? illumination.z * a.z : illumination.z);
+}
+
+// The batch's illumination luminance moments are blended with the colour's
+// weights. The variance pass, which needs every pixel's moments, writes the
+// variance.
 public float4 AccumulateTemporalRadiance(float2 pixel) {
   const uint index = uint(pixel.y) * temporal_frame.history.y + uint(pixel.x);
   TemporalRadiancePixel output = {};
@@ -100,7 +145,8 @@ public float4 AccumulateTemporalRadiance(float2 pixel) {
   const uint cap = temporal_frame.radiance.z;
   if ((temporal_surface[index].flags & 1u) != 0) {
     output.sample_count = min(temporal_frame.radiance.y, cap);
-    const float luminance = Luminance(output.color);
+    const float luminance = Luminance(float4(Demodulate(output.color.xyz,
+        temporal_surface[index].albedo), 0.0));
     float2 moments = float2(luminance, luminance * luminance);
     const TemporalValidityPixel validity = temporal_validity[index];
     if (validity.valid != 0) {
@@ -188,6 +234,98 @@ public void EstimateTemporalVariance(float2 pixel) {
     }
   }
   temporal_radiance[index].variance = variance;
+}
+
+// The filter's two ping-pong halves of width*height records: illumination
+// and the variance of its luminance. Iteration i writes half i % 2.
+[[vk::binding(21, 0)]] RWStructuredBuffer<float4> temporal_filter;
+
+// Iteration 0 reads the accumulated radiance: its illumination and the
+// variance of its mean, variance / b for b batches of history.
+float4 FilterInput(uint index, uint iteration) {
+  if (iteration != 0) {
+    const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
+    return temporal_filter[((iteration - 1) & 1) * pixels + index];
+  }
+  const TemporalRadiancePixel r = temporal_radiance[index];
+  const float batches = float(r.sample_count) /
+      float(min(temporal_frame.radiance.y, temporal_frame.radiance.z));
+  return float4(Demodulate(r.color.xyz, temporal_surface[index].albedo), r.variance / batches);
+}
+
+static const float kFilterKernel[3] = {0.375, 0.25, 0.0625};
+
+// Mirrors FilterTemporalRadiance: one a-trous iteration over usable
+// neighbours (VarianceNeighbour), taps 2^iteration pixels apart. Pixels
+// without a history write zero; nothing reads them.
+float4 FilterIteration(int2 p, uint iteration) {
+  const uint width = temporal_frame.history.y;
+  const uint index = uint(p.y) * width + uint(p.x);
+  if (temporal_radiance[index].sample_count == 0)
+    return float4(0.0);
+  const TemporalPixel s = temporal_surface[index];
+  float gaussian = 0.0;
+  float gaussian_weight = 0.0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const int2 q = p + int2(dx, dy);
+      if (!VarianceNeighbour(q, s.instance_id))
+        continue;
+      const float k = (dx == 0 ? 0.5 : 0.25) * (dy == 0 ? 0.5 : 0.25);
+      gaussian += k * FilterInput(uint(q.y) * width + uint(q.x), iteration).w;
+      gaussian_weight += k;
+    }
+  }
+  const float phi_l = 4.0 * sqrt(max(gaussian / gaussian_weight, 0.0) + 1.0e-10);
+  const float depth = s.normal_depth.w;
+  const float phi_z = max(VarianceDepthStep(p - int2(1, 0), p + int2(1, 0), depth, s.instance_id) +
+      VarianceDepthStep(p - int2(0, 1), p + int2(0, 1), depth, s.instance_id), 1.0e-8);
+  const float3 normal = UnpackNormal(s.shading_normal);
+  const float luminance = Luminance(float4(FilterInput(index, iteration).xyz, 0.0));
+  const int step = 1 << iteration;
+  float3 sum = float3(0.0);
+  float variance = 0.0;
+  float weight_sum = 0.0;
+  for (int ty = -2; ty <= 2; ++ty) {
+    for (int tx = -2; tx <= 2; ++tx) {
+      const int2 q = p + int2(tx, ty) * step;
+      if (!VarianceNeighbour(q, s.instance_id))
+        continue;
+      const uint qi = uint(q.y) * width + uint(q.x);
+      const float4 value = FilterInput(qi, iteration);
+      float w = kFilterKernel[abs(tx)] * kFilterKernel[abs(ty)];
+      if (tx != 0 || ty != 0) {
+        const float distance = float(step) * sqrt(float(tx * tx + ty * ty));
+        const float wz = abs(depth - temporal_surface[qi].normal_depth.w) / (phi_z * distance);
+        const float wl = abs(luminance - Luminance(float4(value.xyz, 0.0))) / phi_l;
+        const float3 other = UnpackNormal(temporal_surface[qi].shading_normal);
+        const float wn = pow(saturate(dot(normal, other)), 128.0);
+        w = w * exp(-(wl + wz)) * wn;
+      }
+      sum += w * value.xyz;
+      variance += w * w * value.w;
+      weight_sum += w;
+    }
+  }
+  return float4(sum / weight_sum, variance / (weight_sum * weight_sum));
+}
+
+public void FilterTemporalRadiance(float2 pixel, uint iteration) {
+  const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
+  const int2 p = int2(pixel);
+  temporal_filter[(iteration & 1) * pixels + uint(p.y) * temporal_frame.history.y + uint(p.x)] =
+      FilterIteration(p, iteration);
+}
+
+// The last iteration, remodulated by the albedo with the accumulated alpha;
+// pixels without a history keep the accumulated colour.
+public float4 CompositeTemporalRadiance(float2 pixel, uint iteration) {
+  const int2 p = int2(pixel);
+  const uint index = uint(p.y) * temporal_frame.history.y + uint(p.x);
+  const TemporalRadiancePixel r = temporal_radiance[index];
+  if (r.sample_count == 0)
+    return r.color;
+  return float4(Remodulate(FilterIteration(p, iteration).xyz, temporal_surface[index].albedo), r.color.w);
 }
 
 // TemporalRejection's stable numeric codes. This contract contains no
@@ -282,6 +420,9 @@ public void WriteTemporalSurface(float2 ndc, float2 pixel) {
   output.instance_id = identity.instance_id;
   output.material_id = identity.material_id;
   output.flags = 1u | identity.flags;
+  const SurfaceHit surface = ReconstructHit(hit, ray.Direction);
+  output.albedo = PackAlbedo(surface.base_color);
+  output.shading_normal = PackNormal(surface.shading_normal);
   if ((identity.flags & 2u) != 0) {
     const float4 previous_world = mul(identity.previous_world_from_object,
         float4(point, 1.0));

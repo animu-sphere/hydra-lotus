@@ -17,13 +17,30 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 - The `research` build intent (`LOTUS_RESEARCH_TESTS=ON`) registers the
   research tier.
 - Temporal radiance keeps the first and second moments of each batch's
-  luminance, and a variance pass estimates each pixel's luminance variance:
-  temporally from four batches of history, with SVGF's edge-aware 7x7
-  spatial estimate before
-  ([reference](docs/reference/TEMPORAL.md#luminance-moments-and-variance)).
+  illumination luminance (the colour demodulated by the surface albedo), and
+  a variance pass estimates each pixel's luminance variance: temporally from
+  four batches of history, with SVGF's edge-aware 7x7 spatial estimate
+  before ([reference](docs/reference/TEMPORAL.md#luminance-moments-and-variance)).
   `TemporalRadiancePixel`'s reserved words became `moments` and `variance`;
   `TemporalProducts` adds the raw radiance `batch` and `variance_gpu_ms`;
   `TemporalLuminance` and `EstimateTemporalVariance` are the CPU oracle.
+- `TemporalPixel` records the primary surface's base colour and shading
+  normal in two reserved words, `albedo` (unorm8) and `shading_normal`
+  (octahedral snorm16), with `UnpackTemporalAlbedo`, `UnpackTemporalNormal`,
+  `DemodulateTemporalColor` and `RemodulateTemporalColor`.
+- `TemporalFrameSettings::filter_iterations` runs SVGF's edge-aware à-trous
+  filter over the accumulated radiance, guided by depth, shading normals,
+  stable identity and illumination variance, into the colour attachment;
+  the history stays unfiltered
+  ([reference](docs/reference/TEMPORAL.md#edge-aware-filtering)).
+  `TemporalProducts` adds `filter_iterations`, `filter_gpu_ms` and
+  `filter_bytes`; the temporal timestamp pool has ten queries;
+  `FilterTemporalRadiance` is the CPU oracle.
+- `lotus-headless --benchmark-svgf` compares raw, temporal and filtered
+  radiance with a high-spp reference
+  ([reference](docs/reference/TEMPORAL.md#headless-svgf-comparison),
+  [evidence](docs/reports/2026-10-18-svgf-filter.md)); the `research` tier
+  runs it under both integrators.
 
 ### Changed
 

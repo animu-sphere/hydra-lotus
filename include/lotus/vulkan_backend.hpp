@@ -106,6 +106,13 @@ struct TemporalProducts {
   // RNG start and fresh samples in this frame, independent of history length.
   std::uint32_t batch_sample_index = 0;
   std::uint32_t batch_samples = 0;
+  // A-trous iterations run this frame; with any, the colour attachment holds
+  // the filtered composite and `radiance` the unfiltered history.
+  std::uint32_t filter_iterations = 0;
+  // Every iteration and the composite.
+  double filter_gpu_ms = 0.0;
+  // The filter's persistent ping-pong buffer, zero until a frame filters.
+  std::uint64_t filter_bytes = 0;
 };
 
 // Last fresh sample's initial direct-light reservoir, top-left rows.

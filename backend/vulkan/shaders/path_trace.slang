@@ -42,15 +42,19 @@ Spectrum TracePath(inout PathState path, Hit hit) {
 struct VertexOutput {
   float4 position : SV_Position;
   float2 ndc : TEXCOORD0;
+  // The draw's first instance: the filter passes' iteration.
+  nointerpolation uint iteration : TEXCOORD1;
 };
 
 [shader("vertex")]
-VertexOutput vertex_main(uint index : SV_VertexID) {
+VertexOutput vertex_main(uint index : SV_VertexID,
+    uint instance : SV_VulkanInstanceID) {
   VertexOutput output;
   float2 ndc = float2(index == 1 ? 3.0 : -1.0,
                      index == 2 ? 3.0 : -1.0);
   output.position = float4(ndc, 0.0, 1.0);
   output.ndc = ndc;
+  output.iteration = instance;
   return output;
 }
 
@@ -159,10 +163,19 @@ FragmentOutput fragment_main(VertexOutput input) {
     output.depth = 1.0;
     return output;
   }
-  if (kPass == 10) {
-    EstimateTemporalVariance(input.position.xy);
+  if (kPass == 10 || kPass == 11) {
+    if (kPass == 10)
+      EstimateTemporalVariance(input.position.xy);
+    else
+      FilterTemporalRadiance(input.position.xy, input.iteration);
     FragmentOutput output;
     output.color = float4(0.0);
+    output.depth = 1.0;
+    return output;
+  }
+  if (kPass == 12) {
+    FragmentOutput output;
+    output.color = CompositeTemporalRadiance(input.position.xy, input.iteration);
     output.depth = 1.0;
     return output;
   }

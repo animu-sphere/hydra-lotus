@@ -64,13 +64,17 @@ shared surface metadata alone
 [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions) is resolved: every
 reset keeps restarting the RNG.
 
-- [ ] **LOTUS-SVGF-02 — Edge-aware filtering and reference comparison.**
-  À-trous filtering guided by depth, normals, motion, stable identity and
-  luminance variance, and the final composite. Compare raw low spp, temporal
-  accumulation alone and the filtered output with a high-spp reference on
-  RMS/MSE, temporal residual, disocclusion response, static convergence and
-  moving-camera stability, under both integrators, with deterministic
-  validation.
+SVGF's edge-aware à-trous filter runs over the accumulated radiance, guided
+by depth, shading normals, stable identity and illumination luminance
+variance, with motion and disocclusion reaching it through the history, and
+the composite remodulates by the albedo; the history stays unfiltered
+([contract](../reference/TEMPORAL.md#edge-aware-filtering)). Against a
+high-spp reference at one sample per frame, it cuts the first frame's error
+by four, halves the error under motion, and reduces flicker and the error of
+just-disoccluded pixels by about three; on a view held still, the temporal
+mean overtakes it within about fourteen frames. Both integrators give
+identical outputs, reproduced bit for bit
+([evidence](../reports/2026-10-18-svgf-filter.md)). The step is complete.
 
 ### Step 4 — SVGF in the viewport
 
