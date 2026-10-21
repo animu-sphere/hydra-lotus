@@ -99,7 +99,7 @@ continue to run under both integrators.
 
 This delivers bounded temporal reuse and its inspectable arithmetic/lifecycle
 evidence. Spatial reuse and Hydra controls remain in the
-[execution plan](../roadmap/current.md#execution-order). Slots/UVs are reused
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order). Slots/UVs are reused
 only across a fixed light domain; light edits and any scene edit with
 table-backed emissive triangles reset conservatively. General light remapping,
 arbitrary moving-history unbiasedness, many-light convergence/time advantages,

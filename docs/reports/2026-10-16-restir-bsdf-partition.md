@@ -175,4 +175,4 @@ python scripts/check_docs.py
 This addresses the reproduced low-roughness gap within these fixtures in
 LOTUS-RESTIR-05. Broader glossy/artifact/bias coverage, reuse cost, temporal
 correlation, scope review and the release gate remain in the
-[execution plan](../roadmap/current.md#execution-order).
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order).

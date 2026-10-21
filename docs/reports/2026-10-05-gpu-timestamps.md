@@ -17,7 +17,7 @@ so the committed reference images are unaffected.
 
 The durations below are one run's, recorded to show what the check
 reports. They are not a performance record: the roadmap's
-[performance records](../roadmap/current.md#performance-baseline-and-foundation-release) remain
+[performance records](../archive/pre-v070-execution-plan.md#performance-baseline-and-foundation-release) remain
 separate work.
 
 ## Design

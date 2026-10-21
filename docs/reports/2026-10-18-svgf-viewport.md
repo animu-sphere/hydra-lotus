@@ -11,7 +11,7 @@ phase status.
 
 ## Question
 
-[LOTUS-SVGF-03](../roadmap/current.md#step-4--svgf-in-the-viewport) asks
+[LOTUS-SVGF-03](../archive/pre-v070-execution-plan.md#step-4--svgf-in-the-viewport) asks
 the standalone viewport to switch the SVGF denoiser at run time, compare the
 raw and filtered images, show the history and variance and time the
 denoiser live. The [SVGF comparison](2026-10-18-svgf-filter.md#cost) left
@@ -146,7 +146,7 @@ change is limited to the present kernel, `Present`'s product selection and
 the filter's buffer, which `lotus-renderer-temporal-gpu` covers), the
 `research` tier (the SVGF campaign's output is unchanged, as the oracle
 comparison shows), the runtime-free `ci-core` configuration and the
-installed hosts. The v0.6.0 [release gate](../roadmap/current.md#step-5--release-gate)
+installed hosts. The v0.6.0 [release gate](../archive/pre-v070-execution-plan.md#step-5--release-gate)
 runs them all.
 
 ## Limits

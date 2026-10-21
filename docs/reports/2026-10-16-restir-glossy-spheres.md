@@ -150,4 +150,4 @@ Hydra and its release gate are not rerun for this headless benchmark change.
 This is bounded one-bounce coverage within LOTUS-RESTIR-05.
 Production materials/multibounce coverage, broader bias and
 artifact assessment, reuse cost, temporal correlation, scope review and the
-release gate remain in the [execution plan](../roadmap/current.md#execution-order).
+release gate remain in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).

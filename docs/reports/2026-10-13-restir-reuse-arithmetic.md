@@ -100,7 +100,7 @@ The CPU combination and normalization oracle implements the arithmetic
 prerequisite of LOTUS-RESTIR-03. GPU reprojection/history integration, receiving
 and source surface evaluation, persistent sample identity, reset/failure
 publication and moving NEE/MIS comparisons remain in the
-[execution plan](../roadmap/current.md#execution-order). Source support and
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order). Source support and
 its coverage of the receiving integral remain caller requirements. These
 finite discrete fixtures do not establish unbiased adaptive history selection,
 recursive moving-scene transport or a temporal performance improvement.

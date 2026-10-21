@@ -89,5 +89,5 @@ is conservatively rejected.
 
 GPU products and their timestamps, history fetch/rejection AOVs, temporal
 radiance accumulation and moving Hydra validation remain in the
-[execution plan](../roadmap/current.md#execution-order). No ReSTIR or denoiser
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order). No ReSTIR or denoiser
 state was introduced.

@@ -37,7 +37,7 @@ handling, not physical-GPU rendering.
 | CI and runtime-free operation | Implemented with hosted capability evidence above and local strict physical-GPU validation. CI acceptance and renderer capability reporting remain separate. |
 | OpenStrata workflow generation and runtime-free validation selection | Accepted tooling limitation: the repository-owned workflow validates the CI contract and runtime-free evidence directly; plugin descriptors are not this renderer's responsibility. [Supported configurations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations) owns the workaround and rationale. |
 | Japanese MSVC header dependency discovery | Accepted tooling limitation with explicit clean-rebuild workaround; local builds of affected public-header consumers and all Hydra tests pass. This does not authorize trusting an incremental build with missing dependency records. See [supported configurations](../reference/SUPPORTED_CONFIGURATIONS.md#build-and-tooling-limitations). |
-| Broader light, material and temporal channels | Deferred to the named scopes in [current.md](../roadmap/current.md#deferred-adapter-work) and the [bootstrap limitations](../reference/SUPPORTED_CONFIGURATIONS.md#foundation-bootstrap-limitations); they are outside foundation bootstrap. |
+| Broader light, material and temporal channels | Deferred to the named scopes in [current.md](../archive/pre-v070-execution-plan.md#deferred-adapter-work) and the [bootstrap limitations](../reference/SUPPORTED_CONFIGURATIONS.md#foundation-bootstrap-limitations); they are outside foundation bootstrap. |
 
 The headless, Hydra and viewport entry points all start the shared core and
 Vulkan backend target. Local validation in this review used Windows 11,

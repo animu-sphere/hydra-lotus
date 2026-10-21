@@ -8,7 +8,7 @@ Hydra-enabled build.
 
 ## Question
 
-[LOTUS-VIEWPORT-03](../roadmap/current.md#step-2--viewport-foundation) asks
+[LOTUS-VIEWPORT-03](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation) asks
 `lotus-viewport` to switch the integrator, spp and accumulation, NEE/MIS,
 ReSTIR off/initial/temporal/spatial/combined and temporal radiance reuse
 while running, and to show beauty, depth, normal, motion vectors, temporal
@@ -197,4 +197,4 @@ The full core, Hydra and `ci-core` suites were not rerun for this report.
   initial-only reservoirs and a full accumulation, that is the last sample
   added.
 - The developer UI has no timing breakdown; that is
-  [LOTUS-VIEWPORT-04](../roadmap/current.md#step-2--viewport-foundation).
+  [LOTUS-VIEWPORT-04](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation).

@@ -139,5 +139,5 @@ preserving NEE/MIS.
 Temporal/spatial reuse, support-aware differing-target normalization, persistent
 light/sample identities, alternative candidate strategies, Hydra settings/AOVs
 and many-light convergence/time/bias/temporal-stability exit evidence remain in
-the [execution plan](../roadmap/current.md#execution-order). GPU subnormal and
+the [execution plan](../archive/pre-v070-execution-plan.md#execution-order). GPU subnormal and
 extreme dynamic-range behavior is not established by the ordinary fixtures.

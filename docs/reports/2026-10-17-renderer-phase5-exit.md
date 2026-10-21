@@ -4,7 +4,7 @@ Reviewed 2026-10-17 against `6705c61`. This review adds no measurement and
 changes no renderer, shader or harness code; it records the decision that the
 [Renderer Phase 5 exit criteria](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di)
 require, from the evidence linked below. This is LOTUS-RESTIR-06 in the
-[execution plan](../roadmap/current.md#step-1--restir-di-closure). The
+[execution plan](../archive/pre-v070-execution-plan.md#step-1--restir-di-closure). The
 [reservoir reference](../reference/RESTIR.md#when-to-use-reservoirs) carries
 the resulting guidance.
 
@@ -153,7 +153,7 @@ Open items are routed rather than reopening the phase:
 | --- | --- |
 | Fresh-batch random numbers replayed after resets | [DES-Q7](../design/DESIGN_POLICY.md#53-open-questions), decided with the denoiser (LOTUS-SVGF-01) |
 | Temporal reuse as denoiser input | Renderer Phase 6 |
-| Reuse path without evidence readbacks | LOTUS-VIEWPORT-03 ([plan](../roadmap/current.md#step-2--viewport-foundation)) |
+| Reuse path without evidence readbacks | LOTUS-VIEWPORT-03 ([plan](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation)) |
 | Production materials and scenes | Renderer Phase 8 (LOTUS-MATERIAL-01) |
 | Indirect reservoirs, light-domain remapping | Renderer Phase 7 |
 | Light selection, light trees, many-light acceleration | Renderer Phase 9 (LOTUS-LIGHT-05) |

@@ -160,5 +160,5 @@ with no detectable bias. Later-bounce noise both weakens temporal correlation
 and coarsens the bias resolution. This does not establish unbiasedness, cover
 light or material animation (which [resets history](../reference/RESTIR.md#compatibility-and-publication)),
 production scenes or larger images, or show a reuse speedup. The remaining
-LOTUS-RESTIR-05 items stay in the [execution plan](../roadmap/current.md#execution-order).
+LOTUS-RESTIR-05 items stay in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).
 No phase exit is claimed.

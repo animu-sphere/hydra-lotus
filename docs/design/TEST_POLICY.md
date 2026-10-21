@@ -31,6 +31,9 @@ suite when a test has none or several.
 | `gpu` | Renders on a Vulkan device when one is present: a small fixed fixture, a fixed seed, a few frames, validation enabled. One representative case per contract. | Explained SKIP |
 | `research` | Re-runs a closed campaign's procedures: workload, proposal and seed sweeps and the controls that keep a measurement honest. Registered only by the `research` build intent. | Explained SKIP |
 
+Long comparisons and parameter sweeps are manually and explicitly triggered;
+there is no nightly campaign or ordinary PR gate for research.
+
 Area labels (`hydra`, `viewport`, `presentation`, `host-smoke`) are
 independent of the tier and select a subsystem with `ctest -L`.
 
@@ -58,7 +61,9 @@ Budgets are constraints on the suite's design, not targets to fill.
   device across cases or is split, rather than growing. A change that pushes
   the suite well past that is a sign that evidence has leaked into
   regression ([measured](../reports/2026-10-18-test-tiers.md)).
-- **Research:** no short budget, but no redundant cases either.
+- **Research:** each experiment declares a bounded evaluation budget under
+  the [strategy stop rule](POST_V060_STRATEGY.md#6-research-track-and-stop-rule);
+  no redundant cases or indefinite expansion of a negative result.
 
 ## 5. Admitting a test
 

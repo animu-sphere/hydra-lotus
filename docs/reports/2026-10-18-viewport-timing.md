@@ -8,7 +8,7 @@ Hydra-enabled build.
 
 ## Question
 
-[LOTUS-VIEWPORT-04](../roadmap/current.md#step-2--viewport-foundation) asks
+[LOTUS-VIEWPORT-04](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation) asks
 `lotus-viewport` to show the frame time; the GPU path-trace, ReSTIR, temporal
 and (once it exists) denoise pass times; the sample count; the scene and TLAS
 update time; and the reservoir and history memory. The backend already
@@ -149,7 +149,7 @@ Targeted at the change, not the full suites (the
   the device once. It predates the developer UI
   ([LOTUS-VIEWPORT-02](2026-10-17-viewport-camera.md#regression)); its cause
   is not established.
-- No denoise pass exists to time; [LOTUS-SVGF-03](../roadmap/current.md#step-4--svgf-in-the-viewport)
+- No denoise pass exists to time; [LOTUS-SVGF-03](../archive/pre-v070-execution-plan.md#step-4--svgf-in-the-viewport)
   adds it to the HUD.
 - The present blit, the debug-view kernel and the overlay have no
   timestamps; the host frame time covers them.

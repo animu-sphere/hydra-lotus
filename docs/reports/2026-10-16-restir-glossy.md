@@ -138,4 +138,4 @@ Hydra and its release gate are not rerun for this headless workload change.
 This adds bounded artifact/convergence evidence to LOTUS-RESTIR-05. The
 low-roughness convergence gap, broader bias/artifact coverage, reuse cost,
 temporal correlation, scope review and release gate remain in the
-[execution plan](../roadmap/current.md#execution-order).
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order).

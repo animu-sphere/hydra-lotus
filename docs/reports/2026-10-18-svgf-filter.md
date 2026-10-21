@@ -9,7 +9,7 @@ status.
 
 ## Question
 
-[LOTUS-SVGF-02](../roadmap/current.md#step-3--svgf-core) completes the
+[LOTUS-SVGF-02](../archive/pre-v070-execution-plan.md#step-3--svgf-core) completes the
 headless [SVGF-class baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline):
 edge-aware a-trous filtering guided by depth, normals, motion, stable
 identity and luminance variance, and the final composite. Raw low-spp
@@ -174,7 +174,7 @@ its clocks fall (P8, 210 MHz, was observed at rest). These are not costs.
 Each tap reads from a 64-byte surface record and a 32-byte radiance record
 besides its 16-byte filter value, so the filter is bound by memory traffic;
 packing its guides into a compact buffer is the obvious reduction. Viewport-resolution timing belongs to
-[LOTUS-SVGF-03](../roadmap/current.md#step-4--svgf-in-the-viewport), with
+[LOTUS-SVGF-03](../archive/pre-v070-execution-plan.md#step-4--svgf-in-the-viewport), with
 denoise timing in the HUD.
 
 ## After the comparison

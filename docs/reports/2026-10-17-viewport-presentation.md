@@ -9,7 +9,7 @@ performance.
 
 ## Question
 
-[LOTUS-VIEWPORT-01](../roadmap/current.md#step-2--viewport-foundation) makes
+[LOTUS-VIEWPORT-01](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation) makes
 `lotus-viewport` present the renderer's progressive output instead of the
 bootstrap triangle, open a USD stage as
 [`hydra-merlin`'s viewport](https://github.com/animu-sphere/hydra-merlin/blob/main/docs/guides/viewport.md#opening-usd-stages)
