@@ -15,6 +15,6 @@ Superseded design documents are not moved here. They stay at their path as a
 short stub naming their replacement, so a citation of the old path still
 leads somewhere.
 
-| Directory | Contents | Current owner of the subject |
+| Document | Contents | Current owner of the subject |
 | --- | --- | --- |
-| — | Nothing is archived yet. | — |
+| [pre-v070-execution-plan.md](pre-v070-execution-plan.md) | Superseded execution plan through v0.6.0, retained for dated evidence citations. | [Active work queue](../roadmap/current.md) and [roadmap](../roadmap/README.md). |

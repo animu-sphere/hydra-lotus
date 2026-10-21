@@ -142,4 +142,4 @@ removes work on exact matches, and sharing reconstruction removes duplicate
 work for changed final selections. This source-level reduction does not
 establish an equal-quality speedup. Broader artifact/bias coverage, temporal
 correlation, remaining cost, scope review and the release gate remain in the
-[execution plan](../roadmap/current.md#execution-order).
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order).

@@ -164,5 +164,5 @@ fixed bands, 8x8 tiles or motion speed, at the resolutions above. Narrow glossy
 highlights are limited by rare-event variance affecting every estimator. This
 does not establish unbiasedness, cover light or material animation, production
 scenes, substantial interreflection or larger images, or show a reuse speedup.
-Remaining LOTUS-RESTIR-05 items stay in the [execution plan](../roadmap/current.md#execution-order).
+Remaining LOTUS-RESTIR-05 items stay in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).
 No phase exit is claimed.

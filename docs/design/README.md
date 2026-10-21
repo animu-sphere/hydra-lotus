@@ -6,6 +6,7 @@ in [reference](../reference/README.md); phase and release status belongs in the
 
 | Document | Owns |
 | --- | --- |
+| [POST_V060_STRATEGY.md](POST_V060_STRATEGY.md) | Practical-renderer priorities, measurement/adoption rules and research stop rules. |
 | [DESIGN_POLICY.md](DESIGN_POLICY.md) | Renderer purpose, boundaries, light transport design and decision principles. |
 | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) | Renderer phase goals, scope, exit criteria and validation strategy. |
 | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) | Repository ownership and consumption of external contracts. |

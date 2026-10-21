@@ -152,4 +152,4 @@ and headless harness. Hydra continues to select the default power proposal.
 It does not introduce a light hierarchy or change the reused estimator's
 support correction. Broader/repeated equal-quality budgets, temporal
 correlation, reuse cost, production artifact/bias coverage and the release
-gate remain in the [execution plan](../roadmap/current.md#execution-order).
+gate remain in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).

@@ -194,5 +194,5 @@ reuse noise is correlated (about 0.58) across edits, and an edit on every frame
 would replay one set of random numbers throughout. This does not cover
 environment, texture or geometry animation, emissive-mesh scenes, production
 scenes or larger images, and does not show a reuse speedup. Reuse cost remains
-in the [execution plan](../roadmap/current.md#execution-order). No phase exit
+in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order). No phase exit
 is claimed.

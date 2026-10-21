@@ -139,5 +139,5 @@ conservative reset applies only with reservoir reuse. Fresh batches still
 replay random numbers after each reset
 ([DES-Q7](../design/DESIGN_POLICY.md#53-open-questions)). The reuse-cost and
 equal-quality decision remains in the
-[execution plan](../roadmap/current.md#step-1--restir-di-closure). No phase
+[execution plan](../archive/pre-v070-execution-plan.md#step-1--restir-di-closure). No phase
 exit is claimed.

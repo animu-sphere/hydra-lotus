@@ -20,19 +20,22 @@ owner: hydra-lotus
 >
 > | Area | Owning document |
 > | --- | --- |
+> | Development priorities, adoption decisions and research stop rules | [POST_V060_STRATEGY.md](POST_V060_STRATEGY.md) |
 > | What this repository owns, and what it consumes from whom | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) |
 > | Targets, directories and dependency directions | [architecture/PROJECT_LAYOUT.md](../architecture/PROJECT_LAYOUT.md) |
-> | The Renderer Phase 0–10 sequence: goals, scope, exit criteria, milestones and testing strategy | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) |
+> | The Renderer Phase 0–10 definitions: goals, scope, exit criteria, milestones and testing strategy | [ROADMAP_POLICY.md](ROADMAP_POLICY.md) |
 > | Which release carries which phase | [roadmap/README.md](../roadmap/README.md) |
 
 ---
 
 ## 1. Purpose
 
-`hydra-lotus` is a **high-performance, research-oriented GPU path tracing
-render delegate** for OpenUSD / Hydra. It is not merely "path tracing shown
-through Hydra". It is a rendering foundation on which the following can be
-implemented and verified continuously:
+`hydra-lotus` is a **practical, OpenUSD-native GPU path tracer** with an
+independent research track. Its Hydra adapter, headless runner and standalone
+viewport use the same renderer core. The
+[development strategy](POST_V060_STRATEGY.md) owns the priority of practical
+scene correctness, GPU efficiency and everyday use. Its foundation also
+supports implementation and verification of the following:
 
 - GPU path tracing on Vulkan;
 - wavefront path tracing;
@@ -402,6 +405,8 @@ ReSTIR; control variates; MCMC-based reuse; advanced path guiding; BDPT;
 ReSTIR BDPT; difficult light transport and caustics; volumes.
 
 These form a **research track kept separate from the core milestones**.
+Each topic follows the [experiment brief and stop rule](POST_V060_STRATEGY.md#6-research-track-and-stop-rule);
+research does not block ordinary releases.
 
 ## 28. Spectral rendering
 
@@ -567,27 +572,20 @@ measurement → optimization → research**.
 
 ## 49. Development order
 
-The order is the [roadmap policy's summary](ROADMAP_POLICY.md#summary):
-
-```text
-Foundation → reference path tracer → minimal material IR → wavefront → NEE / MIS
-  → temporal infrastructure → ReSTIR DI → denoising → ReSTIR GI / advanced reservoirs
-  → production materials → advanced sampling → spectral / neural research
-```
+The [roadmap policy's summary](ROADMAP_POLICY.md#summary) owns the dependency
+order and the [cross-phase rule](ROADMAP_POLICY.md#cross-phase-delivery).
+After the interactive foundation, practical improvements and bounded research
+follow the [development strategy](POST_V060_STRATEGY.md). Numeric phase order
+does not make advanced reservoir transport a production-material prerequisite.
 
 ## 50. Direction
 
-`hydra-lotus` does not aim to be a production renderer from day one. It
-grows as
-
-> **an experimental and practical renderer for cutting-edge GPU light
-> transport, entered through OpenUSD / Hydra.**
-
-Its core is OpenUSD / Hydra + Vulkan + wavefront path tracing + NEE / MIS +
-ReSTIR + temporal reconstruction + denoising. Once that foundation is
-complete, ReSTIR PT, path guiding, reservoir splatting, control variates,
-BDPT, difficult light transport, spectral experiments and neural
-reconstruction can be stacked on it safely.
+Hydra Lotus develops toward practical rendering of representative USD scenes,
+with measurable GPU cost and reliable interactive behavior. Advanced light
+transport remains an independent research track built on the same reference
+and wavefront core, NEE/MIS, temporal infrastructure and denoising. Adoption
+follows the [strategy's measurement and stop rules](POST_V060_STRATEGY.md),
+while preserving the ordinary RGB path.
 
 ## 51. Decision principles
 

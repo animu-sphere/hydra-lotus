@@ -103,5 +103,5 @@ transport baselines; arithmetic checks make no convergence or speed claim.
 
 GPU candidates, selected-sample visibility, BSDF-emission accounting,
 support-aware temporal/spatial reuse and Hydra/exit measurements remain in
-the [execution plan](../roadmap/current.md#execution-order). The shared temporal
+the [execution plan](../archive/pre-v070-execution-plan.md#execution-order). The shared temporal
 infrastructure contains no ReSTIR-specific state.

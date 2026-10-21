@@ -130,4 +130,4 @@ Hydra and the release gate are not rerun for this headless-only change.
 This is bounded multibounce/reference-sensitivity evidence for LOTUS-RESTIR-05.
 Broader scene/artifact coverage, longer-horizon bias/variance discrimination,
 correlation and reuse-cost investigation remain in the
-[execution plan](../roadmap/current.md#execution-order). No phase exit is claimed.
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order). No phase exit is claimed.

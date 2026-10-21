@@ -9,7 +9,7 @@ owns phase status.
 
 ## Question
 
-[LOTUS-SVGF-01](../roadmap/current.md#step-3--svgf-core) is the first half
+[LOTUS-SVGF-01](../archive/pre-v070-execution-plan.md#step-3--svgf-core) is the first half
 of the [SVGF-class baseline](../design/ROADMAP_POLICY.md#renderer-phase-6--denoising--svgf-class-pipeline):
 reprojection and history validation through the existing temporal
 infrastructure, temporal accumulation, first and second moments and variance

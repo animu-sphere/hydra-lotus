@@ -5,7 +5,7 @@ NVIDIA RTX A5000 (driver 597.16) with **graphics and memory clocks locked
 at 1500 and 8001 MHz**. Source: `8e179cd`, unchanged; no renderer, shader
 or harness code changes. The [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison)
 owns the workloads, metrics and budget semantics. This is
-LOTUS-RESTIR-05B in the [execution plan](../roadmap/current.md#step-1--restir-di-closure).
+LOTUS-RESTIR-05B in the [execution plan](../archive/pre-v070-execution-plan.md#step-1--restir-di-closure).
 
 ## Question
 
@@ -237,7 +237,7 @@ temporal surfaces and validity, and check them on the CPU, through a second
 submission: an evidence path, 28–36 ms per frame at only 16,384 pixels,
 which rules out interactive use of reuse through
 `RenderTemporalScene` as it stands. The GPU times above exclude it. The
-viewport ([LOTUS-VIEWPORT-03](../roadmap/current.md#step-2--viewport-foundation))
+viewport ([LOTUS-VIEWPORT-03](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation))
 needs a reuse path that skips these products.
 
 ## Resolution check
@@ -304,7 +304,7 @@ One GPU at one locked clock; 128x128 (and the 256x256 check); 256 lights;
 the power-alias proposal; history cap 32 and spatial radius 1; one to four
 bounces; synthetic fixtures without emissive meshes or production scenes.
 Light count was not swept, and every ray still tests every analytic light
-([LOTUS-LIGHT-05](../roadmap/current.md#deferred-adapter-work)), so the
+([LOTUS-LIGHT-05](../archive/pre-v070-execution-plan.md#deferred-adapter-work)), so the
 NEE/MIS baseline itself grows with the light count. Budgets use power-of-two
 checkpoints without interpolation; horizon efficiencies assume `1/N`
 convergence, which holds for the uncorrelated modes that carry the decision.

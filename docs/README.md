@@ -12,7 +12,7 @@ and the document is a bug. When a summary disagrees with
 
 | Category | Answers | Start here |
 | --- | --- | --- |
-| [design/](design/README.md) | Stable renderer intent, phase scope and rationale. | [DESIGN_POLICY.md](design/DESIGN_POLICY.md) · [ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
+| [design/](design/README.md) | Stable renderer intent, phase scope and rationale. | [POST_V060_STRATEGY.md](design/POST_V060_STRATEGY.md) · [DESIGN_POLICY.md](design/DESIGN_POLICY.md) · [ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | [architecture/](architecture/README.md) | Which targets exist, where code goes, and how they depend on each other. | [PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | [reference/](reference/README.md) | What is implemented now, and on what. | [CAPABILITY_MATRIX.md](reference/CAPABILITY_MATRIX.md) · [SUPPORTED_CONFIGURATIONS.md](reference/SUPPORTED_CONFIGURATIONS.md) · [AOVS.md](reference/AOVS.md) |
 | [roadmap/](roadmap/README.md) | Phase/release status and incomplete work. | [README.md](roadmap/README.md) · [current.md](roadmap/current.md) |
@@ -26,8 +26,9 @@ and the document is a bug. When a summary disagrees with
 
 | Question | Owner |
 | --- | --- |
+| Development priorities, measurement/adoption rules and research stop rules | [design/POST_V060_STRATEGY.md](design/POST_V060_STRATEGY.md) |
 | Purpose, principles, renderer architecture, light transport design | [design/DESIGN_POLICY.md](design/DESIGN_POLICY.md) |
-| Renderer Phase 0–10: goals, scope, exit criteria; milestones; testing strategy | [design/ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
+| Renderer Phase 0–10: application, scope, exit criteria; milestones; testing strategy | [design/ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | Test tiers, where each runs, admitting and retiring tests | [design/TEST_POLICY.md](design/TEST_POLICY.md) |
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
@@ -42,8 +43,8 @@ and the document is a bug. When a summary disagrees with
 | How documents here are maintained, and how they cite other repositories | [contributing/documentation.md](contributing/documentation.md) |
 
 Where the design documents overlap, the narrower one wins:
-INTEGRATION_SCOPE_POLICY.md and ROADMAP_POLICY.md over DESIGN_POLICY.md on
-their subjects, and none of them over PROJECT_LAYOUT.md on structure.
+POST_V060_STRATEGY.md, INTEGRATION_SCOPE_POLICY.md and ROADMAP_POLICY.md
+over DESIGN_POLICY.md on their subjects, and none of them over PROJECT_LAYOUT.md on structure.
 
 ## Owned elsewhere
 

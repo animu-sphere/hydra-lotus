@@ -7,7 +7,7 @@ the OpenStrata `cy2026` `lookdev` runtime for the Hydra-enabled build.
 
 ## Question
 
-[LOTUS-VIEWPORT-02](../roadmap/current.md#step-2--viewport-foundation) adds
+[LOTUS-VIEWPORT-02](../archive/pre-v070-execution-plan.md#step-2--viewport-foundation) adds
 orbit, pan and dolly, authored camera selection, accumulation restarted on
 camera change and scene dirty updates to `lotus-viewport`, and the stage
 time that the [presentation report](2026-10-17-viewport-presentation.md#limits)

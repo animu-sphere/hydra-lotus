@@ -153,4 +153,4 @@ confirms that temporal correlation and reuse cost persist at a longer horizon.
 It changes the measurement harness, not the estimator or its correction.
 Lower-cost reuse/history policies, broader light/material and bias/artifact
 coverage, the scope review and the release gate remain in the
-[execution plan](../roadmap/current.md#execution-order).
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order).

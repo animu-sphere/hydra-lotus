@@ -145,5 +145,5 @@ integrators. The power-alias proposal and four-axis stencil are retained for
 measurement. General light-domain remapping, candidate-strategy comparison,
 Hydra settings/diagnostics and broad convergence, memory, time and artifact
 evaluation remain in LOTUS-RESTIR-05, the
-[execution plan](../roadmap/current.md#execution-order). Phase 5 remains in
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order). Phase 5 remains in
 progress; these fixtures do not declare its exit.

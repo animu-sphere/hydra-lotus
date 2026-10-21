@@ -133,4 +133,4 @@ visibility queries for unchanged selections without changing the estimator,
 support correction, RNG draws, history caps, storage, settings or Hydra
 translation. Temporal correlation, the remaining reuse cost, broader artifact
 and bias coverage, the scope review and release gate remain in the
-[execution plan](../roadmap/current.md#execution-order).
+[execution plan](../archive/pre-v070-execution-plan.md#execution-order).

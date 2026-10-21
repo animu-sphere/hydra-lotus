@@ -180,5 +180,5 @@ sampling, visibility, reuse arithmetic, Hydra setting or default estimator.
 NEE/MIS remains the default. The power-alias proposal is retained; alternative
 candidate proposals are not evaluated. Broader and repeated equal-quality
 measurements, production artifact/bias checks, the phase scope review and
-release gate remain in the [execution plan](../roadmap/current.md#execution-order).
+release gate remain in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).
 No Renderer Phase 5 exit is declared by these measurements.

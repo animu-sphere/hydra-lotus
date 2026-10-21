@@ -9,7 +9,7 @@ owner: hydra-lotus
 > below is implemented beyond what
 > [reference/CAPABILITY_MATRIX.md](../reference/CAPABILITY_MATRIX.md) says.
 >
-> This document owns **the Renderer Phase 0–10 sequence**: each phase's goal,
+> This document owns **the Renderer Phase 0–10 definitions**: each phase's goal,
 > scope and exit criteria, the milestones and the testing strategy.
 > Execution order and incomplete work belong in [current.md](../roadmap/current.md).
 > This policy is distilled from the 2026-10-04 roadmap policy and
@@ -24,12 +24,10 @@ owner: hydra-lotus
 
 ## 1. Purpose
 
-`hydra-lotus` is a **physically based GPU light transport renderer**
-integrated with OpenUSD / Hydra. It is not merely a path tracer for Hydra: it
-is a rendering foundation, standing on a reference implementation whose
-correctness can be checked, on which wavefront path tracing, NEE / MIS,
-temporal sampling, ReSTIR, denoising, advanced sampling and spectral rendering
-are researched and implemented step by step.
+`hydra-lotus` is a **practical, OpenUSD-native GPU path tracer** with an
+independent rendering research track. The [development strategy](POST_V060_STRATEGY.md)
+owns priorities and research stop rules. Every delivery stands on a
+reference implementation whose correctness can be checked.
 
 What matters is not stacking advanced algorithms from the start but **always
 keeping a reference path tracer to compare against**.
@@ -143,6 +141,82 @@ Where each box lives is
 A phase is always cited as "Renderer Phase *n*"
 ([documentation guidelines](../contributing/documentation.md#naming)). A
 phase is not a release.
+
+### Cross-phase delivery
+
+Phase numbers identify capability scopes and their exit criteria, rather
+than imposing a total execution order after the reference, temporal,
+denoising and viewport foundations. Selected Renderer Phase 8 or 9 work may
+precede Renderer Phase 7 when its own dependencies exist and measurements
+justify it. Advanced reservoir transport is not a prerequisite for
+production-material or GPU-efficiency improvements.
+
+Record each selected subset as a stable task ID in
+[current.md](../roadmap/current.md), with its parent phase, bounded scope,
+acceptance evidence and deferred remainder. Assign a release only in the
+[canonical table](../roadmap/README.md#status-at-a-glance). A release may
+span several phases or improve an existing path without completing a phase.
+Unstarted parent phases retain their status until implementation begins;
+partial delivery must be labeled as a subset, never as a phase exit.
+Phase completion still requires an exit review against the full agreed scope.
+
+### Practical foundation workstreams
+
+These contracts bound selected cross-phase delivery. The roadmap chooses
+which milestone carries them; the strategy owns why they come first.
+
+**A — GPU observation and selected optimization (P0).** Establish a shared
+headless/viewport workload manifest covering Cornell box, many instances,
+many analytic lights, texture-heavy scenes and camera/object motion. Record
+GPU, driver, build, resolution, spp, seed, warmup, run count, clock conditions
+and renderer mode. Reuse timestamps, HUD and headless benchmarks for raygen,
+ray query, shading, wavefront queues, accumulation, light sampling, temporal,
+SVGF and scene updates. State any inseparable or unavailable timing rather
+than implying a breakdown that was not measured; use GPU captures as needed.
+Report mean and percentile GPU time, time to equal quality, image error,
+peak VRAM and CPU update time.
+
+**Exit evidence:** a reproducible baseline and environment, pass-cost
+breakdown, explanation of the top three bottlenecks, adoption/rejection
+decisions, before/after measurements for adopted optimizations and no
+reference-quality regression. No predetermined speedup factor is required.
+
+**B — VRAM and temporal buffers (P1).** Inventory temporal/SVGF buffers,
+lifetimes, owners and peak residency, including host mirrors separately.
+Compare representation and reuse candidates under the strategy's
+[adoption rules](POST_V060_STRATEGY.md#4-measurement-and-adoption).
+
+**Exit evidence:** 1080p/4K estimates and measured peak residency where the
+available hardware permits it; explicitly report unavailable measurements.
+Preserve history/rejection meaning, CPU-oracle agreement and dynamic-scene
+stability. Record before/after memory, bandwidth/time and precision effects
+for any adopted change.
+
+**C — Material foundation (P1, Renderer Phase 8 subset).** Audit and fix
+representative assets in this order: base color, metallic/roughness,
+textures/UV, shading normals/tangents/normal maps, emission, alpha masks.
+Build on the [existing material contract](../reference/SCENE.md#materials-and-environment);
+this is not a claim that those features are absent. Translation remains
+UsdPreviewSurface/OpenPBR/MaterialX → Lotus Material IR. Alpha blending
+requires an explicit transport, sorting and stochastic-transparency model
+and a bounded support statement; coverage opacity is not full transparency.
+
+**Exit evidence:** representative USD fixtures and reference images,
+Hydra/headless consistency, documented unsupported parameters, profiling
+and regression coverage for new shader paths. Full OpenPBR, arbitrary
+MaterialX graphs and subsurface scattering are outside this subset.
+
+**D — Light acceleration investigation (P1, Renderer Phase 9 subset).**
+Profile analytic-light intersection separately from NEE/MIS light selection
+on fixed many-light workloads. Compare a hierarchy/BVH or suitable
+procedural primitives for intersection and a light tree/importance
+distribution for selection. Only implement a minimal experiment if the
+measured cost is a leading bottleneck.
+
+**Exit evidence:** separate cost attribution and an adopt/defer decision
+covering GPU time, equal-quality behavior, memory and low-light-count
+regressions. An evidence-based decision to defer implementation satisfies
+this investigation; it does not complete the parent phase.
 
 ### Renderer Phase 0 — Foundation
 
@@ -346,10 +420,12 @@ GI; path-space reservoir reuse; indirect candidate reuse; temporal GI reuse;
 spatial GI reuse.
 
 This phase is research-oriented and kept apart from production requirements.
-It starts once the Renderer Phase 6 denoiser and the
+It may start once the Renderer Phase 6 denoiser and the
 [standalone viewport](#standalone-viewport-frontend) give it an interactive
 evaluation environment, and its comparisons are made there as well as
-headless.
+headless. Their availability does not automatically schedule it. Use a
+bounded experiment brief and the strategy's
+[research stop rule](POST_V060_STRATEGY.md#6-research-track-and-stop-rule).
 
 ### Renderer Phase 8 — Production material support
 
@@ -374,6 +450,11 @@ MaterialX ─────────┘
 
 The GPU evaluates the Lotus material IR.
 
+Selected foundation work may be delivered under the
+[cross-phase rule](#cross-phase-delivery). Expansion starts from demonstrated
+asset gaps, with the strategy's [entry conditions](POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
+That subset does not assert complete production-material support.
+
 ### Renderer Phase 9 — Advanced sampling and scheduling
 
 **Candidates.** Adaptive sampling; better path compaction; material sorting;
@@ -383,6 +464,11 @@ scheduling.
 
 None of these is a required feature. Each is adopted on a quantitative
 evaluation against the reference renderer.
+
+Selected scheduling and light-acceleration work may use the
+[cross-phase rule](#cross-phase-delivery). Intersection acceleration and
+light selection require separate evidence; path guiding uses the
+[research brief and stop rule](POST_V060_STRATEGY.md#6-research-track-and-stop-rule).
 
 ### Renderer Phase 10 — Spectral rendering research
 
@@ -491,9 +577,10 @@ Foundation
 
 Each milestone's **correctness evidence** matters more than its release
 number. Which release carries which phase is decided in the
-[roadmap](../roadmap/README.md#status-at-a-glance) when the phase before it
-is done, or when the phase before it is reduced to a bounded closure that the
-same release completes.
+[roadmap](../roadmap/README.md#status-at-a-glance) when the selected work's
+dependencies and exit evidence are defined. Earlier foundation work retains
+its dependency order; later delivery follows the
+[cross-phase rule](#cross-phase-delivery), not numeric phase order alone.
 
 ## 9. Near-term priority
 
@@ -513,9 +600,11 @@ raises its exit confidence as fast as it adds validation cost is closed on
 its exit criteria, whatever the result, and the renderer moves on. After
 Renderer Phase 5 the interactive path comes first — the
 [standalone viewport](#standalone-viewport-frontend) and the Renderer Phase 6
-denoiser — so that further transport research, beginning with
-Renderer Phase 7, is evaluated interactively. Every new pass still carries its timing
-and debug AOV (§7; [design policy §24–§25](DESIGN_POLICY.md#24-gpu-profiling)).
+denoiser — so that further transport research can be evaluated interactively.
+After that foundation, practical scene correctness, measurement and selected
+optimization take priority under the [strategy](POST_V060_STRATEGY.md);
+research does not gate ordinary releases. Every new pass still carries its
+timing and debug AOV (§7; [design policy §24–§25](DESIGN_POLICY.md#24-gpu-profiling)).
 
 ## 10. Long-term identity
 
@@ -523,19 +612,19 @@ and debug AOV (§7; [design policy §24–§25](DESIGN_POLICY.md#24-gpu-profilin
 | --- | --- |
 | `hydra-merlin` | high-performance raster rendering |
 | `hydra-toon` | toon / avatar / stylized rendering |
-| `hydra-lotus` | physically based GPU light transport, and a rendering research platform |
+| `hydra-lotus` | practical OpenUSD-native GPU path tracing, with an independent research track |
 
-Lotus does not aim to be "a Hydra renderer that makes pretty pictures". It
-aims to be **an OpenUSD-native research renderer in which new GPU rendering
-algorithms are compared, verified and implemented against correct light
-transport**.
+Lotus aims to render representative USD scenes correctly, reliably and at
+a measurable GPU cost. Its reference path tracer also supports bounded
+comparisons of new light-transport algorithms.
 
 ### Summary
 
 ```text
 Foundation → reference path tracer → minimal material IR → wavefront → NEE / MIS
-  → temporal infrastructure → ReSTIR DI → denoising → ReSTIR GI / advanced reservoirs
-  → production materials → advanced sampling → spectral / neural research
+  → temporal infrastructure → ReSTIR DI → denoising + standalone viewport
+      ├─ practical scene correctness → measurement → selected optimization
+      └─ independent, bounded transport / spectral / neural research
 ```
 
 The principle throughout: **correctness → measurement → optimization →

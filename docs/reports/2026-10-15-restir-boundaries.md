@@ -151,4 +151,4 @@ material/surface-boundary workloads. It changes the measurement harness and
 budget reduction, without changing reservoir sampling, support correction,
 visibility, history policy or Hydra controls. Lower reuse cost, temporal
 correlation, broader production artifact/bias coverage, the scope review and
-release gate remain in the [execution plan](../roadmap/current.md#execution-order).
+release gate remain in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).

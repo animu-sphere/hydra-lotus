@@ -154,5 +154,5 @@ This settles the static penalty's cause in this fixture: it is reduced informati
 from temporally correlated reservoirs, not detectable bias or finite-reference
 error. It does not establish unbiasedness in moving scenes, localized artifacts,
 ghosting, behavior in production multibounce scenes, or a reuse speedup.
-Remaining LOTUS-RESTIR-05 items stay in the [execution plan](../roadmap/current.md#execution-order).
+Remaining LOTUS-RESTIR-05 items stay in the [execution plan](../archive/pre-v070-execution-plan.md#execution-order).
 No phase exit is claimed.

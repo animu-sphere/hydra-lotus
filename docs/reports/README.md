@@ -97,8 +97,9 @@ to measure.
 Renderer measurements — the frame-time and ray-count metrics of
 [design policy §24](../design/DESIGN_POLICY.md#24-gpu-profiling), and
 comparisons against the reference path tracer — belong here, one report per
-measured session. The benchmark baseline requirements and execution order are
-owned by [current.md](../roadmap/current.md#performance-baseline-and-foundation-release).
+measured session. Benchmark baseline requirements are owned by the
+[workstream policy](../design/ROADMAP_POLICY.md#practical-foundation-workstreams);
+execution order belongs in [current.md](../roadmap/current.md#execution-order).
 Numbers stay in the dated report; other categories link to the measurement.
 
 ## What belongs where
