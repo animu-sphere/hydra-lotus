@@ -31,6 +31,9 @@ when the measurements justify it.
   [Cornell quality checkpoints](../reports/2026-10-25-quality-curve.md) now
   compare independent measured samples with the committed finite reference
   and retain observed error-threshold rendering times for both integrators.
+  [Disjoint-sequence quality populations](../reports/2026-10-25-quality-populations.md)
+  now separate three measured sample ranges from timing repetitions and
+  retain deterministic agreement between integrators.
   Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
   quality curves beyond Cornell, peak residency and complete viewport repeats;
   preserve the recorded driver failure when extending the baseline.

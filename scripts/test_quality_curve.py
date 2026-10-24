@@ -97,7 +97,8 @@ class QualityCurveTest(unittest.TestCase):
             self.assertEqual(process.call_count, 4)
             summary = json.loads((output / "quality.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["status"], "pass")
-            self.assertEqual(summary["sample_index"], 1 << 20)
+            self.assertEqual(summary["schema"], "lotus-quality-curve-v2")
+            self.assertEqual(summary["sample_indices"], [1 << 20])
             self.assertEqual(summary["reference"]["sample_index"], 0)
             self.assertEqual(summary["reference"]["sha256"], hashlib.sha256(
                 (quality.ROOT / summary["reference"]["path"]).read_bytes()).hexdigest())
@@ -107,6 +108,79 @@ class QualityCurveTest(unittest.TestCase):
                 self.assertEqual([p["gpu_total_ms"] for p in curve["points"]], [2, 8])
                 self.assertEqual([p["render_wall_total_ms"] for p in curve["points"]], [3, 12])
             self.assertTrue((output / "spp-4/headless-cornell-v1-1.log").is_file())
+            self.assertIsNone(summary["sample_populations"][0]["rmse"]["sample_stddev"])
+
+    def test_disjoint_sequences_keep_separate_curves_and_population_counts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            def execute(cmd, **kwargs):
+                result = self.successful_run(cmd, **kwargs)
+                index = int(cmd[cmd.index("--benchmark-sample-index") + 1])
+                report = Path(cmd[cmd.index("--benchmark") + 1])
+                pfm(report.with_suffix(".pfm"), [index / 4096] * (128 * 128 * 3),
+                    width=128, height=128)
+                return result
+            code, process = self.run_curve(output, execute,
+                ("--sample-index", "1024", "--sample-index", "2048"))
+            self.assertEqual(code, 0)
+            self.assertEqual(process.call_count, 8)
+            summary = json.loads((output / "quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["sample_indices"], [1024, 2048])
+            self.assertEqual([(c["sample_index"], c["run"]) for c in summary["curves"]],
+                             [(1024, 0), (1024, 1), (2048, 0), (2048, 1)])
+            for point in summary["sample_populations"]:
+                self.assertEqual(point["independent_sequences"], 2)
+                self.assertLess(point["rmse"]["min"], point["rmse"]["max"])
+                self.assertGreater(point["rmse"]["sample_stddev"], 0)
+            for checkpoint in summary["checkpoints"]:
+                path = output / checkpoint["run_summary"]
+                self.assertTrue(path.is_file())
+                run = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(run["manifest"]["settings"]["sample_index"],
+                                 checkpoint["sample_index"])
+
+    def test_population_does_not_count_timing_repeats_as_independent(self):
+        curves = [{"run": run, "points": [{"rmse": error}]}
+                  for run, error in ((0, 1), (1, 100), (0, 3), (1, 200))]
+        population = quality.sample_populations(curves, [4])[0]
+        self.assertEqual(population["independent_sequences"], 2)
+        self.assertEqual(population["rmse"], {"min": 1, "median": 2, "max": 3,
+                         "mean": 2, "sample_stddev": math.sqrt(2)})
+
+    def test_same_sequence_image_mismatch_fails_with_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            def execute(cmd, **kwargs):
+                result = self.successful_run(cmd, **kwargs)
+                report = Path(cmd[cmd.index("--benchmark") + 1])
+                if report.stem.endswith("-1"):
+                    pfm(report.with_suffix(".pfm"), [0.25] * (128 * 128 * 3),
+                        width=128, height=128)
+                return result
+            code, process = self.run_curve(output, execute)
+            self.assertEqual(code, 1)
+            self.assertEqual(process.call_count, 2)
+            summary = json.loads((output / "quality.json").read_text(encoding="utf-8"))
+            self.assertIn("images differ", summary["error"])
+            self.assertEqual(len(summary["checkpoints"][0]["points"]), 2)
+            self.assertEqual(summary["sample_populations"], [])
+
+    def test_later_sequence_failure_preserves_completed_sequence_without_retry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            def execute(cmd, **kwargs):
+                if cmd[cmd.index("--benchmark-sample-index") + 1] == "2048":
+                    return subprocess.CompletedProcess(cmd, 1, "driver failed", "")
+                return self.successful_run(cmd, **kwargs)
+            code, process = self.run_curve(output, execute,
+                ("--sample-index", "1024", "--sample-index", "2048"))
+            self.assertEqual(code, 1)
+            self.assertEqual(process.call_count, 5)
+            summary = json.loads((output / "quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(summary["curves"]), 2)
+            self.assertEqual(summary["curves"][0]["sample_index"], 1024)
+            self.assertEqual(summary["checkpoints"][-1]["status"], "fail")
+            self.assertEqual(summary["sample_populations"], [])
 
     def test_failure_skip_and_timeout_stop_without_retry_and_preserve_previous_checkpoint(self):
         for outcome in (subprocess.CompletedProcess([], 1, "driver failed", ""),
@@ -158,7 +232,15 @@ class QualityCurveTest(unittest.TestCase):
     def test_invalid_arguments_do_not_launch_or_overwrite(self):
         for extra in (("--frames", "4", "1"), ("--frames", "1", "1"),
                       ("--frames", "4097"), ("--runs", "0"),
-                      ("--rmse-target", "nan"), ("--rmse-target", "0")):
+                      ("--rmse-target", "nan"), ("--rmse-target", "0"),
+                      ("--sample-index", "-1"), ("--sample-index", "0"),
+                      ("--sample-index", "1023"),
+                      ("--sample-index", "1024", "--warmup", "1024"),
+                      ("--sample-index", str((1 << 21) - 3)),
+                      ("--sample-index", "1024", "--sample-index", "1024"),
+                      ("--sample-index", "1024", "--sample-index", "1027"),
+                      tuple(value for i in range(17) for value in
+                            ("--sample-index", str(1024 + i * 4)))):
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as temp:
                 output = Path(temp) / "output"
                 with self.assertRaises(SystemExit):
@@ -171,6 +253,14 @@ class QualityCurveTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_curve(output, self.successful_run)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve")
+
+    def test_adjacent_sequence_ranges_and_variance_boundary_are_allowed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            code, process = self.run_curve(Path(temp) / "output", self.successful_run,
+                ("--sample-index", "1024", "--sample-index", "1028",
+                 "--sample-index", str((1 << 21) - 4)))
+            self.assertEqual(code, 0)
+            self.assertEqual(process.call_count, 12)
 
 
 if __name__ == "__main__":

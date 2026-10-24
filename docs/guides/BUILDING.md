@@ -157,6 +157,22 @@ times. The [contract](../reference/SCENE.md#fixed-benchmarks) defines the
 finite-reference and timing limits; the
 [report](../reports/2026-10-25-quality-curve.md) records both integrators.
 
+For a quality population across disjoint measured sequences, repeat
+`--sample-index`; `--runs` remains the timing repetition count for each
+sequence. The bounded population comparison uses:
+
+```sh
+python scripts/quality_curve.py --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --output build/quality-populations-reference-20261025 --label "c3ea4a4 plus quality population runner; existing core Release binary; 2026-10-25" --clocks "Unlocked; initial nvidia-smi P8 graphics 210 MHz memory 405 MHz; driver 597.16; no clock settings changed; polling disabled" --sample-index 1048576 --sample-index 1114112 --sample-index 1179648 --runs 2 --rmse-target 0.2 --rmse-target 0.1 --rmse-target 0.05
+```
+
+Repeat with `--integrator wavefront` and a fresh output path after the first
+campaign finishes. `quality.json` now uses `lotus-quality-curve-v2`, with
+`sample_indices`, sequence-tagged checkpoints/curves and `sample_populations`.
+The latter counts each sequence once; deterministic timing repetitions
+do not count as new quality observations. The
+[population report](../reports/2026-10-25-quality-populations.md) records
+the evaluation budget, results and remaining limits.
+
 ## Reservoir comparison
 
 After the default build, run the separate static/moving many-light comparison:
