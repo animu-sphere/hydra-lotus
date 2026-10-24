@@ -73,7 +73,7 @@ class PerformanceBaselineTest(unittest.TestCase):
         data = {"schema": "lotus-benchmark-v1", "status": "pass",
                 "procedure": {"integrator": "reference", "light_sampling": "mis",
                               "width": 128, "height": 128,
-                              "measured_frames": 64, "warmup_frames": 8},
+                              "measured_frames": 64, "warmup_frames": 8, "sample_index": 0},
                 "scenes": [{"id": "cornell-v1", "status": "pass",
                             "measurements": {"image": image.name, "validation": {"messages": 0}}}]}
         report.write_text(json.dumps(data), encoding="utf-8")
@@ -92,6 +92,35 @@ class PerformanceBaselineTest(unittest.TestCase):
             for entry in summary["runs"]:
                 self.assertEqual(entry["status"], "pass")
                 self.assertEqual((output / entry["log"]).read_text(encoding="utf-8"), "successful run\n")
+
+    def test_nonzero_sequence_is_forwarded_recorded_and_checked(self):
+        def execute(cmd, **kwargs):
+            result = self.successful_run(cmd, **kwargs)
+            self.assertEqual(cmd[cmd.index("--benchmark-sample-index") + 1], "1048576")
+            path = Path(cmd[cmd.index("--benchmark") + 1])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["procedure"]["sample_index"] = 1048576
+            path.write_text(json.dumps(data), encoding="utf-8")
+            return result
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "valid"
+            code, _ = self.run_baseline(output, execute, ("--sample-index", "1048576"))
+            self.assertEqual(code, 0)
+            summary = json.loads((output / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["manifest"]["settings"]["sample_index"], 1048576)
+            code, process = self.run_baseline(Path(temp) / "ignored", self.successful_run,
+                                               ("--sample-index", "1048576"))
+            self.assertEqual(code, 1)
+            self.assertEqual(process.call_count, 1)
+
+    def test_sequence_range_and_viewport_are_rejected_before_launch(self):
+        for extra in (("--sample-index", "-1"), ("--sample-index", "2097151"),
+                      ("--sample-index", "1", "--viewport", "runner")):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as temp:
+                with self.assertRaises(SystemExit):
+                    self.run_baseline(Path(temp) / "output", self.successful_run, extra)
+                self.assertFalse((Path(temp) / "output").exists())
 
     def test_timeout_preserves_partial_output_and_previous_run_without_retry(self):
         for stdout, stderr in ((b"frame 2\n", b"driver\xff\n"), ("frame 2\n", "driver\n"), (None, None)):

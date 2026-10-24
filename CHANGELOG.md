@@ -23,6 +23,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Independent-sequence Cornell MIS quality curves with linear-RGB error,
+  observed error-threshold rendering times and retained raw evidence;
+  configurable headless benchmark sample indices with variance-range checks
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
 - Optional read-only NVIDIA clock, power-state, utilization and whole-device
   memory observations for shared benchmark attempts, with raw samples and
   explicit unavailable/partial diagnostics
