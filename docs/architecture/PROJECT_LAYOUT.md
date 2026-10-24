@@ -118,6 +118,13 @@ The Vulkan-only `lotus-renderer-benchmark-no-driver` checks explained SKIPs in
 an isolated child process. Both use `validation/benchmark-test.cmake` and
 keep benchmark data separate from renderer correctness evidence.
 
+`adapters/headless/workloads.{hpp,cpp}` owns versioned procedural benchmark
+fixtures. The viewport compiles the same source, as it does `reference.cpp`;
+no new library or core dependency is introduced.
+`validation/performance-workloads.json` fixes static comparison settings and
+workload IDs. `scripts/performance_baseline.py` drives either or both adapters
+sequentially and preserves raw reports, logs and image hashes.
+
 `adapters/headless/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,
 metrics and CLI are owned by the [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison).

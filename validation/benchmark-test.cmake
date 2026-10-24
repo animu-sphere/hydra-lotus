@@ -178,3 +178,34 @@ if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve" OR
   message(FATAL_ERROR "Benchmark accepted correctness options or overwrote rejected output")
 endif()
 message(STATUS "Benchmark schema/workloads/CLI passed for the ${INTEGRATOR} integrator with ${LIGHT_SAMPLING} light sampling; capability exit ${result}")
+
+# One small many-light case protects selection and the shared fixture; do
+# not multiply it across all integrators and legacy benchmark modes.
+if(LIGHT_SAMPLING STREQUAL "mis")
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/selected.json"
+    --benchmark-workload many-lights-v1 --benchmark-light-sampling mis
+    --benchmark-frames 4 --benchmark-warmup 2 --benchmark-size 32
+    RESULT_VARIABLE selected OUTPUT_VARIABLE selected_output ERROR_VARIABLE selected_error TIMEOUT 120)
+  if(NOT selected STREQUAL "0" AND NOT selected STREQUAL "77")
+    message(FATAL_ERROR "Selected workload failed: ${selected_output} ${selected_error}")
+  endif()
+  file(READ "${TEST_ROOT}/selected.json" selected_json)
+  string(JSON count LENGTH "${selected_json}" scenes)
+  string(JSON id GET "${selected_json}" scenes 0 id)
+  string(JSON compared GET "${selected_json}" procedure cornell_reference_compared)
+  if(NOT count EQUAL 1 OR NOT id STREQUAL "many-lights-v1" OR compared)
+    message(FATAL_ERROR "Selection did not isolate the many-light fixture")
+  endif()
+  if(selected STREQUAL "0")
+    string(JSON lights GET "${selected_json}" scenes 0 measurements scene analytic_lights)
+    if(NOT lights EQUAL 256)
+      message(FATAL_ERROR "Many-light workload must contain 256 analytic lights")
+    endif()
+  endif()
+endif()
+execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
+  --benchmark-workload typo RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+file(READ "${TEST_ROOT}/sentinel.json" sentinel)
+if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve")
+  message(FATAL_ERROR "Unknown workload was accepted or changed the output")
+endif()

@@ -47,6 +47,9 @@ struct Options {
   std::optional<double> time;
   // Where to write the run's benchmark JSON; empty writes none.
   std::filesystem::path benchmark;
+  // Versioned headless fixture; empty keeps the interactive Cornell camera.
+  std::string workload;
+  std::uint32_t benchmark_warmup = 0;
   bool help = false;
 };
 

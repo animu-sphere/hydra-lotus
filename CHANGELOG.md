@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- Shared versioned headless/viewport benchmark fixtures, including a
+  256-sphere-light workload; a static workload manifest and sequential
+  baseline runner; viewport warmup exclusion and raw GPU/CPU mean/p95
+  measurements ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
+
 ## [0.6.0] - 2026-10-18
 
 The interactive rendering release completes the v0.6.0 plan: Renderer

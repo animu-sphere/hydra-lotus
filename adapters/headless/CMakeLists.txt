@@ -1,6 +1,6 @@
 include(LotusShaders)
 
-add_executable(lotus-headless main.cpp reference.cpp benchmark.cpp restir_benchmark.cpp
+add_executable(lotus-headless main.cpp reference.cpp workloads.cpp benchmark.cpp restir_benchmark.cpp
   svgf_benchmark.cpp)
 target_link_libraries(lotus-headless PRIVATE
   Lotus::RenderWorld

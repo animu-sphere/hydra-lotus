@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "options.hpp"
+#include "../headless/workloads.hpp"
 
 #include <cmath>
 #include <limits>
@@ -150,6 +151,13 @@ Options ParseOptions(int argc, const char* const* argv) {
       result.stage = std::filesystem::path(std::string(next()));
     } else if (option == "--benchmark") {
       result.benchmark = std::filesystem::path(std::string(next()));
+    } else if (option == "--workload") {
+      result.workload = std::string(next());
+      if (!LotusHeadless::KnownWorkload(result.workload)) {
+        throw std::invalid_argument("unknown workload: " + result.workload);
+      }
+    } else if (option == "--benchmark-warmup") {
+      result.benchmark_warmup = static_cast<std::uint32_t>(ReadUnsigned(next(), option, 4096));
     } else if (option == "--help") {
       result.help = true;
     } else {
@@ -158,6 +166,13 @@ Options ParseOptions(int argc, const char* const* argv) {
   }
   if (result.width == 0 || result.height == 0) {
     throw std::invalid_argument("viewport extent must be non-zero");
+  }
+  if (!result.workload.empty() && (!result.stage.empty() || result.interaction_test || result.resize_test)) {
+    throw std::invalid_argument("--workload excludes --usd, --interaction-test and --resize-test");
+  }
+  if (result.benchmark_warmup != 0 && (result.benchmark.empty() ||
+      result.frame_limit <= result.benchmark_warmup || result.interaction_test || result.resize_test)) {
+    throw std::invalid_argument("--benchmark-warmup needs --benchmark and more --frames than warmup, without interaction/resize tests");
   }
   if (result.fullscreen && !result.visible) {
     throw std::invalid_argument("--fullscreen and --hidden exclude each other");
@@ -221,6 +236,8 @@ std::string Usage(bool hydra) {
       "  --interaction-test       script inputs and edits; check each restart\n"
       "  --allow-unavailable      exit 77, explained, without a device\n"
       "  --benchmark <file>       write the run's timings as JSON\n"
+      "  --workload <id>          fixed headless fixture and authored camera\n"
+      "  --benchmark-warmup N     discard N frames, reset the sample sequence\n"
       "Without --usd the viewport renders the built-in Cornell box.\n"
       "Left drag tumbles, middle (or Ctrl+left) drag tracks, right drag and\n"
       "the wheel dolly, F restores the initial framing. With a stage, C\n"

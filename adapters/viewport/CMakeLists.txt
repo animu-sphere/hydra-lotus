@@ -63,7 +63,8 @@ add_executable(lotus-viewport
   orbit_camera.cpp
   timings.cpp
   window_glfw.cpp
-  "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp")
+  "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp"
+  "${PROJECT_SOURCE_DIR}/adapters/headless/workloads.cpp")
 target_include_directories(lotus-viewport PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${PROJECT_SOURCE_DIR}/adapters/headless")
@@ -122,6 +123,18 @@ if(LOTUS_ENABLE_HYDRA2)
   endif()
 endif()
 
+# The environment fixture uses the same licensed asset as the headless runner.
+set(_viewport_asset_files
+  "${PROJECT_SOURCE_DIR}/validation/assets/StinsonBeach.hdr"
+  "${PROJECT_SOURCE_DIR}/validation/assets/LICENSE.OpenUSD.txt"
+  "${PROJECT_SOURCE_DIR}/validation/assets/manifest.json")
+add_custom_command(TARGET lotus-viewport POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:lotus-viewport>/assets"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    ${_viewport_asset_files}
+    "$<TARGET_FILE_DIR:lotus-viewport>/assets"
+  VERBATIM)
+set_property(TARGET lotus-viewport APPEND PROPERTY LINK_DEPENDS ${_viewport_asset_files})
 lotus_stage_shaders(TARGET lotus-viewport)
 
 # The installed tree reuses the bin/shaders the backend installs.

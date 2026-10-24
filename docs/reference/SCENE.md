@@ -1011,7 +1011,7 @@ and an image whose key names no texture must stay off the GPU
 ### Fixed benchmarks
 
 `lotus-headless --benchmark <json-path>` runs six procedural workloads from
-`adapters/headless/benchmark.cpp`, sharing the reference path tracer and
+`adapters/headless/workloads.cpp`, sharing the reference path tracer and
 Cornell scene definition. Workload identities are versioned; changes to
 their geometry, textures, materials or camera require a new identity before
 comparing measurements. Build identity is supplied with `--benchmark-label`;
@@ -1046,6 +1046,36 @@ executable.
 | `geometry-v1` | One indexed 512×512-quad grid, 524,288 triangles and 263,169 vertices. |
 | `lights-v1` | The Cornell box without its ceiling and emissive panel: 32 triangles in 6 placements, lit by a normalized 0.53° distant light through the open top, a sphere, a rect and a disk light, under a black environment. |
 | `environment-v1` | The Cornell box's blocks on its floor scaled to 120 units: 26 triangles in 3 placements under the Stinson Beach image, its sun behind the camera, which looks 25° down. |
+
+`--benchmark-workload <id>` selects one fixture; omitting it retains the
+original six. The additional `many-lights-v1` fixture retains the Cornell
+ceiling, removes its emissive panel (34 triangles, 7 placements), and places
+256 sphere lights in a 16×16 grid at y=0.85, radius 0.025, radiance
+(12, 10, 8), under a black environment. Its ID fixes those parameters.
+Unknown IDs fail before output is written.
+
+The viewport's `--workload <id>` uses the same factory and authored camera
+without free-camera navigation. It excludes USD input and interaction/resize
+tests; omitting it keeps normal interactive behavior. Licensed environment
+assets accompany both executables. `--benchmark-warmup N` requires a
+benchmark path and a finite frame limit greater than N. It resets the sample
+sequence after N discarded frames, and cuts temporal history at that boundary.
+The existing viewport JSON fields still describe the whole run; `measurement`
+records the post-warmup frame count, raw GPU/CPU populations, mean, median,
+nearest-rank p95 and measured pass means. Missing GPU timestamps and passes
+are null. The CPU population includes UI, scene update, render and present;
+GPU durations exclude untimed presentation/UI/debug passes.
+
+The [shared static manifest](../../validation/performance-workloads.json)
+fixes MIS, resolution, sample index, bounces, frames, warmup and repeat count.
+The [runner](../../scripts/performance_baseline.py) invokes either or both
+adapters sequentially, preserving reports/logs and headless PFM hashes.
+Its `run.json` records build identity, clock conditions, effective manifest,
+integrator and capability skips separately from correctness evidence.
+It refuses a nonempty output directory. These static runs do not yet cover
+camera/object motion, temporal/SVGF modes, absolute time-to-error targets or
+peak process VRAM. Headless per-sample variance remains an efficiency proxy;
+the viewport does no image readback or quality measurement.
 
 The report schema is `lotus-benchmark-v1`, separate from OpenStrata's
 renderer-evidence schema. It retains raw GPU-pass and blocking render wall

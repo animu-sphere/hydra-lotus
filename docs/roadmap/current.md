@@ -23,6 +23,11 @@ when the measurements justify it.
   peak VRAM and CPU update cost; name unavailable metrics. Report the top
   three bottlenecks and an adopt/defer decision for each before opening
   optimization tasks. Preserve deterministic Reference PT comparisons.
+  The [initial static manifest and measurements](../reports/2026-10-21-shared-performance-workloads.md)
+  provide shared fixtures, warmup exclusion and deterministic equivalence.
+  Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
+  independent quality curves, peak residency and complete viewport repeats;
+  preserve the recorded driver failure when extending the baseline.
 - [ ] **LOTUS-MEMORY-01 — Temporal/SVGF ownership and peak residency (P1).**
   Workstream B, improving existing temporal/denoise paths: inventory buffers,
   owners and lifetimes, GPU residency and host mirrors. Produce 1080p/4K
