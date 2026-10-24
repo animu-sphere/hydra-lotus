@@ -1,0 +1,14 @@
+{
+  "schema": "lotus-performance-workloads-v1",
+  "scope": "Static shared baseline; motion and temporal/SVGF comparisons remain pending.",
+  "settings": {
+    "size": 128,
+    "frames": 64,
+    "warmup": 8,
+    "runs": 3,
+    "sample_index": 0,
+    "max_bounces": 64,
+    "light_sampling": "mis"
+  },
+  "workloads": ["cornell-v1", "textured-v1", "instanced-v1", "geometry-v1", "lights-v1", "environment-v1", "many-lights-v1"]
+}

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -28,7 +29,25 @@ struct RunTotals {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   TimingRecord timings;
+  std::uint32_t warmup = 0;
+  std::vector<double> measured_gpu_ms;
+  std::vector<double> measured_cpu_ms;
+  TimingRecord measured_timings;
 };
+
+void Series(std::ostream& out, const std::vector<double>& values) {
+  if (values.empty()) { out << "null"; return; }
+  auto sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  double sum = 0;
+  for (const double value : values) sum += value;
+  out << "{\"mean\":" << sum / values.size()
+      << ",\"median\":" << (sorted[(sorted.size() - 1) / 2] + sorted[sorted.size() / 2]) * 0.5
+      << ",\"p95\":" << sorted[static_cast<std::size_t>(std::ceil(0.95 * sorted.size())) - 1]
+      << ",\"raw\":[";
+  for (std::size_t i = 0; i < values.size(); ++i) out << (i ? "," : "") << values[i];
+  out << "]}";
+}
 
 template <typename Record>
 std::uint64_t Bytes(const std::vector<Record>& records) {
@@ -88,6 +107,8 @@ void WriteBenchmark(const std::filesystem::path& path,
       << "  \"stage\": " << (stage.empty() ? "null" : JsonString(stage))
       << ",\n"
       << "  \"device\": " << JsonString(frame.device_name) << ",\n"
+      << "  \"driver_version_raw\": " << JsonString(frame.driver_version) << ",\n"
+      << "  \"api_version\": " << JsonString(frame.api_version) << ",\n"
       << "  \"width\": " << totals.width << ",\n"
       << "  \"height\": " << totals.height << ",\n"
       << "  \"controls\": {\"integrator\": "
@@ -120,7 +141,20 @@ void WriteBenchmark(const std::filesystem::path& path,
                  ? 0.0
                  : totals.gpu_ms / static_cast<double>(totals.gpu_frames))
       << ",\n"
-      << "  \"gpu_pass_average_ms\": {";
+      << "  \"measurement\": {\"warmup_frames\":" << totals.warmup
+      << ",\"frames\":" << totals.measured_cpu_ms.size()
+      << ",\"gpu_frame_ms\":";
+  Series(out, totals.measured_gpu_ms);
+  out << ",\"cpu_frame_ms\":";
+  Series(out, totals.measured_cpu_ms);
+  out << ",\"gpu_pass_average_ms\":{";
+  for (std::size_t pass = 0; pass < kGpuPassCount; ++pass) {
+    out << (pass ? "," : "") << JsonString(Name(static_cast<GpuPass>(pass))) << ':';
+    const auto count = totals.measured_timings.pass_frames()[pass];
+    if (count == 0) out << "null";
+    else out << totals.measured_timings.pass_totals()[pass] / static_cast<double>(count);
+  }
+  out << "}},\n  \"gpu_pass_average_ms\": {";
   // Each pass over the frames that ran it; null when none did.
   const TimingRecord& timings = totals.timings;
   for (std::size_t pass = 0; pass < kGpuPassCount; ++pass) {
@@ -406,6 +440,7 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
   DeveloperUi& ui = *viewport.ui;
   Controls& controls = viewport.controls;
   RunTotals totals;
+  totals.warmup = options.benchmark_warmup;
   std::vector<InteractionStep> steps;
   if (options.interaction_test) {
     steps = scene.InteractionSteps();
@@ -475,8 +510,17 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
       std::cerr << "lotus-viewport: " << open_error << '\n';
       ui.SetStageError(open_error);
     }
-    const FramePlan plan = PlanFrame(controls, totals.frames,
+    const std::uint64_t sample_frame = totals.frames < options.benchmark_warmup
+        ? totals.frames : totals.frames - options.benchmark_warmup;
+    FramePlan plan = PlanFrame(controls, sample_frame,
         scene.DepthRange());
+    if (options.benchmark_warmup != 0) {
+      // Offset the discarded sequence without changing fresh-frame sampling
+      // when progressive accumulation is disabled.
+      if (totals.frames < options.benchmark_warmup) ++plan.settings.sample_index;
+      // No temporal history from discarded frames enters the measured run.
+      if (totals.frames == options.benchmark_warmup) plan.temporal.camera_cut = true;
+    }
     FrameResult result;
     if (!scene.Render(width, height, plan, result, error)) {
       std::cerr << "lotus-viewport: frame " << totals.frames + 1 << ": "
@@ -488,6 +532,14 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
             Clock::now() - start)
             .count());
     totals.cpu_ns += totals.last_cpu_ns;
+    if (!options.benchmark.empty() && totals.frames >= options.benchmark_warmup) {
+      const double cpu_ms = static_cast<double>(totals.last_cpu_ns) / 1.0e6;
+      totals.measured_cpu_ms.push_back(cpu_ms);
+      if (result.frame.primary_ray_timestamp_available) {
+        totals.measured_gpu_ms.push_back(FrameGpuMs(result.frame));
+      }
+      totals.measured_timings.Add(result.frame, result.scene_update, result.scene, cpu_ms);
+    }
     if (result.present.status == FrameStatus::Fail) {
       std::cerr << "lotus-viewport: presentation failed: "
                 << result.present.detail << '\n';

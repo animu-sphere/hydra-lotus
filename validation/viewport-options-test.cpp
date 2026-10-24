@@ -102,6 +102,15 @@ int main() {
       "a radiance view with temporal radiance");
   Check(Parse({"--fullscreen"}).fullscreen, "fullscreen");
   Check(Parse({"--help"}).help, "help");
+  const auto fixture = Parse({"--workload", "many-lights-v1", "--benchmark", "out.json",
+      "--benchmark-warmup", "8", "--frames", "24"});
+  Check(fixture.workload == "many-lights-v1" && fixture.benchmark_warmup == 8,
+      "shared fixture and measured warmup");
+  Check(Rejects({"--workload", "unknown"}), "unknown fixture");
+  Check(Rejects({"--workload", "cornell-v1", "--usd", "s.usda"}), "fixture with USD");
+  Check(Rejects({"--benchmark-warmup", "8", "--frames", "16"}), "warmup without report");
+  Check(Rejects({"--benchmark-warmup", "8", "--frames", "8", "--benchmark", "out.json"}),
+      "warmup without measured frames");
 
   Check(Rejects({"--frames"}), "missing value");
   Check(Rejects({"--frames", "-1"}), "negative frame count");

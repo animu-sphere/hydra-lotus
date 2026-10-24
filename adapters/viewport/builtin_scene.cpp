@@ -5,6 +5,7 @@
 #include "frame_loop.hpp"
 #include "orbit_camera.hpp"
 #include "reference.hpp"
+#include "../headless/workloads.hpp"
 #include "scenes.hpp"
 
 #include <lotus/extraction.hpp>
@@ -29,8 +30,9 @@ Matrix4 ToFloat(const Matrix4d& matrix) {
 
 class BuiltinScene final : public Scene {
 public:
-  explicit BuiltinScene(OffscreenRenderer& renderer) : renderer_(renderer) {
-    LotusHeadless::SetCornellBox(world_);
+  explicit BuiltinScene(OffscreenRenderer& renderer, const Options& options,
+      const std::filesystem::path& assets) : renderer_(renderer), workload_(options.workload) {
+    world_ = LotusHeadless::MakeWorkload(workload_.empty() ? "cornell-v1" : workload_, assets).world;
     // The box spans [-1, 1]; the initial view is the headless bootstrap
     // camera's, three units in front of it with a 45 degree field of view.
     camera_.SetBounds(BoxCorners({-1.0, -1.0, -1.0}, {1.0, 1.0, 1.0}));
@@ -40,15 +42,16 @@ public:
   }
 
   std::string_view source() const override {
-    return "Cornell box";
+    return workload_.empty() ? std::string_view("Cornell box") : std::string_view(workload_);
   }
 
   std::string Status() const override {
-    return "free camera";
+    return workload_.empty() ? "free camera" : "fixed benchmark camera";
   }
 
   // The scene has no authored cameras, time samples or layers.
   void Handle(const Event& event) override {
+    if (!workload_.empty()) return;
     if (event.type == EventType::KeyDown && event.key == Key::Frame) {
       camera_.SetView(home_);
     } else {
@@ -67,8 +70,10 @@ public:
     height_ = height;
     const double aspect =
         static_cast<double>(width) / static_cast<double>(height);
-    world_.SetCamera({ToFloat(camera_.WorldToView()),
-        ToFloat(camera_.Projection(aspect))});
+    if (workload_.empty()) {
+      world_.SetCamera({ToFloat(camera_.WorldToView()),
+          ToFloat(camera_.Projection(aspect))});
+    }
     const FrameSnapshot snapshot = world_.Commit();
     const GpuSceneEvidence scene =
         renderer_.UpdateScene(extraction_.Update(snapshot));
@@ -116,6 +121,7 @@ public:
 private:
   OffscreenRenderer& renderer_;
   RenderWorld world_;
+  std::string workload_;
   SceneExtraction extraction_;
   std::uint64_t frame_index_ = 0;
   OrbitCamera camera_;
@@ -147,7 +153,7 @@ int RunBuiltinScene(const Options& options, ViewportWindow& window,
     return Unavailable(options, ray_query.detail);
   }
 
-  BuiltinScene scene(*renderer);
+  BuiltinScene scene(*renderer, options, shader_directory.parent_path() / "assets");
   return RunFrameLoop(options, window, scene, {});
 }
 

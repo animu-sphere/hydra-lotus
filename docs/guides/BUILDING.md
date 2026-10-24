@@ -103,6 +103,27 @@ identities, defaults, metric scopes, capability handling and exit codes.
 CTest uses 16 measured/2 warmup frames for the report regression; the
 performance baseline uses the default 64/8.
 
+## Shared static performance workloads
+
+After building the default and viewport trees, the shared manifest drives
+both frontends with the same fixture, camera and rendering settings:
+
+```sh
+python scripts/performance_baseline.py --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --viewport build/cy2026-windows-x86_64-py313-core--renderer-viewport/adapters/viewport/lotus-viewport.exe --output build/shared-baseline-reference --label "952372f plus shared static workloads; core Release; 2026-10-21" --clocks "Unlocked; initial nvidia-smi P0 graphics 1905 MHz memory 8001 MHz; driver 597.16"
+```
+
+This run and its viewport driver failure are preserved in the
+[shared baseline report](../reports/2026-10-21-shared-performance-workloads.md).
+Use the identity and clock conditions actually measured, and a fresh output
+directory. Omit `--viewport` to collect headless evidence independently of
+presentation failures; `--integrator wavefront` selects the other integrator.
+`--workload <id>` selects a manifest subset, and `--plan` prints commands
+without writing or running. The runner stops on failure, retains earlier
+results and never retries a failed launch. Exit 77 denotes an explained
+capability skip, not performance or correctness evidence. The
+[benchmark reference](../reference/SCENE.md#fixed-benchmarks) defines scopes,
+unavailable metrics and the remaining motion/quality measurements.
+
 ## Reservoir comparison
 
 After the default build, run the separate static/moving many-light comparison:
