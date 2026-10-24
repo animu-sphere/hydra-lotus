@@ -126,6 +126,18 @@ capability skip, not performance or correctness evidence. The
 [benchmark reference](../reference/SCENE.md#fixed-benchmarks) defines scopes,
 unavailable metrics and the remaining motion/quality measurements.
 
+To observe NVIDIA device conditions during a campaign, add
+`--gpu-telemetry nvidia-smi` (optionally `--gpu-sample-ms 100`). This records
+raw clock, power-state, utilization and device-memory samples in a separate
+`*.gpu.json` for each attempt; `run.json` links them and distinguishes
+available, partial and unavailable collection. A missing tool or failed
+query does not change the renderer result. Inspect query diagnostics before
+using the observations. Collection is disabled by default, may perturb
+timing and never locks clocks. Device-memory maxima include other processes
+and do not measure peak renderer residency. The
+[collector report](../reports/2026-10-24-gpu-telemetry.md) records a tested
+invocation and its uninstrumented control.
+
 ## Reservoir comparison
 
 After the default build, run the separate static/moving many-light comparison:

@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-24-gpu-telemetry.md](2026-10-24-gpu-telemetry.md) | Opt-in whole-device clock, power-state and memory observations around benchmark attempts; deterministic control comparison, unavailable/failure preservation and remaining baseline limits; [data](2026-10-24-gpu-telemetry.json). |
 | [2026-10-21-shared-performance-workloads.md](2026-10-21-shared-performance-workloads.md) | Shared static fixtures and manifest, headless/viewport timing scopes, repeatability and the remaining performance-baseline evidence; [data](2026-10-21-shared-performance-workloads.json). |
 | [2026-10-18-v0.6.0-release-gate.md](2026-10-18-v0.6.0-release-gate.md) | v0.6.0 release verification: physical-GPU core/Hydra and installed-host checks, the viewport smoke test with the denoiser, deterministic denoiser validation, GPU timings, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging. |
 | [2026-10-18-svgf-viewport.md](2026-10-18-svgf-viewport.md) | SVGF in the viewport and Renderer Phase 6 exit: run-time denoiser switch keeping the history, raw, accumulated, history-length and variance views from the GPU, a split view against the filtered image, variance and filter passes in the HUD, `lotus:filterIterations` for Hydra; compact filter guides cutting five iterations at 1280x720 from 11.6 to 2.4 ms with the same output; every exit criterion met. |

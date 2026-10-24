@@ -23,6 +23,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Optional read-only NVIDIA clock, power-state, utilization and whole-device
+  memory observations for shared benchmark attempts, with raw samples and
+  explicit unavailable/partial diagnostics
+  ([scope and limitations](docs/reference/SCENE.md#fixed-benchmarks)).
 - Shared versioned headless/viewport benchmark fixtures, including a
   256-sphere-light workload; a static workload manifest and sequential
   baseline runner; viewport warmup exclusion and raw GPU/CPU mean/p95

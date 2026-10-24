@@ -186,6 +186,44 @@ class PerformanceBaselineTest(unittest.TestCase):
                 self.run_baseline(output, self.successful_run)
             self.assertEqual(evidence.read_text(encoding="utf-8"), "previous failure")
 
+    def test_optional_telemetry_is_finalized_on_success_failure_and_timeout(self):
+        outcomes = (self.successful_run, FileNotFoundError("missing runner"),
+                    subprocess.TimeoutExpired("runner", 300),
+                    lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "driver failure", ""))
+        for outcome in outcomes:
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "output"
+                with patch.object(baseline, "GpuTelemetry") as observer:
+                    observer.return_value.finish.return_value = {
+                        "status": "unavailable", "report": "observation.gpu.json"}
+                    code, process = self.run_baseline(output, outcome, ("--gpu-telemetry", "nvidia-smi"))
+                count = 3 if outcome == self.successful_run else 1
+                self.assertEqual(code, 0 if count == 3 else 1)
+                self.assertEqual(process.call_count, count)
+                self.assertEqual(observer.return_value.start.call_count, count)
+                self.assertEqual(observer.return_value.finish.call_count, count)
+                summary = json.loads((output / "run.json").read_text(encoding="utf-8"))
+                self.assertEqual(summary["gpu_telemetry"], "nvidia-smi")
+                self.assertTrue(all(r["gpu_telemetry"]["status"] == "unavailable" for r in summary["runs"]))
+
+    def test_plan_never_starts_telemetry_or_creates_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            with patch.object(baseline, "GpuTelemetry") as observer:
+                code, process = self.run_baseline(output, self.successful_run,
+                    ("--gpu-telemetry", "nvidia-smi", "--plan"))
+            self.assertEqual(code, 0)
+            observer.assert_not_called()
+            process.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_invalid_telemetry_interval_is_rejected_before_launch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            with self.assertRaises(SystemExit):
+                self.run_baseline(output, self.successful_run, ("--gpu-sample-ms", "0"))
+            self.assertFalse(output.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
