@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // lotus-viewport's timing HUD figures from synthetic frame evidence, without
 // a window or a GPU.
-#include "../adapters/viewport/timings.hpp"
+#include "../adapters/viewport/app/timings.hpp"
 
 #include <cmath>
 #include <iostream>

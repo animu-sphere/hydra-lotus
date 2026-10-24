@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "orbit_camera.hpp"
+#include "camera/orbit_camera.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Group adapter sources by responsibility: shared fixtures in
+  `adapters/common/`, headless campaigns in `benchmarks/`, and viewport
+  application, camera, platform, scene and UI code in dedicated directories
+  ([layout](docs/architecture/PROJECT_LAYOUT.md#adapter-source-organization)).
+
 ### Added
 
 - Shared versioned headless/viewport benchmark fixtures, including a

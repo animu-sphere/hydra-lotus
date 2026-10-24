@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // lotus-viewport's command line, without a window or a GPU.
-#include "../adapters/viewport/options.hpp"
+#include "../adapters/viewport/app/options.hpp"
 
 #include <initializer_list>
 #include <iostream>

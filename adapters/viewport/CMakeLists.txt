@@ -51,23 +51,22 @@ else()
   target_compile_options(lotus-viewport-imgui PRIVATE -w)
 endif()
 
-# The built-in scene is the headless adapter's reference Cornell box, which
-# has no dependency beyond the core.
+# Scene fixtures are shared source, with no dependency beyond the core.
 add_executable(lotus-viewport
-  builtin_scene.cpp
-  controls.cpp
-  developer_ui.cpp
-  frame_loop.cpp
   main.cpp
-  options.cpp
-  orbit_camera.cpp
-  timings.cpp
-  window_glfw.cpp
-  "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp"
-  "${PROJECT_SOURCE_DIR}/adapters/headless/workloads.cpp")
+  app/controls.cpp
+  app/frame_loop.cpp
+  app/options.cpp
+  app/timings.cpp
+  camera/orbit_camera.cpp
+  platform/window_glfw.cpp
+  scenes/builtin_scene.cpp
+  ui/developer_ui.cpp
+  "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"
+  "${PROJECT_SOURCE_DIR}/adapters/common/workloads.cpp")
 target_include_directories(lotus-viewport PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${PROJECT_SOURCE_DIR}/adapters/headless")
+  "${PROJECT_SOURCE_DIR}/adapters")
 target_link_libraries(lotus-viewport PRIVATE
   Lotus::RenderWorld
   Lotus::RenderExtraction
@@ -100,7 +99,7 @@ if(LOTUS_ENABLE_HYDRA2)
     DESTINATION "${CMAKE_INSTALL_DATADIR}/lotus/licenses"
     RENAME nativefiledialog-extended-LICENSE.txt)
 
-  target_sources(lotus-viewport PRIVATE hydra_stage.cpp)
+  target_sources(lotus-viewport PRIVATE scenes/hydra_stage.cpp)
   target_link_libraries(lotus-viewport PRIVATE
     lotus-hydra2-runtime
     lotus-hydra2-host-dependencies

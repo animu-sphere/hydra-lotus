@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "frame_loop.hpp"
-#include "timings.hpp"
+#include "app/frame_loop.hpp"
+#include "app/timings.hpp"
 
 #include <algorithm>
 #include <chrono>

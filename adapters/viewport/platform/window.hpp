@@ -4,7 +4,7 @@
 // core or backend targets.
 #pragma once
 
-#include "input.hpp"
+#include "platform/input.hpp"
 
 #include <lotus/vulkan_present.hpp>
 

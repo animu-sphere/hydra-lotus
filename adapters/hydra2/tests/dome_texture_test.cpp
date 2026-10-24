@@ -7,7 +7,7 @@
 // synthetic image that the OpenEXR latitude-longitude layout puts in each
 // direction off a mirror.
 #include "adapter.hpp"
-#include "reference.hpp"
+#include "common/reference.hpp"
 
 #include <pxr/imaging/cameraUtil/framing.h>
 #include <pxr/imaging/hd/camera.h>

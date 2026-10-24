@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // lotus-viewport's renderer controls and the frames they plan, without a
 // window or a GPU.
-#include "../adapters/viewport/controls.hpp"
+#include "../adapters/viewport/app/controls.hpp"
 
 #include <iostream>
 #include <string>

@@ -3,7 +3,7 @@
 // unit test covers them in every configuration.
 #pragma once
 
-#include "controls.hpp"
+#include "app/controls.hpp"
 
 #include <cstdint>
 #include <filesystem>

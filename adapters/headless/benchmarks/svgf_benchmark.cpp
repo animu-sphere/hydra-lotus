@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "svgf_benchmark.hpp"
-#include "reference.hpp"
+#include "common/reference.hpp"
 
 #include <lotus/vulkan_backend.hpp>
 

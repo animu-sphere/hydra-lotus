@@ -5,8 +5,8 @@
 // stage (window.next_stage).
 #pragma once
 
-#include "frame_loop.hpp"
-#include "options.hpp"
+#include "app/frame_loop.hpp"
+#include "app/options.hpp"
 
 #include <filesystem>
 #include <string>

@@ -7,9 +7,9 @@
 // and the figures it shows are timings.hpp's.
 #pragma once
 
-#include "controls.hpp"
-#include "timings.hpp"
-#include "window.hpp"
+#include "app/controls.hpp"
+#include "app/timings.hpp"
+#include "platform/window.hpp"
 
 #include <lotus/vulkan_present.hpp>
 

@@ -54,10 +54,10 @@ lotus_add_hydra_test(NAME light-sampling SOURCES light_sampling_test.cpp
 lotus_add_hydra_test(NAME analytic-light SOURCES analytic_light_test.cpp
   LIBRARIES ${_runtime} Lotus::RenderExtraction Lotus::Vulkan usdGeom ${_stage})
 lotus_add_hydra_test(NAME dome-texture
-  SOURCES dome_texture_test.cpp "${PROJECT_SOURCE_DIR}/adapters/headless/reference.cpp"
+  SOURCES dome_texture_test.cpp "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"
   LIBRARIES ${_runtime} Lotus::RenderWorld Lotus::Vulkan usdGeom ${_stage})
 target_include_directories(lotus-hydra2-dome-texture-test
-  PRIVATE "${PROJECT_SOURCE_DIR}/adapters/headless")
+  PRIVATE "${PROJECT_SOURCE_DIR}/adapters")
 target_compile_definitions(lotus-hydra2-dome-texture-test PRIVATE
   LOTUS_ASSETS_DIRECTORY="${PROJECT_SOURCE_DIR}/validation/assets")
 # The plugin probe loads hdLotus through plug, so it links no Lotus target.

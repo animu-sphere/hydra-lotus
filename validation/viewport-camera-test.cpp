@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // lotus-viewport's free camera and pointer bindings, without a window, a GPU
 // or OpenUSD.
-#include "../adapters/viewport/orbit_camera.hpp"
+#include "../adapters/viewport/camera/orbit_camera.hpp"
 
 #include <cmath>
 #include <numbers>

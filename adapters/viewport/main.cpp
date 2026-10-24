@@ -6,8 +6,8 @@
 // also runs as a scripted GPU smoke test (`--hidden --frames N`). Exit codes:
 // 0 success, 1 failure, 77 skip (with --allow-unavailable, an environment
 // that cannot present).
-#include "options.hpp"
-#include "scenes.hpp"
+#include "app/options.hpp"
+#include "scenes/scenes.hpp"
 
 #include <filesystem>
 #include <iostream>

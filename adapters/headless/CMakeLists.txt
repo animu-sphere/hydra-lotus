@@ -1,7 +1,13 @@
 include(LotusShaders)
 
-add_executable(lotus-headless main.cpp reference.cpp workloads.cpp benchmark.cpp restir_benchmark.cpp
-  svgf_benchmark.cpp)
+add_executable(lotus-headless
+  main.cpp
+  benchmarks/benchmark.cpp
+  benchmarks/restir_benchmark.cpp
+  benchmarks/svgf_benchmark.cpp
+  "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"
+  "${PROJECT_SOURCE_DIR}/adapters/common/workloads.cpp")
+target_include_directories(lotus-headless PRIVATE "${PROJECT_SOURCE_DIR}/adapters")
 target_link_libraries(lotus-headless PRIVATE
   Lotus::RenderWorld
   Lotus::RenderExtraction

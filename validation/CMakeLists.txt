@@ -22,33 +22,41 @@ add_test(NAME lotus-renderer-core-boundary-discovery
     -P "${CMAKE_CURRENT_SOURCE_DIR}/core-boundary-test.cmake")
 
 add_executable(lotus-viewport-camera-test viewport-camera-test.cpp
-  ../adapters/viewport/orbit_camera.cpp)
+  ../adapters/viewport/camera/orbit_camera.cpp)
 target_link_libraries(lotus-viewport-camera-test PRIVATE Lotus::Warnings)
 target_compile_features(lotus-viewport-camera-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-camera COMMAND lotus-viewport-camera-test)
 
 # The controls name the backend's settings types; the headers are enough.
 add_executable(lotus-viewport-options-test viewport-options-test.cpp
-  ../adapters/viewport/options.cpp
-  ../adapters/viewport/controls.cpp)
+  ../adapters/viewport/app/options.cpp
+  ../adapters/viewport/app/controls.cpp)
 target_link_libraries(lotus-viewport-options-test PRIVATE
   Lotus::RenderExtraction Lotus::Warnings)
 target_compile_features(lotus-viewport-options-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-options COMMAND lotus-viewport-options-test)
 
 add_executable(lotus-viewport-controls-test viewport-controls-test.cpp
-  ../adapters/viewport/controls.cpp)
+  ../adapters/viewport/app/controls.cpp)
 target_link_libraries(lotus-viewport-controls-test PRIVATE
   Lotus::RenderExtraction Lotus::Warnings)
 target_compile_features(lotus-viewport-controls-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-controls COMMAND lotus-viewport-controls-test)
 
 add_executable(lotus-viewport-timings-test viewport-timings-test.cpp
-  ../adapters/viewport/timings.cpp)
+  ../adapters/viewport/app/timings.cpp)
 target_link_libraries(lotus-viewport-timings-test PRIVATE
   Lotus::RenderExtraction Lotus::Warnings)
 target_compile_features(lotus-viewport-timings-test PRIVATE cxx_std_20)
 add_test(NAME lotus-viewport-timings COMMAND lotus-viewport-timings-test)
+
+# Frontend sources use the same private include roots in tests as in their host.
+foreach(_viewport_test IN ITEMS lotus-viewport-camera-test lotus-viewport-options-test
+    lotus-viewport-controls-test lotus-viewport-timings-test)
+  target_include_directories(${_viewport_test} PRIVATE
+    "${PROJECT_SOURCE_DIR}/adapters"
+    "${PROJECT_SOURCE_DIR}/adapters/viewport")
+endforeach()
 
 add_executable(lotus-render-world-mesh-test render-world-mesh-test.cpp)
 target_link_libraries(lotus-render-world-mesh-test PRIVATE Lotus::RenderExtraction Lotus::Warnings)
@@ -90,7 +98,7 @@ else()
 endif()
 set_tests_properties(lotus-renderer-temporal-gpu PROPERTIES SKIP_RETURN_CODE 77)
 
-add_executable(lotus-restir-gpu-test restir-gpu-test.cpp ../adapters/headless/reference.cpp)
+add_executable(lotus-restir-gpu-test restir-gpu-test.cpp ../adapters/common/reference.cpp)
 target_link_libraries(lotus-restir-gpu-test PRIVATE Lotus::Vulkan Lotus::Warnings)
 if(LOTUS_ENABLE_VULKAN)
   add_dependencies(lotus-restir-gpu-test lotus-shaders)

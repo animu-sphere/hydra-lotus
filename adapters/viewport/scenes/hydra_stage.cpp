@@ -7,9 +7,9 @@
 // current time code, and the renderer controls through the delegate's
 // render settings. Only the Hydra-enabled build (LOTUS_ENABLE_HYDRA2)
 // compiles this file.
-#include "frame_loop.hpp"
-#include "orbit_camera.hpp"
-#include "scenes.hpp"
+#include "app/frame_loop.hpp"
+#include "camera/orbit_camera.hpp"
+#include "scenes/scenes.hpp"
 
 #include "adapter.hpp"
 

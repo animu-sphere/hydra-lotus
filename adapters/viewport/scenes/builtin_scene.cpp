@@ -2,11 +2,11 @@
 // The built-in scene: the reference Cornell box, path-traced as the
 // renderer controls plan it and presented from the backend, seen through
 // the free camera.
-#include "frame_loop.hpp"
-#include "orbit_camera.hpp"
-#include "reference.hpp"
-#include "../headless/workloads.hpp"
-#include "scenes.hpp"
+#include "app/frame_loop.hpp"
+#include "camera/orbit_camera.hpp"
+#include "common/reference.hpp"
+#include "common/workloads.hpp"
+#include "scenes/scenes.hpp"
 
 #include <lotus/extraction.hpp>
 #include <lotus/render_world.hpp>
