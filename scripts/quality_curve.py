@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import statistics
 import sys
 
 import performance_baseline as baseline
@@ -92,6 +93,19 @@ def observed_target(curve, target):
             "render_wall_total_ms": point["render_wall_total_ms"] if point else None}
 
 
+def sample_populations(curves, frames):
+    """Count each disjoint sample sequence once, excluding timing repetitions."""
+    independent = [curve for curve in curves if curve["run"] == 0]
+    populations = []
+    for i, samples in enumerate(frames):
+        errors = [curve["points"][i]["rmse"] for curve in independent]
+        populations.append({"samples": samples, "independent_sequences": len(errors),
+            "rmse": {"min": min(errors), "median": statistics.median(errors),
+                     "max": max(errors), "mean": statistics.mean(errors),
+                     "sample_stddev": statistics.stdev(errors) if len(errors) > 1 else None}})
+    return populations
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", required=True, type=Path)
@@ -102,6 +116,8 @@ def main(argv=None):
     parser.add_argument("--frames", type=int, nargs="+", default=[1, 16, 64, 256])
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=8)
+    parser.add_argument("--sample-index", type=int, action="append",
+                        help="repeat for disjoint measured sequences; default: 1048576")
     parser.add_argument("--rmse-target", type=float, action="append")
     parser.add_argument("--gpu-telemetry", choices=("off", "nvidia-smi"), default="off")
     args = parser.parse_args(argv)
@@ -111,48 +127,66 @@ def main(argv=None):
     targets = args.rmse_target or [0.2, 0.1]
     if len(set(targets)) != len(targets) or any(not math.isfinite(t) or t <= 0 for t in targets):
         parser.error("RMSE targets must be finite, positive and unique")
+    indices = args.sample_index if args.sample_index is not None else [SAMPLE_INDEX]
+    if (not 1 <= len(indices) <= 16 or len(set(indices)) != len(indices)
+            or any(index < max(1024, args.warmup + 1)
+                   or index + max(args.frames) > 1 << 21 for index in indices)):
+        parser.error("use 1..16 unique sample indices disjoint from reference, warmup and variance")
+    ordered = sorted(indices)
+    if any(a + max(args.frames) > b for a, b in zip(ordered, ordered[1:])):
+        parser.error("measured sample sequences must not overlap")
     output = args.output.resolve()
     if output.exists() and any(output.iterdir()):
         parser.error("output directory must be empty to preserve previous measurements")
     reference_path = ROOT / "validation/reference/cornell-box-mean.pfm"
     reference = read_pfm(reference_path)
     executable = args.headless.resolve()
-    summary = {"schema": "lotus-quality-curve-v1", "status": "fail",
+    summary = {"schema": "lotus-quality-curve-v2", "status": "fail",
                "label": args.label, "clock_conditions": args.clocks,
-               "integrator": args.integrator, "sample_index": SAMPLE_INDEX,
+               "integrator": args.integrator, "sample_indices": indices,
                "reference": {"path": "validation/reference/cornell-box-mean.pfm",
                              "sha256": hashlib.sha256(reference_path.read_bytes()).hexdigest(),
                              "samples": 1024, "sample_index": 0, "light_sampling": "bsdf"},
                "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest()
                    if executable.is_file() else None,
-               "rmse_targets": targets, "checkpoints": [], "curves": []}
+               "rmse_targets": targets, "checkpoints": [], "curves": [],
+               "sample_populations": []}
     output.mkdir(parents=True, exist_ok=True)
     try:
-        for frames in args.frames:
-            manifest = baseline.load_manifest(ROOT / "validation/performance-workloads.json")
-            manifest["settings"].update(frames=frames, runs=args.runs, warmup=args.warmup)
-            manifest["workloads"] = ["cornell-v1"]
-            manifest["scope"] = "Cornell independent-sequence MIS quality checkpoint."
-            manifest_path = output / f"manifest-{frames}.json"
-            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-            cell = output / f"spp-{frames}"
-            checkpoint = {"samples": frames, "run_summary": f"spp-{frames}/run.json",
-                          "status": "fail"}
-            summary["checkpoints"].append(checkpoint)
-            code = baseline.main(["--manifest", str(manifest_path), "--headless", str(executable),
-                "--output", str(cell), "--label", args.label, "--clocks", args.clocks,
-                "--integrator", args.integrator, "--sample-index", str(SAMPLE_INDEX),
-                "--gpu-telemetry", args.gpu_telemetry])
-            if code:
-                checkpoint["status"] = "skip" if code == 77 else "fail"
-                summary["status"] = checkpoint["status"]
-                return code
-            checkpoint["points"] = reduce_runs(cell / "run.json", reference, frames)
-            checkpoint["status"] = "pass"
-        for run in range(args.runs):
-            curve = [c["points"][run] for c in summary["checkpoints"]]
-            summary["curves"].append({"run": run, "points": curve,
-                "targets": [observed_target(curve, target) for target in targets]})
+        for index in indices:
+            sequence = output / f"sequence-{index}" if len(indices) > 1 else output
+            sequence.mkdir(parents=True, exist_ok=True)
+            checkpoints = []
+            for frames in args.frames:
+                manifest = baseline.load_manifest(ROOT / "validation/performance-workloads.json")
+                manifest["settings"].update(frames=frames, runs=args.runs, warmup=args.warmup)
+                manifest["workloads"] = ["cornell-v1"]
+                manifest["scope"] = "Cornell independent-sequence MIS quality checkpoint."
+                manifest_path = sequence / f"manifest-{frames}.json"
+                manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+                cell = sequence / f"spp-{frames}"
+                checkpoint = {"sample_index": index, "samples": frames,
+                              "run_summary": (cell / "run.json").relative_to(output).as_posix(),
+                              "status": "fail"}
+                checkpoints.append(checkpoint)
+                summary["checkpoints"].append(checkpoint)
+                code = baseline.main(["--manifest", str(manifest_path), "--headless", str(executable),
+                    "--output", str(cell), "--label", args.label, "--clocks", args.clocks,
+                    "--integrator", args.integrator, "--sample-index", str(index),
+                    "--gpu-telemetry", args.gpu_telemetry])
+                if code:
+                    checkpoint["status"] = "skip" if code == 77 else "fail"
+                    summary["status"] = checkpoint["status"]
+                    return code
+                checkpoint["points"] = reduce_runs(cell / "run.json", reference, frames)
+                require(len({p["image_sha256"] for p in checkpoint["points"]}) == 1,
+                        "images differ between timing repetitions of the same sequence")
+                checkpoint["status"] = "pass"
+            for run in range(args.runs):
+                curve = [c["points"][run] for c in checkpoints]
+                summary["curves"].append({"sample_index": index, "run": run, "points": curve,
+                    "targets": [observed_target(curve, target) for target in targets]})
+        summary["sample_populations"] = sample_populations(summary["curves"], args.frames)
         summary["status"] = "pass"
         return 0
     except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:

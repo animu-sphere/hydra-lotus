@@ -16,6 +16,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Cornell quality summaries use `lotus-quality-curve-v2` with selectable
+  disjoint sample sequences, separate quality populations and timing
+  repetitions, and deterministic image checks within each sequence
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
 - Group adapter sources by responsibility: shared fixtures in
   `adapters/common/`, headless campaigns in `benchmarks/`, and viewport
   application, camera, platform, scene and UI code in dedicated directories

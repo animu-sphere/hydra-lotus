@@ -1095,23 +1095,40 @@ Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
 
 The separate [quality runner](../../scripts/quality_curve.py) measures
-`cornell-v1` at 128×128 with MIS and 64 bounces, using sample index 2²⁰,
+`cornell-v1` at 128×128 with MIS and 64 bounces, by default using sample index 2²⁰,
 disjoint from the committed BSDF reference's 1024 samples starting at 0.
 Defaults are 1, 16, 64 and 256 spp, eight discarded warmup frames and three
 fresh-process repetitions per checkpoint. `--frames`, `--runs` and `--warmup`
 bound the procedure; `--integrator` selects either existing path tracer.
+Repeat `--sample-index N` to measure up to sixteen disjoint sample ranges.
+Every range spans the largest requested checkpoint; duplicates, overlaps
+and intersections with the reference (indices 0–1023), warmup (1 through
+the warmup count) or variance (starting at 2²¹) are rejected before writing
+output or launching. Adjacent, nonoverlapping ranges are permitted.
 Each checkpoint runs independently through the shared baseline runner and
 retains its manifests, reports, logs and PFMs. Failed attempts stop the
 campaign without retries; explained capability skips remain skips.
 
-Its `quality.json` (`lotus-quality-curve-v1`) retains executable/reference
+Its `quality.json` (`lotus-quality-curve-v2`) retains executable/reference
 SHA-256 identities, linear-RGB MSE/RMSE over every pixel/channel, image
 hashes and sums of the raw measured GPU and blocking render-wall durations.
 GPU sums are null without timestamps. These are rendering times excluding
 startup, warmup, variance and update checks, not whole-process latency.
-Repeats use the same sample prefix: they measure timing repeatability,
-not an error distribution across independent seeds. Each curve links raw
-attempt evidence through its checkpoint's `run_summary`.
+`sample_indices` records the selected starts, replacing v1's singular
+`sample_index`. Each checkpoint and curve identifies its `sample_index`.
+Timing repeats within a sequence use the same sample prefix and must have
+identical image hashes. `sample_populations` counts each sequence once
+(run 0), retaining RMSE minimum, median, maximum, mean and sample standard
+deviation (null for one sequence). Repetitions never enlarge this quality
+population. Disjoint indices do not prove statistical independence of the
+pseudorandom generator, and this bounded population does not establish
+confidence intervals. Times and targets remain per sequence and repetition;
+they are not pooled into a population speed ranking.
+Each curve links raw attempt evidence through its checkpoint's `run_summary`.
+With multiple sequences, raw files live below `sequence-N/`; one sequence
+keeps the previous checkpoint directory layout. A later sequence failure
+retains completed earlier curves, but leaves `sample_populations` empty
+and the campaign unsuccessful.
 
 For each `--rmse-target` (defaults 0.2 and 0.1), the reported time is the
 first observed checkpoint whose error and all later observed errors are at
@@ -1120,8 +1137,9 @@ is no interpolation or extrapolation between measured sample counts.
 This is time to a finite-reference error threshold on one static fixture,
 not error against ground truth or a continuous convergence guarantee.
 The BSDF reference has finite-sample noise; no noise-floor subtraction is
-made. The [quality-curve report](../reports/2026-10-25-quality-curve.md)
-owns observations and remaining limits.
+made. The [single-sequence report](../reports/2026-10-25-quality-curve.md)
+and [population report](../reports/2026-10-25-quality-populations.md)
+own observations and remaining limits.
 
 Optional `--gpu-telemetry nvidia-smi` writes one `*.gpu.json` per attempted
 process, linked by `gpu_telemetry` in `run.json`. The
