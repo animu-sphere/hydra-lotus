@@ -1071,8 +1071,15 @@ fixes MIS, resolution, sample index, bounces, frames, warmup and repeat count.
 The [runner](../../scripts/performance_baseline.py) invokes either or both
 adapters sequentially, preserving reports/logs and headless PFM hashes.
 Its `run.json` records build identity, clock conditions, effective manifest,
-integrator and capability skips separately from correctness evidence.
-It refuses a nonempty output directory. These static runs do not yet cover
+integrator and capability skips separately from correctness evidence. Each
+attempt records its command, log path, report path if present, status and
+exit code (null when launch fails or the process times out). A 300-second
+timeout preserves partial stdout/stderr and any partial report; launch
+errors also have a log. Process failures, timeouts and invalid reports
+stop the campaign without retries, retaining earlier successful attempts.
+Exit 77 requires a diagnostic to count as a capability skip.
+It refuses duplicate workload selections and a nonempty output directory
+before launching, to prevent overwriting evidence. These static runs do not yet cover
 camera/object motion, temporal/SVGF modes, absolute time-to-error targets or
 peak process VRAM. Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
