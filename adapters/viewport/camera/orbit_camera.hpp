@@ -5,7 +5,7 @@
 // configuration; the built-in scene and USD stages share it.
 #pragma once
 
-#include "input.hpp"
+#include "platform/input.hpp"
 
 #include <array>
 #include <cstdint>

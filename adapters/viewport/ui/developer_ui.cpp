@@ -6,7 +6,7 @@
 // style's colours, which are display values, are decoded first. A
 // Hydra-enabled build opens USD stages through the native file dialog
 // (nativefiledialog-extended), as hydra-merlin's viewport does.
-#include "developer_ui.hpp"
+#include "ui/developer_ui.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>

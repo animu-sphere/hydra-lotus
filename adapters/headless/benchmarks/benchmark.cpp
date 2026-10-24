@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "benchmark.hpp"
-#include "reference.hpp"
-#include "workloads.hpp"
+#include "common/reference.hpp"
+#include "common/workloads.hpp"
 
 #include <lotus/extraction.hpp>
 #include <lotus/vulkan_backend.hpp>

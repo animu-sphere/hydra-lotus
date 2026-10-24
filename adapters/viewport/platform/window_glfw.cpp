@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "window.hpp"
+#include "platform/window.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>

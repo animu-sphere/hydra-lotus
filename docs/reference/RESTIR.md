@@ -324,7 +324,7 @@ no many-light speedup, temporal stability or reuse bias result.
 ## Headless reservoir comparison
 
 `lotus-headless --benchmark-restir <json-path>` uses
-`adapters/headless/restir_benchmark.cpp` to compare NEE/MIS, initial-only,
+`adapters/headless/benchmarks/restir_benchmark.cpp` to compare NEE/MIS, initial-only,
 temporal, spatial and spatiotemporal reservoirs under the selected integrator.
 It writes `lotus-restir-benchmark-v1` JSON and a sibling `<report-stem>-images/`
 directory of linear RGB PFMs. It is separate from the fixed benchmark and

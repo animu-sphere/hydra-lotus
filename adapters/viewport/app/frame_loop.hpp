@@ -5,10 +5,10 @@
 // the run's checks and its benchmark JSON.
 #pragma once
 
-#include "controls.hpp"
-#include "developer_ui.hpp"
-#include "options.hpp"
-#include "window.hpp"
+#include "app/controls.hpp"
+#include "ui/developer_ui.hpp"
+#include "app/options.hpp"
+#include "platform/window.hpp"
 
 #include <lotus/vulkan_backend.hpp>
 

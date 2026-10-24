@@ -3,10 +3,10 @@
 #include <lotus/render_world.hpp>
 #include <lotus/vulkan_backend.hpp>
 
-#include "reference.hpp"
-#include "benchmark.hpp"
-#include "restir_benchmark.hpp"
-#include "svgf_benchmark.hpp"
+#include "common/reference.hpp"
+#include "benchmarks/benchmark.hpp"
+#include "benchmarks/restir_benchmark.hpp"
+#include "benchmarks/svgf_benchmark.hpp"
 
 #include <algorithm>
 #include <array>

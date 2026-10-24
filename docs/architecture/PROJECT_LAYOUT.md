@@ -96,7 +96,7 @@ checks independent per-sample complementary weights and narrow-glossy furnace
 integrals under every candidate proposal and reuse mode.
 
 Headless temporal-error measurement is private to
-`adapters/headless/temporal_statistics.hpp`. The uninstalled, runtime-free
+`adapters/headless/benchmarks/temporal_statistics.hpp`. The uninstalled, runtime-free
 `lotus-restir-statistics-test` checks its streaming moments and lag-one
 autocorrelation against independent finite-sequence definitions. The
 [reservoir comparison contract](../reference/RESTIR.md#headless-reservoir-comparison)
@@ -118,14 +118,16 @@ The Vulkan-only `lotus-renderer-benchmark-no-driver` checks explained SKIPs in
 an isolated child process. Both use `validation/benchmark-test.cmake` and
 keep benchmark data separate from renderer correctness evidence.
 
-`adapters/headless/workloads.{hpp,cpp}` owns versioned procedural benchmark
-fixtures. The viewport compiles the same source, as it does `reference.cpp`;
-no new library or core dependency is introduced.
+`adapters/common/workloads.{hpp,cpp}` owns versioned procedural benchmark
+fixtures; `adapters/common/reference.{hpp,cpp}` owns the Cornell fixture,
+image I/O and reference comparisons. Headless, viewport and the reservoir
+GPU test compile these shared sources directly; no new library or core
+dependency is introduced. The internal `LotusHeadless` namespace is retained.
 `validation/performance-workloads.json` fixes static comparison settings and
 workload IDs. `scripts/performance_baseline.py` drives either or both adapters
 sequentially and preserves raw reports, logs and image hashes.
 
-`adapters/headless/restir_benchmark.cpp` adds a separate reservoir comparison
+`adapters/headless/benchmarks/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,
 metrics and CLI are owned by the [reservoir reference](../reference/RESTIR.md#headless-reservoir-comparison).
 The same module owns the opt-in mixed area/environment and material/depth
@@ -179,6 +181,29 @@ names the directory of the implementation direction's sketch
 
 Once `backend/vulkan/` grows, it is split into subdirectories inside the same
 target before it is split into targets.
+
+### Adapter source organization
+
+The executable directories keep only `main.cpp` and `CMakeLists.txt` at their
+root. Related implementation/header pairs stay together:
+
+| Directory | Responsibility |
+| --- | --- |
+| `adapters/common/` | Shared procedural fixtures, image I/O and statistical reference comparison; standard library and renderer-world types only. |
+| `adapters/headless/benchmarks/` | Fixed, reservoir and SVGF benchmark entry points and temporal-error statistics. |
+| `adapters/viewport/app/` | CLI options, renderer controls, frame loop and timing records. |
+| `adapters/viewport/camera/` | Free-camera mathematics and navigation. |
+| `adapters/viewport/platform/` | Window boundary, input events and GLFW implementation. |
+| `adapters/viewport/scenes/` | Built-in scene and optional Hydra stage runners. |
+| `adapters/viewport/ui/` | Dear ImGui developer UI and optional native stage picker. |
+
+These are source groups inside existing targets, not separate libraries.
+Viewport headers use paths relative to its private include root, such as
+`app/controls.hpp`; shared fixture includes use `common/reference.hpp`
+relative to `adapters/`. Tests that compile frontend sources use those same
+private include roots. Neither frontend compiles sources from the other.
+Executable output directories, install destinations and command-line modes
+remain owned by their existing adapter targets.
 
 ## 4. Dependency directions
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <lotus/vulkan_backend.hpp>
 #include "../backend/vulkan/reservoir.hpp"
-#include "../adapters/headless/reference.hpp"
+#include "../adapters/common/reference.hpp"
 
 #include <algorithm>
 #include <cmath>

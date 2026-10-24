@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "../adapters/headless/temporal_statistics.hpp"
+#include "../adapters/headless/benchmarks/temporal_statistics.hpp"
 
 #include <algorithm>
 #include <array>

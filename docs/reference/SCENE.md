@@ -714,7 +714,7 @@ The reference path tracer's images are of one fixed scene, rendered by
 ([design policy §26](../design/DESIGN_POLICY.md#26-reference--deterministic-mode)).
 
 - **Scene.** A Cornell box, 128×128 pixels, defined in
-  `adapters/headless/reference.cpp`. The box spans [-1, 1]³ and is open
+  `adapters/common/reference.cpp`. The box spans [-1, 1]³ and is open
   towards the camera. Its walls have a dielectric coat over Lambert:
   white floor, ceiling and back,
   a red left wall and a green right wall. Under the ceiling hangs a black
@@ -1011,7 +1011,7 @@ and an image whose key names no texture must stay off the GPU
 ### Fixed benchmarks
 
 `lotus-headless --benchmark <json-path>` runs six procedural workloads from
-`adapters/headless/workloads.cpp`, sharing the reference path tracer and
+`adapters/common/workloads.cpp`, sharing the reference path tracer and
 Cornell scene definition. Workload identities are versioned; changes to
 their geometry, textures, materials or camera require a new identity before
 comparing measurements. Build identity is supplied with `--benchmark-label`;

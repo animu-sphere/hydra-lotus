@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "restir_benchmark.hpp"
-#include "reference.hpp"
+#include "common/reference.hpp"
 #include "temporal_statistics.hpp"
 
 #include <lotus/vulkan_backend.hpp>
