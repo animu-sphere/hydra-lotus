@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-25-quality-curve.md](2026-10-25-quality-curve.md) | Independent-sequence Cornell MIS error checkpoints, observed finite-reference error-threshold rendering times, deterministic integrator agreement and remaining measurement limits; [data](2026-10-25-quality-curve.json). |
 | [2026-10-24-gpu-telemetry.md](2026-10-24-gpu-telemetry.md) | Opt-in whole-device clock, power-state and memory observations around benchmark attempts; deterministic control comparison, unavailable/failure preservation and remaining baseline limits; [data](2026-10-24-gpu-telemetry.json). |
 | [2026-10-21-shared-performance-workloads.md](2026-10-21-shared-performance-workloads.md) | Shared static fixtures and manifest, headless/viewport timing scopes, repeatability and the remaining performance-baseline evidence; [data](2026-10-21-shared-performance-workloads.json). |
 | [2026-10-18-v0.6.0-release-gate.md](2026-10-18-v0.6.0-release-gate.md) | v0.6.0 release verification: physical-GPU core/Hydra and installed-host checks, the viewport smoke test with the denoiser, deterministic denoiser validation, GPU timings, synchronization, runtime-free tests, documentation and repeatable local Hydra packaging. |

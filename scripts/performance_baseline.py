@@ -35,11 +35,14 @@ def load_manifest(path):
 
 def command(executable, adapter, workload, integrator, settings, report, label):
     if adapter == "headless":
-        return [str(executable), "--benchmark", str(report),
+        cmd = [str(executable), "--benchmark", str(report),
                 "--benchmark-label", label, "--benchmark-workload", workload,
                 "--benchmark-integrator", integrator, "--benchmark-light-sampling", "mis",
                 "--benchmark-size", str(settings["size"]), "--benchmark-frames", str(settings["frames"]),
                 "--benchmark-warmup", str(settings["warmup"])]
+        if settings["sample_index"]:
+            cmd += ["--benchmark-sample-index", str(settings["sample_index"])]
+        return cmd
     return [str(executable), "--workload", workload, "--benchmark", str(report),
             "--integrator", integrator, "--nee", "on", "--width", str(settings["size"]),
             "--height", str(settings["size"]), "--samples", str(settings["frames"]),
@@ -57,6 +60,7 @@ def check_report(report, adapter, workload, integrator, settings):
                 or procedure["width"] != settings["size"] or procedure["height"] != settings["size"]
                 or procedure["measured_frames"] != settings["frames"]
                 or procedure["warmup_frames"] != settings["warmup"]
+                or procedure["sample_index"] != settings["sample_index"]
                 or len(data["scenes"]) != 1 or data["scenes"][0]["id"] != workload
                 or data["scenes"][0]["status"] != "pass"
                 or data["scenes"][0]["measurements"]["validation"]["messages"] != 0):
@@ -87,6 +91,8 @@ def main(argv=None):
     parser.add_argument("--clocks", required=True, help="locked clock settings, or explicitly unlocked")
     parser.add_argument("--integrator", choices=("reference", "wavefront"), default="reference")
     parser.add_argument("--workload", action="append", help="optional subset of manifest IDs")
+    parser.add_argument("--sample-index", type=int, default=0,
+                        help="headless measured sequence start; default: manifest seed 0")
     parser.add_argument("--plan", action="store_true", help="print commands without running or writing")
     parser.add_argument("--gpu-telemetry", choices=("off", "nvidia-smi"), default="off",
                         help="optional whole-device clock/memory observations (may perturb timing)")
@@ -97,6 +103,11 @@ def main(argv=None):
         parser.error("gpu sample interval must be 100..10000 ms")
     manifest = load_manifest(args.manifest)
     settings = manifest["settings"]
+    if not 0 <= args.sample_index <= (1 << 21) - settings["frames"]:
+        parser.error("measured sample range must end before variance sample index 2097152")
+    if args.sample_index and args.viewport:
+        parser.error("nonzero sample index is supported only by headless")
+    settings["sample_index"] = args.sample_index
     workloads = args.workload or manifest["workloads"]
     if any(w not in manifest["workloads"] for w in workloads):
         parser.error("workload is absent from the manifest")

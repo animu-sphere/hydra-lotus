@@ -138,6 +138,25 @@ and do not measure peak renderer residency. The
 [collector report](../reports/2026-10-24-gpu-telemetry.md) records a tested
 invocation and its uninstrumented control.
 
+## Cornell quality checkpoints
+
+After the default build, measure error against the committed reference with
+a disjoint measured sample sequence:
+
+```sh
+python scripts/quality_curve.py --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --output build/quality-cornell-reference-20261025 --label "53f737a + independent quality checkpoints; core Release; 2026-10-25" --clocks "Unlocked; initial nvidia-smi P3 graphics 1410 MHz memory 5001 MHz; driver 597.16; no clock settings changed" --rmse-target 0.2 --rmse-target 0.1 --rmse-target 0.05
+```
+
+Use the actual source/build and clock conditions in the label and a fresh
+directory. `--integrator wavefront` uses the other path tracer. Defaults are
+1, 16, 64 and 256 spp, three repetitions and eight warmup frames;
+`--frames 1 16 64`, `--runs 1` and `--warmup 2` can bound a smaller run.
+`quality.json` links each checkpoint's `run.json` and retains each repeat's
+RGB error and summed rendering times. Unreached error targets have null
+times. The [contract](../reference/SCENE.md#fixed-benchmarks) defines the
+finite-reference and timing limits; the
+[report](../reports/2026-10-25-quality-curve.md) records both integrators.
+
 ## Reservoir comparison
 
 After the default build, run the separate static/moving many-light comparison:

@@ -36,13 +36,14 @@ string(JSON schema GET "${json}" schema)
 string(JSON count LENGTH "${json}" scenes)
 string(JSON frames GET "${json}" procedure measured_frames)
 string(JSON warmup GET "${json}" procedure warmup_frames)
+string(JSON sample_index GET "${json}" procedure sample_index)
 string(JSON label GET "${json}" build label)
 string(JSON integrator GET "${json}" procedure integrator)
 string(JSON light_sampling GET "${json}" procedure light_sampling)
 string(JSON width GET "${json}" procedure width)
 string(JSON compared GET "${json}" procedure cornell_reference_compared)
 if(NOT schema STREQUAL "lotus-benchmark-v1" OR NOT count EQUAL 6 OR
-   NOT frames EQUAL 16 OR NOT warmup EQUAL 2 OR
+   NOT frames EQUAL 16 OR NOT warmup EQUAL 2 OR NOT sample_index EQUAL 0 OR
    NOT label STREQUAL "CTest quoted \"label\"" OR
    NOT integrator STREQUAL INTEGRATOR OR
    NOT light_sampling STREQUAL LIGHT_SAMPLING OR NOT width EQUAL 128 OR
@@ -184,6 +185,7 @@ message(STATUS "Benchmark schema/workloads/CLI passed for the ${INTEGRATOR} inte
 if(LIGHT_SAMPLING STREQUAL "mis")
   execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/selected.json"
     --benchmark-workload many-lights-v1 --benchmark-light-sampling mis
+    --benchmark-sample-index 1
     --benchmark-frames 4 --benchmark-warmup 2 --benchmark-size 32
     RESULT_VARIABLE selected OUTPUT_VARIABLE selected_output ERROR_VARIABLE selected_error TIMEOUT 120)
   if(NOT selected STREQUAL "0" AND NOT selected STREQUAL "77")
@@ -193,7 +195,10 @@ if(LIGHT_SAMPLING STREQUAL "mis")
   string(JSON count LENGTH "${selected_json}" scenes)
   string(JSON id GET "${selected_json}" scenes 0 id)
   string(JSON compared GET "${selected_json}" procedure cornell_reference_compared)
-  if(NOT count EQUAL 1 OR NOT id STREQUAL "many-lights-v1" OR compared)
+  string(JSON sample_index GET "${selected_json}" procedure sample_index)
+  string(JSON warmup_index GET "${selected_json}" procedure warmup_sample_index)
+  if(NOT count EQUAL 1 OR NOT id STREQUAL "many-lights-v1" OR compared OR
+     NOT sample_index EQUAL 1 OR NOT warmup_index EQUAL 0)
     message(FATAL_ERROR "Selection did not isolate the many-light fixture")
   endif()
   if(selected STREQUAL "0")
@@ -203,6 +208,15 @@ if(LIGHT_SAMPLING STREQUAL "mis")
     endif()
   endif()
 endif()
+foreach(seed -1 2097152 4294967296 2097151 bad)
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
+    --benchmark-sample-index "${seed}" --benchmark-frames 2
+    RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+  file(READ "${TEST_ROOT}/sentinel.json" sentinel)
+  if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve")
+    message(FATAL_ERROR "Invalid or overlapping measured sequence was accepted or changed output")
+  endif()
+endforeach()
 execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
   --benchmark-workload typo RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
 file(READ "${TEST_ROOT}/sentinel.json" sentinel)

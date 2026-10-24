@@ -130,6 +130,11 @@ sequentially and preserves raw reports, logs and image hashes.
 power-state and memory counters around each process. It is a Python
 standard-library collector, with no renderer or installed dependency; the
 [benchmark reference](../reference/SCENE.md#fixed-benchmarks) owns its scopes.
+`scripts/quality_curve.py` reuses the baseline runner for independent-sequence
+Cornell error checkpoints, reads RGB PFMs with the Python standard library
+and reduces raw rendering times into observed finite-reference error
+thresholds. It adds no installed target or renderer dependency; the same
+benchmark reference owns its procedure and limits.
 
 `adapters/headless/benchmarks/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,

@@ -34,6 +34,7 @@ struct Options {
   std::string workload;
   std::uint32_t frames = 64;
   std::uint32_t warmup = 8;
+  std::uint32_t sample_index = 0;
   // The square target's side in pixels.
   std::uint32_t size = kReferenceSize;
   Lotus::Integrator integrator = Lotus::Integrator::Reference;
@@ -54,6 +55,12 @@ bool Mis(const Options& options) {
 
 bool Wavefront(const Options& options) {
   return options.integrator == Lotus::Integrator::Wavefront;
+}
+
+std::uint32_t WarmupSampleIndex(const Options& options) {
+  // A changed sequence key resets accumulation before measurement, even
+  // when the requested measured sequence is the old warmup default.
+  return options.sample_index == 1 ? 0 : 1;
 }
 
 double Milliseconds(Clock::time_point start) {
@@ -164,7 +171,7 @@ Result Measure(std::string_view id, const Options& options,
     Lotus::PathTracingSettings settings;
     settings.integrator = options.integrator;
     settings.light_sampling = options.light_sampling;
-    settings.sample_index = 1; // Warmup has its own sequence, then reset to seed 0.
+    settings.sample_index = WarmupSampleIndex(options);
     for (std::uint32_t i = 0; i < options.warmup; ++i)
       Check(renderer->RenderScene(draw, target, 1, settings));
     const auto before = renderer->UpdateScene({});
@@ -173,7 +180,7 @@ Result Measure(std::string_view id, const Options& options,
     // The wavefront integrator's rays and kernel durations per frame.
     std::vector<double> rays, rounds, camera, intersect, shade, tail;
     Lotus::GpuFrameEvidence frame;
-    settings.sample_index = 0;
+    settings.sample_index = options.sample_index;
     for (std::uint32_t i = 0; i < options.frames; ++i) {
       start = Clock::now();
       frame = renderer->RenderScene(draw, target, 1, settings);
@@ -404,7 +411,8 @@ int BenchmarkMain(int argc, char** argv) {
     std::cerr << "usage: lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                  "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n"
                  "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n"
-                 "       [--benchmark-light-sampling <bsdf|mis>] [--benchmark-workload <id>]\n";
+                 "       [--benchmark-light-sampling <bsdf|mis>] [--benchmark-workload <id>]\n"
+                 "       [--benchmark-sample-index <start below 2097152>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -436,6 +444,12 @@ int BenchmarkMain(int argc, char** argv) {
         std::cerr << "invalid size: " << value << '\n'; return 2;
       }
     }
+    else if (option == "--benchmark-sample-index") {
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.sample_index);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+        std::cerr << "invalid sample index: " << value << '\n'; return 2;
+      }
+    }
     else if (option == "--benchmark-frames" || option == "--benchmark-warmup") {
       std::uint32_t count = 0;
       const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
@@ -445,6 +459,13 @@ int BenchmarkMain(int argc, char** argv) {
       }
       (option == "--benchmark-frames" ? options.frames : options.warmup) = count;
     } else { std::cerr << "unknown benchmark option: " << option << '\n'; return 2; }
+  }
+  // Keep timed samples below, and disjoint from, the variance batches.
+  if (options.sample_index >= kVarianceSampleIndex ||
+      options.frames > kVarianceSampleIndex - options.sample_index) {
+    std::cerr << "measured sample range must end before variance sample index "
+              << kVarianceSampleIndex << '\n';
+    return 2;
   }
   try {
     if (!options.report.parent_path().empty())
@@ -477,13 +498,14 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"width\":" << options.size << ",\"height\":" << options.size
         << ",\"cornell_reference_compared\":"
         << (options.size == kReferenceSize && (options.workload.empty() || options.workload == "cornell-v1") ? "true" : "false")
-        << ",\"sample_index\":0,\"max_bounces\":64,"
+        << ",\"sample_index\":" << options.sample_index << ",\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
         << ",\"warmup_frames\":" << options.warmup
         << ",\"variance_batches\":" << kVarianceBatches
         << ",\"variance_batch_samples\":" << kVarianceBatch
         << ",\"variance_sample_index\":" << kVarianceSampleIndex
-        << ",\"warmup_sample_index\":1,\"unchanged_batches\":16,\"unchanged_iterations\":1000,"
+        << ",\"warmup_sample_index\":" << WarmupSampleIndex(options)
+        << ",\"unchanged_batches\":16,\"unchanged_iterations\":1000,"
            "\"fresh_renderer_per_scene\":true,\"update_measurements_per_kind\":1},"
            "\"metric_notes\":{"
            "\"gpu_frame_ms\":\"One sample pass, including clears, excluding readback; one call per sample.\","

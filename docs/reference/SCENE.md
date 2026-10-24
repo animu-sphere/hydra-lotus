@@ -1025,7 +1025,14 @@ the Cornell image is compared with the reference only at 128, which
 `procedure.cornell_reference_compared` records. Defaults are 8 warmup frames from sample index 1, followed
 by a reset to sample index 0 and 64 measured frames, one pixel sample per
 frame, with 64 maximum bounces. `--benchmark-frames` and
-`--benchmark-warmup` accept 1–4096. `--benchmark-integrator reference`
+`--benchmark-warmup` accept 1–4096. `--benchmark-sample-index` selects the
+first measured sample (default 0), recorded as `procedure.sample_index`.
+The half-open measured range must end at or below 2²¹, where the separate
+variance batches start; negative, overflowing and overlapping ranges fail
+before output is written. Warmup starts at sample index 1, except at 0
+when the measured start is 1, so changing the sequence always resets
+accumulation at the measurement boundary.
+`--benchmark-integrator reference`
 (the default) or `wavefront` selects the
 [integrator](#wavefront-integrator), recorded as `procedure.integrator`.
 `--benchmark-light-sampling bsdf` (the default, so that earlier
@@ -1079,10 +1086,42 @@ errors also have a log. Process failures, timeouts and invalid reports
 stop the campaign without retries, retaining earlier successful attempts.
 Exit 77 requires a diagnostic to count as a capability skip.
 It refuses duplicate workload selections and a nonempty output directory
-before launching, to prevent overwriting evidence. These static runs do not yet cover
-camera/object motion, temporal/SVGF modes, absolute time-to-error targets or
-peak process VRAM. Headless per-sample variance remains an efficiency proxy;
+before launching, to prevent overwriting evidence. `--sample-index` overrides
+the manifest's default measured sequence for headless runs only; a nonzero
+value with a viewport is rejected before launch. The effective manifest and
+each headless report must agree on the sequence start. These static runs do
+not yet cover camera/object motion, temporal/SVGF modes or peak process VRAM.
+Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
+
+The separate [quality runner](../../scripts/quality_curve.py) measures
+`cornell-v1` at 128×128 with MIS and 64 bounces, using sample index 2²⁰,
+disjoint from the committed BSDF reference's 1024 samples starting at 0.
+Defaults are 1, 16, 64 and 256 spp, eight discarded warmup frames and three
+fresh-process repetitions per checkpoint. `--frames`, `--runs` and `--warmup`
+bound the procedure; `--integrator` selects either existing path tracer.
+Each checkpoint runs independently through the shared baseline runner and
+retains its manifests, reports, logs and PFMs. Failed attempts stop the
+campaign without retries; explained capability skips remain skips.
+
+Its `quality.json` (`lotus-quality-curve-v1`) retains executable/reference
+SHA-256 identities, linear-RGB MSE/RMSE over every pixel/channel, image
+hashes and sums of the raw measured GPU and blocking render-wall durations.
+GPU sums are null without timestamps. These are rendering times excluding
+startup, warmup, variance and update checks, not whole-process latency.
+Repeats use the same sample prefix: they measure timing repeatability,
+not an error distribution across independent seeds. Each curve links raw
+attempt evidence through its checkpoint's `run_summary`.
+
+For each `--rmse-target` (defaults 0.2 and 0.1), the reported time is the
+first observed checkpoint whose error and all later observed errors are at
+or below that target. Unreached targets have null samples and times; there
+is no interpolation or extrapolation between measured sample counts.
+This is time to a finite-reference error threshold on one static fixture,
+not error against ground truth or a continuous convergence guarantee.
+The BSDF reference has finite-sample noise; no noise-floor subtraction is
+made. The [quality-curve report](../reports/2026-10-25-quality-curve.md)
+owns observations and remaining limits.
 
 Optional `--gpu-telemetry nvidia-smi` writes one `*.gpu.json` per attempted
 process, linked by `gpu_telemetry` in `run.json`. The

@@ -28,8 +28,11 @@ when the measurements justify it.
   [Optional whole-device telemetry](../reports/2026-10-24-gpu-telemetry.md)
   now retains clock/power-state ranges and sampled device-memory use;
   those observations do not establish locked clocks or process peak residency.
+  [Cornell quality checkpoints](../reports/2026-10-25-quality-curve.md) now
+  compare independent measured samples with the committed finite reference
+  and retain observed error-threshold rendering times for both integrators.
   Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
-  independent quality curves, peak residency and complete viewport repeats;
+  quality curves beyond Cornell, peak residency and complete viewport repeats;
   preserve the recorded driver failure when extending the baseline.
 - [ ] **LOTUS-MEMORY-01 — Temporal/SVGF ownership and peak residency (P1).**
   Workstream B, improving existing temporal/denoise paths: inventory buffers,
