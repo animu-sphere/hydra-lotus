@@ -1084,6 +1084,29 @@ camera/object motion, temporal/SVGF modes, absolute time-to-error targets or
 peak process VRAM. Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
 
+Optional `--gpu-telemetry nvidia-smi` writes one `*.gpu.json` per attempted
+process, linked by `gpu_telemetry` in `run.json`. The
+`lotus-gpu-telemetry-v1` sidecar retains timestamped observations for every
+NVIDIA device, identified by UUID: driver, power state, graphics/memory
+clocks (MHz), GPU utilization (%) and whole-device used/total memory (MiB).
+It records raw samples, query durations and per-device min/max ranges.
+Unsupported numeric counters are null. Missing tools/devices, timeouts and
+malformed responses produce an explicit unavailable or partial telemetry
+status with diagnostics; they do not change the renderer's result or retry
+the query. Earlier samples and the sidecar survive renderer failure.
+
+The collector samples before launch, periodically across the process and
+after exit; these observations include initialization, warmup, variance
+measurements and teardown, without frame synchronization. The default
+100 ms delay is between queries, whose own duration adds to the interval;
+`--gpu-sample-ms` accepts 100–10000 ms. A query can take up to five seconds.
+Per-device sampled maxima include other processes, can miss short-lived
+allocations and are **not peak process VRAM**. All-device reporting does
+not identify which device the renderer selected. Polling may perturb
+timings, so it is disabled by default; observed clocks do not prove locked
+clocks or a stable performance baseline. The collector never changes clock
+settings. See the [collector evidence](../reports/2026-10-24-gpu-telemetry.md).
+
 The report schema is `lotus-benchmark-v1`, separate from OpenStrata's
 renderer-evidence schema. It retains raw GPU-pass and blocking render wall
 durations plus mean, median, min, max and nearest-rank p95. Pixel samples/s

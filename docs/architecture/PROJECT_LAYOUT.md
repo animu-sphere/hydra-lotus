@@ -126,6 +126,10 @@ dependency is introduced. The internal `LotusHeadless` namespace is retained.
 `validation/performance-workloads.json` fixes static comparison settings and
 workload IDs. `scripts/performance_baseline.py` drives either or both adapters
 sequentially and preserves raw reports, logs and image hashes.
+`scripts/gpu_telemetry.py` optionally observes whole-device NVIDIA clock,
+power-state and memory counters around each process. It is a Python
+standard-library collector, with no renderer or installed dependency; the
+[benchmark reference](../reference/SCENE.md#fixed-benchmarks) owns its scopes.
 
 `adapters/headless/benchmarks/restir_benchmark.cpp` adds a separate reservoir comparison
 mode to the same installed `lotus-headless` target. Its versioned workloads,

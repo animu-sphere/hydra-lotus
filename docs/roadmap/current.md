@@ -25,6 +25,9 @@ when the measurements justify it.
   optimization tasks. Preserve deterministic Reference PT comparisons.
   The [initial static manifest and measurements](../reports/2026-10-21-shared-performance-workloads.md)
   provide shared fixtures, warmup exclusion and deterministic equivalence.
+  [Optional whole-device telemetry](../reports/2026-10-24-gpu-telemetry.md)
+  now retains clock/power-state ranges and sampled device-memory use;
+  those observations do not establish locked clocks or process peak residency.
   Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
   independent quality curves, peak residency and complete viewport repeats;
   preserve the recorded driver failure when extending the baseline.

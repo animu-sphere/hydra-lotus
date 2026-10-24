@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from gpu_telemetry import GpuTelemetry
+
 
 def load_manifest(path):
     manifest = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -86,7 +88,13 @@ def main(argv=None):
     parser.add_argument("--integrator", choices=("reference", "wavefront"), default="reference")
     parser.add_argument("--workload", action="append", help="optional subset of manifest IDs")
     parser.add_argument("--plan", action="store_true", help="print commands without running or writing")
+    parser.add_argument("--gpu-telemetry", choices=("off", "nvidia-smi"), default="off",
+                        help="optional whole-device clock/memory observations (may perturb timing)")
+    parser.add_argument("--gpu-sample-ms", type=int, default=100,
+                        help="delay between telemetry queries, 100..10000 ms (default: 100)")
     args = parser.parse_args(argv)
+    if not 100 <= args.gpu_sample_ms <= 10000:
+        parser.error("gpu sample interval must be 100..10000 ms")
     manifest = load_manifest(args.manifest)
     settings = manifest["settings"]
     workloads = args.workload or manifest["workloads"]
@@ -105,6 +113,7 @@ def main(argv=None):
         output.mkdir(parents=True, exist_ok=True)
     summary = {"schema": "lotus-performance-run-v1", "label": args.label,
                "clock_conditions": args.clocks, "manifest": manifest,
+               "gpu_telemetry": args.gpu_telemetry,
                "integrator": args.integrator, "started_unix": int(time.time()), "runs": []}
     exit_code = 0
     try:
@@ -123,7 +132,11 @@ def main(argv=None):
                              "command": cmd, "log": stem + ".log"}
                     summary["runs"].append(entry)
                     log = output / entry["log"]
+                    observer = (GpuTelemetry(output / (stem + ".gpu.json"), args.gpu_sample_ms)
+                                if args.gpu_telemetry == "nvidia-smi" else None)
                     try:
+                        if observer:
+                            observer.start()
                         result = subprocess.run(cmd, capture_output=True, text=True,
                                                 encoding="utf-8", errors="replace", timeout=300)
                     except subprocess.TimeoutExpired as error:
@@ -142,6 +155,8 @@ def main(argv=None):
                         raise
                     finally:
                         entry["report"] = report.name if report.exists() else None
+                        if observer:
+                            entry["gpu_telemetry"] = observer.finish()
                     entry["exit_code"] = result.returncode
                     log.write_text(result.stdout + result.stderr, encoding="utf-8")
                     if result.returncode == 77:
