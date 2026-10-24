@@ -92,6 +92,8 @@ def main(argv=None):
     workloads = args.workload or manifest["workloads"]
     if any(w not in manifest["workloads"] for w in workloads):
         parser.error("workload is absent from the manifest")
+    if len(set(workloads)) != len(workloads):
+        parser.error("duplicate workload selection would overwrite measurements")
     adapters = [(name, executable.resolve()) for name, executable in
                 (("headless", args.headless), ("viewport", args.viewport)) if executable]
     if not adapters:
@@ -116,12 +118,32 @@ def main(argv=None):
                         print(json.dumps(cmd))
                         continue
                     print(stem, flush=True)
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                    (output / (stem + ".log")).write_text(result.stdout + result.stderr, encoding="utf-8")
                     entry = {"adapter": adapter, "workload": workload, "run": run,
-                             "exit_code": result.returncode, "status": "fail",
-                             "report": report.name if report.exists() else None}
+                             "exit_code": None, "status": "fail", "report": None,
+                             "command": cmd, "log": stem + ".log"}
                     summary["runs"].append(entry)
+                    log = output / entry["log"]
+                    try:
+                        result = subprocess.run(cmd, capture_output=True, text=True,
+                                                encoding="utf-8", errors="replace", timeout=300)
+                    except subprocess.TimeoutExpired as error:
+                        # TimeoutExpired can carry bytes even with text=True.
+                        def decoded(value):
+                            if isinstance(value, bytes):
+                                return value.decode("utf-8", errors="replace")
+                            return value or ""
+                        entry["error"] = "process timed out after 300 seconds"
+                        log.write_text(decoded(error.stdout) + decoded(error.stderr) +
+                                       "\n" + entry["error"] + "\n", encoding="utf-8")
+                        raise RuntimeError(f"{stem} timed out; inspect its log") from error
+                    except OSError as error:
+                        entry["error"] = str(error)
+                        log.write_text(str(error) + "\n", encoding="utf-8")
+                        raise
+                    finally:
+                        entry["report"] = report.name if report.exists() else None
+                    entry["exit_code"] = result.returncode
+                    log.write_text(result.stdout + result.stderr, encoding="utf-8")
                     if result.returncode == 77:
                         if not (result.stdout + result.stderr).strip():
                             raise ValueError("unexplained capability skip")
@@ -133,7 +155,7 @@ def main(argv=None):
                     else:
                         entry.update(check_report(report, adapter, workload, args.integrator, settings))
                         entry["status"] = "pass"
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, RuntimeError) as error:
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
         summary["error"] = str(error)
         print(error, file=sys.stderr)
         exit_code = 1

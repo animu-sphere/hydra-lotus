@@ -118,8 +118,10 @@ Use the identity and clock conditions actually measured, and a fresh output
 directory. Omit `--viewport` to collect headless evidence independently of
 presentation failures; `--integrator wavefront` selects the other integrator.
 `--workload <id>` selects a manifest subset, and `--plan` prints commands
-without writing or running. The runner stops on failure, retains earlier
-results and never retries a failed launch. Exit 77 denotes an explained
+without writing or running. Select each workload only once. The runner stops
+on failure, retains earlier results and never retries a failed launch.
+Inspect the failed attempt's `command`, `log`, `report` and `exit_code` in
+`run.json`; timeout logs include partial process output. Exit 77 denotes an explained
 capability skip, not performance or correctness evidence. The
 [benchmark reference](../reference/SCENE.md#fixed-benchmarks) defines scopes,
 unavailable metrics and the remaining motion/quality measurements.

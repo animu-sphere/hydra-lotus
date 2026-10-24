@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve shared-baseline attempt records and logs on process launch
+  failure or timeout, including partial output and reports; reject duplicate
+  workload selections before they can overwrite evidence
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
+
 ### Changed
 
 - Group adapter sources by responsibility: shared fixtures in
