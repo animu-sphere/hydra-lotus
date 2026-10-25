@@ -2,6 +2,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -67,6 +68,19 @@ using vulkan_internal::SupportsShaderDrawParameters;
 using vulkan_internal::ValidationState;
 using vulkan_internal::VulkanOk;
 using vulkan_internal::VulkanWorldToClip;
+
+// Adds the host time since the previous lap to one frame phase.
+class HostLaps {
+public:
+  void Lap(double& phase) {
+    const auto now = std::chrono::steady_clock::now();
+    phase += std::chrono::duration<double, std::milli>(now - mark_).count();
+    mark_ = now;
+  }
+
+private:
+  std::chrono::steady_clock::time_point mark_ = std::chrono::steady_clock::now();
+};
 
 constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 // The scene pass's colour target and its radiance accumulation image.
@@ -513,10 +527,20 @@ bool CreateHostBuffer(VkPhysicalDevice physical_device,
   }
   VkMemoryRequirements requirements{};
   vkGetBufferMemoryRequirements(device, buffer, &requirements);
-  const std::uint32_t memory_type = FindMemoryType(
-      physical_device, requirements.memoryTypeBits,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      &coherent);
+  // The host reads what the GPU copies into a buffer. Uncached host-visible
+  // memory makes those reads bus reads, about a millisecond for a 128x128
+  // frame's products; cached memory needs an invalidation when not coherent.
+  std::uint32_t memory_type = std::numeric_limits<std::uint32_t>::max();
+  if ((usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0) {
+    memory_type = FindMemoryType(physical_device, requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &coherent);
+  }
+  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
+    memory_type = FindMemoryType(physical_device, requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &coherent);
+  }
   if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
     detail = "no host-visible buffer memory type is available";
     return false;
@@ -936,6 +960,8 @@ public:
       return Evidence(FrameStatus::Fail,
           "the renderer failed earlier: " + failure_);
     }
+    FrameHostTimings host;
+    HostLaps laps;
     const bool trace = pass != FramePass::Bootstrap;
     if (!trace && !((draw.draw_count == 1 && draw.triangle_count == 1) ||
                       (draw.draw_count == 0 && draw.triangle_count == 0))) {
@@ -1000,9 +1026,11 @@ public:
       UpdateSceneDescriptors(targets);
     }
     bool initializing = !targets.initialized;
+    laps.Lap(host.prepare_ms);
     if (!Record(draw, target, targets, pass, wavefront, restir, true, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
+    laps.Lap(host.record_ms);
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &command_;
@@ -1011,18 +1039,24 @@ public:
       if (trace && !WritePathConstants(target, settings, add_sample, detail)) {
         return Evidence(FrameStatus::Fail, detail);
       }
+      laps.Lap(host.prepare_ms);
       // A failure here may leave the command buffer pending, so it can never
       // be recorded again.
       if (!VulkanOk(vkResetFences(device_, 1, &fence_), "vkResetFences",
               detail) ||
           !VulkanOk(vkQueueSubmit(queue_, 1, &submit, fence_),
-              "vkQueueSubmit", detail) ||
-          !VulkanOk(vkWaitForFences(device_, 1, &fence_, VK_TRUE,
+              "vkQueueSubmit", detail)) {
+        failure_ = detail;
+        return Evidence(FrameStatus::Fail, detail);
+      }
+      laps.Lap(host.submit_ms);
+      if (!VulkanOk(vkWaitForFences(device_, 1, &fence_, VK_TRUE,
                         10'000'000'000ULL),
               "vkWaitForFences", detail)) {
         failure_ = detail;
         return Evidence(FrameStatus::Fail, detail);
       }
+      laps.Lap(host.wait_ms);
       ++completion_;
       if (add_sample) {
         ++accumulated_samples_;
@@ -1038,14 +1072,18 @@ public:
         if (!Record(draw, target, targets, pass, wavefront, restir, false, detail)) {
           return Evidence(FrameStatus::Fail, detail);
         }
+        laps.Lap(host.record_ms);
       }
     }
-    if (target.read_back &&
-        (!InvalidateIfNeeded(device_, targets.color_readback_memory,
-             targets.color_readback_coherent, detail) ||
-            !InvalidateIfNeeded(device_, targets.depth_readback_memory,
-                targets.depth_readback_coherent, detail))) {
-      return Evidence(FrameStatus::Fail, detail);
+    laps.Lap(host.results_ms);
+    if (target.read_back) {
+      if (!InvalidateIfNeeded(device_, targets.color_readback_memory,
+              targets.color_readback_coherent, detail) ||
+          !InvalidateIfNeeded(device_, targets.depth_readback_memory,
+              targets.depth_readback_coherent, detail)) {
+        return Evidence(FrameStatus::Fail, detail);
+      }
+      laps.Lap(host.readback_ms);
     }
 
     const std::uint32_t width = targets.width;
@@ -1068,6 +1106,7 @@ public:
                                      ? instance_state_.validation_detail
                                      : validation_.first_message;
     if (target.read_back) {
+      laps.Lap(host.results_ms);
       evidence.color.width = width;
       evidence.color.height = height;
       evidence.color.row_pitch = width * targets.color_pixel_bytes;
@@ -1085,6 +1124,7 @@ public:
       evidence.depth.payload.resize(pixel_count);
       std::memcpy(evidence.depth.payload.data(), targets.depth_mapped,
           pixel_count * sizeof(float));
+      laps.Lap(host.readback_ms);
     }
     // Present copies this frame's scene colour; a bootstrap frame leaves
     // nothing to present. Its reservoirs hold the last fresh sample's, and
@@ -1154,6 +1194,8 @@ public:
     evidence.detail = success.str();
     if (!rendering_temporal_)
       temporal_history_.Reset();
+    laps.Lap(host.results_ms);
+    evidence.host_timings = host;
     return evidence;
   }
 

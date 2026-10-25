@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-25-frame-host-split.md](2026-10-25-frame-host-split.md) | Blocking frame host phases (preparation, recording, submission, wait, readback, results) and host-cached readback memory: before/after on the shared workloads, size and validation probes, ReSTIR evidence frames, identical images, adoption decision; [data](2026-10-25-frame-host-split.json). |
 | [2026-10-25-changed-section-staging.md](2026-10-25-changed-section-staging.md) | Compatible geometry replacements stage only changed sections: deformation staged bytes, update wall and upload GPU before/after, identical images and refits, adoption decision; [data](2026-10-25-changed-section-staging.json). |
 | [2026-10-25-motion-workloads.md](2026-10-25-motion-workloads.md) | Headless camera, rigid-transform and deformation motion on the shared workloads: per-frame authoring, extraction, scene-update and refit costs, staged bytes, power-state bimodality and the restaging candidate; [data](2026-10-25-motion-workloads.json). |
 | [2026-10-25-textured-quality.md](2026-10-25-textured-quality.md) | Textured fixture quality against a finite Reference PT image, split-reference discrepancy, disjoint measured sequences and deterministic repetition/integrator checks; [data](2026-10-25-textured-quality.json). |

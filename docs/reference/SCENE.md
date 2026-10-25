@@ -539,6 +539,17 @@ coverage realization, not averaged depth. Cut-outs give exact visibility.
 queue supports timestamps, a persistent query pool measures the scene
 render pass, including clears and excluding readback; the last submission's
 `primary_ray_gpu_ms` and `primary_ray_timestamp_available` carry that result.
+`GpuFrameEvidence::host_timings` splits a passing call's host wall time,
+from a steady clock, into target/descriptor preparation and constant writes,
+command recording, fence reset and queue submission, the fence wait,
+readback invalidation and product copies, and results/evidence assembly.
+The GPU copies the products into host-visible buffers allocated from
+host-cached memory where the device offers it (invalidated when not
+coherent), so the copies to the products are cached reads
+([evidence](../reports/2026-10-25-frame-host-split.md)); the same applies
+to the temporal and reservoir readback mirrors. Buffers the host only
+writes, such as constants, keep the first host-visible, preferably coherent,
+type.
 The headless report checks `renderer.ray_query.capability`, `.triangle` and
 `.timestamp` with the barycentric output; unavailable features give
 explained SKIPs.
@@ -1239,16 +1250,20 @@ placements. Hydra dirty tracking, temporal history and viewport presentation
 are outside this measurement.
 
 Scene-pool reserved/occupied bytes include device-local and host-visible
-resources and exclude renderer targets/constants. Total VRAM and CPU-only
-render-submit time are explicitly unavailable (`null` with reasons), and so
-are rays/s and average path depth for the reference integrator. With the
+resources and exclude renderer targets/constants. Total VRAM is explicitly
+unavailable (`null` with a reason), and so are rays/s and average path depth
+for the reference integrator. With the
 wavefront integrator, each scene's `wavefront` measurements hold the rays
 traced per frame from its queue counts, rays per camera path, rays per GPU
 second, the bounces run as rounds and per-kernel GPU durations, the tail's
 included; they are `null` for the reference
 integrator. The blocking render wall duration includes GPU waits,
-readback and product copies. A queue without timestamp support retains wall
-measurements and emits null GPU durations/rates.
+readback and product copies; `render_host_ms` retains the same frames'
+`host_timings` phases (`prepare`, `record`, `submit`, `wait`, `readback`,
+`results`) as series, whose sum excludes `RenderScene`'s argument checks.
+Enabled validation layers add to the phases whose calls they intercept. A
+queue without timestamp support retains wall measurements and emits null
+GPU durations/rates.
 
 Each successful scene writes a final RGB PFM beside the JSON, named
 `<report-stem>-<scene-id>.pfm`, and checks finite, visible, nonblack output.

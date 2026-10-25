@@ -29,7 +29,10 @@ Initial-only sampling supports deterministic progressive accumulation.
 Temporal/spatial reuse uses fresh batches and bounded, correlated histories;
 represented candidate counts are not counts of independent samples. Reuse
 frames through `RenderTemporalScene` read back and check their evidence
-products, 28–36 ms of wall time at 128x128. A target with `read_back` false
+products, 5–9 ms of wall time at 128x128 since readback buffers use
+host-cached memory (28–36 ms before;
+[measurement](../reports/2026-10-25-frame-host-split.md#restir-evidence-frames)).
+A target with `read_back` false
 leaves them on the GPU: presented in `lotus-viewport`, reuse frames take
 0.6–0.7 ms at 128x128 and 4–6 ms at 1280x720
 ([measurement](../reports/2026-10-18-viewport-controls.md#presenting-path-cost)).
