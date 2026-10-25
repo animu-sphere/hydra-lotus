@@ -139,6 +139,26 @@ struct GpuAnalyticLightRecord {
 };
 static_assert(sizeof(GpuAnalyticLightRecord) == 96);
 
+// A child of a GpuLightNode with this bit is the analytic light the other
+// bits index; without it, the node they index. Only the root over a single
+// light has an empty child, its second, which the traversal skips by value.
+inline constexpr std::uint32_t kLightLeaf = 0x80000000U;
+inline constexpr std::uint32_t kNoLightChild = 0xFFFFFFFFU;
+
+// One interior node of the binary hierarchy over the sphere, rect and disk
+// lights that the crossing test traverses; node 0 is the root. Each child's
+// bounds are stored in its parent, so a node is read only when a ray enters
+// it. Its mirror is `LightNode` in shaders/common/scene.slang.
+struct GpuLightNode {
+  // Per child: its bounds' low corner and, in w, the child as bits; its
+  // high corner.
+  float low0[4];
+  float high0[4];
+  float low1[4];
+  float high1[4];
+};
+static_assert(sizeof(GpuLightNode) == 64);
+
 // The environment image as the scene passes look it up and sample it. Its
 // mirror is `EnvironmentRecord` in shaders/common/scene.slang. The record
 // starts the environment buffer; its sampling distribution follows, as
@@ -254,6 +274,20 @@ public:
   }
   [[nodiscard]] std::uint32_t AnalyticLightCount() const {
     return analytic_count_;
+  }
+  // The crossing hierarchy's nodes, followed by the distant lights' indices
+  // as uints, under the same conditions; 0 without bounded or distant
+  // lights.
+  [[nodiscard]] VkDeviceAddress LightNodeAddress() const {
+    return lights_.address == 0 || light_nodes_offset_ == 0
+               ? 0
+               : lights_.address + light_nodes_offset_;
+  }
+  [[nodiscard]] std::uint32_t LightNodeCount() const {
+    return light_node_count_;
+  }
+  [[nodiscard]] std::uint32_t DistantLightCount() const {
+    return distant_count_;
   }
   // The texture table: one view per slot, VK_NULL_HANDLE for a free slot.
   // Views are in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. The generation
@@ -373,6 +407,9 @@ private:
   std::uint32_t light_count_ = 0;
   VkDeviceSize analytic_offset_ = 0;
   std::uint32_t analytic_count_ = 0;
+  VkDeviceSize light_nodes_offset_ = 0;
+  std::uint32_t light_node_count_ = 0;
+  std::uint32_t distant_count_ = 0;
   std::uint32_t emissive_triangles_ = 0;
   std::array<float, 3> environment_{};
   // The last plan's environment image; its buffer, which holds its record

@@ -170,9 +170,15 @@ struct PathConstants {
   std::uint32_t restir_spatial;
   std::uint32_t restir_spatial_radius;
   std::uint32_t restir_proposal;
+  // The GPU scene's crossing hierarchy, followed by the distant lights'
+  // indices, or 0 to test every analytic light (LightCrossing::Linear).
+  std::uint64_t light_nodes;
+  std::uint32_t light_node_count;
+  std::uint32_t distant_count;
 };
-static_assert(sizeof(PathConstants) == 184 &&
+static_assert(sizeof(PathConstants) == 200 &&
               offsetof(PathConstants, restir_proposal) == 180 &&
+              offsetof(PathConstants, light_nodes) == 184 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
               offsetof(PathConstants, environment_map) == 144 &&
               offsetof(PathConstants, instances) == 48 &&
@@ -861,6 +867,9 @@ public:
           settings.light_sampling != LightSampling::Mis &&
           settings.light_sampling != LightSampling::RestirInitial)
         return Reject("unknown light sampling");
+      if (settings.light_crossing != LightCrossing::Hierarchy &&
+          settings.light_crossing != LightCrossing::Linear)
+        return Reject("unknown light crossing");
       if (settings.light_sampling == LightSampling::RestirInitial &&
           (settings.restir_candidates == 0 || settings.restir_candidates > 64))
         return Reject("initial reservoir candidates must be in [1, 64]");
@@ -2116,6 +2125,10 @@ public:
     constants.light_count = scene_.LightCount();
     constants.analytic_lights = scene_.AnalyticLightAddress();
     constants.analytic_count = scene_.AnalyticLightCount();
+    const bool hierarchy = settings.light_crossing == LightCrossing::Hierarchy;
+    constants.light_nodes = hierarchy ? scene_.LightNodeAddress() : 0;
+    constants.light_node_count = hierarchy ? scene_.LightNodeCount() : 0;
+    constants.distant_count = hierarchy ? scene_.DistantLightCount() : 0;
     constants.environment_map = scene_.EnvironmentAddress();
     constants.environment_selection = scene_.EnvironmentSelection();
     constants.sample_index = settings.sample_index + accumulated_samples_;

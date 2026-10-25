@@ -316,6 +316,11 @@ empty plan records no GPU work.
   light's irradiance) and its entry's probability. A distant light whose
   cone is too narrow for float densities (1 − cos below the smallest
   normal float) is kept as a parallel light of the cone's irradiance.
+  The analytic-light crossing hierarchy follows: 64-byte interior nodes of
+  a binary hierarchy over the sphere, rect and disk lights (n − 1 nodes
+  for n ≥ 2 such lights, one for a single light), each holding its two
+  children's float bounds and references, then a uint32 index per distant
+  light ([path tracing](#path-tracing)).
   Black lights, lights of zero size and lights whose normalized radiance
   exceeds float range are left out. The table is rebuilt from the plan's instances, their geometry
   and transforms, the material table and the lights whenever the instance
@@ -344,7 +349,9 @@ empty plan records no GPU work.
 `GpuSceneStats` reports resident geometry and textures, instances, material
 table entries, the light table's emissive triangles and analytic lights,
 whether the scene passes read an environment image (`environment_map`) and
-whether the light table samples it (`environment_sampled`), its bytes and
+whether the light table samples it (`environment_sampled`), its bytes
+(`light_hierarchy_bytes` counting the crossing hierarchy within the light
+table's) and
 lifetime upload counts, light-table and environment-image rewrites
 included. `ReadBackScene`
 copies the device buffers and images back for validation: the corner
@@ -627,6 +634,19 @@ of compute kernels. Both call the same transport steps
   cone holds its direction. Lights block neither rays nor one another,
   and camera rays pass them. With light sampling, each is weighed against
   next event estimation's density for the direction.
+  `PathTracingSettings::light_crossing` chooses how a ray finds them. With
+  `LightCrossing::Hierarchy`, the default, it descends the GPU scene's
+  crossing hierarchy and tests only the sphere, rect and disk lights whose
+  bounds its segment overlaps, and tests the distant lights only when it
+  escapes. The hierarchy splits the lights at the median of their centres
+  along the axis over which they spread most, so its depth is at most
+  ⌈log₂ n⌉; each light's bounds are widened by 10⁻⁴ of its extent plus
+  10⁻⁵ of its coordinates' magnitude and rounded outwards, so that rounding
+  cannot hide a light the per-light test would find.
+  `LightCrossing::Linear` tests every analytic light in order. Both apply
+  the same per-light test, so they find the same lights; a ray's three or
+  more crossed lights may be summed in a different order. Changing it does
+  not restart the accumulation.
 - **Direct light.** With light sampling, each scattering event that may
   continue samples one emissive triangle or analytic light through a
   shadow ray, after Russian roulette and before the BSDF sample
@@ -954,12 +974,15 @@ order. Changing it restarts the accumulation.
   wavefront shade kernel traces the shadow ray inline and, for the emission
   weight and, with analytic lights, for the lights a ray crossed, reads the
   path's ray origin section.
-- **Cost.** Light selection takes constant time; every ray tests every
-  analytic light, and under BSDF sampling every scattering event loops
-  over them for parallel lights, so a frame's cost grows linearly with
-  their number, about 3.7 µs per light per 128×128 light-sampled frame on
-  the measured device. There is no acceleration structure for lights, and
-  the wavefront shade kernel keeps its shadow rays inline
+- **Cost.** Light selection takes constant time. With the crossing
+  hierarchy (the [default](#path-tracing)), a ray tests only the lights
+  whose bounds it enters: on the measured device a 256-light 128×128
+  light-sampled frame costs 1.3–1.7× a one-light frame, where testing every
+  light cost 9–10×, and the hierarchy adds about 0.1 µs per light of
+  slope ([evidence](../reports/2026-10-25-light-crossing-hierarchy.md)).
+  Under BSDF sampling every scattering event still loops over the analytic
+  lights for parallel lights, and the wavefront shade kernel keeps its
+  shadow rays inline
   ([exit review](../reports/2026-10-12-renderer-phase3-exit.md)).
 
 `renderer.path.light_sampling` compares the Cornell box's images under
@@ -1054,6 +1077,10 @@ accumulation at the measurement boundary.
 `--benchmark-light-sampling bsdf` (the default, so that earlier
 measurements stay comparable) or `mis` selects the
 [light sampling](#light-sampling), recorded as `procedure.light_sampling`.
+`--benchmark-light-crossing hierarchy` (the default) or `linear` selects
+how rays find the analytic lights they cross
+([path tracing](#path-tracing)), recorded as `procedure.light_crossing`;
+`scene.light_hierarchy_bytes` records the hierarchy's size.
 `textured-v1`, `instanced-v1` and `geometry-v1` use a white environment,
 coated diffuse surfaces and deterministic grid heights; their light tables
 are empty. The lit workloads light the Cornell box's geometry by analytic

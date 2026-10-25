@@ -46,7 +46,10 @@ when the measurements justify it.
   blocking frame overhead; host-cached readback was adopted, removing about
   1.1 ms of readback from each 128x128 frame with identical images.
   [Many-light crossing](../reports/2026-10-25-light-crossing-cost.md)
-  explains the many-light continuation cost (LOTUS-LIGHT-06 below).
+  explained the many-light continuation cost, and a
+  [crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md)
+  was adopted: a 256-light frame is 5.3–8.0× faster with images equal to
+  rounding.
   Remaining: controlled timing, Hydra/viewport motion, temporal/SVGF modes,
   quality curves for the other fixtures, peak residency and complete viewport
   repeats; preserve the recorded driver failure when extending the baseline.
@@ -76,18 +79,6 @@ outside this queue.
   bounded fixes. Full OpenPBR/MaterialX and subsurface remain outside this
   subset. Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
-- [ ] **LOTUS-LIGHT-06 — Minimal analytic-light crossing acceleration (P1).**
-  Workstream D, Renderer Phase 9 subset. The completed LOTUS-LIGHT-05
-  [crossing-cost evaluation](../reports/2026-10-25-light-crossing-cost.md)
-  attributed 81–88% of the 256-light frame to crossing tests and deferred
-  selection. Replace the per-ray loop over every
-  analytic light with one bounded structure (a light hierarchy, or the
-  lights as procedural primitives in a ray-tracing acceleration structure)
-  that still finds every crossed light. Compare against the
-  [light-count control](../reports/2026-10-25-light-crossing-cost.md#cost-against-light-count)
-  under both integrators: GPU time, identical or statistically equal images,
-  structure memory and build/update cost, and the 1–4 light regression.
-  Light trees for selection and scheduling remain outside this experiment.
 
 ## Previous delivery evidence
 

@@ -327,16 +327,131 @@ std::optional<GpuAnalyticLightRecord> MakeAnalyticLight(const Light& light,
 // every instance whose material emits and one per analytic light, chosen in
 // proportion to its weight: a triangle's world-space area times its
 // material's emission estimate, an analytic light's as MakeAnalyticLight
-// estimates it. The analytic records follow, in the lights' order.
-// With an environment image of positive weight, its entry comes last, and
-// `environment_pdf` is the entry's probability.
+// estimates it. The analytic records follow, in the lights' order, then
+// the crossing hierarchy over the bounded ones and the distant lights'
+// indices. With an environment image of positive weight, its entry comes
+// last, and `environment_pdf` is the entry's probability.
 struct LightTable {
   std::vector<std::uint32_t> offsets;
   std::vector<GpuLightRecord> lights;
   std::vector<GpuAnalyticLightRecord> analytic;
+  std::vector<GpuLightNode> nodes;
+  std::vector<std::uint32_t> distant;
   std::uint32_t emissive_triangles = 0;
   float environment_pdf = 0.0F;
 };
+
+// A sphere, rect or disk light's world-space bounds, and the centre the
+// hierarchy sorts it by.
+struct LightBounds {
+  std::array<float, 3> low;
+  std::array<float, 3> high;
+  Vec3d centre;
+  std::uint32_t index = 0;
+};
+
+// The light's bounds, widened by 1e-4 of its extent plus 1e-5 of its
+// coordinates' magnitude and rounded outwards, so that the crossing test's
+// rounding of a ray that grazes the light cannot leave the light outside
+// them.
+LightBounds BoundLight(const GpuAnalyticLightRecord& light, std::uint32_t index) {
+  LightBounds bounds;
+  bounds.index = index;
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    const double centre = light.position[axis];
+    const double u = light.axis_u[axis];
+    const double v = light.axis_v[axis];
+    const double extent = light.shape == kSphereLight ? light.position[3]
+                          : light.shape == kRectLight
+                              ? std::abs(u) + std::abs(v)
+                              : std::sqrt(u * u + v * v);
+    const double margin =
+        1e-4 * extent + 1e-5 * (std::abs(centre) + extent);
+    bounds.centre[axis] = centre;
+    bounds.low[axis] = std::nextafter(
+        static_cast<float>(centre - extent - margin),
+        -std::numeric_limits<float>::infinity());
+    bounds.high[axis] = std::nextafter(
+        static_cast<float>(centre + extent + margin),
+        std::numeric_limits<float>::infinity());
+  }
+  return bounds;
+}
+
+void StoreBounds(float* low, float* high, const LightBounds* first,
+    const LightBounds* last, std::uint32_t child) {
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    low[axis] = std::numeric_limits<float>::max();
+    high[axis] = -std::numeric_limits<float>::max();
+    for (const LightBounds* item = first; item != last; ++item) {
+      low[axis] = std::min(low[axis], item->low[axis]);
+      high[axis] = std::max(high[axis], item->high[axis]);
+    }
+  }
+  std::memcpy(&low[3], &child, sizeof(child));
+}
+
+// The child that holds [first, last): a leaf for one light, otherwise a
+// node whose children split the lights at the median of their centres
+// along the axis over which the centres spread most. Ties go by index, so
+// the hierarchy depends only on the lights, and its depth is at most
+// ceil(log2(count)).
+std::uint32_t BuildLightNode(LightBounds* first, LightBounds* last,
+    std::vector<GpuLightNode>& nodes) {
+  if (last - first == 1)
+    return kLightLeaf | first->index;
+  const auto node = static_cast<std::uint32_t>(nodes.size());
+  nodes.emplace_back();
+  Vec3d low = first->centre;
+  Vec3d high = first->centre;
+  for (const LightBounds* item = first; item != last; ++item) {
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      low[axis] = std::min(low[axis], item->centre[axis]);
+      high[axis] = std::max(high[axis], item->centre[axis]);
+    }
+  }
+  std::size_t axis = 0;
+  for (std::size_t candidate = 1; candidate < 3; ++candidate) {
+    if (high[candidate] - low[candidate] > high[axis] - low[axis])
+      axis = candidate;
+  }
+  LightBounds* middle = first + (last - first) / 2;
+  std::nth_element(first, middle, last,
+      [axis](const LightBounds& a, const LightBounds& b) {
+        return a.centre[axis] != b.centre[axis] ? a.centre[axis] < b.centre[axis]
+                                                : a.index < b.index;
+      });
+  const std::uint32_t left = BuildLightNode(first, middle, nodes);
+  const std::uint32_t right = BuildLightNode(middle, last, nodes);
+  GpuLightNode& stored = nodes[node];
+  StoreBounds(stored.low0, stored.high0, first, middle, left);
+  StoreBounds(stored.low1, stored.high1, middle, last, right);
+  return node;
+}
+
+// The crossing hierarchy over the sphere, rect and disk lights, and the
+// distant lights' indices, which only escaping rays test. Parallel lights,
+// which no ray crosses, are in neither. One bounded light gets a root whose
+// second child is empty.
+void BuildLightHierarchy(LightTable& table) {
+  std::vector<LightBounds> bounded;
+  for (std::size_t index = 0; index < table.analytic.size(); ++index) {
+    const std::uint32_t shape = table.analytic[index].shape;
+    if (shape == kDistantLight)
+      table.distant.push_back(static_cast<std::uint32_t>(index));
+    else if (shape != kParallelLight)
+      bounded.push_back(
+          BoundLight(table.analytic[index], static_cast<std::uint32_t>(index)));
+  }
+  if (bounded.size() == 1) {
+    GpuLightNode& root = table.nodes.emplace_back();
+    StoreBounds(root.low0, root.high0, bounded.data(), bounded.data() + 1,
+        kLightLeaf | bounded.front().index);
+    StoreBounds(root.low1, root.high1, nullptr, nullptr, kNoLightChild);
+  } else if (bounded.size() > 1) {
+    BuildLightNode(bounded.data(), bounded.data() + bounded.size(), table.nodes);
+  }
+}
 
 // An environment image's light-table weight, its estimated power over 2 pi
 // as a distant light's is: the flux of its radiance from every direction
@@ -388,6 +503,7 @@ LightTable BuildLightTable(const std::vector<SceneInstance>& instances,
     }
     table.analytic.push_back(*record);
   }
+  BuildLightHierarchy(table);
   const double environment_weight =
       environment_mean > 0.0 ? EnvironmentWeight(environment_mean, scene_radius)
                              : 0.0;
@@ -893,6 +1009,9 @@ void GpuScene::Destroy() {
   scene_lights_.clear();
   light_count_ = 0;
   analytic_count_ = 0;
+  light_nodes_offset_ = 0;
+  light_node_count_ = 0;
+  distant_count_ = 0;
   emissive_triangles_ = 0;
   DestroyBuffer(memory_, device_, tlas_instances_);
   DestroyBuffer(memory_, device_, scratch_);
@@ -1480,6 +1599,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   LightTable light_table;
   VkDeviceSize light_entries_offset = 0;
   VkDeviceSize analytic_offset = 0;
+  VkDeviceSize light_nodes_offset = 0;
   VkDeviceSize light_bytes = 0;
   if (write_lights) {
     light_table = BuildLightTable(
@@ -1488,8 +1608,11 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         AlignUp(light_table.offsets.size() * sizeof(std::uint32_t), kLightBytes);
     analytic_offset =
         light_entries_offset + light_table.lights.size() * kLightBytes;
-    light_bytes = analytic_offset +
-                  light_table.analytic.size() * kAnalyticLightBytes;
+    light_nodes_offset = analytic_offset +
+                         light_table.analytic.size() * kAnalyticLightBytes;
+    light_bytes = light_nodes_offset +
+                  light_table.nodes.size() * sizeof(GpuLightNode) +
+                  light_table.distant.size() * sizeof(std::uint32_t);
   }
   staging_bytes += instance_bytes + material_bytes + tlas_input_bytes +
                    light_bytes + environment_bytes;
@@ -1822,6 +1945,13 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       std::memcpy(staging + offset + analytic_offset,
           light_table.analytic.data(),
           light_table.analytic.size() * kAnalyticLightBytes);
+      std::memcpy(staging + offset + light_nodes_offset,
+          light_table.nodes.data(),
+          light_table.nodes.size() * sizeof(GpuLightNode));
+      std::memcpy(staging + offset + light_nodes_offset +
+                      light_table.nodes.size() * sizeof(GpuLightNode),
+          light_table.distant.data(),
+          light_table.distant.size() * sizeof(std::uint32_t));
       copies.push_back({lights_.buffer, VkBufferCopy{offset, 0, light_bytes}});
     }
     offset += light_bytes;
@@ -1829,6 +1959,11 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     light_count_ = static_cast<std::uint32_t>(light_table.lights.size());
     analytic_offset_ = analytic_offset;
     analytic_count_ = static_cast<std::uint32_t>(light_table.analytic.size());
+    light_node_count_ = static_cast<std::uint32_t>(light_table.nodes.size());
+    distant_count_ = static_cast<std::uint32_t>(light_table.distant.size());
+    light_nodes_offset_ =
+        light_node_count_ + distant_count_ == 0 ? 0 : light_nodes_offset;
+    stats_.light_hierarchy_bytes = light_bytes - light_nodes_offset;
     emissive_triangles_ = light_table.emissive_triangles;
     environment_selection_ = light_table.environment_pdf;
     stats_.light_bytes = light_bytes;
