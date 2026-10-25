@@ -138,6 +138,20 @@ and do not measure peak renderer residency. The
 [collector report](../reports/2026-10-24-gpu-telemetry.md) records a tested
 invocation and its uninstrumented control.
 
+### Camera and object motion
+
+`--motion camera`, `transform` or `deform` edits every measured headless
+frame instead of accumulating one pose (viewport runs reject it). The
+[motion campaign](../reports/2026-10-25-motion-workloads.md) ran each motion
+under both integrators into its own output directory:
+
+```sh
+python scripts/performance_baseline.py --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --integrator reference --motion deform --output build/motion-deform-reference-20261025 --label "516c659 plus LOTUS-PERF-01 motion (uncommitted); core Release; 2026-10-25" --clocks "Unlocked; initial nvidia-smi P8, 210 MHz, 405 MHz; driver 597.16"
+```
+
+A single fixture can be measured directly with
+`lotus-headless --benchmark <json> --benchmark-workload <id> --benchmark-motion <kind>`.
+
 ## Cornell quality checkpoints
 
 After the default build, measure error against the committed reference with

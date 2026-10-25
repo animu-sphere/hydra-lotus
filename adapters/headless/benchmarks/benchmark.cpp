@@ -28,6 +28,24 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Lotus::FrameStatus;
 
+// What changes before each measured frame. Static keeps one accumulation;
+// the others edit the scene so that every measured frame restarts it.
+enum class Motion { Static, Camera, Transform, Deform };
+
+// The motion's offset after the last measured frame, growing linearly from
+// the warmup pose so that consecutive frames always differ: a camera pan,
+// the edited mesh's translation, or its shear of z by x.
+constexpr float kMotionAmplitude = 0.05F;
+
+const char* MotionName(Motion motion) {
+  switch (motion) {
+  case Motion::Camera: return "camera";
+  case Motion::Transform: return "transform";
+  case Motion::Deform: return "deform";
+  default: return "static";
+  }
+}
+
 struct Options {
   std::filesystem::path report;
   std::string label;
@@ -41,6 +59,7 @@ struct Options {
   // BSDF sampling unless chosen, so that the fixed baseline's earlier
   // measurements stay comparable.
   Lotus::LightSampling light_sampling = Lotus::LightSampling::Bsdf;
+  Motion motion = Motion::Static;
 };
 
 // The per-sample variance's batches: their count, their samples each, and
@@ -157,7 +176,7 @@ Result Measure(std::string_view id, const Options& options,
     auto work = MakeWorkload(id, executable / "assets");
     Lotus::SceneExtraction extraction;
     const auto snapshot = work.world.Commit();
-    const auto draw = Lotus::ExtractDrawSummary(snapshot);
+    auto draw = Lotus::ExtractDrawSummary(snapshot);
     std::uint64_t triangles = 0;
     for (const auto& [key, mesh] : snapshot.scene->meshes)
       triangles += mesh.geometry->triangles.size();
@@ -179,14 +198,67 @@ Result Measure(std::string_view id, const Options& options,
     std::vector<double> gpu, wall;
     // The wavefront integrator's rays and kernel durations per frame.
     std::vector<double> rays, rounds, camera, intersect, shade, tail;
+    // Each motion frame's world edit and Commit, extraction, blocking
+    // UpdateScene, its submission's phases and the bytes it staged.
+    std::vector<double> author, extract, update, upload_gpu, blas_gpu, tlas_gpu, uploaded;
+    const bool moving = options.motion != Motion::Static;
+    const auto& edit = snapshot.scene->meshes.at(work.edit_mesh);
+    auto previous = before;
     Lotus::GpuFrameEvidence frame;
     settings.sample_index = options.sample_index;
     for (std::uint32_t i = 0; i < options.frames; ++i) {
+      if (moving) {
+        const float offset = kMotionAmplitude * float(i + 1) / float(options.frames);
+        // The deformed copy is prepared outside the timed edit.
+        Lotus::MeshGeometry geometry;
+        if (options.motion == Motion::Deform) {
+          geometry = *edit.geometry;
+          for (auto& p : geometry.positions) p[2] += offset * p[0];
+        }
+        start = Clock::now();
+        if (options.motion == Motion::Camera) {
+          auto moved = snapshot.camera;
+          moved.view[12] += offset;
+          work.world.SetCamera(moved);
+        } else if (options.motion == Motion::Transform) {
+          auto moved = edit.instance;
+          moved.world_from_object[12] += offset;
+          work.world.SetMeshInstance(work.edit_mesh, moved);
+        } else {
+          work.world.SetMesh(work.edit_mesh, std::move(geometry), edit.instance);
+        }
+        const auto posed = work.world.Commit();
+        author.push_back(Milliseconds(start));
+        start = Clock::now();
+        const auto plan = extraction.Update(posed);
+        draw = Lotus::ExtractDrawSummary(posed);
+        extract.push_back(Milliseconds(start));
+        Require(plan.Empty() == (options.motion == Motion::Camera),
+            "camera motion produced scene work, or object motion none");
+        start = Clock::now();
+        const auto evidence = renderer->UpdateScene(plan);
+        update.push_back(Milliseconds(start));
+        Check(evidence);
+        const auto& now = evidence.stats;
+        const auto& was = previous.stats;
+        Require(now.blas_builds == was.blas_builds && now.tlas_builds == was.tlas_builds &&
+            now.blas_updates == was.blas_updates + (options.motion == Motion::Deform ? 1 : 0) &&
+            now.tlas_updates == was.tlas_updates + (options.motion != Motion::Camera ? 1 : 0),
+            "motion did not refit exactly the edited BLAS and the TLAS");
+        uploaded.push_back(double(now.uploaded_bytes - was.uploaded_bytes));
+        if (evidence.timings.available) {
+          upload_gpu.push_back(evidence.timings.upload_gpu_ms);
+          blas_gpu.push_back(evidence.timings.blas_build_gpu_ms);
+          tlas_gpu.push_back(evidence.timings.tlas_build_gpu_ms);
+        }
+        previous = evidence;
+      }
       start = Clock::now();
       frame = renderer->RenderScene(draw, target, 1, settings);
       wall.push_back(Milliseconds(start));
       Check(frame);
-      Require(frame.samples_per_pixel == i + 1, "accumulation sample count mismatch");
+      Require(frame.samples_per_pixel == (moving ? 1 : i + 1),
+          "accumulation sample count mismatch");
       if (frame.primary_ray_timestamp_available) {
         Require(std::isfinite(frame.primary_ray_gpu_ms) && frame.primary_ray_gpu_ms > 0,
             "invalid GPU timestamp duration");
@@ -214,10 +286,10 @@ Result Measure(std::string_view id, const Options& options,
     // their sequences apart from the timed frames': the mean over pixels and
     // channels of each value's variance across the batches, times the batch
     // size. The time to reach a given variance is proportional to it times
-    // the GPU time per sample.
+    // the GPU time per sample. A moving scene has no single pose to measure.
     const std::size_t pixels = std::size_t{options.size} * options.size;
     std::vector<double> sum(pixels * 3), squares(pixels * 3);
-    for (std::uint32_t batch = 0; batch < kVarianceBatches; ++batch) {
+    for (std::uint32_t batch = 0; !moving && batch < kVarianceBatches; ++batch) {
       settings.sample_index = kVarianceSampleIndex + batch * kVarianceBatch;
       const auto accumulated = renderer->RenderScene(draw, target, kVarianceBatch, settings);
       Require(accumulated.status == FrameStatus::Pass, accumulated.detail);
@@ -245,12 +317,12 @@ Result Measure(std::string_view id, const Options& options,
 
     const auto after = renderer->UpdateScene({});
     Check(after);
-    Require(after.stats.memory == before.stats.memory &&
-        after.stats.upload_submissions == before.stats.upload_submissions &&
-        after.stats.blas_builds == before.stats.blas_builds &&
-        after.stats.blas_updates == before.stats.blas_updates &&
-        after.stats.tlas_builds == before.stats.tlas_builds &&
-        after.stats.tlas_updates == before.stats.tlas_updates,
+    Require(after.stats.memory == previous.stats.memory &&
+        after.stats.upload_submissions == previous.stats.upload_submissions &&
+        after.stats.blas_builds == previous.stats.blas_builds &&
+        after.stats.blas_updates == previous.stats.blas_updates &&
+        after.stats.tlas_builds == previous.stats.tlas_builds &&
+        after.stats.tlas_updates == previous.stats.tlas_updates,
         "steady rendering changed scene allocation/upload/acceleration counters");
 
     RgbImage image{options.size, options.size, {}};
@@ -274,7 +346,7 @@ Result Measure(std::string_view id, const Options& options,
     // This also verifies camera/transport compatibility with the established
     // reference, rather than treating a fast but incorrect image as a baseline.
     // The reference exists only at its own size.
-    if (id == "cornell-v1" && options.size == kReferenceSize) {
+    if (id == "cornell-v1" && options.size == kReferenceSize && !moving) {
       Reference reference;
       reference.samples = 1024;
       Require(ReadPfm(executable / "reference/cornell-box-mean.pfm", reference.mean).empty(),
@@ -287,9 +359,10 @@ Result Measure(std::string_view id, const Options& options,
 
     // Time complete unchanged Commit -> extraction -> backend calls in batches
     // to keep the clock's overhead below the tiny per-call cost.
+    // The single edits below measure the static pose only.
     std::vector<double> unchanged;
     constexpr std::uint32_t iterations = 1000;
-    for (int batch = 0; batch < 16; ++batch) {
+    for (int batch = 0; !moving && batch < 16; ++batch) {
       start = Clock::now();
       for (std::uint32_t i = 0; i < iterations; ++i) {
         const auto plan = extraction.Update(work.world.Commit());
@@ -306,31 +379,34 @@ Result Measure(std::string_view id, const Options& options,
       }
       unchanged.push_back(Milliseconds(start) / iterations);
     }
-    const auto& edit = snapshot.scene->meshes.at(work.edit_mesh);
-    auto geometry = *edit.geometry;
-    for (auto& p : geometry.positions) p[2] += 0.01F * p[0];
-    work.world.SetMesh(work.edit_mesh, std::move(geometry), edit.instance);
-    auto plan = extraction.Update(work.world.Commit());
-    start = Clock::now();
-    const auto point = renderer->UpdateScene(plan);
-    const double point_wall = Milliseconds(start);
-    Check(point);
-    Require(point.stats.blas_updates == initial.stats.blas_updates + 1 &&
-        point.stats.blas_builds == initial.stats.blas_builds &&
-        point.stats.tlas_updates == initial.stats.tlas_updates + 1,
-        "point edit did not refit BLAS and dependent TLAS");
-    auto moved = edit.instance;
-    moved.world_from_object[12] += 0.01F;
-    work.world.SetMeshInstance(work.edit_mesh, moved);
-    plan = extraction.Update(work.world.Commit());
-    start = Clock::now();
-    const auto transform = renderer->UpdateScene(plan);
-    const double transform_wall = Milliseconds(start);
-    Check(transform);
-    Require(transform.stats.tlas_updates == point.stats.tlas_updates + 1 &&
-        transform.stats.blas_updates == point.stats.blas_updates &&
-        transform.stats.blas_builds == point.stats.blas_builds,
-        "transform edit did not refit only TLAS");
+    Lotus::GpuSceneEvidence point, transform;
+    double point_wall = 0, transform_wall = 0;
+    if (!moving) {
+      auto geometry = *edit.geometry;
+      for (auto& p : geometry.positions) p[2] += 0.01F * p[0];
+      work.world.SetMesh(work.edit_mesh, std::move(geometry), edit.instance);
+      auto plan = extraction.Update(work.world.Commit());
+      start = Clock::now();
+      point = renderer->UpdateScene(plan);
+      point_wall = Milliseconds(start);
+      Check(point);
+      Require(point.stats.blas_updates == initial.stats.blas_updates + 1 &&
+          point.stats.blas_builds == initial.stats.blas_builds &&
+          point.stats.tlas_updates == initial.stats.tlas_updates + 1,
+          "point edit did not refit BLAS and dependent TLAS");
+      auto moved = edit.instance;
+      moved.world_from_object[12] += 0.01F;
+      work.world.SetMeshInstance(work.edit_mesh, moved);
+      plan = extraction.Update(work.world.Commit());
+      start = Clock::now();
+      transform = renderer->UpdateScene(plan);
+      transform_wall = Milliseconds(start);
+      Check(transform);
+      Require(transform.stats.tlas_updates == point.stats.tlas_updates + 1 &&
+          transform.stats.blas_updates == point.stats.blas_updates &&
+          transform.stats.blas_builds == point.stats.blas_builds,
+          "transform edit did not refit only TLAS");
+    }
 
     std::ostringstream out;
     out << std::setprecision(10) << "{\"device\":{\"name\":" << Quote(frame.device_name)
@@ -349,8 +425,10 @@ Result Measure(std::string_view id, const Options& options,
         << ",\"environment_sampled\":" << (initial.stats.environment_sampled ? "true" : "false")
         << "},\"gpu_frame_ms\":";
     Series(out, gpu);
-    out << ",\"per_sample_variance\":" << variance << ",\"variance_gpu_ms\":";
-    if (gpu.empty()) {
+    out << ",\"per_sample_variance\":";
+    if (moving) out << "null"; else out << variance;
+    out << ",\"variance_gpu_ms\":";
+    if (gpu.empty() || moving) {
       out << "null";
     } else {
       auto sorted = gpu;
@@ -390,8 +468,26 @@ Result Measure(std::string_view id, const Options& options,
         << ",\"scene_pool_used_bytes\":" << after.stats.memory.used_bytes
         << ",\"initial_update\":";
     UpdateJson(out, initial, initial_wall);
-    out << ",\"point_refit\":"; UpdateJson(out, point, point_wall);
-    out << ",\"transform_refit\":"; UpdateJson(out, transform, transform_wall);
+    if (moving) {
+      out << ",\"point_refit\":null,\"transform_refit\":null,\"motion\":{\"author_cpu_ms\":";
+      Series(out, author);
+      out << ",\"extract_cpu_ms\":"; Series(out, extract);
+      out << ",\"update_wall_ms\":"; Series(out, update);
+      out << ",\"upload_gpu_ms\":"; Series(out, upload_gpu);
+      out << ",\"blas_gpu_ms\":"; Series(out, blas_gpu);
+      out << ",\"tlas_gpu_ms\":"; Series(out, tlas_gpu);
+      out << ",\"uploaded_bytes\":"; Series(out, uploaded);
+      out << ",\"blas_updates\":" << after.stats.blas_updates - before.stats.blas_updates
+          << ",\"tlas_updates\":" << after.stats.tlas_updates - before.stats.tlas_updates
+          << ",\"upload_submissions\":"
+          << after.stats.upload_submissions - before.stats.upload_submissions
+          << ",\"scene_pool_reserved_bytes_before\":" << before.stats.memory.reserved_bytes
+          << ",\"scene_pool_used_bytes_before\":" << before.stats.memory.used_bytes << '}';
+    } else {
+      out << ",\"point_refit\":"; UpdateJson(out, point, point_wall);
+      out << ",\"transform_refit\":"; UpdateJson(out, transform, transform_wall);
+      out << ",\"motion\":null";
+    }
     out << ",\"image\":" << Quote(image_path.filename().string())
         << ",\"mean_rgb\":" << radiance_sum / (double(pixels) * 3)
         << ",\"hit_pixels\":" << hits << '}';
@@ -412,7 +508,8 @@ int BenchmarkMain(int argc, char** argv) {
                  "       [--benchmark-frames <1..4096>] [--benchmark-warmup <1..4096>]\n"
                  "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n"
                  "       [--benchmark-light-sampling <bsdf|mis>] [--benchmark-workload <id>]\n"
-                 "       [--benchmark-sample-index <start below 2097152>]\n";
+                 "       [--benchmark-sample-index <start below 2097152>]\n"
+                 "       [--benchmark-motion <static|camera|transform|deform>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -436,6 +533,13 @@ int BenchmarkMain(int argc, char** argv) {
       if (value == "bsdf") options.light_sampling = Lotus::LightSampling::Bsdf;
       else if (value == "mis") options.light_sampling = Lotus::LightSampling::Mis;
       else { std::cerr << "invalid light sampling: " << value << '\n'; return 2; }
+    }
+    else if (option == "--benchmark-motion") {
+      if (value == "static") options.motion = Motion::Static;
+      else if (value == "camera") options.motion = Motion::Camera;
+      else if (value == "transform") options.motion = Motion::Transform;
+      else if (value == "deform") options.motion = Motion::Deform;
+      else { std::cerr << "invalid motion: " << value << '\n'; return 2; }
     }
     else if (option == "--benchmark-size") {
       const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.size);
@@ -497,8 +601,12 @@ int BenchmarkMain(int argc, char** argv) {
         << ",\"light_sampling\":" << Quote(Mis(options) ? "mis" : "bsdf")
         << ",\"width\":" << options.size << ",\"height\":" << options.size
         << ",\"cornell_reference_compared\":"
-        << (options.size == kReferenceSize && (options.workload.empty() || options.workload == "cornell-v1") ? "true" : "false")
-        << ",\"sample_index\":" << options.sample_index << ",\"max_bounces\":64,"
+        << (options.size == kReferenceSize && options.motion == Motion::Static &&
+            (options.workload.empty() || options.workload == "cornell-v1") ? "true" : "false")
+        << ",\"motion\":" << Quote(MotionName(options.motion))
+        << ",\"motion_amplitude\":";
+    if (options.motion == Motion::Static) out << "null"; else out << kMotionAmplitude;
+    out << ",\"sample_index\":" << options.sample_index << ",\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
         << ",\"warmup_frames\":" << options.warmup
         << ",\"variance_batches\":" << kVarianceBatches
@@ -516,6 +624,11 @@ int BenchmarkMain(int argc, char** argv) {
            "\"unchanged_cpu_ms\":\"Commit, extraction and empty UpdateScene plus invariant checks; batch wall time / 1000.\","
            "\"scene_pool_bytes\":\"Scene pools include device-local and host-visible memory; exclude renderer targets and constants.\","
            "\"update_ms\":\"One initial upload/build, one point refit and one transform refit; CPU wall covers blocking UpdateScene only. Counters are cumulative.\","
+           "\"motion\":\"Non-static motion only: before every measured frame, a camera pan, the edited mesh's translation or its shear of z by x, "
+           "growing linearly to motion_amplitude, restarts the accumulation (one sample per frame). Author covers the world edit and Commit, "
+           "excluding the deformed copy's preparation; extract covers SceneExtraction and the draw summary; update is blocking UpdateScene wall; "
+           "GPU phases come from its timestamps; counters are totals over the measured frames. Variance, the Cornell comparison, unchanged "
+           "batches and single refits are static only and null.\","
            "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\","
            "\"wavefront\":\"Wavefront integrator only: rays traced per frame from its queue counts, "
            "rays per camera path, rays per GPU second, bounces run as rounds and per-kernel GPU durations; null for the reference integrator.\"},"

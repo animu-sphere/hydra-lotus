@@ -114,6 +114,53 @@ class PerformanceBaselineTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(process.call_count, 1)
 
+    def test_motion_is_forwarded_and_every_frame_edit_checked(self):
+        def execute(motion, blas, tlas, procedure_motion=None):
+            def run(cmd, **kwargs):
+                result = self.successful_run(cmd, **kwargs)
+                self.assertEqual(cmd[cmd.index("--benchmark-motion") + 1], motion)
+                path = Path(cmd[cmd.index("--benchmark") + 1])
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["procedure"]["motion"] = procedure_motion or motion
+                data["scenes"][0]["measurements"]["motion"] = {
+                    "update_wall_ms": {"raw": [0.1] * 64}, "blas_updates": blas, "tlas_updates": tlas}
+                path.write_text(json.dumps(data), encoding="utf-8")
+                return result
+            return run
+
+        cases = ((("deform", 64, 64), 0), (("transform", 0, 64), 0), (("camera", 0, 0), 0),
+                 (("deform", 63, 64), 1), (("camera", 0, 64), 1), (("transform", 0, 64, "static"), 1))
+        for case, expected in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "output"
+                code, process = self.run_baseline(output, execute(*case), ("--motion", case[0]))
+                self.assertEqual(code, expected)
+                self.assertEqual(process.call_count, 3 if expected == 0 else 1)
+                summary = json.loads((output / "run.json").read_text(encoding="utf-8"))
+                self.assertEqual(summary["manifest"]["settings"]["motion"], case[0])
+
+        static = baseline.command(Path("runner"), "headless", "cornell-v1", "reference",
+                                  dict(self.settings, motion="static"), Path("out.json"), "revision")
+        self.assertNotIn("--benchmark-motion", static)
+
+    def test_motion_requires_headless_and_the_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(SystemExit):
+                self.run_baseline(Path(temp) / "output", self.successful_run,
+                                  ("--motion", "camera", "--viewport", "runner"))
+            self.assertFalse((Path(temp) / "output").exists())
+            path = Path(temp) / "manifest.json"
+            self.manifest["motions"] = ["camera"]
+            path.write_text(json.dumps(self.manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "motions"):
+                baseline.load_manifest(path)
+            del self.manifest["motions"]
+            path.write_text(json.dumps(self.manifest), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.run_baseline(Path(temp) / "output", self.successful_run,
+                                  ("--manifest", str(path), "--motion", "deform"))
+            self.assertFalse((Path(temp) / "output").exists())
+
     def test_sequence_range_and_viewport_are_rejected_before_launch(self):
         for extra in (("--sample-index", "-1"), ("--sample-index", "2097151"),
                       ("--sample-index", "1", "--viewport", "runner")):

@@ -1073,8 +1073,9 @@ nearest-rank p95 and measured pass means. Missing GPU timestamps and passes
 are null. The CPU population includes UI, scene update, render and present;
 GPU durations exclude untimed presentation/UI/debug passes.
 
-The [shared static manifest](../../validation/performance-workloads.json)
-fixes MIS, resolution, sample index, bounces, frames, warmup and repeat count.
+The [shared manifest](../../validation/performance-workloads.json)
+fixes MIS, resolution, sample index, bounces, frames, warmup, repeat count
+and the permitted motions.
 The [runner](../../scripts/performance_baseline.py) invokes either or both
 adapters sequentially, preserving reports/logs and headless PFM hashes.
 Its `run.json` records build identity, clock conditions, effective manifest,
@@ -1089,8 +1090,12 @@ It refuses duplicate workload selections and a nonempty output directory
 before launching, to prevent overwriting evidence. `--sample-index` overrides
 the manifest's default measured sequence for headless runs only; a nonzero
 value with a viewport is rejected before launch. The effective manifest and
-each headless report must agree on the sequence start. These static runs do
-not yet cover camera/object motion, temporal/SVGF modes or peak process VRAM.
+each headless report must agree on the sequence start. `--motion` selects one
+of the manifest's `motions` for headless runs only (static by default; a
+moving run with a viewport is rejected before launch). The effective manifest
+records it, and each report must agree and must have edited every measured
+frame with the expected refits. The viewport has no motion mode, and neither
+frontend covers temporal/SVGF modes or peak process VRAM here.
 Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
 
@@ -1207,6 +1212,26 @@ CPU scene construction/extraction is outside these update timings. Build and
 update counters check that the point edit refits BLAS and TLAS, and the
 transform edit refits only TLAS. Each update kind is a single observation per
 invocation, not a distribution.
+
+`--benchmark-motion camera|transform|deform` (default `static`, recorded as
+`procedure.motion`) instead edits the scene before every measured frame:
+it pans the camera's view along x, translates the workload's edited mesh
+along x, or shears that mesh's object-space z by x. The offset grows linearly
+from the warmup pose to `procedure.motion_amplitude` (0.05) at the last
+frame, so consecutive frames always differ, and every measured frame is one
+sample after an accumulation restart. The deformed geometry copy is prepared
+outside the timed edit. Each frame's `motion` series retain authoring
+(`SetCamera`/`SetMeshInstance`/`SetMesh` plus `Commit`), extraction with the
+draw summary, blocking `UpdateScene` wall time, its upload/BLAS/TLAS
+timestamps and staged bytes. Camera motion must produce empty plans; a
+transform must refit only the TLAS and a deformation the edited BLAS and the
+TLAS, without builds, in every frame. `motion` totals these refits and upload
+submissions, with the scene pool before motion beside the after-motion pool
+fields. Variance, the Cornell comparison, unchanged batches and the single
+refits apply to one static pose; moving reports null them. The edited mesh
+is fixed per workload, so for `instanced-v1` it moves or deforms all 4,096
+placements. Hydra dirty tracking, temporal history and viewport presentation
+are outside this measurement.
 
 Scene-pool reserved/occupied bytes include device-local and host-visible
 resources and exclude renderer targets/constants. Total VRAM and CPU-only

@@ -1,6 +1,6 @@
 {
   "schema": "lotus-performance-workloads-v1",
-  "scope": "Static shared baseline; motion and temporal/SVGF comparisons remain pending.",
+  "scope": "Shared baseline: static accumulation for both frontends; headless camera/object motion. Viewport motion and temporal/SVGF comparisons remain pending.",
   "settings": {
     "size": 128,
     "frames": 64,
@@ -10,5 +10,6 @@
     "max_bounces": 64,
     "light_sampling": "mis"
   },
+  "motions": ["static", "camera", "transform", "deform"],
   "workloads": ["cornell-v1", "textured-v1", "instanced-v1", "geometry-v1", "lights-v1", "environment-v1", "many-lights-v1"]
 }

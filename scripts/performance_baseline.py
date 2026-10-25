@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Run the shared static manifest sequentially; keep raw evidence per adapter."""
+"""Run the shared manifest sequentially; keep raw evidence per adapter."""
 
 import argparse
 import hashlib
@@ -11,6 +11,8 @@ import sys
 import time
 
 from gpu_telemetry import GpuTelemetry
+
+MOTIONS = ("static", "camera", "transform", "deform")
 
 
 def load_manifest(path):
@@ -30,6 +32,10 @@ def load_manifest(path):
     if (not workloads or len(set(workloads)) != len(workloads)
             or any(not isinstance(w, str) or not w.replace("-", "").isalnum() for w in workloads)):
         raise ValueError("invalid or duplicate workload IDs")
+    motions = manifest.get("motions", ["static"])
+    if ("static" not in motions or len(set(motions)) != len(motions)
+            or any(m not in MOTIONS for m in motions)):
+        raise ValueError("invalid or duplicate motions")
     return manifest
 
 
@@ -42,6 +48,8 @@ def command(executable, adapter, workload, integrator, settings, report, label):
                 "--benchmark-warmup", str(settings["warmup"])]
         if settings["sample_index"]:
             cmd += ["--benchmark-sample-index", str(settings["sample_index"])]
+        if settings.get("motion", "static") != "static":
+            cmd += ["--benchmark-motion", settings["motion"]]
         return cmd
     return [str(executable), "--workload", workload, "--benchmark", str(report),
             "--integrator", integrator, "--nee", "on", "--width", str(settings["size"]),
@@ -61,10 +69,19 @@ def check_report(report, adapter, workload, integrator, settings):
                 or procedure["measured_frames"] != settings["frames"]
                 or procedure["warmup_frames"] != settings["warmup"]
                 or procedure["sample_index"] != settings["sample_index"]
+                or procedure.get("motion", "static") != settings.get("motion", "static")
                 or len(data["scenes"]) != 1 or data["scenes"][0]["id"] != workload
                 or data["scenes"][0]["status"] != "pass"
                 or data["scenes"][0]["measurements"]["validation"]["messages"] != 0):
             raise ValueError("invalid headless measurement")
+        motion = settings.get("motion", "static")
+        if motion != "static":
+            moved = data["scenes"][0]["measurements"]["motion"]
+            frames = settings["frames"]
+            if (len(moved["update_wall_ms"]["raw"]) != frames
+                    or moved["blas_updates"] != (frames if motion == "deform" else 0)
+                    or moved["tlas_updates"] != (0 if motion == "camera" else frames)):
+                raise ValueError("motion did not edit every measured frame")
         image = report.parent / data["scenes"][0]["measurements"]["image"]
         return {"image_sha256": hashlib.sha256(image.read_bytes()).hexdigest()}
     if (data["schema"] != "lotus.viewport-benchmark/v1" or data["scene_source"] != workload
@@ -93,6 +110,8 @@ def main(argv=None):
     parser.add_argument("--workload", action="append", help="optional subset of manifest IDs")
     parser.add_argument("--sample-index", type=int, default=0,
                         help="headless measured sequence start; default: manifest seed 0")
+    parser.add_argument("--motion", choices=MOTIONS, default="static",
+                        help="headless per-frame scene motion; default: static accumulation")
     parser.add_argument("--plan", action="store_true", help="print commands without running or writing")
     parser.add_argument("--gpu-telemetry", choices=("off", "nvidia-smi"), default="off",
                         help="optional whole-device clock/memory observations (may perturb timing)")
@@ -107,7 +126,12 @@ def main(argv=None):
         parser.error("measured sample range must end before variance sample index 2097152")
     if args.sample_index and args.viewport:
         parser.error("nonzero sample index is supported only by headless")
+    if args.motion not in manifest.get("motions", ["static"]):
+        parser.error("motion is absent from the manifest")
+    if args.motion != "static" and args.viewport:
+        parser.error("motion is supported only by headless")
     settings["sample_index"] = args.sample_index
+    settings["motion"] = args.motion
     workloads = args.workload or manifest["workloads"]
     if any(w not in manifest["workloads"] for w in workloads):
         parser.error("workload is absent from the manifest")
