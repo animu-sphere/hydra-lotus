@@ -70,7 +70,7 @@ subsets, with no whole-phase exit implied. No release date is fixed.
 | A (P0) — GPU observation and selected optimization | Shared headless/viewport baseline, major cost attribution and measured fixes to existing paths. | [Practical foundation workstreams](../design/ROADMAP_POLICY.md#practical-foundation-workstreams), A. |
 | B (P1) — VRAM / temporal buffers | Ownership, lifetimes, peak residency and justified representation/reuse comparisons. | Same policy, B. |
 | C (P1) — Material foundation | Selected Renderer Phase 8 fixture, coverage and correctness work on real USD assets. | Same policy, C; full production materials remain outside this subset. |
-| D (P1) — Light profiling | Selected Renderer Phase 9 investigation separating intersection and selection; acceleration implementation is conditional. | Same policy, D; a measured deferral is a valid investigation outcome. |
+| D (P1) — Light profiling | Selected Renderer Phase 9 investigation separating intersection and selection; acceleration implementation is conditional. LOTUS-LIGHT-05 [attributed the many-light cost to crossing tests](../reports/2026-10-25-light-crossing-cost.md#decisions) (go) and deferred selection. | Same policy, D; a measured deferral is a valid investigation outcome. |
 
 The [active queue](current.md#execution-order) contains only the first bounded
 tasks. Establish the benchmark, select bottleneck fixes, add representative

@@ -213,6 +213,25 @@ if(LIGHT_SAMPLING STREQUAL "mis")
       message(FATAL_ERROR "Many-light workload must contain 256 analytic lights")
     endif()
   endif()
+  # A smaller grid of the same fixture, for the light-count control.
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/grid.json"
+    --benchmark-workload many-lights-v1 --benchmark-light-sampling mis
+    --benchmark-light-grid 2 --benchmark-frames 4 --benchmark-warmup 2 --benchmark-size 32
+    RESULT_VARIABLE grid OUTPUT_VARIABLE grid_output ERROR_VARIABLE grid_error TIMEOUT 120)
+  if(NOT grid STREQUAL "0" AND NOT grid STREQUAL "77")
+    message(FATAL_ERROR "Light grid failed: ${grid_output} ${grid_error}")
+  endif()
+  file(READ "${TEST_ROOT}/grid.json" grid_json)
+  string(JSON side GET "${grid_json}" procedure light_grid)
+  if(NOT side EQUAL 2)
+    message(FATAL_ERROR "Light grid side was not recorded")
+  endif()
+  if(grid STREQUAL "0")
+    string(JSON lights GET "${grid_json}" scenes 0 measurements scene analytic_lights)
+    if(NOT lights EQUAL 4)
+      message(FATAL_ERROR "A light grid of side 2 must contain 4 analytic lights")
+    endif()
+  endif()
   # Each motion edits every measured frame and refits only what it changed.
   set(motion_blas 0 0 4)
   set(motion_tlas 0 4 4)
@@ -253,6 +272,16 @@ file(READ "${TEST_ROOT}/sentinel.json" sentinel)
 if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve")
   message(FATAL_ERROR "Unknown motion was accepted or changed the output")
 endif()
+foreach(grid_args "--benchmark-light-grid;4" "--benchmark-workload;cornell-v1;--benchmark-light-grid;4"
+    "--benchmark-workload;many-lights-v1;--benchmark-light-grid;0"
+    "--benchmark-workload;many-lights-v1;--benchmark-light-grid;17")
+  execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json" ${grid_args}
+    RESULT_VARIABLE invalid OUTPUT_QUIET ERROR_QUIET)
+  file(READ "${TEST_ROOT}/sentinel.json" sentinel)
+  if(NOT invalid STREQUAL "2" OR NOT sentinel STREQUAL "preserve")
+    message(FATAL_ERROR "Invalid light grid ${grid_args} was accepted or changed the output")
+  endif()
+endforeach()
 foreach(seed -1 2097152 4294967296 2097151 bad)
   execute_process(COMMAND "${EXECUTABLE}" --benchmark "${TEST_ROOT}/sentinel.json"
     --benchmark-sample-index "${seed}" --benchmark-frames 2

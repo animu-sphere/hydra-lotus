@@ -61,6 +61,8 @@ struct Options {
   // measurements stay comparable.
   Lotus::LightSampling light_sampling = Lotus::LightSampling::Bsdf;
   Motion motion = Motion::Static;
+  // many-lights-v1's light grid side, 1..16; 0 keeps the fixture's.
+  std::uint32_t light_grid = 0;
 };
 
 // The per-sample variance's batches: their count, their samples each, and
@@ -175,6 +177,7 @@ Result Measure(std::string_view id, const Options& options,
       return result;
     }
     auto work = MakeWorkload(id, executable / "assets");
+    if (options.light_grid != 0) SetLightGrid(work.world, options.light_grid);
     Lotus::SceneExtraction extraction;
     const auto snapshot = work.world.Commit();
     auto draw = Lotus::ExtractDrawSummary(snapshot);
@@ -529,7 +532,8 @@ int BenchmarkMain(int argc, char** argv) {
                  "       [--benchmark-integrator <reference|wavefront>] [--benchmark-size <16..4096>]\n"
                  "       [--benchmark-light-sampling <bsdf|mis>] [--benchmark-workload <id>]\n"
                  "       [--benchmark-sample-index <start below 2097152>]\n"
-                 "       [--benchmark-motion <static|camera|transform|deform>]\n";
+                 "       [--benchmark-motion <static|camera|transform|deform>]\n"
+                 "       [--benchmark-light-grid <1..16>, with many-lights-v1]\n";
     return 2;
   }
   options.report = argv[2];
@@ -568,6 +572,13 @@ int BenchmarkMain(int argc, char** argv) {
         std::cerr << "invalid size: " << value << '\n'; return 2;
       }
     }
+    else if (option == "--benchmark-light-grid") {
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.light_grid);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+          options.light_grid == 0 || options.light_grid > kManyLightGrid) {
+        std::cerr << "invalid light grid: " << value << '\n'; return 2;
+      }
+    }
     else if (option == "--benchmark-sample-index") {
       const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.sample_index);
       if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
@@ -583,6 +594,10 @@ int BenchmarkMain(int argc, char** argv) {
       }
       (option == "--benchmark-frames" ? options.frames : options.warmup) = count;
     } else { std::cerr << "unknown benchmark option: " << option << '\n'; return 2; }
+  }
+  if (options.light_grid != 0 && options.workload != "many-lights-v1") {
+    std::cerr << "--benchmark-light-grid requires --benchmark-workload many-lights-v1\n";
+    return 2;
   }
   // Keep timed samples below, and disjoint from, the variance batches.
   if (options.sample_index >= kVarianceSampleIndex ||
@@ -624,7 +639,9 @@ int BenchmarkMain(int argc, char** argv) {
         << (options.size == kReferenceSize && options.motion == Motion::Static &&
             (options.workload.empty() || options.workload == "cornell-v1") ? "true" : "false")
         << ",\"motion\":" << Quote(MotionName(options.motion))
-        << ",\"motion_amplitude\":";
+        << ",\"light_grid\":";
+    if (options.light_grid == 0) out << "null"; else out << options.light_grid;
+    out << ",\"motion_amplitude\":";
     if (options.motion == Motion::Static) out << "null"; else out << kMotionAmplitude;
     out << ",\"sample_index\":" << options.sample_index << ",\"max_bounces\":64,"
            "\"samples_per_frame\":1,\"measured_frames\":" << options.frames
@@ -652,6 +669,8 @@ int BenchmarkMain(int argc, char** argv) {
            "excluding the deformed copy's preparation; extract covers SceneExtraction and the draw summary; update is blocking UpdateScene wall; "
            "GPU phases come from its timestamps; counters are totals over the measured frames. Variance, the Cornell comparison, unchanged "
            "batches and single refits are static only and null.\","
+           "\"light_grid\":\"When set, many-lights-v1's 16 x 16 sphere lights are replaced by a square grid of this side "
+           "over the same footprint, radius and total power; null is the fixture.\","
            "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\","
            "\"wavefront\":\"Wavefront integrator only: rays traced per frame from its queue counts, "
            "rays per camera path, rays per GPU second, bounces run as rounds and per-kernel GPU durations; null for the reference integrator.\"},"
