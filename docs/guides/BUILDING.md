@@ -173,6 +173,38 @@ do not count as new quality observations. The
 [population report](../reports/2026-10-25-quality-populations.md) records
 the evaluation budget, results and remaining limits.
 
+### Other static workloads
+
+Create one finite Reference PT baseline for the selected workload before
+measuring it. For the bounded `textured-v1` comparison, create this manifest
+in PowerShell:
+
+```powershell
+$qualityManifest = Get-Content validation/performance-workloads.json -Raw | ConvertFrom-Json
+$qualityManifest.settings.frames = 4096
+$qualityManifest.settings.runs = 1
+$qualityManifest.workloads = @('textured-v1')
+$qualityManifest | ConvertTo-Json -Depth 8 | Set-Content build/quality-textured-reference-manifest-20261025.json -Encoding utf8
+```
+
+Run the reference, then pass its successful single-attempt `run.json` to the
+quality runner. Use your source/build identity and actual clock conditions:
+
+```sh
+python scripts/performance_baseline.py --manifest build/quality-textured-reference-manifest-20261025.json --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --output build/quality-textured-finite-reference-20261025 --label "ca7edbf plus workload quality runner; unchanged core Release binary; 2026-10-25" --clocks "Unlocked; initial nvidia-smi P0 graphics 1695 MHz memory 8001 MHz; driver 597.16; polling disabled; no clock changes"
+python scripts/quality_curve.py --headless build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless.exe --workload textured-v1 --reference-run build/quality-textured-finite-reference-20261025/run.json --output build/quality-textured-reference-20261025 --label "ca7edbf plus workload quality runner; unchanged core Release binary; 2026-10-25" --clocks "Unlocked; initial nvidia-smi P0 graphics 1695 MHz memory 8001 MHz; driver 597.16; polling disabled; no clock changes" --integrator reference --sample-index 1048576 --sample-index 1114112 --runs 2 --rmse-target 0.2 --rmse-target 0.1 --rmse-target 0.05
+```
+
+After the first campaign finishes, repeat the second command with
+`--integrator wavefront` and a fresh output directory. The reference PFM,
+benchmark JSON, process log and run summary are copied into each campaign's
+`reference/` directory. The [contract](../reference/SCENE.md#fixed-benchmarks)
+defines input validation and range separation. The
+[textured report](../reports/2026-10-25-textured-quality.md) also compares
+a second 4096-spp reference made with the first command plus
+`--sample-index 65536` and output `build/quality-textured-split-reference-20261025`.
+That reference discrepancy is recorded without subtracting it from errors.
+
 ## Reservoir comparison
 
 After the default build, run the separate static/moving many-light comparison:

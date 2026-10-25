@@ -1094,23 +1094,35 @@ not yet cover camera/object motion, temporal/SVGF modes or peak process VRAM.
 Headless per-sample variance remains an efficiency proxy;
 the viewport does no image readback or quality measurement.
 
-The separate [quality runner](../../scripts/quality_curve.py) measures
-`cornell-v1` at 128×128 with MIS and 64 bounces, by default using sample index 2²⁰,
+The separate [quality runner](../../scripts/quality_curve.py) measures a
+shared static workload at 128×128 with MIS and 64 bounces. It defaults to
+`cornell-v1`, using sample index 2²⁰,
 disjoint from the committed BSDF reference's 1024 samples starting at 0.
 Defaults are 1, 16, 64 and 256 spp, eight discarded warmup frames and three
 fresh-process repetitions per checkpoint. `--frames`, `--runs` and `--warmup`
 bound the procedure; `--integrator` selects either existing path tracer.
+`--workload` selects one shared-manifest ID. Outside Cornell,
+`--reference-run` is required: a baseline `run.json` with exactly one
+successful headless Reference PT attempt for that workload, MIS, 64 bounces,
+one sample per frame and matching dimensions. The reference must contain
+more samples than every requested checkpoint. Its image hash must match
+the baseline entry, and the RGB PFM must be finite with matching dimensions.
+Failed/skipped runs, mismatched settings, missing evidence and modified
+images are rejected before launching or creating output. The reference
+run, benchmark report, log and PFM are copied under `reference/` and hashed
+in `quality.json`, preserving provenance alongside the measured curves.
+An explicit reference may also replace Cornell's committed image.
 Repeat `--sample-index N` to measure up to sixteen disjoint sample ranges.
 Every range spans the largest requested checkpoint; duplicates, overlaps
-and intersections with the reference (indices 0–1023), warmup (1 through
-the warmup count) or variance (starting at 2²¹) are rejected before writing
+and intersections with the reference (by default indices 0–1023), warmup
+(1 through the warmup count) or variance (starting at 2²¹) are rejected before writing
 output or launching. Adjacent, nonoverlapping ranges are permitted.
 Each checkpoint runs independently through the shared baseline runner and
 retains its manifests, reports, logs and PFMs. Failed attempts stop the
 campaign without retries; explained capability skips remain skips.
 
-Its `quality.json` (`lotus-quality-curve-v2`) retains executable/reference
-SHA-256 identities, linear-RGB MSE/RMSE over every pixel/channel, image
+Its `quality.json` (`lotus-quality-curve-v2`) identifies the `workload` and
+retains executable/reference SHA-256 identities, linear-RGB MSE/RMSE over every pixel/channel, image
 hashes and sums of the raw measured GPU and blocking render-wall durations.
 GPU sums are null without timestamps. These are rendering times excluding
 startup, warmup, variance and update checks, not whole-process latency.
@@ -1136,9 +1148,11 @@ or below that target. Unreached targets have null samples and times; there
 is no interpolation or extrapolation between measured sample counts.
 This is time to a finite-reference error threshold on one static fixture,
 not error against ground truth or a continuous convergence guarantee.
-The BSDF reference has finite-sample noise; no noise-floor subtraction is
-made. The [single-sequence report](../reports/2026-10-25-quality-curve.md)
-and [population report](../reports/2026-10-25-quality-populations.md)
+Both the committed BSDF and explicit MIS references have finite-sample noise;
+no noise-floor subtraction is made. The
+[single-sequence report](../reports/2026-10-25-quality-curve.md)
+and [population report](../reports/2026-10-25-quality-populations.md), plus
+the [textured comparison](../reports/2026-10-25-textured-quality.md),
 own observations and remaining limits.
 
 Optional `--gpu-telemetry nvidia-smi` writes one `*.gpu.json` per attempted

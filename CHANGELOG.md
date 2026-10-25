@@ -27,6 +27,10 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Static-workload quality curves against validated finite Reference PT
+  baseline images, preserving reference evidence and rejecting overlapping
+  sample ranges or mismatched workload/settings
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
 - Independent-sequence Cornell MIS quality curves with linear-RGB error,
   observed error-threshold rendering times and retained raw evidence;
   configurable headless benchmark sample indices with variance-range checks

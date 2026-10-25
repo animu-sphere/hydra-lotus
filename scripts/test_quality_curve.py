@@ -73,8 +73,9 @@ class QualityCurveTest(unittest.TestCase):
                 "procedure": {"integrator": value("--benchmark-integrator"), "light_sampling": "mis",
                               "width": 128, "height": 128, "measured_frames": frames,
                               "warmup_frames": int(value("--benchmark-warmup")),
-                              "sample_index": int(value("--benchmark-sample-index"))},
-                "scenes": [{"id": "cornell-v1", "status": "pass",
+                              "sample_index": int(value("--benchmark-sample-index")),
+                              "max_bounces": 64, "samples_per_frame": 1},
+                "scenes": [{"id": value("--benchmark-workload"), "status": "pass",
                             "measurements": {"image": image.name, "validation": {"messages": 0},
                                              "gpu_frame_ms": {"raw": [2] * frames},
                                              "render_wall_ms": {"raw": [3] * frames}}}]}
@@ -88,6 +89,85 @@ class QualityCurveTest(unittest.TestCase):
                     "--label", "revision", "--clocks", "unlocked", "--runs", "2",
                     "--frames", "1", "4", *extra])
         return code, process
+
+    def make_reference(self, directory):
+        directory.mkdir()
+        manifest = quality.baseline.load_manifest(quality.ROOT / "validation/performance-workloads.json")
+        manifest["settings"].update(frames=4096, runs=1)
+        manifest["workloads"] = ["textured-v1"]
+        report = directory / "headless-textured-v1-0.json"
+        command = quality.baseline.command(Path("runner"), "headless", "textured-v1", "reference",
+                                            manifest["settings"], report, "reference build")
+        self.successful_run(command + ["--benchmark-sample-index", "0"])
+        log = report.with_suffix(".log")
+        log.write_text("success\n", encoding="utf-8")
+        run = {"schema": "lotus-performance-run-v1", "status": "pass", "integrator": "reference",
+               "manifest": manifest, "runs": [{"adapter": "headless", "workload": "textured-v1",
+                   "run": 0, "exit_code": 0, "status": "pass", "report": report.name,
+                   "log": log.name, "image_sha256": hashlib.sha256(report.with_suffix(".pfm").read_bytes()).hexdigest()}]}
+        path = directory / "run.json"
+        path.write_text(json.dumps(run), encoding="utf-8")
+        return path
+
+    def test_external_reference_selects_workload_and_snapshots_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            reference = self.make_reference(Path(temp) / "input")
+            code, process = self.run_curve(output, self.successful_run,
+                ("--workload", "textured-v1", "--reference-run", str(reference)))
+            self.assertEqual(code, 0)
+            summary = json.loads((output / "quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["workload"], "textured-v1")
+            self.assertEqual(summary["reference"]["samples"], 4096)
+            self.assertEqual(summary["reference"]["sample_index"], 0)
+            self.assertEqual(summary["curves"][0]["points"][0]["rmse"], 0)
+            for call in process.call_args_list:
+                command = call.args[0]
+                self.assertEqual(command[command.index("--benchmark-workload") + 1], "textured-v1")
+            for name, digest in summary["reference"]["evidence_sha256"].items():
+                self.assertEqual(hashlib.sha256((output / "reference" / name).read_bytes()).hexdigest(), digest)
+            self.assertTrue((output / summary["reference"]["run_summary"]).is_file())
+
+    def test_external_reference_rejects_failed_mismatched_and_modified_evidence(self):
+        for fault in ("status", "exit", "integrator", "workload", "size", "depth", "samples",
+                      "hash", "dimensions", "log", "multiple", "path", "overlap", "short"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temp:
+                reference = self.make_reference(Path(temp) / "input")
+                run = json.loads(reference.read_text(encoding="utf-8"))
+                report = reference.parent / run["runs"][0]["report"]
+                data = json.loads(report.read_text(encoding="utf-8"))
+                extra = []
+                if fault == "status": run["status"] = "fail"
+                elif fault == "exit": run["runs"][0]["exit_code"] = 1
+                elif fault == "integrator": run["integrator"] = "wavefront"
+                elif fault == "workload": run["runs"][0]["workload"] = "cornell-v1"
+                elif fault == "size": run["manifest"]["settings"]["size"] = 64
+                elif fault == "depth": data["procedure"]["max_bounces"] = 1
+                elif fault == "samples": data["procedure"]["samples_per_frame"] = 2
+                elif fault == "hash": report.with_suffix(".pfm").write_bytes(b"changed")
+                elif fault == "dimensions":
+                    pfm(report.with_suffix(".pfm"), [0, 0, 0])
+                    run["runs"][0]["image_sha256"] = hashlib.sha256(report.with_suffix(".pfm").read_bytes()).hexdigest()
+                elif fault == "log": report.with_suffix(".log").unlink()
+                elif fault == "multiple": run["runs"].append(run["runs"][0])
+                elif fault == "path": run["runs"][0]["report"] = "../report.json"
+                elif fault == "overlap": extra = ["--sample-index", "4095"]
+                elif fault == "short": extra = ["--frames", "4096"]
+                reference.write_text(json.dumps(run), encoding="utf-8")
+                report.write_text(json.dumps(data), encoding="utf-8")
+                output = Path(temp) / "output"
+                with self.assertRaises(SystemExit):
+                    self.run_curve(output, self.successful_run,
+                        ("--workload", "textured-v1", "--reference-run", str(reference), *extra))
+                self.assertFalse(output.exists())
+
+    def test_external_reference_boundary_accepts_first_disjoint_sample(self):
+        with tempfile.TemporaryDirectory() as temp:
+            reference = self.make_reference(Path(temp) / "input")
+            code, _ = self.run_curve(Path(temp) / "output", self.successful_run,
+                ("--workload", "textured-v1", "--reference-run", str(reference),
+                 "--sample-index", "4096"))
+            self.assertEqual(code, 0)
 
     def test_full_campaign_retains_independent_sequences_and_raw_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -231,6 +311,7 @@ class QualityCurveTest(unittest.TestCase):
 
     def test_invalid_arguments_do_not_launch_or_overwrite(self):
         for extra in (("--frames", "4", "1"), ("--frames", "1", "1"),
+                      ("--workload", "textured-v1"), ("--workload", "unknown-v1"),
                       ("--frames", "4097"), ("--runs", "0"),
                       ("--rmse-target", "nan"), ("--rmse-target", "0"),
                       ("--sample-index", "-1"), ("--sample-index", "0"),

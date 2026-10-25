@@ -34,9 +34,12 @@ when the measurements justify it.
   [Disjoint-sequence quality populations](../reports/2026-10-25-quality-populations.md)
   now separate three measured sample ranges from timing repetitions and
   retain deterministic agreement between integrators.
+  [Textured quality checkpoints](../reports/2026-10-25-textured-quality.md)
+  extend this to a second static fixture with validated finite Reference PT
+  evidence, a split-reference discrepancy and deterministic comparisons.
   Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
-  quality curves beyond Cornell, peak residency and complete viewport repeats;
-  preserve the recorded driver failure when extending the baseline.
+  quality curves for the other fixtures, peak residency and complete viewport
+  repeats; preserve the recorded driver failure when extending the baseline.
 - [ ] **LOTUS-MEMORY-01 — Temporal/SVGF ownership and peak residency (P1).**
   Workstream B, improving existing temporal/denoise paths: inventory buffers,
   owners and lifetimes, GPU residency and host mirrors. Produce 1080p/4K
