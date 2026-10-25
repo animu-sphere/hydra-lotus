@@ -7,6 +7,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -196,6 +197,8 @@ Result Measure(std::string_view id, const Options& options,
     const auto before = renderer->UpdateScene({});
     Check(before);
     std::vector<double> gpu, wall;
+    // The blocking RenderScene's host phases per frame, in FrameHostTimings order.
+    std::array<std::vector<double>, 6> host;
     // The wavefront integrator's rays and kernel durations per frame.
     std::vector<double> rays, rounds, camera, intersect, shade, tail;
     // Each motion frame's world edit and Commit, extraction, blocking
@@ -257,6 +260,15 @@ Result Measure(std::string_view id, const Options& options,
       frame = renderer->RenderScene(draw, target, 1, settings);
       wall.push_back(Milliseconds(start));
       Check(frame);
+      const auto& phases = frame.host_timings;
+      const std::array<double, 6> split{phases.prepare_ms, phases.record_ms,
+          phases.submit_ms, phases.wait_ms, phases.readback_ms, phases.results_ms};
+      Require(std::all_of(split.begin(), split.end(),
+                  [](double ms) { return std::isfinite(ms) && ms >= 0; }) &&
+          std::accumulate(split.begin(), split.end(), 0.0) <= wall.back(),
+          "host phases are invalid or exceed the frame's wall time");
+      for (std::size_t phase = 0; phase < split.size(); ++phase)
+        host[phase].push_back(split[phase]);
       Require(frame.samples_per_pixel == (moving ? 1 : i + 1),
           "accumulation sample count mismatch");
       if (frame.primary_ray_timestamp_available) {
@@ -436,6 +448,14 @@ Result Measure(std::string_view id, const Options& options,
       out << variance * (sorted[(sorted.size() - 1) / 2] + sorted[sorted.size() / 2]) * 0.5;
     }
     out << ",\"render_wall_ms\":"; Series(out, wall);
+    out << ",\"render_host_ms\":{";
+    constexpr const char* kHostPhases[] = {
+        "prepare", "record", "submit", "wait", "readback", "results"};
+    for (std::size_t phase = 0; phase < host.size(); ++phase) {
+      out << (phase ? "," : "") << Quote(kHostPhases[phase]) << ':';
+      Series(out, host[phase]);
+    }
+    out << '}';
     out << ",\"pixel_samples_per_second_gpu\":";
     if (gpu.empty()) out << "null";
     else out << double(pixels) * options.frames * 1000 /
@@ -618,6 +638,9 @@ int BenchmarkMain(int argc, char** argv) {
            "\"metric_notes\":{"
            "\"gpu_frame_ms\":\"One sample pass, including clears, excluding readback; one call per sample.\","
            "\"render_wall_ms\":\"Blocking RenderScene, including submit, fence wait, readback and product copies.\","
+           "\"render_host_ms\":\"The same calls' host phases: target/descriptor preparation and constant writes, command recording, "
+           "fence reset and queue submission, fence wait, readback invalidation and product copies, and results/evidence assembly. "
+           "Their sum excludes RenderScene's argument checks; enabled validation layers add to the phases they intercept.\","
            "\"pixel_samples_per_second\":\"Full-frame pixel samples divided by total measured GPU or wall time, including camera misses.\","
            "\"per_sample_variance\":\"Mean over pixels and channels of each value's variance across the variance batches, times their samples each.\","
            "\"variance_gpu_ms\":\"Per-sample variance times the median GPU frame time: proportional to the time to equal quality; null without timestamps.\","
@@ -636,13 +659,13 @@ int BenchmarkMain(int argc, char** argv) {
     // The wavefront integrator counts its rays; the reference shader does not.
     if (!Wavefront(options))
       out << "\"rays_per_second\":null,\"average_path_depth\":null,";
-    out << "\"total_vram_bytes\":null,\"cpu_render_submit_ms\":null},"
+    out << "\"total_vram_bytes\":null},"
            "\"unavailable_reasons\":{";
     if (!Wavefront(options))
       out << "\"rays_per_second\":\"Reference shader has no ray counter; pixel samples are not ray counts.\","
              "\"average_path_depth\":\"Reference shader has no path-depth counter.\",";
-    out << "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM.\","
-           "\"cpu_render_submit_ms\":\"Blocking API does not separate CPU submission from GPU wait/readback.\"},\"scenes\":[";
+    out << "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM.\"},"
+           "\"scenes\":[";
     for (std::size_t i = 0; i < results.size(); ++i) {
       const auto& result = results[i];
       out << (i ? "," : "") << "{\"id\":" << Quote(result.id) << ",\"status\":"

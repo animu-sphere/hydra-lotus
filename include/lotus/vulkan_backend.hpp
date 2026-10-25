@@ -67,6 +67,26 @@ struct WavefrontTimings {
   double tail_gpu_ms = 0.0;
 };
 
+// Host wall time of a passing frame call by phase, from a steady clock.
+// Their sum falls short of the caller's wall time by the argument checks
+// before them and the return of the evidence.
+struct FrameHostTimings {
+  // Target, accumulation, queue and descriptor preparation, plus each
+  // submission's constant writes.
+  double prepare_ms = 0.0;
+  // Command buffer recording, the first submission's and any re-recording.
+  double record_ms = 0.0;
+  // vkResetFences and vkQueueSubmit, every submission together.
+  double submit_ms = 0.0;
+  // vkWaitForFences: the GPU work and its scheduling, as the host sees it.
+  double wait_ms = 0.0;
+  // Readback invalidation and the colour and depth product copies; 0 when
+  // the target is not read back.
+  double readback_ms = 0.0;
+  // Timestamp, queue and reservoir results and the evidence assembly.
+  double results_ms = 0.0;
+};
+
 struct TemporalProducts {
   bool available = false;
   bool history_available = false;
@@ -213,6 +233,7 @@ struct GpuFrameEvidence {
   // wavefront_path_counts is empty.
   std::uint32_t wavefront_rounds = 0;
   WavefrontTimings wavefront_timings;
+  FrameHostTimings host_timings;
   TemporalProducts temporal;
   RestirProducts restir;
 };

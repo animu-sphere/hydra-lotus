@@ -152,6 +152,20 @@ python scripts/performance_baseline.py --headless build/cy2026-windows-x86_64-py
 A single fixture can be measured directly with
 `lotus-headless --benchmark <json> --benchmark-workload <id> --benchmark-motion <kind>`.
 
+### Host phases of a frame
+
+Each report's `render_host_ms` splits the blocking `RenderScene` wall time
+into preparation, recording, submission, fence wait, readback and results
+([contract](../reference/SCENE.md#fixed-benchmarks)). Validation layers add
+to most of them; the [readback evaluation](../reports/2026-10-25-frame-host-split.md)
+also measured single fixtures without them:
+
+```sh
+VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/host-split.json --benchmark-workload cornell-v1 --benchmark-light-sampling mis --benchmark-size 512
+```
+
+The report's `validation.enabled` records which condition applied.
+
 ## Cornell quality checkpoints
 
 After the default build, measure error against the committed reference with

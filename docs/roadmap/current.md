@@ -42,6 +42,9 @@ when the measurements justify it.
   [Changed-section staging](../reports/2026-10-25-changed-section-staging.md)
   was adopted: deformation no longer restages unchanged triangle indices
   (67% fewer staged bytes and about 20% less update wall on the large mesh).
+  [Frame host phases](../reports/2026-10-25-frame-host-split.md) explain the
+  blocking frame overhead; host-cached readback was adopted, removing about
+  1.1 ms of readback from each 128x128 frame with identical images.
   Remaining: controlled timing, Hydra/viewport motion, temporal/SVGF modes,
   quality curves for the other fixtures, peak residency and complete viewport
   repeats; preserve the recorded driver failure when extending the baseline.

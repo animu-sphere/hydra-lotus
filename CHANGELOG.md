@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Fixed
 
+- Allocate frame-product, temporal and reservoir readback buffers from
+  host-cached memory where the device offers it, so reading back a frame
+  no longer performs uncached bus reads; a blocking 128x128 headless frame
+  read back in about 1.1 ms before and 0.01 ms after
+  ([contract](docs/reference/SCENE.md#primary-rays),
+  [evidence](docs/reports/2026-10-25-frame-host-split.md)).
+
 - Preserve shared-baseline attempt records and logs on process launch
   failure or timeout, including partial output and reports; reject duplicate
   workload selections before they can overwrite evidence
@@ -32,6 +39,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- `GpuFrameEvidence::host_timings` and the benchmark's `render_host_ms`
+  split a blocking frame's host wall time into preparation, recording,
+  submission, fence wait, readback and results; CPU render-submit time is
+  no longer reported as unavailable
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
 - Headless camera, rigid-transform and deformation motion for the shared
   benchmark workloads (`--benchmark-motion`, runner `--motion`), recording
   per-frame authoring, extraction, blocking scene-update wall time,
