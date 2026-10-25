@@ -400,6 +400,9 @@ struct GpuSceneStats {
   // Device bytes of the light table, its per-instance offsets and analytic
   // light records included.
   std::uint64_t light_bytes = 0;
+  // Of those, the analytic-light crossing hierarchy's nodes and the distant
+  // lights' indices.
+  std::uint64_t light_hierarchy_bytes = 0;
   // Device bytes of the environment image's record and sampling
   // distribution; its texels count among the textures'.
   std::uint64_t environment_bytes = 0;
@@ -596,6 +599,18 @@ enum class LightSampling {
   RestirInitial,
 };
 
+// How a ray finds the analytic lights it crosses, whose emission BSDF
+// sampling adds. Both find the same lights and weigh them alike; only the
+// order in which a ray's three or more crossed lights are summed differs.
+enum class LightCrossing {
+  // A binary hierarchy over the sphere, rect and disk lights' bounds, which
+  // the GPU scene builds with the light table; distant lights are tested
+  // on escape.
+  Hierarchy,
+  // Every analytic light, in order: the evaluation baseline.
+  Linear,
+};
+
 // Light-table selection for fresh reservoir candidates. The payload mapping
 // and target measure stay fixed; only the proposal probability changes.
 enum class RestirProposal {
@@ -615,6 +630,7 @@ struct PathTracingSettings {
   Integrator integrator = Integrator::Reference;
   // Changing it restarts the accumulation.
   LightSampling light_sampling = LightSampling::Mis;
+  LightCrossing light_crossing = LightCrossing::Hierarchy;
   // The random sequence of an accumulation's first sample; its k-th sample
   // uses sample_index + k. With the pixel's coordinates it selects each
   // sample's random numbers: the same index, scene, camera and target give

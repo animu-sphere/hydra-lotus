@@ -23,6 +23,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Rays find the analytic lights they cross through a binary hierarchy over
+  the sphere, rect and disk lights' bounds, built with the light table,
+  instead of testing every light: a 256-light `many-lights-v1` frame's
+  scene pass is 5.3–8.0x faster under both integrators, with images equal
+  to rounding and no measured low-light-count regression.
+  `PathTracingSettings::light_crossing` and `--benchmark-light-crossing`
+  keep the linear loop as a baseline, and
+  `GpuSceneStats::light_hierarchy_bytes` reports the hierarchy's size
+  ([contract](docs/reference/SCENE.md#path-tracing),
+  [evidence](docs/reports/2026-10-25-light-crossing-hierarchy.md)).
 - Compatible geometry replacements that keep their buffer layout stage and
   copy only the sections whose contents changed, so deformation no longer
   restages unchanged triangle indices

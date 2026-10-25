@@ -63,6 +63,7 @@ struct Options {
   Motion motion = Motion::Static;
   // many-lights-v1's light grid side, 1..16; 0 keeps the fixture's.
   std::uint32_t light_grid = 0;
+  Lotus::LightCrossing light_crossing = Lotus::LightCrossing::Hierarchy;
 };
 
 // The per-sample variance's batches: their count, their samples each, and
@@ -194,6 +195,7 @@ Result Measure(std::string_view id, const Options& options,
     Lotus::PathTracingSettings settings;
     settings.integrator = options.integrator;
     settings.light_sampling = options.light_sampling;
+    settings.light_crossing = options.light_crossing;
     settings.sample_index = WarmupSampleIndex(options);
     for (std::uint32_t i = 0; i < options.warmup; ++i)
       Check(renderer->RenderScene(draw, target, 1, settings));
@@ -437,6 +439,7 @@ Result Measure(std::string_view id, const Options& options,
         << initial.stats.resident_textures << ",\"texture_bytes\":" << initial.stats.texture_bytes
         << ",\"emissive_triangles\":" << initial.stats.emissive_triangles
         << ",\"analytic_lights\":" << initial.stats.analytic_lights
+        << ",\"light_hierarchy_bytes\":" << initial.stats.light_hierarchy_bytes
         << ",\"environment_sampled\":" << (initial.stats.environment_sampled ? "true" : "false")
         << "},\"gpu_frame_ms\":";
     Series(out, gpu);
@@ -533,7 +536,8 @@ int BenchmarkMain(int argc, char** argv) {
                  "       [--benchmark-light-sampling <bsdf|mis>] [--benchmark-workload <id>]\n"
                  "       [--benchmark-sample-index <start below 2097152>]\n"
                  "       [--benchmark-motion <static|camera|transform|deform>]\n"
-                 "       [--benchmark-light-grid <1..16>, with many-lights-v1]\n";
+                 "       [--benchmark-light-grid <1..16>, with many-lights-v1]\n"
+                 "       [--benchmark-light-crossing <hierarchy|linear>]\n";
     return 2;
   }
   options.report = argv[2];
@@ -557,6 +561,11 @@ int BenchmarkMain(int argc, char** argv) {
       if (value == "bsdf") options.light_sampling = Lotus::LightSampling::Bsdf;
       else if (value == "mis") options.light_sampling = Lotus::LightSampling::Mis;
       else { std::cerr << "invalid light sampling: " << value << '\n'; return 2; }
+    }
+    else if (option == "--benchmark-light-crossing") {
+      if (value == "hierarchy") options.light_crossing = Lotus::LightCrossing::Hierarchy;
+      else if (value == "linear") options.light_crossing = Lotus::LightCrossing::Linear;
+      else { std::cerr << "invalid light crossing: " << value << '\n'; return 2; }
     }
     else if (option == "--benchmark-motion") {
       if (value == "static") options.motion = Motion::Static;
@@ -634,6 +643,8 @@ int BenchmarkMain(int argc, char** argv) {
         << "},\"procedure\":{\"integrator\":"
         << Quote(Wavefront(options) ? "wavefront" : "reference")
         << ",\"light_sampling\":" << Quote(Mis(options) ? "mis" : "bsdf")
+        << ",\"light_crossing\":"
+        << Quote(options.light_crossing == Lotus::LightCrossing::Linear ? "linear" : "hierarchy")
         << ",\"width\":" << options.size << ",\"height\":" << options.size
         << ",\"cornell_reference_compared\":"
         << (options.size == kReferenceSize && options.motion == Motion::Static &&
@@ -671,6 +682,9 @@ int BenchmarkMain(int argc, char** argv) {
            "batches and single refits are static only and null.\","
            "\"light_grid\":\"When set, many-lights-v1's 16 x 16 sphere lights are replaced by a square grid of this side "
            "over the same footprint, radius and total power; null is the fixture.\","
+           "\"light_crossing\":\"How rays find the analytic lights they cross: the GPU scene's hierarchy over the bounded "
+           "lights' bounds, or every light in order (the evaluation baseline). light_hierarchy_bytes counts the hierarchy's "
+           "nodes and distant-light indices.\","
            "\"unavailable_gpu_timestamps\":\"Null GPU durations/rates indicate no timestamp support; wall measurements remain available.\","
            "\"wavefront\":\"Wavefront integrator only: rays traced per frame from its queue counts, "
            "rays per camera path, rays per GPU second, bounces run as rounds and per-kernel GPU durations; null for the reference integrator.\"},"

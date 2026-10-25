@@ -125,6 +125,21 @@ public struct EnvironmentRecord {
 };
 static const uint64_t kEnvironmentRecordBytes = 80;
 
+// Mirrors GpuLightNode in gpu_scene.hpp: one interior node of the crossing
+// hierarchy, holding its two children's bounds; w of a low corner is the
+// child as bits.
+public struct LightNode {
+  public float4 low0;
+  public float4 high0;
+  public float4 low1;
+  public float4 high1;
+};
+public static const uint kLightLeaf = 0x80000000u;
+// Only a root over one light has an empty second child.
+public static const uint kNoLightChild = 0xFFFFFFFFu;
+// The hierarchy's depth is at most ceil(log2(lights)).
+static const uint kLightStackSize = 32;
+
 public static const uint kSphereLight = 0;
 public static const uint kRectLight = 1;
 public static const uint kDiskLight = 2;
@@ -177,6 +192,11 @@ public struct PathConstants {
   public uint restir_spatial;
   public uint restir_spatial_radius;
   public uint restir_proposal;
+  // The crossing hierarchy's nodes, followed by the distant lights'
+  // indices, or 0 to test every analytic light in order.
+  public uint64_t light_nodes;
+  public uint light_node_count;
+  public uint distant_count;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -848,87 +868,170 @@ public float EmitterPdf(Hit hit, float area) {
   return path_constants.lights[first + hit.primitive].pdf / area;
 }
 
+// The emission of analytic light `index` if a ray from `origin` along unit
+// `direction` crosses it before `distance`, as the ray sees it: a sphere's
+// near side from outside it, a rect's or disk's emitting side, and, for a
+// ray that escapes the scene, a distant light whose cone holds its
+// direction. With `weigh`, it is weighed against light sampling's density
+// for the direction by the power heuristic, the ray's own density being
+// `pdf`.
+Spectrum CrossedLight(uint index, float3 origin, float3 direction,
+    float distance, bool escaped, bool weigh, float pdf) {
+  const AnalyticLightRecord light = path_constants.analytic_lights[index];
+  const uint shape = light.shape.x;
+  // The density with which light sampling finds this direction.
+  float light_pdf = 0.0;
+  if (shape == kSphereLight) {
+    // The nearer root without cancellation (Haines et al., "Precision
+    // Improvements for Ray/Sphere Intersection", Ray Tracing Gems, 2019).
+    const float radius = light.position.w;
+    const float3 offset = origin - light.position.xyz;
+    const float c = dot(offset, offset) - radius * radius;
+    const float b = -dot(offset, direction);
+    const float3 perpendicular = offset + b * direction;
+    const float discriminant =
+        radius * radius - dot(perpendicular, perpendicular);
+    // Only from outside, towards the sphere.
+    if (!(c > 0.0) || !(b > 0.0) || discriminant < 0.0) {
+      return SpectrumConstant(0.0);
+    }
+    const float t = c / (b + sqrt(discriminant));
+    if (!(t < distance)) {
+      return SpectrumConstant(0.0);
+    }
+    light_pdf = SphereConePdf(radius * radius / dot(offset, offset));
+  } else if (shape == kRectLight || shape == kDiskLight) {
+    const float facing = dot(direction, light.normal.xyz);
+    if (!(facing < 0.0)) {
+      return SpectrumConstant(0.0);
+    }
+    const float t = dot(light.position.xyz - origin, light.normal.xyz) / facing;
+    if (!(t > 0.0) || !(t < distance)) {
+      return SpectrumConstant(0.0);
+    }
+    // The point's coordinates along the half axes.
+    const float3 q = origin + t * direction - light.position.xyz;
+    const float3 u = light.axis_u.xyz;
+    const float3 v = light.axis_v.xyz;
+    const float uu = dot(u, u);
+    const float uv = dot(u, v);
+    const float vv = dot(v, v);
+    const float qu = dot(q, u);
+    const float qv = dot(q, v);
+    const float determinant = uu * vv - uv * uv;
+    const float a = (qu * vv - qv * uv) / determinant;
+    const float b = (qv * uu - qu * uv) / determinant;
+    if (shape == kRectLight ? !(abs(a) <= 1.0 && abs(b) <= 1.0)
+                            : !(a * a + b * b <= 1.0)) {
+      return SpectrumConstant(0.0);
+    }
+    light_pdf = t * t / (-facing * light.normal.w);
+  } else if (shape == kDistantLight && escaped) {
+    const float3 toward = light.axis_u.xyz;
+    const float one_minus_cos = light.axis_u.w;
+    const float cosine = dot(direction, toward);
+    // Within the cone, by its sine where the cosine is too coarse.
+    if (one_minus_cos <= 1.0) {
+      const float3 across = cross(direction, toward);
+      if (!(cosine > 0.0) ||
+          !(dot(across, across) <= one_minus_cos * (2.0 - one_minus_cos))) {
+        return SpectrumConstant(0.0);
+      }
+    } else if (!(cosine >= 1.0 - one_minus_cos)) {
+      return SpectrumConstant(0.0);
+    }
+    light_pdf = 1.0 / (2.0 * kPi * one_minus_cos);
+  } else {
+    return SpectrumConstant(0.0);
+  }
+  const float weight =
+      weigh ? PowerHeuristic(pdf, light.radiance.w * light_pdf) : 1.0;
+  return SpectrumFromRgb(light.radiance.xyz) * weight;
+}
+
+// Whether the segment [0, distance] of a ray from `origin`, with per-axis
+// inverse direction `inverse`, overlaps the box [low, high].
+bool OverlapsBox(float3 low, float3 high, float3 origin, float3 inverse,
+    float distance) {
+  const float3 t0 = (low - origin) * inverse;
+  const float3 t1 = (high - origin) * inverse;
+  const float3 near = min(t0, t1);
+  const float3 far = max(t0, t1);
+  return max(max(near.x, near.y), max(near.z, 0.0)) <=
+         min(min(far.x, far.y), min(far.z, distance));
+}
+
 // The emission of the analytic lights that a ray from `origin` along unit
-// `direction` crosses before `distance`, as the ray sees it: a sphere's near
-// side from outside it, a rect's or disk's emitting side, and, for a ray
-// that escapes the scene, the distant lights whose cone holds its direction.
-// Lights neither block rays nor each other. With `weigh`, each is weighed
-// against light sampling's density for the direction by the power
-// heuristic, the ray's own density being `pdf`.
+// `direction` crosses before `distance`, each as CrossedLight finds it.
+// Lights neither block rays nor each other. With a crossing hierarchy, its
+// leaves are the sphere, rect and disk lights whose bounds the ray
+// overlaps, and only an escaping ray tests the distant lights.
 public Spectrum CrossedLights(float3 origin, float3 direction, float distance,
     bool escaped, bool weigh, float pdf) {
   Spectrum sum = SpectrumConstant(0.0);
-  for (uint index = 0; index < path_constants.analytic_count; ++index) {
-    const AnalyticLightRecord light = path_constants.analytic_lights[index];
-    const uint shape = light.shape.x;
-    // The density with which light sampling finds this direction.
-    float light_pdf = 0.0;
-    if (shape == kSphereLight) {
-      // The nearer root without cancellation (Haines et al., "Precision
-      // Improvements for Ray/Sphere Intersection", Ray Tracing Gems, 2019).
-      const float radius = light.position.w;
-      const float3 offset = origin - light.position.xyz;
-      const float c = dot(offset, offset) - radius * radius;
-      const float b = -dot(offset, direction);
-      const float3 perpendicular = offset + b * direction;
-      const float discriminant =
-          radius * radius - dot(perpendicular, perpendicular);
-      // Only from outside, towards the sphere.
-      if (!(c > 0.0) || !(b > 0.0) || discriminant < 0.0) {
-        continue;
-      }
-      const float t = c / (b + sqrt(discriminant));
-      if (!(t < distance)) {
-        continue;
-      }
-      light_pdf = SphereConePdf(radius * radius / dot(offset, offset));
-    } else if (shape == kRectLight || shape == kDiskLight) {
-      const float facing = dot(direction, light.normal.xyz);
-      if (!(facing < 0.0)) {
-        continue;
-      }
-      const float t = dot(light.position.xyz - origin, light.normal.xyz) / facing;
-      if (!(t > 0.0) || !(t < distance)) {
-        continue;
-      }
-      // The point's coordinates along the half axes.
-      const float3 q = origin + t * direction - light.position.xyz;
-      const float3 u = light.axis_u.xyz;
-      const float3 v = light.axis_v.xyz;
-      const float uu = dot(u, u);
-      const float uv = dot(u, v);
-      const float vv = dot(v, v);
-      const float qu = dot(q, u);
-      const float qv = dot(q, v);
-      const float determinant = uu * vv - uv * uv;
-      const float a = (qu * vv - qv * uv) / determinant;
-      const float b = (qv * uu - qu * uv) / determinant;
-      if (shape == kRectLight ? !(abs(a) <= 1.0 && abs(b) <= 1.0)
-                              : !(a * a + b * b <= 1.0)) {
-        continue;
-      }
-      light_pdf = t * t / (-facing * light.normal.w);
-    } else if (shape == kDistantLight && escaped) {
-      const float3 toward = light.axis_u.xyz;
-      const float one_minus_cos = light.axis_u.w;
-      const float cosine = dot(direction, toward);
-      // Within the cone, by its sine where the cosine is too coarse.
-      if (one_minus_cos <= 1.0) {
-        const float3 across = cross(direction, toward);
-        if (!(cosine > 0.0) ||
-            !(dot(across, across) <= one_minus_cos * (2.0 - one_minus_cos))) {
-          continue;
-        }
-      } else if (!(cosine >= 1.0 - one_minus_cos)) {
-        continue;
-      }
-      light_pdf = 1.0 / (2.0 * kPi * one_minus_cos);
-    } else {
-      continue;
+  if (path_constants.light_nodes == 0) {
+    for (uint index = 0; index < path_constants.analytic_count; ++index) {
+      sum = sum + CrossedLight(index, origin, direction, distance, escaped,
+          weigh, pdf);
     }
-    const float weight =
-        weigh ? PowerHeuristic(pdf, light.radiance.w * light_pdf) : 1.0;
-    sum = sum + SpectrumFromRgb(light.radiance.xyz) * weight;
+    return sum;
+  }
+  LightNode* nodes = (LightNode*)path_constants.light_nodes;
+  if (path_constants.light_node_count != 0) {
+    // A zero component's inverse is a large finite value of its sign, so
+    // that the slab products stay ordered instead of 0 * inf.
+    const float3 inverse = float3(
+        1.0 / (abs(direction.x) > 1e-30 ? direction.x : (direction.x < 0.0 ? -1e-30 : 1e-30)),
+        1.0 / (abs(direction.y) > 1e-30 ? direction.y : (direction.y < 0.0 ? -1e-30 : 1e-30)),
+        1.0 / (abs(direction.z) > 1e-30 ? direction.z : (direction.z < 0.0 ? -1e-30 : 1e-30)));
+    uint stack[kLightStackSize];
+    uint depth = 0;
+    uint node = 0;
+    while (true) {
+      const LightNode current = nodes[node];
+      const uint child0 = asuint(current.low0.w);
+      const uint child1 = asuint(current.low1.w);
+      const bool enter0 = OverlapsBox(current.low0.xyz, current.high0.xyz,
+          origin, inverse, distance);
+      const bool enter1 = child1 != kNoLightChild &&
+          OverlapsBox(current.low1.xyz, current.high1.xyz, origin, inverse,
+              distance);
+      uint next = 0xFFFFFFFFu;
+      if (enter0) {
+        if ((child0 & kLightLeaf) != 0) {
+          sum = sum + CrossedLight(child0 & ~kLightLeaf, origin, direction,
+              distance, escaped, weigh, pdf);
+        } else {
+          next = child0;
+        }
+      }
+      if (enter1) {
+        if ((child1 & kLightLeaf) != 0) {
+          sum = sum + CrossedLight(child1 & ~kLightLeaf, origin, direction,
+              distance, escaped, weigh, pdf);
+        } else if (next == 0xFFFFFFFFu) {
+          next = child1;
+        } else {
+          stack[depth++] = child1;
+        }
+      }
+      if (next == 0xFFFFFFFFu) {
+        if (depth == 0) {
+          break;
+        }
+        next = stack[--depth];
+      }
+      node = next;
+    }
+  }
+  if (escaped) {
+    uint* distant =
+        (uint*)(path_constants.light_nodes +
+                uint64_t(path_constants.light_node_count) * 64);
+    for (uint i = 0; i < path_constants.distant_count; ++i) {
+      sum = sum + CrossedLight(distant[i], origin, direction, distance,
+          escaped, weigh, pdf);
+    }
   }
   return sum;
 }
