@@ -54,6 +54,15 @@ struct GeometryLayout {
   VkDeviceSize normal_offset = 0;
   std::vector<VkDeviceSize> texcoord_offsets;
   VkDeviceSize size = 0;
+
+  bool operator==(const GeometryLayout&) const = default;
+};
+
+// A range of a geometry buffer and the CPU contents an upload writes to it.
+struct GeometrySection {
+  VkDeviceSize offset = 0;
+  const void* data = nullptr;
+  VkDeviceSize size = 0;
 };
 
 GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
@@ -71,6 +80,34 @@ GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
     layout.size = layout.texcoord_offsets.back() + texcoords.size() * kVec2Bytes;
   }
   return layout;
+}
+
+// The sections whose contents differ between two geometries that share
+// `layout`. Their triangles are equal by the retention rule; padding is
+// already zero on the device.
+std::vector<GeometrySection> ChangedSections(const MeshGeometry& previous,
+    const MeshGeometry& next, const GeometryLayout& layout, bool moved) {
+  std::vector<GeometrySection> sections;
+  if (moved) {
+    sections.push_back({0, next.positions.data(),
+        next.positions.size() * kVec3Bytes});
+  }
+  if (layout.normal_offset != 0 && previous.normals != next.normals) {
+    sections.push_back({layout.normal_offset, next.normals.data(),
+        next.normals.size() * kVec3Bytes});
+  }
+  auto was = previous.texcoords.begin();
+  std::size_t set = 0;
+  for (const auto& [name, texcoords] : next.texcoords) {
+    (void)name;
+    if (was->second != texcoords) {
+      sections.push_back({layout.texcoord_offsets[set], texcoords.data(),
+          texcoords.size() * kVec2Bytes});
+    }
+    ++was;
+    ++set;
+  }
+  return sections;
 }
 
 // The light table's estimate of a material's emitted radiance per unit
@@ -1343,7 +1380,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   // Retain compatible geometry in its slot before applying ordinary releases.
   // The immutable CPU sources change identity; their GPU storage and BLAS do
   // not. Exact indices and vertex count are required by Vulkan's update rules.
+  // A retained geometry with an unchanged layout stages only its changed
+  // sections; one whose layout changed is staged whole.
   std::unordered_map<const MeshGeometry*, std::uint32_t> retained;
+  std::unordered_map<const MeshGeometry*, std::vector<GeometrySection>> changed;
   std::unordered_set<const MeshGeometry*> retained_sources;
   std::unordered_set<std::uint64_t> changed_blas;
   for (const auto& replacement : update.geometry_replacements) {
@@ -1356,8 +1396,14 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     const auto slot = slot_of_.at(replacement.previous);
     retained.emplace(replacement.replacement, slot);
     retained_sources.insert(replacement.previous);
-    if (previous.positions != next.positions) {
+    const bool moved = previous.positions != next.positions;
+    if (moved) {
       changed_blas.insert(slots_[slot].blas_id);
+    }
+    const GeometryLayout layout = LayOut(next, index_alignment_);
+    if (layout == LayOut(previous, index_alignment_)) {
+      changed.emplace(replacement.replacement,
+          ChangedSections(previous, next, layout, moved));
     }
     ++stats_.geometry_releases;
   }
@@ -1385,7 +1431,14 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   }
   staging_bytes = AlignUp(staging_bytes, kTexelAlignment);
   for (const auto& geometry : update.geometry_uploads) {
-    staging_bytes += LayOut(*geometry, index_alignment_).size;
+    const auto sections = changed.find(geometry.get());
+    if (sections == changed.end()) {
+      staging_bytes += LayOut(*geometry, index_alignment_).size;
+      continue;
+    }
+    for (const GeometrySection& section : sections->second) {
+      staging_bytes += section.size;
+    }
   }
   const VkDeviceSize instance_bytes =
       update.instances.size() * kInstanceBytes;
@@ -1533,23 +1586,33 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         return false;
       }
     }
-    // Zeroed padding keeps the device contents deterministic.
-    std::memset(staging + offset, 0, size);
-    std::memcpy(staging + offset, source->positions.data(), position_bytes);
-    std::memcpy(staging + offset + geometry.index_offset,
-        source->triangles.data(), triangle_bytes);
-    if (geometry.normal_offset != 0) {
-      std::memcpy(staging + offset + geometry.normal_offset,
-          source->normals.data(), source->normals.size() * kVec3Bytes);
+    if (const auto sections = changed.find(source.get());
+        sections != changed.end()) {
+      for (const GeometrySection& section : sections->second) {
+        std::memcpy(staging + offset, section.data, section.size);
+        copies.push_back({geometry.buffer.buffer,
+            VkBufferCopy{offset, section.offset, section.size}});
+        offset += section.size;
+      }
+    } else {
+      // Zeroed padding keeps the device contents deterministic.
+      std::memset(staging + offset, 0, size);
+      std::memcpy(staging + offset, source->positions.data(), position_bytes);
+      std::memcpy(staging + offset + geometry.index_offset,
+          source->triangles.data(), triangle_bytes);
+      if (geometry.normal_offset != 0) {
+        std::memcpy(staging + offset + geometry.normal_offset,
+            source->normals.data(), source->normals.size() * kVec3Bytes);
+      }
+      std::size_t set = 0;
+      for (const auto& [name, texcoords] : source->texcoords) {
+        (void)name;
+        std::memcpy(staging + offset + geometry.texcoord_offsets[set++],
+            texcoords.data(), texcoords.size() * kVec2Bytes);
+      }
+      copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
+      offset += size;
     }
-    std::size_t set = 0;
-    for (const auto& [name, texcoords] : source->texcoords) {
-      (void)name;
-      std::memcpy(staging + offset + geometry.texcoord_offsets[set++],
-          texcoords.data(), texcoords.size() * kVec2Bytes);
-    }
-    copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
-    offset += size;
 
     if (acceleration_ && (!reuse || refit)) {
       BlasBuild& build = blas_builds.emplace_back();

@@ -184,7 +184,50 @@ void CheckReplacementPlans(Resources& r, VkPhysicalDevice physical, std::uint32_
               scene.Stats().blas_builds == before.blas_builds &&
               scene.Stats().blas_updates == before.blas_updates + 2,
       "replacement permutation lost geometry or rebuilt compatible BLASes");
+  // A compatible replacement stages only the sections that changed, unless
+  // its layout changed. The plans differ only in their geometry bytes.
+  auto replace = [&](std::shared_ptr<Lotus::MeshGeometry>& previous,
+                     std::shared_ptr<Lotus::MeshGeometry> next) {
+    const auto was = scene.Stats().uploaded_bytes;
+    Lotus::SceneUpdate edit;
+    edit.geometry_releases = {previous.get()};
+    edit.geometry_uploads = {next};
+    edit.geometry_replacements = {{previous.get(), next.get()}};
+    edit.instances_changed = true;
+    edit.instances = {{a.get()}, {next.get()}};
+    const bool edited = scene.Apply(edit, detail);
+    Require(edited, detail);
+    previous = std::move(next);
+    return scene.Stats().uploaded_bytes - was;
+  };
+  auto c = std::make_shared<Lotus::MeshGeometry>(*b);
+  c->positions[1][2] = 1;
+  c->normals = {{0, 0, 1}, {0, 0, 1}, {0, 0, 1}};
+  c->texcoords["st"] = {{0, 0}, {1, 0}, {0, 1}};
+  const auto relaid = replace(b, c);
+  auto d = std::make_shared<Lotus::MeshGeometry>(*b);
+  d->positions[2][2] = 1;
+  const auto positions = replace(b, d);
+  auto e = std::make_shared<Lotus::MeshGeometry>(*b);
+  e->positions[0][2] = 2;
+  e->normals[0] = {0, 1, 0};
+  e->texcoords["st"][0] = {1, 1};
+  const auto attributes = replace(b, e);
+  const bool reread = scene.ReadBack(contents, detail);
+  Require(reread, detail);
+  const auto& resident = contents.geometries[0];
+  Require(attributes - positions ==
+                  b->normals.size() * 12 + b->texcoords["st"].size() * 8 &&
+              relaid > attributes && resident.positions == b->positions &&
+              resident.triangles == b->triangles && resident.normals == b->normals &&
+              resident.texcoords.size() == 1 &&
+              resident.texcoords[0] == b->texcoords["st"] &&
+              scene.Stats().blas_builds == before.blas_builds &&
+              scene.Stats().blas_updates == before.blas_updates + 5,
+      "compatible replacement staged unchanged sections or lost contents");
   std::cout << "PASS: replacement rejection is atomic; source permutations refit and read back correctly\n";
+  std::cout << "PASS: compatible replacements stage changed sections (relaid " << relaid
+            << " B, positions " << positions << " B, all attributes " << attributes << " B)\n";
 }
 
 int Run() {

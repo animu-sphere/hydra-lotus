@@ -16,6 +16,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Compatible geometry replacements that keep their buffer layout stage and
+  copy only the sections whose contents changed, so deformation no longer
+  restages unchanged triangle indices
+  ([contract](docs/reference/SCENE.md#gpu-scene),
+  [evidence](docs/reports/2026-10-25-changed-section-staging.md)).
 - Cornell quality summaries use `lotus-quality-curve-v2` with selectable
   disjoint sample sequences, separate quality populations and timing
   repetitions, and deterministic image checks within each sequence

@@ -265,7 +265,12 @@ empty plan records no GPU work.
   order, as float pairs at the next aligned offset. Normals and texture
   coordinates are geometry: changing them replaces the CPU source and
   uploads its contents, but a compatible replacement retains GPU storage
-  and its BLAS as described [below](#acceleration-structures).
+  and its BLAS as described [below](#acceleration-structures). When the
+  replacement also keeps the buffer's layout (the same normal count and
+  texture-coordinate set sizes), only its sections whose contents differ —
+  positions, normals, each texture-coordinate set — are staged and copied;
+  the triangles and unchanged sections stay on the device. A layout change
+  stages the whole buffer.
 - Geometry occupies a slot in the GPU scene's geometry table. A released
   slot is reused lowest first, so slots are deterministic for a
   deterministic sequence of plans. Compatible replacements keep their slot;

@@ -38,8 +38,10 @@ when the measurements justify it.
   extend this to a second static fixture with validated finite Reference PT
   evidence, a split-reference discrepancy and deterministic comparisons.
   [Headless camera/object motion](../reports/2026-10-25-motion-workloads.md)
-  now measures per-frame authoring, extraction, scene-update and refit costs;
-  restaging unchanged triangle indices on deformation is the next candidate.
+  now measures per-frame authoring, extraction, scene-update and refit costs.
+  [Changed-section staging](../reports/2026-10-25-changed-section-staging.md)
+  was adopted: deformation no longer restages unchanged triangle indices
+  (67% fewer staged bytes and about 20% less update wall on the large mesh).
   Remaining: controlled timing, Hydra/viewport motion, temporal/SVGF modes,
   quality curves for the other fixtures, peak residency and complete viewport
   repeats; preserve the recorded driver failure when extending the baseline.
