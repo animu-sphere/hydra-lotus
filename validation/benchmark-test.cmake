@@ -240,8 +240,8 @@ if(LIGHT_SAMPLING STREQUAL "mis")
     --benchmark-workload many-lights-v1 --benchmark-light-sampling mis
     --benchmark-light-grid 2 --benchmark-light-crossing linear
     --benchmark-frames 4 --benchmark-warmup 2 --benchmark-size 32
-    RESULT_VARIABLE linear OUTPUT_VARIABLE linear_output ERROR_VARIABLE linear_error TIMEOUT 120)
-  if(NOT linear STREQUAL "0" AND NOT linear STREQUAL "77")
+    RESULT_VARIABLE baseline OUTPUT_VARIABLE linear_output ERROR_VARIABLE linear_error TIMEOUT 120)
+  if(NOT baseline STREQUAL "0" AND NOT baseline STREQUAL "77")
     message(FATAL_ERROR "Linear crossing failed: ${linear_output} ${linear_error}")
   endif()
   file(READ "${TEST_ROOT}/linear.json" linear_json)
