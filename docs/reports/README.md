@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-25-textured-quality.md](2026-10-25-textured-quality.md) | Textured fixture quality against a finite Reference PT image, split-reference discrepancy, disjoint measured sequences and deterministic repetition/integrator checks; [data](2026-10-25-textured-quality.json). |
 | [2026-10-25-quality-populations.md](2026-10-25-quality-populations.md) | Cornell finite-reference quality across disjoint sample sequences, separate timing repetitions, observed target attainment and deterministic integrator comparisons; [data](2026-10-25-quality-populations.json). |
 | [2026-10-25-quality-curve.md](2026-10-25-quality-curve.md) | Independent-sequence Cornell MIS error checkpoints, observed finite-reference error-threshold rendering times, deterministic integrator agreement and remaining measurement limits; [data](2026-10-25-quality-curve.json). |
 | [2026-10-24-gpu-telemetry.md](2026-10-24-gpu-telemetry.md) | Opt-in whole-device clock, power-state and memory observations around benchmark attempts; deterministic control comparison, unavailable/failure preservation and remaining baseline limits; [data](2026-10-24-gpu-telemetry.json). |
