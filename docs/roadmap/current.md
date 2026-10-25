@@ -37,7 +37,10 @@ when the measurements justify it.
   [Textured quality checkpoints](../reports/2026-10-25-textured-quality.md)
   extend this to a second static fixture with validated finite Reference PT
   evidence, a split-reference discrepancy and deterministic comparisons.
-  Remaining: controlled timing, camera/object motion, temporal/SVGF modes,
+  [Headless camera/object motion](../reports/2026-10-25-motion-workloads.md)
+  now measures per-frame authoring, extraction, scene-update and refit costs;
+  restaging unchanged triangle indices on deformation is the next candidate.
+  Remaining: controlled timing, Hydra/viewport motion, temporal/SVGF modes,
   quality curves for the other fixtures, peak residency and complete viewport
   repeats; preserve the recorded driver failure when extending the baseline.
 - [ ] **LOTUS-MEMORY-01 — Temporal/SVGF ownership and peak residency (P1).**

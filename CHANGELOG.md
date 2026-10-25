@@ -27,6 +27,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Headless camera, rigid-transform and deformation motion for the shared
+  benchmark workloads (`--benchmark-motion`, runner `--motion`), recording
+  per-frame authoring, extraction, blocking scene-update wall time,
+  upload/BLAS/TLAS timestamps and staged bytes, and checking the expected
+  refits in every frame
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks)).
 - Static-workload quality curves against validated finite Reference PT
   baseline images, preserving reference evidence and rejecting overlapping
   sample ranges or mismatched workload/settings
