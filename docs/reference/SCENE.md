@@ -1075,7 +1075,12 @@ original six. The additional `many-lights-v1` fixture retains the Cornell
 ceiling, removes its emissive panel (34 triangles, 7 placements), and places
 256 sphere lights in a 16×16 grid at y=0.85, radius 0.025, radiance
 (12, 10, 8), under a black environment. Its ID fixes those parameters.
-Unknown IDs fail before output is written.
+Unknown IDs fail before output is written. As a light-count control,
+`--benchmark-light-grid <1..16>`, accepted only with that workload, replaces
+the grid by one of the given side over the same footprint (x and z from
+−0.9 to 0.9, or one light at the centre) with the same radius and total
+power, each radiance scaled by 256/side². It is recorded as
+`procedure.light_grid`, null for the fixture itself.
 
 The viewport's `--workload <id>` uses the same factory and authored camera
 without free-camera navigation. It excludes USD input and interaction/resize

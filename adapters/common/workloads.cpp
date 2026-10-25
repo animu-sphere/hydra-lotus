@@ -70,6 +70,27 @@ Lotus::Matrix4 RotationY(double degrees) {
 
 } // namespace
 
+void SetLightGrid(Lotus::RenderWorld& world, unsigned side) {
+  if (side == 0 || side > kManyLightGrid)
+    throw std::invalid_argument("light grid side must be 1.." + std::to_string(kManyLightGrid));
+  for (unsigned i = 0; i < kManyLightGrid * kManyLightGrid; ++i)
+    world.RemoveLight("/lights/" + std::to_string(i));
+  // The full grid's spacing is exactly 0.12; one light sits at the centre.
+  const float spacing = side == 1 ? 0.0F : 0.12F * (15.0F / float(side - 1));
+  const float first = side == 1 ? 0.0F : -0.9F;
+  const float scale = float(kManyLightGrid * kManyLightGrid) / float(side * side);
+  for (unsigned y = 0; y < side; ++y) {
+    for (unsigned x = 0; x < side; ++x) {
+      Lotus::Light light;
+      light.world_from_light = Translation(first + spacing * x,
+          0.85F, first + spacing * y);
+      light.radius = 0.025F;
+      light.radiance = {12.0F * scale, 10.0F * scale, 8.0F * scale};
+      world.SetLight("/lights/" + std::to_string(y * side + x), light);
+    }
+  }
+}
+
 // The lit workloads light the reference scene's geometry as its emissive
 // panel does not: by analytic lights, and by an environment image.
 Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets) {
@@ -83,16 +104,7 @@ Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets) 
   if (id == "many-lights-v1") {
     work.world.RemoveMesh("/cornell/light");
     work.world.RemoveMaterial("/materials/light");
-    for (unsigned y = 0; y < 16; ++y) {
-      for (unsigned x = 0; x < 16; ++x) {
-        Lotus::Light light;
-        light.world_from_light = Translation(-0.9F + 0.12F * x,
-            0.85F, -0.9F + 0.12F * y);
-        light.radius = 0.025F;
-        light.radiance = {12.0F, 10.0F, 8.0F};
-        work.world.SetLight("/lights/" + std::to_string(y * 16 + x), light);
-      }
-    }
+    SetLightGrid(work.world, kManyLightGrid);
     work.edit_mesh = "/cornell/back";
     return work;
   }

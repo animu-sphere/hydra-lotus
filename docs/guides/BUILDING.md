@@ -166,6 +166,18 @@ VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation build/cy2026-windows-x86_64
 
 The report's `validation.enabled` records which condition applied.
 
+### Light-count control
+
+`--benchmark-light-grid <1..16>` replaces `many-lights-v1`'s 16×16 lights by
+a smaller grid at the same footprint and total power
+([contract](../reference/SCENE.md#fixed-benchmarks)). The
+[crossing-cost evaluation](../reports/2026-10-25-light-crossing-cost.md) ran
+sides 1, 2, 4, 8 and 16 per integrator and size, for example:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/light-grid.json --benchmark-workload many-lights-v1 --benchmark-light-sampling mis --benchmark-integrator wavefront --benchmark-light-grid 4
+```
+
 ## Cornell quality checkpoints
 
 After the default build, measure error against the committed reference with

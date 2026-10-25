@@ -26,6 +26,11 @@ struct Workload {
   std::string edit_mesh;
 };
 
+// many-lights-v1's sphere lights: a grid of side x side over the fixture's
+// footprint at its total power. The fixture is the full grid, 16 x 16.
+inline constexpr unsigned kManyLightGrid = 16;
+void SetLightGrid(Lotus::RenderWorld& world, unsigned side);
+
 // Environment images are read relative to the executable's licensed assets.
 Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets);
 

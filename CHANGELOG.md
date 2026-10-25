@@ -39,6 +39,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- `--benchmark-light-grid` replaces `many-lights-v1`'s lights by a smaller
+  grid at the same footprint and total power, a light-count control that
+  attributed 81–88% of a 256-light frame to analytic-light crossing tests
+  ([contract](docs/reference/SCENE.md#fixed-benchmarks),
+  [evidence](docs/reports/2026-10-25-light-crossing-cost.md)).
 - `GpuFrameEvidence::host_timings` and the benchmark's `render_host_ms`
   split a blocking frame's host wall time into preparation, recording,
   submission, fence wait, readback and results; CPU render-submit time is
