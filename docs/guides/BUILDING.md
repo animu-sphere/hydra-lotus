@@ -192,7 +192,14 @@ build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchm
 
 The [lazy-mirror remeasurement](../reports/2026-10-26-lazy-readback-mirrors.md)
 used the same command, plus a control with `--residency-read-back 1`, which
-reads every frame back and so allocates the host mirrors.
+reads every frame back and so allocates the host mirrors. The
+[reservoir history split](../reports/2026-10-26-reservoir-history-split.md)
+added pass timings from 16-frame runs of the reservoir mode, with and
+without spatial reuse:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-residency build/history-split-1080p.json --benchmark-label "split" --residency-width 1920 --residency-height 1080 --residency-mode restir-reuse --residency-frames 16 --residency-restir-spatial 0
+```
 
 ## Cornell quality checkpoints
 

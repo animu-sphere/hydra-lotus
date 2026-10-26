@@ -18,14 +18,23 @@ public struct RestirPixel {
 };
 [[vk::binding(16, 0)]] public RWStructuredBuffer<RestirPixel> initial_reservoirs;
 
-// 192-byte private history record. The first 64 bytes are RestirReusePixel;
-// the remaining float4s retain the exact jittered source target function.
-struct RestirHistory {
+// Mirrors RestirReusePixel: the resolved reuse record.
+struct RestirReuse {
   RestirPixel pixel;
   float normalization;
   uint supporting_candidates;
   uint previous_index;
   uint age;
+};
+[[vk::binding(17, 0)]] RWStructuredBuffer<RestirReuse> temporal_reservoirs;
+[[vk::binding(18, 0)]] StructuredBuffer<RestirReuse> previous_reservoirs;
+[[vk::binding(19, 0)]] RWStructuredBuffer<RestirReuse> spatial_reservoirs;
+[[vk::binding(20, 0)]] RWStructuredBuffer<uint4> spatial_sources;
+
+// 128-byte exact jittered source surface: its target function for support
+// evaluation. Written once per frame by the temporal pass; the spatial pass
+// reads it and its output shares it, so it is stored apart from the records.
+struct RestirSurface {
   float4 origin;
   float4 normal; // w: dielectric_f90
   float4 shading_normal;
@@ -36,10 +45,8 @@ struct RestirHistory {
   uint64_t instance_id;
   uint64_t material_id;
 };
-[[vk::binding(17, 0)]] RWStructuredBuffer<RestirHistory> temporal_reservoirs;
-[[vk::binding(18, 0)]] StructuredBuffer<RestirHistory> previous_reservoirs;
-[[vk::binding(19, 0)]] RWStructuredBuffer<RestirHistory> spatial_reservoirs;
-[[vk::binding(20, 0)]] RWStructuredBuffer<uint4> spatial_sources;
+[[vk::binding(22, 0)]] RWStructuredBuffer<RestirSurface> reservoir_surfaces;
+[[vk::binding(23, 0)]] StructuredBuffer<RestirSurface> previous_surfaces;
 
 // f in the light's unit-square parameter measure. Reconstruction embeds the
 // power selection p; its Jacobian is p / sample.pdf (area or solid angle).
@@ -146,7 +153,7 @@ public Spectrum InitialDirectLight(uint pixel, SurfaceHit surface, ShadingFrame 
   return SpectrumFromRgb(selected.contribution.xyz) * weight;
 }
 
-Spectrum HistoryContribution(RestirHistory source, uint light, LightSample sample) {
+Spectrum HistoryContribution(RestirSurface source, uint light, LightSample sample) {
   SurfaceBsdf bsdf;
   bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
   bsdf.alpha = source.base_alpha.w;
@@ -162,7 +169,7 @@ Spectrum HistoryContribution(RestirHistory source, uint light, LightSample sampl
       sample.radiance * (path_constants.lights[light].pdf / sample.pdf);
 }
 
-Spectrum HistoryContribution(RestirHistory source, uint light, float2 uv) {
+Spectrum HistoryContribution(RestirSurface source, uint light, float2 uv) {
   return HistoryContribution(source, light,
       ReconstructReservoirLight(light, uv, source.origin.xyz));
 }
@@ -173,12 +180,13 @@ bool SameSample(RestirPixel a, RestirPixel b) {
 
 // The source stores its unshadowed target at its own exact jittered surface.
 // It is valid for this selection only when the full light-slot/UV key matches.
-float HistoryTarget(RestirHistory source, RestirPixel selected, out bool valid) {
+float HistoryTarget(RestirReuse source, RestirSurface surface, RestirPixel selected,
+    out bool valid) {
   if (SameSample(source.pixel, selected)) {
     valid = isfinite(source.pixel.reservoir.selected_target);
     return source.pixel.reservoir.selected_target;
   }
-  const Spectrum contribution = HistoryContribution(source, selected.reservoir.sample, selected.uv);
+  const Spectrum contribution = HistoryContribution(surface, selected.reservoir.sample, selected.uv);
   valid = IsFinite(contribution);
   return MaxComponent(contribution);
 }
@@ -201,7 +209,8 @@ float ReceiverVisibility(RestirPixel selected, RestirPixel current, float3 origi
 public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_rng,
     bool active) {
   const uint slot = pixel.y * path_constants.width + pixel.x;
-  RestirHistory result = {};
+  RestirReuse result = {};
+  RestirSurface receiver = {};
   result.pixel = initial_reservoirs[slot];
   result.previous_index = 0xffffffffu;
   result.normalization = ReservoirNormalization(result.pixel.reservoir);
@@ -212,22 +221,24 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
     const float3 wo = basis.ToLocal(-ray.Direction);
     const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
-    result.origin = float4(origin, CurrentViewDepth(surface.position));
-    result.normal = float4(surface.normal, surface.bsdf.dielectric_f90);
-    result.shading_normal = float4(surface.shading_normal, 0.0);
-    result.outgoing = float4(wo, 0.0);
-    result.base_alpha = float4(SpectrumToRgb(surface.bsdf.base_color), surface.bsdf.alpha);
-    result.dielectric_metallic = float4(SpectrumToRgb(surface.bsdf.dielectric_f0), surface.bsdf.metallic);
-    result.fresnel = float4(SpectrumToRgb(surface.bsdf.f0), surface.bsdf.f90);
-    TemporalInstanceIdentity(hit.instance, result.instance_id, result.material_id);
+    receiver.origin = float4(origin, CurrentViewDepth(surface.position));
+    receiver.normal = float4(surface.normal, surface.bsdf.dielectric_f90);
+    receiver.shading_normal = float4(surface.shading_normal, 0.0);
+    receiver.outgoing = float4(wo, 0.0);
+    receiver.base_alpha = float4(SpectrumToRgb(surface.bsdf.base_color), surface.bsdf.alpha);
+    receiver.dielectric_metallic = float4(SpectrumToRgb(surface.bsdf.dielectric_f0), surface.bsdf.metallic);
+    receiver.fresnel = float4(SpectrumToRgb(surface.bsdf.f0), surface.bsdf.f90);
+    TemporalInstanceIdentity(hit.instance, receiver.instance_id, receiver.material_id);
     uint previous_index;
     if (path_constants.restir_history != 0 && (result.pixel.flags & 2) == 0 &&
-        TemporalSampleHistory(slot, result.instance_id, result.material_id, previous_index)) {
-      const RestirHistory source = previous_reservoirs[previous_index];
+        TemporalSampleHistory(slot, receiver.instance_id, receiver.material_id, previous_index)) {
+      const RestirReuse source = previous_reservoirs[previous_index];
       // A jittered source can hit a different surface than its centre AOV.
       // Require its own identity too. Failed records are never published.
+      // Its shading data is read only if support evaluation needs it.
       if ((source.pixel.flags & 1) != 0 && (source.pixel.flags & 2) == 0 &&
-          source.instance_id == result.instance_id && source.material_id == result.material_id) {
+          previous_surfaces[previous_index].instance_id == receiver.instance_id &&
+          previous_surfaces[previous_index].material_id == receiver.material_id) {
         const uint count = min(source.pixel.reservoir.candidate_count,
             path_constants.restir_max_history_candidates);
         Spectrum received = SpectrumConstant(0.0);
@@ -235,7 +246,7 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
           if (source.pixel.reservoir.sample >= path_constants.light_count)
             result.pixel.flags |= 2;
           else
-            received = HistoryContribution(result, source.pixel.reservoir.sample, source.pixel.uv);
+            received = HistoryContribution(receiver, source.pixel.reservoir.sample, source.pixel.uv);
         }
         uint rng = SeedRandom(slot, path_constants.sample_index ^ 0x94D049BBu);
         bool selected;
@@ -255,7 +266,8 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
           // Even an all-zero observed source contributes its support count.
           if (result.pixel.reservoir.weight_sum > 0.0) {
             bool valid_support;
-            const float support = HistoryTarget(source, result.pixel, valid_support);
+            const float support = HistoryTarget(source, previous_surfaces[previous_index],
+                result.pixel, valid_support);
             if (!valid_support)
               result.pixel.flags |= 2;
             result.supporting_candidates = initial_reservoirs[slot].reservoir.candidate_count +
@@ -271,7 +283,7 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
       const LightSample sample = ReconstructReservoirLight(
           result.pixel.reservoir.sample, result.pixel.uv, origin);
       const float visibility = ReceiverVisibility(result.pixel, initial_reservoirs[slot], origin, sample);
-      const Spectrum estimate = HistoryContribution(result,
+      const Spectrum estimate = HistoryContribution(receiver,
           result.pixel.reservoir.sample, sample) * (visibility * result.normalization);
       if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
         result.pixel.flags |= 2;
@@ -280,13 +292,14 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     }
   }
   temporal_reservoirs[slot] = result;
+  reservoir_surfaces[slot] = receiver;
 }
 
 // Geometry-only acceptance is independent of the random light selection.
 // Do not gate on selected visibility or target: even all-zero observed
 // streams can support the final selection and belong in its denominator.
-bool SpatialCompatible(RestirHistory receiver, RestirHistory source) {
-  return (source.pixel.flags & 3u) == 1u &&
+bool SpatialCompatible(RestirSurface receiver, RestirReuse record, RestirSurface source) {
+  return (record.pixel.flags & 3u) == 1u &&
       receiver.origin.w > 0.0 && source.origin.w > 0.0 &&
       receiver.material_id == source.material_id &&
       abs(receiver.origin.w - source.origin.w) <=
@@ -297,8 +310,9 @@ bool SpatialCompatible(RestirHistory receiver, RestirHistory source) {
 
 public void WriteSpatialReservoir(uint2 pixel) {
   const uint slot = pixel.y * path_constants.width + pixel.x;
-  const RestirHistory centre = temporal_reservoirs[slot];
-  RestirHistory result = centre;
+  const RestirReuse centre = temporal_reservoirs[slot];
+  const RestirSurface receiver = reservoir_surfaces[slot];
+  RestirReuse result = centre;
   uint4 sources = uint4(0xffffffffu);
   const int radius = int(path_constants.restir_spatial_radius);
   const int2 offsets[4] = {int2(-radius, 0), int2(radius, 0),
@@ -312,7 +326,7 @@ public void WriteSpatialReservoir(uint2 pixel) {
               path_constants.path_capacity / path_constants.width)))
         continue;
       const uint index = uint(neighbour.y) * path_constants.width + uint(neighbour.x);
-      if (SpatialCompatible(centre, temporal_reservoirs[index])) {
+      if (SpatialCompatible(receiver, temporal_reservoirs[index], reservoir_surfaces[index])) {
         sources[i] = index;
         ++accepted;
       }
@@ -330,10 +344,10 @@ public void WriteSpatialReservoir(uint2 pixel) {
       for (uint i = 0; i < 4; ++i) {
         if (sources[i] == 0xffffffffu)
           continue;
-        const RestirHistory source = temporal_reservoirs[sources[i]];
+        const RestirReuse source = temporal_reservoirs[sources[i]];
         Spectrum received = SpectrumConstant(0.0);
         if (source.pixel.reservoir.weight_sum > 0.0)
-          received = HistoryContribution(centre, source.pixel.reservoir.sample, source.pixel.uv);
+          received = HistoryContribution(receiver, source.pixel.reservoir.sample, source.pixel.uv);
         if (!IsFinite(received) || !MergeReevaluatedReservoir(result.pixel.reservoir,
                 source.pixel.reservoir, source.normalization, MaxComponent(received),
                 path_constants.restir_max_history_candidates, NextRandom(rng), selected)) {
@@ -353,9 +367,10 @@ public void WriteSpatialReservoir(uint2 pixel) {
         for (uint i = 0; i < 4; ++i) {
           if (sources[i] == 0xffffffffu)
             continue;
-          const RestirHistory source = temporal_reservoirs[sources[i]];
+          const RestirReuse source = temporal_reservoirs[sources[i]];
           bool valid_support;
-          const float support = HistoryTarget(source, result.pixel, valid_support);
+          const float support = HistoryTarget(source, reservoir_surfaces[sources[i]],
+              result.pixel, valid_support);
           if (!valid_support)
             result.pixel.flags |= 2u;
           if (support > 0.0)
@@ -367,9 +382,9 @@ public void WriteSpatialReservoir(uint2 pixel) {
           result.pixel.reservoir, result.supporting_candidates);
       if ((result.pixel.flags & 2u) == 0 && result.pixel.reservoir.weight_sum > 0.0) {
         const LightSample sample = ReconstructReservoirLight(
-            result.pixel.reservoir.sample, result.pixel.uv, result.origin.xyz);
-        const float visibility = ReceiverVisibility(result.pixel, centre.pixel, result.origin.xyz, sample);
-        const Spectrum estimate = HistoryContribution(result,
+            result.pixel.reservoir.sample, result.pixel.uv, receiver.origin.xyz);
+        const float visibility = ReceiverVisibility(result.pixel, centre.pixel, receiver.origin.xyz, sample);
+        const Spectrum estimate = HistoryContribution(receiver,
             result.pixel.reservoir.sample, sample) * (visibility * result.normalization);
         if (!isfinite(result.normalization) || result.normalization <= 0.0 || !IsFinite(estimate))
           result.pixel.flags |= 2u;
@@ -378,7 +393,8 @@ public void WriteSpatialReservoir(uint2 pixel) {
       }
     }
   }
-  // Destination is never read by another pixel in this pass.
+  // Destination is never read by another pixel in this pass. The output
+  // keeps the receiver's surface, which the temporal pass already stored.
   spatial_reservoirs[slot] = result;
   spatial_sources[slot] = sources;
 }

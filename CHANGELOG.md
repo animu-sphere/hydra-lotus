@@ -23,6 +23,15 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Reservoir history stores each frame's source surfaces once, beside 64-byte
+  reuse records, instead of a 192-byte record per buffer that the spatial
+  pass copied: with spatial reuse the reservoirs hold 512 instead of 640 B
+  per pixel on the device (253 MiB less at 1080p, 1.0 GiB at 4K) and the
+  spatial pass is 37–53% faster, with byte-identical images. Read-back
+  mirrors hold records only. `--benchmark-residency` reports per-frame GPU
+  pass times and gains `--residency-restir-spatial`
+  ([contract](docs/reference/RESTIR.md#products-and-costs),
+  [evidence](docs/reports/2026-10-26-reservoir-history-split.md)).
 - Host readback mirrors of the scene targets, temporal surfaces, validity,
   radiance and reservoirs are allocated by the first frame that reads back
   (or restores preserved contents) instead of with their device buffers, so

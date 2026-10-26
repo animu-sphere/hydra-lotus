@@ -5,7 +5,7 @@
 // swapchain as it blits the scene colour. The product is read as raw uint4
 // words at its record stride, so one binding serves every record layout;
 // the layouts mirror TemporalPixel, TemporalValidityPixel, RestirPixel,
-// RestirHistoryRecord, the fresh RGBA batch and TemporalRadiancePixel in the
+// RestirReusePixel, the fresh RGBA batch and TemporalRadiancePixel in the
 // backend.
 
 // Mirrors DebugView.
@@ -24,7 +24,7 @@ static const uint kVariance = 11;
 struct ViewConstants {
   uint view;
   // Record stride in uint4 words: 4 for TemporalPixel, 1 for
-  // TemporalValidityPixel, 3 for RestirPixel, 12 for RestirHistoryRecord,
+  // TemporalValidityPixel, 3 for RestirPixel, 4 for RestirReusePixel,
   // 1 for the fresh batch, 2 for TemporalRadiancePixel.
   uint stride;
   uint width;
@@ -101,7 +101,8 @@ float3 Reservoir(uint base) {
   const float3 no_sample = float3(0.35, 0.05, 0.05);
   if (constants.view == kReservoirValidity)
     return selected ? float3(0.10, 0.75, 0.15) : no_sample;
-  const bool reuse = constants.stride == 12;
+  // Reservoir views read RestirPixel (3 words) or RestirReusePixel (4).
+  const bool reuse = constants.stride == 4;
   if (constants.view == kReservoirAge) {
     const float age = reuse ? float(source[base + 3].w) : 0.0;
     return Heat(age / max(constants.range.y, 1.0));
