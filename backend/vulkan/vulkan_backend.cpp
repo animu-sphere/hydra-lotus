@@ -435,6 +435,33 @@ std::optional<std::uint32_t> FindGraphicsQueue(VkPhysicalDevice device) {
   return std::nullopt;
 }
 
+// The memory types of the renderer's own allocations, outside the scene's
+// pools; Residency classifies them with the same choice.
+std::uint32_t DeviceMemoryType(VkPhysicalDevice physical_device,
+    std::uint32_t allowed) {
+  return FindMemoryType(physical_device, allowed,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+}
+
+// The host reads what the GPU copies into a buffer. Uncached host-visible
+// memory makes those reads bus reads, about a millisecond for a 128x128
+// frame's products; cached memory needs an invalidation when not coherent.
+std::uint32_t HostMemoryType(VkPhysicalDevice physical_device,
+    std::uint32_t allowed, VkBufferUsageFlags usage, bool* coherent) {
+  std::uint32_t memory_type = std::numeric_limits<std::uint32_t>::max();
+  if ((usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0) {
+    memory_type = FindMemoryType(physical_device, allowed,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, coherent);
+  }
+  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
+    memory_type = FindMemoryType(physical_device, allowed,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        coherent);
+  }
+  return memory_type;
+}
+
 bool CreateImage(VkPhysicalDevice physical_device,
     VkDevice device,
     std::uint32_t width,
@@ -462,8 +489,7 @@ bool CreateImage(VkPhysicalDevice physical_device,
   VkMemoryRequirements requirements{};
   vkGetImageMemoryRequirements(device, image, &requirements);
   const std::uint32_t memory_type =
-      FindMemoryType(physical_device, requirements.memoryTypeBits,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+      DeviceMemoryType(physical_device, requirements.memoryTypeBits);
   if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
     detail = "no device-local image memory type is available";
     return false;
@@ -500,8 +526,7 @@ bool CreateDeviceBuffer(VkPhysicalDevice physical_device,
   VkMemoryRequirements requirements{};
   vkGetBufferMemoryRequirements(device, buffer, &requirements);
   const std::uint32_t memory_type =
-      FindMemoryType(physical_device, requirements.memoryTypeBits,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+      DeviceMemoryType(physical_device, requirements.memoryTypeBits);
   if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
     detail = "no device-local buffer memory type is available";
     return false;
@@ -533,20 +558,8 @@ bool CreateHostBuffer(VkPhysicalDevice physical_device,
   }
   VkMemoryRequirements requirements{};
   vkGetBufferMemoryRequirements(device, buffer, &requirements);
-  // The host reads what the GPU copies into a buffer. Uncached host-visible
-  // memory makes those reads bus reads, about a millisecond for a 128x128
-  // frame's products; cached memory needs an invalidation when not coherent.
-  std::uint32_t memory_type = std::numeric_limits<std::uint32_t>::max();
-  if ((usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0) {
-    memory_type = FindMemoryType(physical_device, requirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &coherent);
-  }
-  if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
-    memory_type = FindMemoryType(physical_device, requirements.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        &coherent);
-  }
+  const std::uint32_t memory_type = HostMemoryType(physical_device,
+      requirements.memoryTypeBits, usage, &coherent);
   if (memory_type == std::numeric_limits<std::uint32_t>::max()) {
     detail = "no host-visible buffer memory type is available";
     return false;
@@ -843,6 +856,114 @@ public:
 
   BackendCapability RayQueryCapability() const override {
     return ray_query_;
+  }
+
+  GpuResidency Residency() const override {
+    GpuResidency residency;
+    if (device_ == VK_NULL_HANDLE)
+      return residency;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+    VkPhysicalDeviceMemoryProperties2 memory{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+    if (memory_budget_)
+      memory.pNext = &budget;
+    vkGetPhysicalDeviceMemoryProperties2(physical_device_, &memory);
+    const auto& properties = memory.memoryProperties;
+    const auto group = [&](const char* owner, bool device_local) -> GpuAllocationGroup& {
+      for (auto& existing : residency.groups)
+        if (existing.owner == owner && existing.device_local == device_local)
+          return existing;
+      return residency.groups.emplace_back(GpuAllocationGroup{owner, device_local});
+    };
+    const auto add = [&](const char* owner, const VkMemoryRequirements& requirements,
+                         std::uint32_t type) {
+      auto& entry = group(owner, (properties.memoryTypes[type].propertyFlags &
+                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0);
+      ++entry.allocations;
+      entry.bytes += requirements.size;
+    };
+    // Each is a dedicated allocation of its requirements, of the memory type
+    // its creation helper chose.
+    const auto device_buffer = [&](const char* owner, VkBuffer buffer) {
+      if (buffer == VK_NULL_HANDLE)
+        return;
+      VkMemoryRequirements requirements{};
+      vkGetBufferMemoryRequirements(device_, buffer, &requirements);
+      add(owner, requirements, DeviceMemoryType(physical_device_, requirements.memoryTypeBits));
+    };
+    const auto host_buffer = [&](const char* owner, VkBuffer buffer, VkBufferUsageFlags usage) {
+      if (buffer == VK_NULL_HANDLE)
+        return;
+      VkMemoryRequirements requirements{};
+      vkGetBufferMemoryRequirements(device_, buffer, &requirements);
+      add(owner, requirements,
+          HostMemoryType(physical_device_, requirements.memoryTypeBits, usage, nullptr));
+    };
+    const auto image = [&](const char* owner, VkImage image) {
+      if (image == VK_NULL_HANDLE)
+        return;
+      VkMemoryRequirements requirements{};
+      vkGetImageMemoryRequirements(device_, image, &requirements);
+      add(owner, requirements, DeviceMemoryType(physical_device_, requirements.memoryTypeBits));
+    };
+    constexpr VkBufferUsageFlags readback = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    GpuAllocationGroup pools_device{"scene.pools", true}, pools_host{"scene.pools", false};
+    scene_.AddResidency(pools_device, pools_host);
+    for (const auto* pools : {&pools_device, &pools_host})
+      if (pools->allocations != 0)
+        residency.groups.push_back(*pools);
+    host_buffer("constants.path", path_constants_, 0);
+    const auto targets = [&](const Targets& t, const char* attachments, const char* mirrors) {
+      image(attachments, t.accumulation_image);
+      image(attachments, t.color_image);
+      image(attachments, t.depth_image);
+      host_buffer(mirrors, t.color_readback, readback);
+      host_buffer(mirrors, t.depth_readback, readback);
+    };
+    targets(targets_, "targets.bootstrap", "targets.bootstrap.readback");
+    targets(scene_targets_, "targets.scene", "targets.scene.readback");
+    for (const Targets* t : {&targets_, &scene_targets_}) {
+      device_buffer("wavefront.state", t->queue_state);
+      device_buffer("wavefront.state", t->queue_items);
+      device_buffer("wavefront.state", t->paths);
+      host_buffer("wavefront.readback", t->queue_readback, readback);
+    }
+    for (const auto& buffer : temporal_surfaces_)
+      device_buffer("temporal.surfaces", buffer.buffer);
+    host_buffer("temporal.surfaces.readback", temporal_readback_.buffer, readback);
+    device_buffer("temporal.validity", temporal_validity_.buffer);
+    host_buffer("temporal.validity.readback", temporal_validity_readback_.buffer, readback);
+    host_buffer("temporal.metadata", temporal_constants_.buffer, 0);
+    host_buffer("temporal.metadata", temporal_instances_.buffer, 0);
+    for (const auto& buffer : temporal_radiance_)
+      device_buffer("temporal.radiance", buffer.buffer);
+    device_buffer("temporal.radiance", temporal_batch_.buffer);
+    host_buffer("temporal.radiance.readback", temporal_radiance_readback_.buffer, readback);
+    device_buffer("temporal.filter", temporal_filter_.buffer);
+    device_buffer("restir.initial", restir_initial_.buffer);
+    host_buffer("restir.initial.readback", restir_readback_.buffer, readback);
+    for (const auto& buffer : restir_history_buffers_)
+      device_buffer("restir.history", buffer.buffer);
+    host_buffer("restir.history.readback", restir_history_readback_.buffer, readback);
+    device_buffer("restir.spatial", restir_spatial_input_.buffer);
+    device_buffer("restir.spatial", restir_spatial_sources_.buffer);
+    host_buffer("restir.spatial.readback", restir_spatial_input_readback_.buffer, readback);
+    host_buffer("restir.spatial.readback", restir_spatial_sources_readback_.buffer, readback);
+    if (presentation_) {
+      image("present.view", presentation_->view_image());
+      residency.swapchain_images = presentation_->swapchain_images();
+    }
+    for (const auto& entry : residency.groups)
+      (entry.device_local ? residency.device_local_bytes : residency.host_bytes) += entry.bytes;
+    residency.budget_available = memory_budget_;
+    if (!memory_budget_)
+      residency.budget_detail = "the device does not expose VK_EXT_memory_budget";
+    for (std::uint32_t i = 0; i < properties.memoryHeapCount; ++i)
+      residency.heaps.push_back({(properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0,
+          properties.memoryHeaps[i].size, memory_budget_ ? budget.heapUsage[i] : 0,
+          memory_budget_ ? budget.heapBudget[i] : 0});
+    return residency;
   }
 
   bool ValidateSceneSettings(const PathTracingSettings& settings,
@@ -2494,6 +2615,8 @@ private:
     // still uploads its buffers and reports why it builds no BLAS or TLAS.
     acceleration_ = ProbeAccelerationStructures(physical_device_);
     ray_query_ = vulkan_internal::ProbeRayQueries(physical_device_, acceleration_);
+    memory_budget_ = vulkan_internal::HasDeviceExtension(physical_device_,
+        VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     // The scene passes write RGBA32F, the radiance pass accumulates into a
     // storage image from the fragment stage, and the instance records hold
     // 64-bit normal addresses.
@@ -2621,6 +2744,8 @@ private:
     }
     if (presentation_)
       extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (memory_budget_)
+      extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     device_create.enabledExtensionCount = static_cast<std::uint32_t>(extensions.size());
     device_create.ppEnabledExtensionNames = extensions.data();
     device_create.queueCreateInfoCount = 1;
@@ -3536,6 +3661,8 @@ private:
   VkPhysicalDeviceProperties device_properties_{};
   AccelerationSupport acceleration_;
   BackendCapability ray_query_;
+  // VK_EXT_memory_budget, enabled when the device exposes it.
+  bool memory_budget_ = false;
   std::uint32_t queue_family_ = 0;
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;

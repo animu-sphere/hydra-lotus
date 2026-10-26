@@ -5,6 +5,7 @@
 
 #include "common/reference.hpp"
 #include "benchmarks/benchmark.hpp"
+#include "benchmarks/residency_benchmark.hpp"
 #include "benchmarks/restir_benchmark.hpp"
 #include "benchmarks/svgf_benchmark.hpp"
 
@@ -4913,6 +4914,8 @@ int main(int argc, char** argv) {
     return LotusHeadless::RestirBenchmarkMain(argc, argv);
   if (argc > 1 && std::string_view(argv[1]) == "--benchmark-svgf")
     return LotusHeadless::SvgfBenchmarkMain(argc, argv);
+  if (argc > 1 && std::string_view(argv[1]) == "--benchmark-residency")
+    return LotusHeadless::ResidencyBenchmarkMain(argc, argv);
   if (argc > 1 && std::string_view(argv[1]) == "--benchmark")
     return LotusHeadless::BenchmarkMain(argc, argv);
   Session session;
@@ -4953,7 +4956,8 @@ int main(int argc, char** argv) {
                    "       lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                    "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n"
                    "       lotus-headless --benchmark-restir <json-path> [measurement options]\n"
-                   "       lotus-headless --benchmark-svgf <json-path> [measurement options]\n";
+                   "       lotus-headless --benchmark-svgf <json-path> [measurement options]\n"
+                   "       lotus-headless --benchmark-residency <json-path> [measurement options]\n";
       return 2;
     }
   }

@@ -241,6 +241,11 @@ public:
     stats.memory = memory_.Stats();
     return stats;
   }
+  // The scene pools' blocks, for OffscreenRenderer::Residency.
+  void AddResidency(GpuAllocationGroup& device_local,
+      GpuAllocationGroup& host) const {
+    memory_.AddResidency(device_local, host);
+  }
   // The last Apply's submission; unavailable when it submitted nothing.
   [[nodiscard]] const GpuSceneTimings& Timings() const {
     return timings_;

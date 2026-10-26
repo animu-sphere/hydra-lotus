@@ -52,18 +52,6 @@ Handle DecodeHandle(std::uintptr_t handle) noexcept {
   }
 }
 
-bool HasDeviceExtension(VkPhysicalDevice device, const char* name) {
-  std::uint32_t count = 0;
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
-  std::vector<VkExtensionProperties> extensions(count);
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
-      extensions.data());
-  return std::any_of(extensions.begin(), extensions.end(),
-      [&](const VkExtensionProperties& extension) {
-        return std::string_view(extension.extensionName) == name;
-      });
-}
-
 const char* FormatName(VkFormat format) {
   switch (format) {
   case VK_FORMAT_B8G8R8A8_SRGB:

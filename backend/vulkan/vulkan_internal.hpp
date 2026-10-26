@@ -4,6 +4,7 @@
 // headers only.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fstream>
@@ -238,6 +239,18 @@ inline bool SupportsShaderDrawParameters(VkPhysicalDevice device) {
   features.pNext = &vulkan11;
   vkGetPhysicalDeviceFeatures2(device, &features);
   return vulkan11.shaderDrawParameters == VK_TRUE;
+}
+
+inline bool HasDeviceExtension(VkPhysicalDevice device, std::string_view name) {
+  std::uint32_t count = 0;
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+  std::vector<VkExtensionProperties> extensions(count);
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
+      extensions.data());
+  return std::any_of(extensions.begin(), extensions.end(),
+      [&](const VkExtensionProperties& extension) {
+        return name == extension.extensionName;
+      });
 }
 
 inline std::uint32_t FindMemoryType(VkPhysicalDevice device,

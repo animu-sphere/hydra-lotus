@@ -263,7 +263,21 @@ if(LOTUS_RESEARCH_TESTS)
     lotus_test_tier(research lotus-renderer-svgf-benchmark-${integrator})
   endforeach()
 endif()
+# The renderer's allocation inventory and heap usage in every frame-state
+# mode; it asserts owners and per-pixel lower bounds, never VRAM totals.
+add_test(NAME lotus-renderer-residency-benchmark
+  COMMAND "${CMAKE_COMMAND}"
+    "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/residency-benchmark"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/residency-benchmark-test.cmake")
+lotus_test_tier(gpu lotus-renderer-residency-benchmark)
 if(LOTUS_ENABLE_VULKAN)
+  add_test(NAME lotus-renderer-residency-benchmark-no-driver
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"
+      "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/residency-benchmark-no-driver"
+      -DNO_DRIVER=ON -P "${CMAKE_CURRENT_SOURCE_DIR}/residency-benchmark-test.cmake")
+  lotus_test_tier(fast lotus-renderer-residency-benchmark-no-driver)
   add_test(NAME lotus-renderer-restir-benchmark-no-driver
     COMMAND "${CMAKE_COMMAND}"
       "-DEXECUTABLE=$<TARGET_FILE:lotus-headless>"

@@ -49,6 +49,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- `OffscreenRenderer::Residency()` lists every allocation the renderer makes
+  by owner and memory kind, with `VK_EXT_memory_budget` process heap usage
+  when the device exposes it; `lotus-headless --benchmark-residency` samples
+  it in each progressive, temporal, SVGF and ReSTIR mode. At 4K, SVGF with
+  both reuse passes holds 7.3 GiB of device and 6.8 GiB of host memory
+  ([contract](docs/reference/SCENE.md#renderer-residency),
+  [evidence](docs/reports/2026-10-26-frame-residency.md)).
 - `--benchmark-light-grid` replaces `many-lights-v1`'s lights by a smaller
   grid at the same footprint and total power, a light-count control that
   attributed 81–88% of a 256-light frame to analytic-light crossing tests

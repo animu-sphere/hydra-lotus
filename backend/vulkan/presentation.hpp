@@ -55,6 +55,14 @@ public:
   // and presents it. The caller fills the validation fields.
   [[nodiscard]] PresentEvidence Present(const PresentSource& source,
       std::uint32_t width, std::uint32_t height);
+  // The debug views' image, null until a view needs one, and the
+  // swapchain's images, for OffscreenRenderer::Residency.
+  [[nodiscard]] VkImage view_image() const noexcept {
+    return view_image_;
+  }
+  [[nodiscard]] std::uint32_t swapchain_images() const noexcept {
+    return static_cast<std::uint32_t>(images_.size());
+  }
   // The overlay's Shutdown, device objects, then the surface; call with the
   // device idle.
   void Destroy(VkInstance instance);
