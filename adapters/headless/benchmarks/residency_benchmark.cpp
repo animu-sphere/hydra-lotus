@@ -48,6 +48,7 @@ struct Options {
   std::string workload = "cornell-v1";
   std::string mode;
   unsigned width = 1920, height = 1080, frames = 3;
+  bool read_back = false;
 };
 
 void Require(bool condition, const std::string& why) {
@@ -85,7 +86,8 @@ Options Parse(int argc, char** argv) {
     throw std::invalid_argument("usage: lotus-headless --benchmark-residency <json-path> "
                                 "[--benchmark-label <identity>] [--residency-workload <id>] "
                                 "[--residency-mode <id>] [--residency-width <16..8192>] "
-                                "[--residency-height <16..8192>] [--residency-frames <1..16>]");
+                                "[--residency-height <16..8192>] [--residency-frames <1..16>] "
+                                "[--residency-read-back <0|1>]");
   Options options;
   options.report = argv[2];
   for (int i = 3; i < argc; ++i) {
@@ -109,6 +111,8 @@ Options Parse(int argc, char** argv) {
       options.height = Number(value, 16, 8192);
     else if (option == "--residency-frames")
       options.frames = Number(value, 1, 16);
+    else if (option == "--residency-read-back")
+      options.read_back = Number(value, 0, 1) != 0;
     else
       throw std::invalid_argument("unknown benchmark option: " + std::string(option));
   }
@@ -201,8 +205,9 @@ Result Measure(const Mode& mode, const Options& options, const std::filesystem::
     OffscreenTarget target;
     target.width = options.width;
     target.height = options.height;
-    // As the viewport renders: the products stay on the GPU.
-    target.read_back = false;
+    // By default as the viewport and Hydra render: the products stay on
+    // the GPU. Reading back allocates the host mirrors.
+    target.read_back = options.read_back;
     PathTracingSettings settings;
     settings.integrator = mode.integrator;
     if (mode.restir) {
@@ -221,6 +226,11 @@ Result Measure(const Mode& mode, const Options& options, const std::filesystem::
       RequireFrame(frame);
       Require(!mode.temporal || frame.temporal.radiance_available == mode.accumulate, "unexpected radiance mode");
       Require(!mode.restir || frame.restir.available, "missing reservoirs");
+      Require(!options.read_back ||
+                  (!frame.color.payload.empty() && (!mode.temporal || !frame.temporal.validity.empty()) &&
+                      (!mode.accumulate || !frame.temporal.radiance.empty()) &&
+                      (!mode.restir || !frame.restir.spatial.empty())),
+          "missing read-back products");
       result.device = "{\"name\":" + Quote(frame.device_name) + ",\"api\":" + Quote(frame.api_version) +
                       ",\"driver\":" + Quote(frame.driver_version) + ",\"validation_available\":" +
                       (frame.validation_available ? "true" : "false") + '}';
@@ -306,8 +316,8 @@ int ResidencyBenchmarkMain(int argc, char** argv) {
         << ",\"system\":" << Quote(LOTUS_BENCHMARK_SYSTEM) << "},\"device\":" << device
         << ",\"procedure\":{\"workload\":" << Quote(options.workload) << ",\"width\":" << options.width
         << ",\"height\":" << options.height << ",\"pixels\":" << std::uint64_t{options.width} * options.height
-        << ",\"frames\":" << options.frames << ",\"samples_per_frame\":1,\"read_back\":false,"
-           "\"fresh_renderer_per_mode\":true},"
+        << ",\"frames\":" << options.frames << ",\"samples_per_frame\":1,\"read_back\":"
+        << (options.read_back ? "true" : "false") << ",\"fresh_renderer_per_mode\":true},"
            "\"metric_notes\":{"
            "\"groups\":\"OffscreenRenderer::Residency: the renderer's own allocations by owner and memory kind, "
            "allocation sizes with alignment; scene pools count reserved blocks. Driver objects (pipelines, descriptor and "

@@ -1,0 +1,394 @@
+{
+  "schema": "lotus-lazy-readback-mirrors-v1",
+  "question": "Does allocating host readback mirrors only for frames that read back remove the unused mirrors from GPU-only frames without changing device residency or read-back products?",
+  "procedure": "lotus-headless --benchmark-residency, cornell-v1, 3 frames of 1 sample per mode, a fresh renderer per mode, one process per size at 1920x1080 and 3840x2160 with read_back false, and a 1920x1080 control with --residency-read-back 1; compared with the 2026-10-26 frame-residency campaign (build/residency-20261025, main 5e598b6 + residency) under the same conditions; validation and synchronization validation active",
+  "environment": {
+    "build": {
+      "label": "d348446 + lazy mirrors; core Release",
+      "compiler": "MSVC 19.51.36256.0",
+      "configuration": "Release",
+      "system": "Windows AMD64"
+    },
+    "device": {
+      "name": "NVIDIA RTX A5000",
+      "api": "1.4.329",
+      "driver": "2504261632",
+      "validation_available": true
+    },
+    "driver": "597.16",
+    "base_commit": "d348446",
+    "binary_sha256": "0ce46e274152ca250e1a0fc5f8f4f72fb0cf7d15f61838f5e524a0120f3cb173",
+    "directory": "build/lazy-mirrors-20261026",
+    "before_directory": "build/residency-20261025"
+  },
+  "sizes": {
+    "1920x1080": {
+      "progressive-reference": {
+        "renderer_host_mib": {
+          "before": 43.6,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 91.9,
+          "after": 91.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 39.6,
+        "process_host_heap_mib": {
+          "before": 91.9,
+          "after": 52.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 236.2,
+          "after": 236.2
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 48.3
+        }
+      },
+      "progressive-wavefront": {
+        "renderer_host_mib": {
+          "before": 43.6,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 273.9,
+          "after": 273.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 39.6,
+        "process_host_heap_mib": {
+          "before": 99.9,
+          "after": 60.4
+        },
+        "process_device_local_heap_mib": {
+          "before": 418.3,
+          "after": 418.3
+        },
+        "residual_mib_after": {
+          "device_local": 144.4,
+          "host": 56.3
+        }
+      },
+      "temporal-metadata": {
+        "renderer_host_mib": {
+          "before": 328.3,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 376.7,
+          "after": 376.7
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 324.3,
+        "process_host_heap_mib": {
+          "before": 384.6,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 521.0,
+          "after": 521.0
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "temporal-radiance": {
+        "renderer_host_mib": {
+          "before": 486.5,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 534.9,
+          "after": 534.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 482.5,
+        "process_host_heap_mib": {
+          "before": 540.3,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 679.4,
+          "after": 679.4
+        },
+        "residual_mib_after": {
+          "device_local": 144.4,
+          "host": 56.3
+        }
+      },
+      "svgf": {
+        "renderer_host_mib": {
+          "before": 486.5,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 629.8,
+          "after": 629.8
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 482.5,
+        "process_host_heap_mib": {
+          "before": 540.3,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 774.3,
+          "after": 774.3
+        },
+        "residual_mib_after": {
+          "device_local": 144.5,
+          "host": 56.3
+        }
+      },
+      "restir-reuse": {
+        "renderer_host_mib": {
+          "before": 1593.9,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 1642.3,
+          "after": 1642.3
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 1589.9,
+        "process_host_heap_mib": {
+          "before": 1647.8,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 1786.7,
+          "after": 1786.7
+        },
+        "residual_mib_after": {
+          "device_local": 144.4,
+          "host": 56.3
+        }
+      },
+      "svgf-restir": {
+        "renderer_host_mib": {
+          "before": 1752.1,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 1895.5,
+          "after": 1895.5
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 1748.1,
+        "process_host_heap_mib": {
+          "before": 1806.0,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 2040.0,
+          "after": 2040.0
+        },
+        "residual_mib_after": {
+          "device_local": 144.5,
+          "host": 56.3
+        }
+      }
+    },
+    "3840x2160": {
+      "progressive-reference": {
+        "renderer_host_mib": {
+          "before": 162.2,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 302.9,
+          "after": 302.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 158.2,
+        "process_host_heap_mib": {
+          "before": 210.5,
+          "after": 52.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 447.2,
+          "after": 447.2
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 48.3
+        }
+      },
+      "progressive-wavefront": {
+        "renderer_host_mib": {
+          "before": 162.2,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 1030.6,
+          "after": 1030.6
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 158.2,
+        "process_host_heap_mib": {
+          "before": 218.6,
+          "after": 60.4
+        },
+        "process_device_local_heap_mib": {
+          "before": 1175.0,
+          "after": 1175.0
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "temporal-metadata": {
+        "renderer_host_mib": {
+          "before": 1301.3,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 1441.9,
+          "after": 1441.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 1297.3,
+        "process_host_heap_mib": {
+          "before": 1357.6,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 1586.2,
+          "after": 1586.2
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "temporal-radiance": {
+        "renderer_host_mib": {
+          "before": 1934.1,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 2074.8,
+          "after": 2074.8
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 1930.1,
+        "process_host_heap_mib": {
+          "before": 1987.9,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 2219.0,
+          "after": 2219.0
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "svgf": {
+        "renderer_host_mib": {
+          "before": 1934.1,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 2454.4,
+          "after": 2454.4
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 1930.1,
+        "process_host_heap_mib": {
+          "before": 1987.9,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 2598.7,
+          "after": 2598.7
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "restir-reuse": {
+        "renderer_host_mib": {
+          "before": 6363.8,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 6504.4,
+          "after": 6504.4
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 6359.8,
+        "process_host_heap_mib": {
+          "before": 6417.6,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 6648.7,
+          "after": 6648.7
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      },
+      "svgf-restir": {
+        "renderer_host_mib": {
+          "before": 6996.6,
+          "after": 4.0
+        },
+        "renderer_device_local_mib": {
+          "before": 7516.9,
+          "after": 7516.9
+        },
+        "device_local_groups_identical": true,
+        "mirror_groups_after": 0,
+        "mirror_mib_removed": 6992.6,
+        "process_host_heap_mib": {
+          "before": 7050.4,
+          "after": 60.3
+        },
+        "process_device_local_heap_mib": {
+          "before": 7661.2,
+          "after": 7661.2
+        },
+        "residual_mib_after": {
+          "device_local": 144.3,
+          "host": 56.3
+        }
+      }
+    }
+  },
+  "read_back_control_1920x1080_groups_identical_to_before": {
+    "progressive-reference": true,
+    "progressive-wavefront": true,
+    "temporal-metadata": true,
+    "temporal-radiance": true,
+    "svgf": true,
+    "restir-reuse": true,
+    "svgf-restir": true
+  },
+  "correctness": {
+    "lotus-renderer-restir-gpu MirrorLifecycle": "both integrators, 16x16, SVGF (5 iterations) with temporal and spatial reuse: two GPU-only frames allocate no mirror and return no host products; the third, read-back frame allocates the same mirrors and returns byte-identical colour, depth, temporal surfaces, validity, radiance, batch and reservoir products to a renderer that read back every frame",
+    "lotus-renderer-residency-benchmark": "every mode at 40x24 without readback (no .readback owner) and with readback (each mirror at its per-pixel lower bound)"
+  },
+  "decision": "adopt"
+}

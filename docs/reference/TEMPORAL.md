@@ -223,7 +223,9 @@ The primary-surface pass has its own persistent timestamp pair:
 `timestamp_available` and `primary_surface_gpu_ms`, covering the buffer clear
 and surface draw, excluding metadata host writes and surface readback.
 Unavailable timestamps report false/zero. `surface_bytes` counts both device
-buffers and their two-buffer host readback mirror (256 bytes per target pixel);
+buffers and, once a frame has read back, their two-buffer host readback mirror
+(128 bytes per target pixel each; host mirrors are allocated only by the first
+frame with `read_back`);
 `metadata_bytes` counts the 272-byte camera/window/validation/radiance block and the retained capacity
 of the 96-byte-per-instance metadata buffer. Surface buffers/readback persist
 at a fixed extent and are replaced on resize. Instance capacity grows when
@@ -287,8 +289,9 @@ exercise inclusive threshold and fetch-edge behavior.
 `reprojection_gpu_ms` has its own persistent timestamp pair, sharing
 `timestamp_available` with the primary-surface pass. It covers the fullscreen
 validity pass and excludes host writes and readback. Unavailable timestamps
-report false/zero. `validity_bytes` counts the persistent device output and
-host readback mirror (32 bytes per pixel), separately from `surface_bytes`.
+report false/zero. `validity_bytes` counts the persistent device output and,
+once allocated by a read-back frame, its host readback mirror (16 bytes per
+pixel each), separately from `surface_bytes`.
 The two passes have explicit shader-write/read and transfer/readback barriers.
 The validity pipeline and ten-query timestamp pool are created at renderer
 initialization; fixed extents reuse buffers and resize replaces them.
@@ -369,8 +372,8 @@ temporal mean; the D32 attachment keeps ordinary primary depth.
 the persistent ten-query pool, with the existing `timestamp_available`
 flag. They measure the accumulation and variance draws, excluding batch
 copy, transport and readbacks. `radiance_bytes` counts two device history
-buffers, their two-buffer host readback mirror, and the fresh RGBA device
-batch with its host mirror: 160 bytes per pixel. These buffers persist at a
+buffers and the fresh RGBA device batch (80 bytes per pixel) and, once a
+read-back frame has allocated it, their host readback mirror (another 80). These buffers persist at a
 fixed extent and are replaced on resize; returned evidence vectors and
 Vulkan allocation alignment are outside this accounting. The pipelines are
 created at renderer initialization. History and RNG state publish only after

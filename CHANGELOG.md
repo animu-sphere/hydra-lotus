@@ -23,6 +23,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- Host readback mirrors of the scene targets, temporal surfaces, validity,
+  radiance and reservoirs are allocated by the first frame that reads back
+  (or restores preserved contents) instead of with their device buffers, so
+  frames that keep their products on the GPU, as the viewport and Hydra's
+  presentation do, hold no mirrors: SVGF with both reuse passes uses
+  1.71 GiB less host-visible memory at 1080p and 6.83 GiB at 4K, with
+  identical products when read back. The temporal and reservoir byte fields
+  count mirrors only once allocated, and `--residency-read-back` measures
+  the read-back case
+  ([contract](docs/reference/SCENE.md#renderer-residency),
+  [evidence](docs/reports/2026-10-26-lazy-readback-mirrors.md)).
 - Rays find the analytic lights they cross through a binary hierarchy over
   the sphere, rect and disk lights' bounds, built with the light table,
   instead of testing every light: a 256-light `many-lights-v1` frame's

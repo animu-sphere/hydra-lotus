@@ -295,8 +295,8 @@ Proposal and candidate-count changes also reset temporal radiance and reservoir
 history compatibility. Reservoir
 state stays outside shared temporal metadata/validity.
 
-Persistent device storage and its host readback mirror initially total 96 bytes
-per pixel. Capacity is retained across smaller targets and mode switches;
+Persistent device storage takes 48 bytes per pixel; its host readback mirror,
+another 48, is allocated by the first frame with `read_back`. Capacity is retained across smaller targets and mode switches;
 `reservoir_bytes` reports it separately from scene-memory stats. Storage-range
 limits reject before dispatch. A separate timestamp pair reports
 `initial_gpu_ms`, covering primary tracing, candidates and selected visibility,
@@ -516,7 +516,8 @@ but finite sampling and recursive correlation prevent a proof of unbiasedness.
 
 `scene_gpu_ms` already includes metadata and reservoir work; components must
 not be added to it. It excludes scene updates and readback. Wall time includes
-both. Reservoir and metadata bytes include device storage and host mirrors;
+both. Reservoir and metadata bytes include device storage and the host mirrors
+these read-back frames allocate;
 scene-pool reserved bytes exclude renderer targets. Total VRAM remains null.
 GPU series/cumulative times are null when unsupported or inapplicable.
 
@@ -813,7 +814,9 @@ means a compatible preceding frame exists, not that every pixel accepted it.
 
 Private GPU history records are 192 bytes including source shading data.
 Two device buffers and a two-frame readback mirror add 768 bytes/pixel; with
-initial storage/mirror, fresh capacity totals 864 bytes/pixel. Allocated
+initial storage/mirror, fresh capacity totals 864 bytes/pixel when frames read
+back, and the 432 device bytes alone when they do not: mirrors are allocated
+only by the first frame with `read_back`. Allocated
 capacity remains retained across smaller targets and mode switches and is
 included in `reservoir_bytes`. Shared temporal buffers are reported separately.
 Storage-range limits reject before dispatch. `temporal_gpu_ms` times only the
@@ -907,8 +910,8 @@ selected spatial source. The source-index diagnostic records all participants.
 
 The immutable input buffer and its readback add 384 bytes/pixel; source-index
 storage and readback add 32. With initial and two-frame history allocations,
-fresh spatial capacity totals 1280 bytes/pixel, excluding shared temporal
-metadata. Capacities remain retained after smaller targets and mode switches.
+fresh spatial capacity totals 1280 bytes/pixel when frames read back (640
+without the mirrors), excluding shared temporal metadata. Capacities remain retained after smaller targets and mode switches.
 `spatial_gpu_ms` times only the spatial pass, including target/support evaluation
 and selected visibility, excluding readback. `temporal_gpu_ms` still includes
 the exact shading preparation pass when temporal reuse is off. All three

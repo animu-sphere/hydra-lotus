@@ -62,10 +62,13 @@ when the measurements justify it.
   behavior; defer broader layout changes until the baseline identifies them.
   A [residency inventory](../reports/2026-10-26-frame-residency.md) now
   lists every renderer allocation by owner with process heap usage at
-  1080p/4K; the renderer's groups explain all frame-sized growth. Next:
-  allocate host readback mirrors only for frames that read back (884 B per
-  pixel unused by Hydra and the viewport), then compare reservoir-history
-  representations.
+  1080p/4K; the renderer's groups explain all frame-sized growth.
+  [Lazy readback mirrors](../reports/2026-10-26-lazy-readback-mirrors.md)
+  were adopted: GPU-only frames hold no host mirrors (1.71 GiB less
+  host-visible memory for SVGF with reuse at 1080p, 6.83 GiB at 4K) with
+  identical read-back products. Next: compare reservoir-history
+  representations (640 B per pixel on the device under reuse) against the
+  reservoir CPU oracles, bias and moving-scene behaviour.
 
 ## Deferred adapter work
 

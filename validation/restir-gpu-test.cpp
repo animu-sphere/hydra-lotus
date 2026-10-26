@@ -1381,6 +1381,74 @@ void TemporalOverflow(OffscreenRenderer& renderer, Integrator integrator) {
 }
 } // namespace
 
+template <class T>
+bool SameBytes(const std::vector<T>& a, const std::vector<T>& b) {
+  return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0;
+}
+
+std::uint32_t MirrorAllocations(OffscreenRenderer& renderer) {
+  std::uint32_t allocations = 0;
+  for (const auto& group : renderer.Residency().groups)
+    if (group.owner.ends_with(".readback") && group.owner != "wavefront.readback")
+      allocations += group.allocations;
+  return allocations;
+}
+
+// Host mirrors are allocated by the first frame that reads back. Frames
+// before it keep every product on the GPU; the read-back frame must report
+// the same bytes as a renderer that read back every frame.
+void MirrorLifecycle(OffscreenRenderer& always, OffscreenRenderer& lazy, Integrator integrator) {
+  Fixture a(always, integrator, 16), l(lazy, integrator, 16);
+  for (auto* f : {&a, &l}) {
+    PlaneWorld(f->world);
+    Light light; light.shape = LightShape::Distant; light.angle = 0;
+    f->world.SetLight("/light", light);
+    f->settings.restir_spatial = true;
+  }
+  TemporalFrameSettings temporal; temporal.accumulate_radiance = true;
+  temporal.filter_iterations = kTemporalFilterIterations;
+  for (unsigned frame = 0; frame < 3; ++frame) {
+    l.target.read_back = frame == 2;
+    const auto expected = a.Temporal(temporal);
+    const auto actual = l.Temporal(temporal);
+    Check(actual.temporal.available && actual.temporal.radiance_available && actual.restir.available,
+        "mirror lifecycle frame missing products");
+    if (frame < 2) {
+      Check(actual.color.payload.empty() && actual.temporal.current.empty() &&
+          actual.temporal.radiance.empty() && actual.restir.initial.empty() && actual.restir.spatial.empty(),
+          "a frame without readback returned host products");
+      Check(MirrorAllocations(lazy) == 0, "a frame without readback allocated host mirrors");
+      Check(actual.restir.reservoir_bytes < expected.restir.reservoir_bytes &&
+          actual.temporal.surface_bytes < expected.temporal.surface_bytes,
+          "memory accounting counted unallocated mirrors");
+      continue;
+    }
+    Check(MirrorAllocations(lazy) == MirrorAllocations(always), "read-back frame mirrors differ");
+    Check(actual.restir.reservoir_bytes == expected.restir.reservoir_bytes &&
+        actual.temporal.surface_bytes == expected.temporal.surface_bytes &&
+        actual.temporal.validity_bytes == expected.temporal.validity_bytes &&
+        actual.temporal.radiance_bytes == expected.temporal.radiance_bytes,
+        "read-back frame memory accounting differs");
+    Check(actual.restir.history_available && actual.temporal.history_available,
+        "GPU-only frames did not keep history");
+    Check(SameBytes(actual.color.payload, expected.color.payload) &&
+        SameBytes(actual.depth.payload, expected.depth.payload) &&
+        SameBytes(actual.temporal.current, expected.temporal.current) &&
+        SameBytes(actual.temporal.previous, expected.temporal.previous) &&
+        SameBytes(actual.temporal.validity, expected.temporal.validity) &&
+        SameBytes(actual.temporal.radiance, expected.temporal.radiance) &&
+        SameBytes(actual.temporal.previous_radiance, expected.temporal.previous_radiance) &&
+        SameBytes(actual.temporal.batch, expected.temporal.batch) &&
+        SameBytes(actual.restir.initial, expected.restir.initial) &&
+        SameBytes(actual.restir.temporal, expected.restir.temporal) &&
+        SameBytes(actual.restir.spatial, expected.restir.spatial) &&
+        SameBytes(actual.restir.spatial_sources, expected.restir.spatial_sources) &&
+        SameBytes(actual.restir.previous, expected.restir.previous),
+        "products after GPU-only frames differ from always-read-back products");
+  }
+  std::cout << "mirror lifecycle: GPU-only frames allocate no mirrors; first read-back products identical PASS\n";
+}
+
 int main(int argc, char** argv) try {
   const RendererShaders shader_set = ShadersIn(argc > 1 ? argv[1] : "");
   const std::string& vertex = shader_set.vertex;
@@ -1400,8 +1468,9 @@ int main(int argc, char** argv) try {
     // Fresh scene extraction and renderer ownership for each independent fixture.
     const unsigned first_test = argc > 3 && std::string(argv[3]) == "--bsdf-only" ? 27U :
         argc > 3 && std::string(argv[3]) == "--visibility-only" ? 25U :
-        argc > 3 && std::string(argv[3]) == "--spatial-only" ? 11U : 0U;
-    for (unsigned test = first_test; test < 31; ++test) {
+        argc > 3 && std::string(argv[3]) == "--spatial-only" ? 11U :
+        argc > 3 && std::string(argv[3]) == "--mirrors-only" ? 31U : 0U;
+    for (unsigned test = first_test; test < 32; ++test) {
       renderer = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
       Check(renderer != nullptr, detail.c_str());
       if (test == 0) Arithmetic(*renderer, integrator);
@@ -1435,6 +1504,11 @@ int main(int argc, char** argv) try {
       if (test == 28) GlossyFurnace(*renderer, integrator);
       if (test == 29) EmissiveLifecycle(*renderer, integrator, false);
       if (test == 30) EmissiveLifecycle(*renderer, integrator, true);
+      if (test == 31) {
+        auto lazy = CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
+        Check(lazy != nullptr, detail.c_str());
+        MirrorLifecycle(*renderer, *lazy, integrator);
+      }
     }
   }
   std::cout << "PASS: initial, temporal and spatial reservoirs under both integrators\n";
