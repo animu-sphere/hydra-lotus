@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -113,9 +115,9 @@ Lotus::Material Metal(const std::array<float, 3>& base, float roughness, float m
   return material;
 }
 
-} // namespace
-
-void SetMaterialBasics(Lotus::RenderWorld& world) {
+// Clears the world, then sets material-basics-v1's camera, dome, key light
+// and displayColor backdrop under `root`, which every fixture shares.
+void SetStudio(Lotus::RenderWorld& world, const std::string& root) {
   const auto old = world.Commit();
   for (const auto& [key, mesh] : old.scene->meshes) world.RemoveMesh(key);
   for (const auto& [key, material] : old.scene->materials) world.RemoveMaterial(key);
@@ -123,7 +125,7 @@ void SetMaterialBasics(Lotus::RenderWorld& world) {
   for (const auto& [key, texture] : old.scene->textures) world.RemoveTexture(key);
   world.SetEnvironmentMap(std::nullopt);
 
-  // The camera 6.5 units in front of the balls, looking down -Z: focal
+  // The camera 6.5 units in front of the subjects, looking down -Z: focal
   // length 50 over a 32 aperture, so tan(half field of view) = 0.32; its
   // clipping range is 1 to 100.
   constexpr float kFocal = 3.125F;
@@ -145,12 +147,18 @@ void SetMaterialBasics(Lotus::RenderWorld& world) {
   key.radiance = {4.0F, 4.0F, 4.0F};
   key.width = 3.0F;
   key.height = 3.0F;
-  world.SetLight("/MaterialBasics/Key", key);
+  world.SetLight(root + "/Key", key);
 
-  world.SetMesh("/MaterialBasics/Backdrop", Backdrop(), {});
-  const std::string backdrop = "/MaterialBasics/Backdrop.lotus:displayColor";
+  world.SetMesh(root + "/Backdrop", Backdrop(), {});
+  const std::string backdrop = root + "/Backdrop.lotus:displayColor";
   world.SetMaterial(backdrop, Dielectric({0.5F, 0.5F, 0.5F}));
-  world.BindMaterial("/MaterialBasics/Backdrop", backdrop);
+  world.BindMaterial(root + "/Backdrop", backdrop);
+}
+
+} // namespace
+
+void SetMaterialBasics(Lotus::RenderWorld& world) {
+  SetStudio(world, "/MaterialBasics");
 
   Lotus::Material specular = Dielectric({0.05F, 0.05F, 0.05F}, 0.2F);
   specular.use_specular_workflow = true;
@@ -196,6 +204,241 @@ void SetMaterialBasics(Lotus::RenderWorld& world) {
     world.SetMaterial(material, balls[i].second);
     world.BindMaterial(mesh, material);
   }
+}
+
+namespace {
+
+using Texel = std::array<std::uint8_t, 4>;
+
+// scripts/material_fixtures.py's IMAGES, as the adapter decodes them: one
+// channel becomes (r, r, r, 1), two (r, r, r, g) and three (r, g, b, 1).
+Texel Palette(std::uint32_t x, std::uint32_t y) {
+  return {std::uint8_t(40 + 60 * x), std::uint8_t(40 + 60 * y),
+      std::uint8_t((x + y) % 2 == 0 ? 200 : 60), 255};
+}
+
+Texel Ramp(std::uint32_t x, std::uint32_t y) {
+  const auto v = std::uint8_t(15 + 15 * (x + 4 * y));
+  return {v, v, v, 255};
+}
+
+Texel GreyAlpha(std::uint32_t x, std::uint32_t y) {
+  const auto v = std::uint8_t(50 + 60 * x);
+  return {v, v, v, std::uint8_t(230 - 60 * y)};
+}
+
+Texel Rgba(std::uint32_t x, std::uint32_t y) {
+  return {std::uint8_t(220 - 60 * x), std::uint8_t(40 + 60 * y),
+      std::uint8_t(40 + 60 * ((x + y) % 4)), std::uint8_t(30 + 65 * x)};
+}
+
+Texel Checker(std::uint32_t x, std::uint32_t y) {
+  const auto v = std::uint8_t((x + y) % 2 == 0 ? 255 : 0);
+  return {v, v, v, 255};
+}
+
+// A square image's texels, rows from the top.
+Lotus::Texture Image(std::uint32_t size, Lotus::TextureFormat format,
+    Texel (*texel)(std::uint32_t, std::uint32_t)) {
+  Lotus::Texture texture;
+  texture.width = texture.height = size;
+  texture.format = format;
+  for (std::uint32_t y = 0; y < size; ++y)
+    for (std::uint32_t x = 0; x < size; ++x) {
+      const Texel value = texel(x, y);
+      texture.texels.insert(texture.texels.end(), value.begin(), value.end());
+    }
+  return texture;
+}
+
+// A lookup of validation/materials/textures/<file> under a colour space,
+// keyed relative to validation/materials/.
+Lotus::TextureInput Lookup(const std::string& file, const std::string& space,
+    Lotus::TextureWrap wrap_s = Lotus::TextureWrap::Clamp,
+    Lotus::TextureWrap wrap_t = Lotus::TextureWrap::Clamp) {
+  Lotus::TextureInput lookup;
+  lookup.texture = "textures/" + file + "|" + space;
+  lookup.wrap_s = wrap_s;
+  lookup.wrap_t = wrap_t;
+  return lookup;
+}
+
+Lotus::TextureInput Channel(Lotus::TextureInput lookup, std::uint32_t channel) {
+  lookup.channel = channel;
+  return lookup;
+}
+
+// A material whose base colour is `lookup`, at the set `texcoords`.
+Lotus::Material Textured(Lotus::TextureInput lookup, std::string texcoords = "st") {
+  Lotus::Material material;
+  material.base_color_texture = std::move(lookup);
+  material.texcoords = std::move(texcoords);
+  return material;
+}
+
+using Texcoords = std::vector<std::array<float, 2>>;
+using Face = std::array<std::array<float, 2>, 4>;
+
+// A card's texture coordinates per triangle corner, from its four face
+// vertices counter-clockwise from the bottom left: the fan (0, 1, 2),
+// (0, 2, 3).
+Texcoords Corners(const Face& face) {
+  return {face[0], face[1], face[2], face[0], face[2], face[3]};
+}
+
+constexpr Face kUnit{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+constexpr Face kWide{{{-0.5F, -0.5F}, {1.5F, -0.5F}, {1.5F, 1.5F}, {-0.5F, 1.5F}}};
+// uv1, where a card has it: st turned a quarter.
+constexpr Face kTurned{{{1, 0}, {1, 1}, {0, 1}, {0, 0}}};
+
+Lotus::MeshGeometry Card(std::map<std::string, Texcoords> texcoords) {
+  Lotus::MeshGeometry mesh;
+  mesh.positions = {{-0.5F, -0.5F, 0.0F}, {0.5F, -0.5F, 0.0F},
+      {0.5F, 0.5F, 0.0F}, {-0.5F, 0.5F, 0.0F}};
+  mesh.triangles = {{0, 1, 2}, {0, 2, 3}};
+  mesh.source_faces = {0, 0};
+  mesh.texcoords = std::move(texcoords);
+  return mesh;
+}
+
+void DarkerMetal(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialBasics/Looks/Metal50";
+  Lotus::Material metal = world.Commit().scene->materials.at(key);
+  for (float& channel : metal.base_color) channel *= 0.9F;
+  world.SetMaterial(key, metal);
+}
+
+// As a texel-centre convention error would place the coordinates.
+void ShiftedRepeat(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialTextures/Cards/Repeat";
+  const Lotus::SceneMesh mesh = world.Commit().scene->meshes.at(key);
+  Lotus::MeshGeometry geometry = *mesh.geometry;
+  for (auto& st : geometry.texcoords.at("st")) st[0] += 0.125F;
+  world.SetMesh(key, std::move(geometry), mesh.instance);
+}
+
+} // namespace
+
+void SetMaterialTextures(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialTextures";
+  SetStudio(world, root);
+
+  // Every image a translated lookup names. Under auto, the 8-bit
+  // three-channel palette is sRGB and the one- and two-channel images are
+  // not.
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/palette.png|raw", Image(4, kUnorm, Palette));
+  world.SetTexture("textures/palette.png|auto", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/ramp.png|auto", Image(4, kUnorm, Ramp));
+  world.SetTexture("textures/grey-alpha.png|auto", Image(4, kUnorm, GreyAlpha));
+  world.SetTexture("textures/rgba.png|sRGB", Image(4, kSrgb, Rgba));
+  world.SetTexture("textures/rgba.png|raw", Image(4, kUnorm, Rgba));
+  world.SetTexture("textures/checker.png|raw", Image(64, kUnorm, Checker));
+
+  using Lotus::TextureWrap;
+  const auto palette = [](TextureWrap s = TextureWrap::Clamp,
+                           TextureWrap t = TextureWrap::Clamp) {
+    return Lookup("palette.png", "sRGB", s, t);
+  };
+  Lotus::Material grey_alpha = Textured(Lookup("grey-alpha.png", "auto"));
+  grey_alpha.roughness_texture = Channel(Lookup("grey-alpha.png", "auto"), 3);
+  Lotus::Material alpha = Textured(Lookup("rgba.png", "sRGB"));
+  alpha.roughness_texture = Channel(Lookup("rgba.png", "sRGB"), 3);
+  Lotus::Material orm;
+  orm.base_color = {0.95F, 0.64F, 0.54F};
+  orm.metallic_texture = Channel(Lookup("rgba.png", "raw"), 2);
+  orm.roughness_texture = Channel(Lookup("rgba.png", "raw"), 1);
+  orm.texcoords = "st";
+  Lotus::TextureInput scale_bias = Lookup("palette.png", "raw");
+  scale_bias.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  scale_bias.bias = {-0.5F, -0.5F, -0.5F, 0.0F};
+  // The unresolved file keeps its authored path. Neither lookup names an
+  // image, so both return their fallbacks.
+  Lotus::TextureInput missing = palette();
+  missing.texture = "./textures/missing.png|sRGB";
+  missing.scale = {0.5F, 0.5F, 0.5F, 1.0F};
+  missing.fallback = {0.9F, 0.2F, 0.6F, 1.0F};
+  Lotus::TextureInput no_file = palette();
+  no_file.texture = "|auto";
+  no_file.fallback = {0.2F, 0.6F, 0.9F, 1.0F};
+  Lotus::Material constant = Textured(palette(), "");
+  constant.texcoord_fallback = {0.6F, 0.3F};
+  Lotus::Material absent = Textured(palette(), "absent");
+  absent.texcoord_fallback = {0.1F, 0.9F};
+  // Untranslated connections leave their inputs' defaults: a UsdTransform2d
+  // between the reader and the texture, the ramp's metallic at a second
+  // texture-coordinate source, a colour output on roughness and a scalar
+  // output on the base colour.
+  Lotus::Material colour_on_scalar;
+  colour_on_scalar.base_color = {0.3F, 0.5F, 0.7F};
+
+  using Sets = std::map<std::string, Texcoords>;
+  const Sets unit{{"st", Corners(kUnit)}};
+  const Sets wide{{"st", Corners(kWide)}};
+  const Sets two{{"st", Corners(kUnit)}, {"uv1", Corners(kTurned)}};
+  struct Entry {
+    const char* name;
+    Lotus::Material material;
+    Sets texcoords;
+  };
+  const std::array<Entry, 25> cards{{
+      {"UseMetadata", Textured(palette(TextureWrap::Black, TextureWrap::Black)), wide},
+      {"Clamp", Textured(palette()), wide},
+      {"Repeat", Textured(palette(TextureWrap::Repeat, TextureWrap::Repeat)), wide},
+      {"Mirror", Textured(palette(TextureWrap::Mirror, TextureWrap::Mirror)), wide},
+      {"Mixed", Textured(palette(TextureWrap::Repeat, TextureWrap::Black)), wide},
+      {"Srgb", Textured(palette()), unit},
+      {"Raw", Textured(Lookup("palette.png", "raw")), unit},
+      {"Auto", Textured(Lookup("palette.png", "auto")), unit},
+      {"Grey", Textured(Lookup("ramp.png", "auto")), unit},
+      {"GreyAlpha", grey_alpha, unit},
+      {"Alpha", alpha, unit},
+      {"Orm", orm, unit},
+      {"ScaleBias", Textured(scale_bias), unit},
+      {"Missing", Textured(missing), unit},
+      {"NoFile", Textured(no_file), unit},
+      // Per vertex, which reaches the corners as per face vertex would.
+      {"Vertex", Textured(palette()), unit},
+      // (0, 0), (1, 0), (0, 1), (1, 1) indexed by 1, 0, 2, 3: mirrored in s.
+      {"Indexed", Textured(palette()), {{"st", Corners({{{1, 0}, {0, 0}, {0, 1}, {1, 1}}})}}},
+      {"Named", Textured(palette(), "uv1"), two},
+      {"Constant", constant, unit},
+      {"Absent", absent, unit},
+      {"Transform2d", Lotus::Material{}, unit},
+      {"SecondSource", Textured(palette()), two},
+      {"ColourOnScalar", colour_on_scalar, unit},
+      {"ScalarOnColour", Lotus::Material{}, unit},
+      {"Minified",
+          Textured(Lookup("checker.png", "raw", TextureWrap::Repeat, TextureWrap::Repeat)),
+          unit},
+  }};
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < cards.size(); ++i) {
+    const std::string name = cards[i].name;
+    const std::string mesh = root + "/Cards/" + name;
+    const std::string material = root + "/Looks/" + name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = 0.7F;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, Card(cards[i].texcoords), placed);
+    world.SetMaterial(material, cards[i].material);
+    world.BindMaterial(mesh, material);
+  }
+}
+
+std::span<const MaterialFixture> MaterialFixtures() {
+  static constexpr MaterialFixture kFixtures[] = {
+      {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
+          "the half-rough metal 10% darker", DarkerMetal},
+      {"material-textures-v1", "/MaterialTextures", 160, SetMaterialTextures,
+          "the repeating card half a texel off", ShiftedRepeat},
+  };
+  return kFixtures;
 }
 
 } // namespace LotusHeadless

@@ -1252,6 +1252,15 @@ public:
         TF_WARN("Lotus uses the default material for %s: %s",
             GetId().GetText(), translation.unsupported.c_str());
       }
+      if (!translation.connected_inputs.empty()) {
+        std::string inputs;
+        for (const TfToken& input : translation.connected_inputs) {
+          inputs += (inputs.empty() ? "" : ", ") + input.GetString();
+        }
+        TF_WARN("Lotus uses the defaults of %s inputs whose shader graph it "
+                "does not translate: %s",
+            GetId().GetText(), inputs.c_str());
+      }
       state_->SyncMaterial(GetId(), translation);
     }
     *dirty_bits = Clean;

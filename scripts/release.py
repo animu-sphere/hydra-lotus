@@ -24,6 +24,8 @@ REQUIRED = {
     "bin/reference/cornell-box-variance.pfm",
     "bin/reference/material-basics-v1-mean.pfm",
     "bin/reference/material-basics-v1-variance.pfm",
+    "bin/reference/material-textures-v1-mean.pfm",
+    "bin/reference/material-textures-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",

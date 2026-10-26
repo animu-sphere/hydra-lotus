@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Write or check the committed UsdPreviewSurface material fixtures.
 
-Each fixture is authored here as USD text, with no OpenUSD dependency, and
-mirrored as a Lotus scene in adapters/common/material_fixtures.cpp. The
-Hydra fixture test requires the two to agree; the headless check renders
-the mirror against the committed reference images.
+Each fixture is authored here as USD text and PNG images, with no OpenUSD
+or imaging dependency, and mirrored as a Lotus scene in
+adapters/common/material_fixtures.cpp. The Hydra fixture test requires the
+two to agree; the headless check renders the mirror against the committed
+reference images.
 """
 
 import argparse
 import math
 from pathlib import Path
+import struct
 import sys
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORY = ROOT / "validation" / "materials"
@@ -216,7 +219,302 @@ def basics():
     return "\n".join(lines)
 
 
-FIXTURES = {"material-basics-v1.usda": basics}
+def png(width, height, channels, texel):
+    """An 8-bit PNG of `channels` channels (grey, grey-alpha, RGB or RGBA)
+    whose texel at column x and row y from the top is texel(x, y).
+
+    The zlib stream holds stored blocks only, so the bytes depend on no
+    compressor version; no gamma or colour-space chunk is written.
+    """
+    rows = b"".join(b"\0" + bytes(c for x in range(width) for c in texel(x, y))
+                    for y in range(height))
+    blocks = b""
+    for start in range(0, len(rows), 65535):
+        block = rows[start:start + 65535]
+        final = start + 65535 >= len(rows)
+        blocks += struct.pack("<BHH", final, len(block), len(block) ^ 0xFFFF) + block
+    stream = b"\x78\x01" + blocks + struct.pack(">I", zlib.adler32(rows))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data +
+                struct.pack(">I", zlib.crc32(kind + data)))
+
+    colour_type = {1: 0, 2: 4, 3: 2, 4: 6}[channels]
+    header = struct.pack(">IIBBBBB", width, height, 8, colour_type, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", stream) +
+            chunk(b"IEND", b""))
+
+
+# material-textures-v1's images in validation/materials/textures/: width,
+# height, channels and each texel's channels as a function of its column x
+# and row y from the top. The C++ mirror computes the same values.
+IMAGES = {
+    # Red by column, green by row, blue alternating: every texel differs.
+    "palette.png": (4, 4, 3, lambda x, y: (40 + 60 * x, 40 + 60 * y,
+                                           200 if (x + y) % 2 == 0 else 60)),
+    "ramp.png": (4, 4, 1, lambda x, y: (15 + 15 * (x + 4 * y),)),
+    "grey-alpha.png": (4, 4, 2, lambda x, y: (50 + 60 * x, 230 - 60 * y)),
+    "rgba.png": (4, 4, 4, lambda x, y: (220 - 60 * x, 40 + 60 * y,
+                                        40 + 60 * ((x + y) % 4), 30 + 65 * x)),
+    # One-texel cells, minified about 2.4 times on its card.
+    "checker.png": (64, 64, 1, lambda x, y: (255 if (x + y) % 2 == 0 else 0,)),
+}
+
+# Texture coordinates per face vertex of the card quad, whose points run
+# counter-clockwise from the bottom left: the image once, or from -0.5 to
+# 1.5 so that every wrap mode shows.
+UNIT = ((0, 0), (1, 0), (1, 1), (0, 1))
+WIDE = ((-0.5, -0.5), (1.5, -0.5), (1.5, 1.5), (-0.5, 1.5))
+# Each input's USD type, by node type.
+INPUT_TYPES = {
+    "UsdPreviewSurface": {"diffuseColor": "color3f", "metallic": "float",
+                          "roughness": "float"},
+    "UsdUVTexture": {"bias": "float4", "fallback": "float4", "file": "asset",
+                     "scale": "float4", "sourceColorSpace": "token", "st": "float2",
+                     "wrapS": "token", "wrapT": "token"},
+    "UsdPrimvarReader_float2": {"fallback": "float2", "varname": "string"},
+    "UsdTransform2d": {"in": "float2", "rotation": "float", "scale": "float2",
+                       "translation": "float2"},
+}
+OUTPUT_TYPES = {"rgb": "float3", "r": "float", "g": "float", "b": "float", "a": "float",
+                "result": "float2"}
+
+
+def output(node, name):
+    """A connection to `node`'s output `name`."""
+    return ("connect", node, name)
+
+
+def texture(file, space=None, st=output("Reader", "result"), wrap="clamp", **inputs):
+    """A UsdUVTexture node of `file` in validation/materials/textures/, read
+    at `st` with `wrap` along both coordinates unless given otherwise."""
+    authored = {"st": st, **inputs}
+    if file is not None:
+        authored["file"] = f"./textures/{file}"
+    if space is not None:
+        authored["sourceColorSpace"] = space
+    if wrap is not None:
+        authored.setdefault("wrapS", wrap)
+        authored.setdefault("wrapT", wrap)
+    return ("UsdUVTexture", authored)
+
+
+def reader(varname="st", **inputs):
+    return ("UsdPrimvarReader_float2", {"varname": varname, **inputs})
+
+
+def card(surface, **nodes):
+    """A material: its UsdPreviewSurface inputs and its other shader nodes."""
+    return {"surface": surface, "nodes": nodes}
+
+
+RGB = output("Texture", "rgb")
+# material-textures-v1: the policy's third audit item, textures and UV, on a
+# 5x5 grid of cards. Rows from the top: wrap modes; colour spaces and channel
+# counts; scalar channels, scale and bias and missing images; texture-
+# coordinate sources; then connections the translator does not read, and
+# minification. Each entry is the card's name, its material and, where they
+# differ from st per face vertex over UNIT, its texture-coordinate primvars
+# as (values, interpolation, indices).
+TEXTURES = [
+    [("UseMetadata", card({"diffuseColor": RGB},
+                          Texture=texture("palette.png", "sRGB", wrap=None),
+                          Reader=reader()), {"st": (WIDE,)}),
+     ("Clamp", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                    Reader=reader()), {"st": (WIDE,)}),
+     ("Repeat", card({"diffuseColor": RGB},
+                     Texture=texture("palette.png", "sRGB", wrap="repeat"),
+                     Reader=reader()), {"st": (WIDE,)}),
+     ("Mirror", card({"diffuseColor": RGB},
+                     Texture=texture("palette.png", "sRGB", wrap="mirror"),
+                     Reader=reader()), {"st": (WIDE,)}),
+     ("Mixed", card({"diffuseColor": RGB},
+                    Texture=texture("palette.png", "sRGB", wrapS="repeat", wrapT="black"),
+                    Reader=reader()), {"st": (WIDE,)})],
+    [("Srgb", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                   Reader=reader()), {}),
+     ("Raw", card({"diffuseColor": RGB}, Texture=texture("palette.png", "raw"),
+                  Reader=reader()), {}),
+     ("Auto", card({"diffuseColor": RGB}, Texture=texture("palette.png"),
+                   Reader=reader()), {}),
+     ("Grey", card({"diffuseColor": RGB}, Texture=texture("ramp.png"),
+                   Reader=reader()), {}),
+     ("GreyAlpha", card({"diffuseColor": RGB, "roughness": output("Texture", "a")},
+                        Texture=texture("grey-alpha.png"), Reader=reader()), {})],
+    [("Alpha", card({"diffuseColor": RGB, "roughness": output("Texture", "a")},
+                    Texture=texture("rgba.png", "sRGB"), Reader=reader()), {}),
+     ("Orm", card({"diffuseColor": (0.95, 0.64, 0.54),
+                   "metallic": output("Texture", "b"),
+                   "roughness": output("Texture", "g")},
+                  Texture=texture("rgba.png", "raw"), Reader=reader()), {}),
+     ("ScaleBias", card({"diffuseColor": RGB},
+                        Texture=texture("palette.png", "raw", scale=(2, 2, 2, 1),
+                                        bias=(-0.5, -0.5, -0.5, 0)),
+                        Reader=reader()), {}),
+     ("Missing", card({"diffuseColor": RGB},
+                      Texture=texture("missing.png", "sRGB", scale=(0.5, 0.5, 0.5, 1),
+                                      fallback=(0.9, 0.2, 0.6, 1)),
+                      Reader=reader()), {}),
+     ("NoFile", card({"diffuseColor": RGB},
+                     Texture=texture(None, fallback=(0.2, 0.6, 0.9, 1)),
+                     Reader=reader()), {})],
+    [("Vertex", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                     Reader=reader()), {"st": (UNIT, "vertex")}),
+     ("Indexed", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                      Reader=reader()),
+      {"st": (((0, 0), (1, 0), (0, 1), (1, 1)), "faceVarying", (1, 0, 2, 3))}),
+     ("Named", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                    Reader=reader("uv1")),
+      {"st": (UNIT,), "uv1": (((1, 0), (1, 1), (0, 1), (0, 0)),)}),
+     ("Constant", card({"diffuseColor": RGB},
+                       Texture=texture("palette.png", "sRGB", st=(0.6, 0.3))), {}),
+     ("Absent", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                     Reader=reader("absent", fallback=(0.1, 0.9))), {})],
+    [("Transform2d", card({"diffuseColor": RGB},
+                          Texture=texture("palette.png", "sRGB",
+                                          st=output("Transform", "result")),
+                          Transform=("UsdTransform2d",
+                                     {"in": output("Reader", "result"), "rotation": 30,
+                                      "scale": (2, 2), "translation": (0.25, 0)}),
+                          Reader=reader()), {}),
+     ("SecondSource", card({"diffuseColor": RGB, "metallic": output("Ramp", "r")},
+                           Texture=texture("palette.png", "sRGB"),
+                           Ramp=texture("ramp.png", "raw", st=output("Second", "result")),
+                           Reader=reader(), Second=reader("uv1")),
+      {"st": (UNIT,), "uv1": (((1, 0), (1, 1), (0, 1), (0, 0)),)}),
+     ("ColourOnScalar", card({"diffuseColor": (0.3, 0.5, 0.7), "roughness": RGB},
+                             Texture=texture("palette.png", "raw"), Reader=reader()), {}),
+     ("ScalarOnColour", card({"diffuseColor": output("Texture", "r")},
+                             Texture=texture("ramp.png", "raw"), Reader=reader()), {}),
+     ("Minified", card({"diffuseColor": RGB},
+                       Texture=texture("checker.png", "raw", wrap="repeat"),
+                       Reader=reader()), {})],
+]
+CARD_COLUMNS = (-1.6, -0.8, 0, 0.8, 1.6)
+CARD_ROWS = (1.6, 0.8, 0, -0.8, -1.6)
+
+
+def value(kind, authored):
+    if kind == "asset":
+        return f"@{authored}@"
+    if kind in ("string", "token"):
+        return f'"{authored}"'
+    if isinstance(authored, tuple):
+        return f"({', '.join(number(c) for c in authored)})"
+    return number(authored)
+
+
+def shader(material, name, kind, inputs):
+    """A Shader prim's lines, inputs in name order, then the outputs that
+    other nodes of `material` read."""
+    lines = [f'            def Shader "{name}"', "            {",
+             f'                uniform token info:id = "{kind}"']
+    for key in sorted(inputs):
+        authored = inputs[key]
+        prefix = f"{INPUT_TYPES[kind][key]} inputs:{key}"
+        if isinstance(authored, tuple) and authored and authored[0] == "connect":
+            lines.append(f"                {prefix}.connect = "
+                         f"<{material}/{authored[1]}.outputs:{authored[2]}>")
+        else:
+            lines.append(f"                {prefix} = {value(INPUT_TYPES[kind][key], authored)}")
+    return lines
+
+
+def primvar(name, values, interpolation="faceVarying", indices=None):
+    lines = [f"            texCoord2f[] primvars:{name} = [{vectors(values)}] (",
+             f'                interpolation = "{interpolation}"', "            )"]
+    if indices is not None:
+        lines.append(f"            int[] primvars:{name}:indices = [{integers(indices)}]")
+    return lines
+
+
+def textures():
+    lines = [
+        "#usda 1.0",
+        "(",
+        '    defaultPrim = "MaterialTextures"',
+        "    metersPerUnit = 1",
+        '    upAxis = "Y"',
+        ")",
+        "",
+        "# Generated by scripts/material_fixtures.py; edit it there. Mirrored by",
+        "# adapters/common/material_fixtures.cpp (SetMaterialTextures).",
+        "",
+        "# The unit card every card inherits, facing +Z, without normals.",
+        'class Mesh "_Card"',
+        "{",
+        "    int[] faceVertexCounts = [4]",
+        "    int[] faceVertexIndices = [0, 1, 2, 3]",
+        "    point3f[] points = [(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), (-0.5, 0.5, 0)]",
+        '    uniform token subdivisionScheme = "none"',
+        "}",
+        "",
+        'def Xform "MaterialTextures"',
+        "{",
+    ]
+    # The camera, lights and backdrop of material-basics-v1.
+    shared = basics().splitlines()
+    start = shared.index('    def Camera "Camera"')
+    lines += shared[start:shared.index('    def Scope "Looks"')]
+    lines += ['    def Scope "Looks"', "    {"]
+    names = [name for row in TEXTURES for name, _, _ in row]
+    for row in TEXTURES:
+        for name, material, _ in row:
+            path = f"/MaterialTextures/Looks/{name}"
+            used = {}
+            for authored in [*material["surface"].values(),
+                             *(v for _, inputs in material["nodes"].values()
+                               for v in inputs.values())]:
+                if isinstance(authored, tuple) and authored and authored[0] == "connect":
+                    used.setdefault(authored[1], set()).add(authored[2])
+            lines += [
+                f'        def Material "{name}"',
+                "        {",
+                f"            token outputs:surface.connect = <{path}/Surface.outputs:surface>",
+                "",
+            ]
+            lines += shader(path, "Surface", "UsdPreviewSurface", material["surface"])
+            lines += ["                token outputs:surface", "            }"]
+            for node in sorted(material["nodes"]):
+                kind, inputs = material["nodes"][node]
+                lines += [""] + shader(path, node, kind, inputs)
+                lines += [f"                {OUTPUT_TYPES[o]} outputs:{o}"
+                          for o in sorted(used.get(node, ()))]
+                lines.append("            }")
+            lines.append("        }")
+            if name != names[-1]:
+                lines.append("")
+    lines += ["    }", "", '    def Scope "Cards"', "    {"]
+    for y, row in zip(CARD_ROWS, TEXTURES):
+        for x, (name, _, primvars) in zip(CARD_COLUMNS, row):
+            lines += [
+                f'        def Mesh "{name}" (',
+                '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                "            prepend inherits = </_Card>",
+                "        )",
+                "        {",
+                f"            rel material:binding = </MaterialTextures/Looks/{name}>",
+            ]
+            for set_name, layout in sorted((primvars or {"st": (UNIT,)}).items()):
+                lines += primvar(set_name, *layout)
+            lines += [
+                "            float3 xformOp:scale = (0.7, 0.7, 0.7)",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                "        }",
+            ]
+            if name != names[-1]:
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
+# Every committed file, relative to DIRECTORY: USD text or image bytes.
+FIXTURES = {
+    "material-basics-v1.usda": basics,
+    "material-textures-v1.usda": textures,
+    **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
+}
 
 
 def main(argv=None):
@@ -226,11 +524,16 @@ def main(argv=None):
     stale = []
     for name, generate in FIXTURES.items():
         path = DIRECTORY / name
-        text = generate()
+        content = generate()
         if args.command == "write":
-            DIRECTORY.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8", newline="\n")
-        elif not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, str):
+                path.write_text(content, encoding="utf-8", newline="\n")
+            else:
+                path.write_bytes(content)
+        elif not path.exists() or (path.read_text(encoding="utf-8")
+                                   if isinstance(content, str)
+                                   else path.read_bytes()) != content:
             stale.append(name)
     for name in stale:
         print(f"{name} differs from scripts/material_fixtures.py", file=sys.stderr)

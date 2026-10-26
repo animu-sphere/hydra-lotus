@@ -94,8 +94,15 @@ outside this queue.
   established committed USD fixtures with C++ mirrors and reference images:
   base colour and metallic/roughness extract exactly through Hydra, render
   byte-identically to the headless mirror and match the reference; no fix
-  was needed, and the roughness-0 floor is now documented. Remaining:
-  textures/UV, normals/normal maps, emission and alpha masks. Path classification waits for distinct shading classes and
+  was needed, and the roughness-0 floor is now documented. The
+  [textures fixture](../reports/2026-10-27-material-textures.md) adds wrap
+  modes, colour spaces, channel counts and texture-coordinate sources, with
+  Hio's decoded texels equal to the mirror's; they need no fix. Untranslated
+  connections such as `UsdTransform2d` silently took their defaults and now
+  warn; translating `UsdTransform2d` is a candidate bounded fix. Minification
+  without mipmaps is unbiased, with 17% more per-sample variance on the
+  minified card. Remaining: normals/normal maps, emission and alpha masks.
+  Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
 
 ## Previous delivery evidence

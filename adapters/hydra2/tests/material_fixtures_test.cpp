@@ -3,8 +3,10 @@
 // UsdImaging. CPU mode syncs each committed fixture's USD file into the Lotus
 // render delegate and requires its scene snapshot to be the headless mirror
 // in adapters/common/material_fixtures.cpp: the same materials, bindings,
-// triangles, lights and environment exactly, and the same positions,
-// normals, transforms and camera to float rounding. GPU mode renders the
+// triangles, texture coordinates, decoded textures, lights and environment
+// exactly, with texture keys' resolved paths taken relative to the
+// fixtures' directory, and the same positions, normals, transforms and
+// camera to float rounding. GPU mode renders the
 // stage through Hydra, under NEE/MIS (the default) and BSDF sampling, from
 // the headless check's independent sample index, and requires each image to
 // be the backend's image of the mirror bit for bit and to match the committed
@@ -36,6 +38,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -48,7 +51,6 @@ namespace {
 
 const std::filesystem::path kFixtures = LOTUS_MATERIAL_FIXTURES_DIRECTORY;
 const std::filesystem::path kReferences = LOTUS_REFERENCE_DIRECTORY;
-constexpr std::uint32_t kSize = LotusHeadless::kMaterialFixtureSize;
 // The headless check's: far from the reference's own samples.
 constexpr int kSampleIndex = 1 << 20;
 constexpr int kSamples = 256;
@@ -91,8 +93,10 @@ private:
 // pass renders a float colour AOV, and without it syncs the scene only.
 class Session {
 public:
-  Session(const UsdStageRefPtr& stage, const HdRenderSettingsMap& settings, bool gpu)
-      : delegate_(settings), index_(HdRenderIndex::New(&delegate_, {})) {
+  Session(const LotusHeadless::MaterialFixture& fixture, const UsdStageRefPtr& stage,
+      const HdRenderSettingsMap& settings, bool gpu)
+      : size_(fixture.size), delegate_(settings),
+        index_(HdRenderIndex::New(&delegate_, {})) {
     Check(index_ != nullptr, "could not create the render index");
     UsdImagingCreateSceneIndicesInfo info;
     info.stage = stage;
@@ -106,12 +110,12 @@ public:
             SdfPath::AbsoluteRootPath()));
     auto state = std::make_shared<HdRenderPassState>();
     const auto* camera = dynamic_cast<const HdCamera*>(index_->GetSprim(
-        HdPrimTypeTokens->camera, SdfPath("/MaterialBasics/Camera")));
+        HdPrimTypeTokens->camera, SdfPath(std::string(fixture.root) + "/Camera")));
     Check(camera != nullptr, "the fixture's camera is not a Hydra camera");
     state->SetCamera(camera);
-    state->SetFraming(CameraUtilFraming(GfRect2i(GfVec2i(0), kSize, kSize)));
+    state->SetFraming(CameraUtilFraming(GfRect2i(GfVec2i(0), size_, size_)));
     if (gpu) {
-      Check(color_.Allocate(GfVec3i(kSize, kSize, 1), HdFormatFloat32Vec4, false),
+      Check(color_.Allocate(GfVec3i(size_, size_, 1), HdFormatFloat32Vec4, false),
           "could not allocate the colour buffer");
       HdRenderPassAovBinding binding;
       binding.aovName = HdAovTokens->color;
@@ -144,10 +148,10 @@ public:
     const auto* pixels = static_cast<const float*>(color_.Map());
     Check(pixels != nullptr, "the colour buffer is not allocated");
     LotusHeadless::RgbImage image;
-    image.width = image.height = kSize;
-    for (std::uint32_t y = 0; y < kSize; ++y) {
-      for (std::uint32_t x = 0; x < kSize; ++x) {
-        const float* pixel = pixels + (std::size_t{kSize - 1 - y} * kSize + x) * 4;
+    image.width = image.height = size_;
+    for (std::uint32_t y = 0; y < size_; ++y) {
+      for (std::uint32_t x = 0; x < size_; ++x) {
+        const float* pixel = pixels + (std::size_t{size_ - 1 - y} * size_ + x) * 4;
         Check(pixel[3] == 1.0F, "alpha " + std::to_string(pixel[3]) +
                                     " at pixel " + std::to_string(x) + "," +
                                     std::to_string(y) + ": a sample missed the stage");
@@ -159,6 +163,7 @@ public:
   }
 
 private:
+  std::uint32_t size_;
   HdLotusRenderDelegate delegate_;
   std::unique_ptr<HdRenderIndex> index_;
   UsdImagingSceneIndices scene_indices_;
@@ -187,6 +192,40 @@ bool Near(const std::vector<std::array<float, N>>& a,
   return true;
 }
 
+// A texture key as the mirror names it: an existing resolved path relative
+// to the fixtures' directory. An unresolved path, or none, is kept.
+std::string MirrorKey(const std::string& key) {
+  const auto bar = key.rfind('|');
+  if (bar == std::string::npos) return key;
+  const std::filesystem::path file(key.substr(0, bar));
+  std::error_code error;
+  if (!file.is_absolute() || !std::filesystem::exists(file, error)) return key;
+  const std::filesystem::path relative = std::filesystem::relative(file, kFixtures, error);
+  return error ? key : relative.generic_string() + key.substr(bar);
+}
+
+Lotus::Material MirrorKeys(Lotus::Material material) {
+  for (auto* input : {&material.base_color_texture, &material.roughness_texture,
+           &material.metallic_texture, &material.emission_texture,
+           &material.normal_texture, &material.opacity_texture,
+           &material.specular_color_texture})
+    if (*input) (*input)->texture = MirrorKey((*input)->texture);
+  return material;
+}
+
+// What a mismatched material's lookups name, for the failure message.
+std::string Lookups(const Lotus::Material& material) {
+  std::string text = "texcoords '" + material.texcoords + "'";
+  const char* names[] = {"base colour", "roughness", "metallic", "emission",
+      "normal", "opacity", "specular colour"};
+  const auto inputs = Lotus::TextureInputs(material);
+  for (std::size_t i = 0; i < inputs.size(); ++i)
+    if (*inputs[i])
+      text += std::string(", ") + names[i] + " " + (*inputs[i])->texture + " channel " +
+              std::to_string((*inputs[i])->channel);
+  return text;
+}
+
 // The stage's snapshot against the mirror's. Returns how many of the float
 // values compared to rounding differ at all, for the record.
 std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
@@ -202,7 +241,24 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
   rounded(stage.camera.projection, mirror.camera.projection, "the camera's projection");
   Check(got.environment == want.environment && !got.environment_map,
       "the environment differs from the mirror's");
-  Check(got.textures.empty(), "the stage names textures");
+  std::map<std::string, std::shared_ptr<const Lotus::Texture>> textures;
+  for (const auto& [key, texture] : got.textures) textures[MirrorKey(key)] = texture;
+  std::string keys;
+  for (const auto& [key, texture] : textures) keys += " " + key;
+  Check(textures.size() == want.textures.size(), "the stage has textures" + keys);
+  for (const auto& [key, texture] : want.textures) {
+    const auto found = textures.find(key);
+    Check(found != textures.end(), "the stage has no texture " + key + "; it has" + keys);
+    const Lotus::Texture& decoded = *found->second;
+    Check(decoded.width == texture->width && decoded.height == texture->height &&
+              decoded.format == texture->format,
+        "texture " + key + " is " + std::to_string(decoded.width) + "x" +
+            std::to_string(decoded.height) + " in format " +
+            std::to_string(static_cast<int>(decoded.format)) + ", the mirror's " +
+            std::to_string(static_cast<int>(texture->format)));
+    Check(decoded.texels == texture->texels,
+        "texture " + key + "'s texels differ from the mirror's");
+  }
   Check(got.lights.size() == want.lights.size(), "the lights differ from the mirror's");
   for (const auto& [key, light] : want.lights) {
     const auto found = got.lights.find(key);
@@ -219,7 +275,9 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
   for (const auto& [key, material] : want.materials) {
     const auto found = got.materials.find(key);
     Check(found != got.materials.end(), "the stage has no material " + key);
-    Check(found->second == material, "material " + key + " differs from the mirror's");
+    Check(MirrorKeys(found->second) == material,
+        "material " + key + " differs from the mirror's: " +
+            Lookups(MirrorKeys(found->second)) + " against " + Lookups(material));
   }
   Check(got.meshes.size() == want.meshes.size(),
       "the stage has " + std::to_string(got.meshes.size()) +
@@ -238,7 +296,8 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
     const Lotus::MeshGeometry& b = *mesh.geometry;
     Check(a.triangles == b.triangles && a.source_faces == b.source_faces,
         "mesh " + key + "'s triangles differ from the mirror's");
-    Check(a.texcoords.empty(), "mesh " + key + " has texture coordinates");
+    Check(a.texcoords == b.texcoords,
+        "mesh " + key + "'s texture coordinates differ from the mirror's");
     rounded(a.positions, b.positions, "mesh " + key + "'s positions");
     rounded(a.normals, b.normals, "mesh " + key + "'s normals");
   }
@@ -248,14 +307,16 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
 // The backend's deterministic image of the mirror, rendered in one call by a
 // renderer of its own as the headless check renders it, RGB with rows from
 // the top.
-LotusHeadless::RgbImage MirrorImage(const Lotus::RendererShaders& shaders, bool mis) {
+LotusHeadless::RgbImage MirrorImage(const LotusHeadless::MaterialFixture& fixture,
+    const Lotus::RendererShaders& shaders, bool mis) {
+  const std::uint32_t size = fixture.size;
   Lotus::FrameStatus status = Lotus::FrameStatus::Fail;
   std::string error;
   const auto renderer = Lotus::CreateOffscreenRenderer(
       shaders.vertex, shaders.fragment, status, error, shaders.ray_query);
   Check(renderer != nullptr, "could not create the backend renderer: " + error);
   Lotus::RenderWorld world;
-  LotusHeadless::SetMaterialBasics(world);
+  fixture.set(world);
   const Lotus::FrameSnapshot snapshot = world.Commit();
   Lotus::SceneExtraction extraction;
   const Lotus::GpuSceneEvidence scene =
@@ -263,10 +324,10 @@ LotusHeadless::RgbImage MirrorImage(const Lotus::RendererShaders& shaders, bool 
   Check(scene.status == Lotus::FrameStatus::Pass,
       "the backend scene update failed: " + scene.detail);
   Lotus::OffscreenTarget target;
-  target.width = kSize;
-  target.height = kSize;
-  target.display_window = {0.0F, 0.0F, float(kSize), float(kSize)};
-  target.data_window = {0, 0, std::int32_t(kSize), std::int32_t(kSize)};
+  target.width = size;
+  target.height = size;
+  target.display_window = {0.0F, 0.0F, float(size), float(size)};
+  target.data_window = {0, 0, std::int32_t(size), std::int32_t(size)};
   Lotus::PathTracingSettings settings;
   settings.sample_index = kSampleIndex;
   settings.max_samples = kSamples;
@@ -276,11 +337,11 @@ LotusHeadless::RgbImage MirrorImage(const Lotus::RendererShaders& shaders, bool 
   Check(frame.status == Lotus::FrameStatus::Pass &&
             frame.samples_per_pixel == kSamples &&
             frame.color.pixel_format == "rgba32-sfloat" &&
-            frame.color.payload.size() == std::size_t{kSize} * kSize * 16,
+            frame.color.payload.size() == std::size_t{size} * size * 16,
       "the backend render failed: " + frame.detail);
   LotusHeadless::RgbImage image;
-  image.width = image.height = kSize;
-  for (std::size_t pixel = 0; pixel < std::size_t{kSize} * kSize; ++pixel) {
+  image.width = image.height = size;
+  for (std::size_t pixel = 0; pixel < std::size_t{size} * size; ++pixel) {
     float rgba[4];
     std::memcpy(rgba, frame.color.payload.data() + pixel * sizeof(rgba), sizeof(rgba));
     image.values.insert(image.values.end(), rgba, rgba + 3);
@@ -310,52 +371,53 @@ int main(int argc, char** argv) try {
     }
   }
 
-  const std::string stem(LotusHeadless::kMaterialBasics);
-  const std::filesystem::path file = kFixtures / (stem + ".usda");
-  const UsdStageRefPtr stage = UsdStage::Open(file.string());
-  Check(stage != nullptr, "could not open " + file.string());
+  for (const LotusHeadless::MaterialFixture& fixture : LotusHeadless::MaterialFixtures()) {
+    const std::string stem(fixture.id);
+    const std::filesystem::path file = kFixtures / (stem + ".usda");
+    const UsdStageRefPtr stage = UsdStage::Open(file.string());
+    Check(stage != nullptr, "could not open " + file.string());
 
-  if (!gpu) {
-    Session session(stage, {}, false);
-    session.Render();
-    Lotus::RenderWorld world;
-    LotusHeadless::SetMaterialBasics(world);
-    const std::size_t inexact =
-        ExpectMirror(session.Delegate().GetFrameSnapshot(), world.Commit());
-    std::cout << stem << " extracts to its mirror; " << inexact
-              << " transform, camera, position or normal sets differ by rounding\n";
-    return 0;
-  }
+    if (!gpu) {
+      Session session(fixture, stage, {}, false);
+      session.Render();
+      Lotus::RenderWorld world;
+      fixture.set(world);
+      const std::size_t inexact =
+          ExpectMirror(session.Delegate().GetFrameSnapshot(), world.Commit());
+      std::cout << stem << " extracts to its mirror; " << inexact
+                << " transform, camera, position or normal sets differ by rounding\n";
+      continue;
+    }
 
-  LotusHeadless::Reference reference;
-  reference.samples = kReferenceSamples;
-  for (const auto& [suffix, image] :
-      {std::pair{"-mean.pfm", &reference.mean}, std::pair{"-variance.pfm", &reference.variance}}) {
-    const auto failure = LotusHeadless::ReadPfm(kReferences / (stem + suffix), *image);
-    Check(failure.empty(), failure);
-  }
-  for (const bool mis : {true, false}) {
-    HdRenderSettingsMap settings;
-    settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(kSamples);
-    settings[kSampleIndexSetting] = VtValue(kSampleIndex);
-    settings[kLightSamplingSetting] = VtValue(mis);
-    Session session(stage, settings, true);
-    const LotusHeadless::RgbImage image = session.Converge();
-    const char* name = mis ? "NEE/MIS" : "BSDF sampling";
-    const LotusHeadless::RgbImage mirror = MirrorImage(shaders, mis);
-    Check(std::memcmp(image.values.data(), mirror.values.data(),
-              image.values.size() * sizeof(float)) == 0,
-        std::string(name) +
-            ": Hydra's image differs from the backend's image of the mirror");
-    const LotusHeadless::Comparison comparison =
-        LotusHeadless::Compare(image, kSamples, reference);
-    Check(comparison.failure.empty(), std::string(name) + ": " + comparison.failure);
-    std::cout << std::fixed << std::setprecision(2) << stem << ' ' << name << ' '
-              << kSamples << " spp: the mirror's image bit for bit; image z "
-              << comparison.image_z[0] << ' '
-              << comparison.image_z[1] << ' ' << comparison.image_z[2] << ", "
-              << comparison.tile << "px tiles max |z| " << comparison.max_tile_z
-              << " mean z^2 " << comparison.mean_tile_z2 << '\n';
+    LotusHeadless::Reference reference;
+    reference.samples = kReferenceSamples;
+    for (const auto& [suffix, image] : {std::pair{"-mean.pfm", &reference.mean},
+             std::pair{"-variance.pfm", &reference.variance}}) {
+      const auto failure = LotusHeadless::ReadPfm(kReferences / (stem + suffix), *image);
+      Check(failure.empty(), failure);
+    }
+    for (const bool mis : {true, false}) {
+      HdRenderSettingsMap settings;
+      settings[HdRenderSettingsTokens->convergedSamplesPerPixel] = VtValue(kSamples);
+      settings[kSampleIndexSetting] = VtValue(kSampleIndex);
+      settings[kLightSamplingSetting] = VtValue(mis);
+      Session session(fixture, stage, settings, true);
+      const LotusHeadless::RgbImage image = session.Converge();
+      const std::string name = stem + (mis ? " NEE/MIS" : " BSDF sampling");
+      const LotusHeadless::RgbImage mirror = MirrorImage(fixture, shaders, mis);
+      Check(std::memcmp(image.values.data(), mirror.values.data(),
+                image.values.size() * sizeof(float)) == 0,
+          name + ": Hydra's image differs from the backend's image of the mirror");
+      const LotusHeadless::Comparison comparison =
+          LotusHeadless::Compare(image, kSamples, reference);
+      Check(comparison.failure.empty(), name + ": " + comparison.failure);
+      std::cout << std::fixed << std::setprecision(2) << name << ' ' << kSamples
+                << " spp: the mirror's image bit for bit; image z "
+                << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+                << comparison.image_z[2] << ", " << comparison.tile
+                << "px tiles max |z| " << comparison.max_tile_z << " mean z^2 "
+                << comparison.mean_tile_z2 << '\n';
+    }
   }
   return 0;
 } catch (const std::exception& error) {

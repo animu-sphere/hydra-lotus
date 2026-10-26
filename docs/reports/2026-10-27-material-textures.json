@@ -1,0 +1,254 @@
+{
+  "schema": "lotus-material-textures-v1",
+  "question": "Does a committed UsdPreviewSurface fixture for textures and UV extract through Hydra, decoded images included, to its independent C++ mirror and render, headless and through Hydra, in agreement with committed Reference PT images; and which texture and UV behaviours need a fix?",
+  "procedure": {
+    "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-textures-v1.usda (fails only on the deliberately missing ./textures/missing.png)",
+    "reference": "lotus-headless --write-material-reference validation/reference: every fixture in a cleared GPU scene, BSDF sampling, reference integrator, 64 batches of 64 samples then 4096 samples from sample index 0; material-textures-v1 at 160x160",
+    "headless_check": "ctest -R 'lotus-validation-assets|lotus-renderer-evidence|lotus-renderer-install-tree|lotus-test-tiers' in build/cy2026-windows-x86_64-py313-core (renderer.material.fixtures, also from the installed tree)",
+    "hydra": "full build of build/cy2026-windows-x86_64-py313-lookdev--hydra--renderer-hydra2, then ctest -R 'hydra-(material|texture)|test-tiers'",
+    "minification_control": "uncommitted: the Minified card's material replaced by a constant base colour 0.5, reference written to a scratch directory with the same samples, card interior compared with the committed reference",
+    "scripts": "python -m unittest test_material_fixtures; python scripts/material_fixtures.py check; python scripts/check_docs.py"
+  },
+  "environment": {
+    "source": "228a3e9 plus this change",
+    "os": "Windows AMD64",
+    "compiler": "MSVC 19.51 Release",
+    "device": "NVIDIA RTX A5000",
+    "driver": "597.16",
+    "vulkan_api": "1.4.329",
+    "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime",
+    "validation": "validation and synchronization validation active",
+    "clocks": "unlocked",
+    "binaries_sha256": {
+      "lotus-headless.exe": "d50ebf8bcce4455e20aa49938caab487128296203f7de9c84fa49e176a47e703",
+      "lotus-hydra2-material-fixtures-test.exe": "e26c75bc6ba9d9904ccd27d0485bdda907e14a544bbb0d020a33116b7e11ad78",
+      "hdLotus.dll": "8a5844da54d5b92ae113660106199dc0b2e194e6712bd9b4c98124d5d8a65ff1"
+    }
+  },
+  "fixture_sha256": {
+    "validation/materials/material-textures-v1.usda": "06843a8cd7d0c7d85f72b00c871f8c68689153e88c307659391ceae330769146",
+    "validation/materials/textures/palette.png": "157140ce904345dc78b1df491be0e3d89b4829b5eeb175bcb3a5dc1d969b2c15",
+    "validation/materials/textures/ramp.png": "929a1274d6709ce1012ef204b1d8bc3fe9f2dd0412d44b856c0720dbee46890a",
+    "validation/materials/textures/grey-alpha.png": "92a8c5d21575fc49f6df3758fd18c4059ea6746db118f23b4ff7b540349281d5",
+    "validation/materials/textures/rgba.png": "c14f1c0448f4e8e84e801a7eff20424d63e1be0c13bdcf5e060d9bdd87883f74",
+    "validation/materials/textures/checker.png": "c1d37e7976672487290b93c1394c9132e2cf4772be06d5375c9d06bb2a1f8f7c"
+  },
+  "reference": {
+    "samples": 4096,
+    "batches": 64,
+    "size": [
+      160,
+      160
+    ],
+    "write_seconds_both_fixtures": 6.0,
+    "material_basics_rewritten_byte_identical": true,
+    "sha256": {
+      "validation/reference/material-textures-v1-mean.pfm": "81abeba9b9504f45ee185bd5698a9e8be246be7c900e273f9b4ca56470c4cc33",
+      "validation/reference/material-textures-v1-variance.pfm": "49faf92ae2295b314df9fb85ec40d509af638e77c54334c98132a6b79a73c8dd",
+      "validation/reference/material-basics-v1-mean.pfm": "dc0fda1547d42c5e05851ca7bddf139cefd5bbcfef33c87d4daf9d1d41972101",
+      "validation/reference/material-basics-v1-variance.pfm": "6d67c119f6a9ae98c4d19c5945b3e1e941fa968040ae8ae9dfee796a0bbc95b0"
+    }
+  },
+  "extraction": {
+    "materials_equal": true,
+    "texture_keys": "resolved paths relative to validation/materials/; the unresolved file keeps ./textures/missing.png; no file keys |auto",
+    "textures_equal": [
+      "textures/palette.png|sRGB Rgba8Srgb",
+      "textures/palette.png|raw Rgba8Unorm",
+      "textures/palette.png|auto Rgba8Srgb",
+      "textures/ramp.png|auto Rgba8Unorm",
+      "textures/grey-alpha.png|auto Rgba8Unorm",
+      "textures/rgba.png|sRGB Rgba8Srgb",
+      "textures/rgba.png|raw Rgba8Unorm",
+      "textures/checker.png|raw Rgba8Unorm"
+    ],
+    "texcoords_equal": true,
+    "bindings_equal": true,
+    "triangles_equal": true,
+    "lights_and_environment_equal": true,
+    "float_sets_differing_by_rounding": 0,
+    "untranslated_warnings": {
+      "/MaterialTextures/Looks/Transform2d": [
+        "diffuseColor"
+      ],
+      "/MaterialTextures/Looks/SecondSource": [
+        "metallic"
+      ],
+      "/MaterialTextures/Looks/ColourOnScalar": [
+        "roughness"
+      ],
+      "/MaterialTextures/Looks/ScalarOnColour": [
+        "diffuseColor"
+      ]
+    }
+  },
+  "comparisons": {
+    "sample_index": 1048576,
+    "tile_pixels": 8,
+    "rows": [
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 16,
+        "image_z": [
+          0.65,
+          0.82,
+          0.22
+        ],
+        "max_tile_z": 3.59,
+        "mean_tile_z2": 1.03
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 256,
+        "image_z": [
+          -0.65,
+          -0.51,
+          -0.4
+        ],
+        "max_tile_z": 3.55,
+        "mean_tile_z2": 1.14
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 16,
+        "image_z": [
+          0.32,
+          0.37,
+          0.33
+        ],
+        "max_tile_z": 1.88,
+        "mean_tile_z2": 0.07
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.22,
+          0.32,
+          0.28
+        ],
+        "max_tile_z": 1.44,
+        "mean_tile_z2": 0.12
+      },
+      {
+        "frontend": "headless",
+        "integrator": "wavefront",
+        "light_sampling": "mis",
+        "spp": 16,
+        "image_z": [
+          0.32,
+          0.37,
+          0.33
+        ],
+        "max_tile_z": 1.88,
+        "mean_tile_z2": 0.07
+      },
+      {
+        "frontend": "headless",
+        "integrator": "wavefront",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.22,
+          0.32,
+          0.28
+        ],
+        "max_tile_z": 1.44,
+        "mean_tile_z2": 0.12
+      },
+      {
+        "frontend": "hydra",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.22,
+          0.32,
+          0.28
+        ],
+        "max_tile_z": 1.44,
+        "mean_tile_z2": 0.12
+      },
+      {
+        "frontend": "hydra",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 256,
+        "image_z": [
+          -0.65,
+          -0.51,
+          -0.4
+        ],
+        "max_tile_z": 3.55,
+        "mean_tile_z2": 1.14
+      }
+    ],
+    "byte_identical": [
+      "headless wavefront-mis and reference-mis images at 16 and 256 spp",
+      "Hydra and the backend's image of the mirror, NEE/MIS and BSDF, 256 spp"
+    ],
+    "negative_control": {
+      "change": "Repeat card's st + 0.125 in s (half a texel of the 4x4 palette)",
+      "spp": 256,
+      "max_tile_z": 17.46,
+      "rejected": true
+    },
+    "reference_reproduced_bit_for_bit": true,
+    "material_basics_rows_unchanged": true
+  },
+  "minification": {
+    "card": "Minified, interior 361 pixels",
+    "checker_level0": {
+      "mean": 0.33862,
+      "per_sample_variance": 0.22124
+    },
+    "prefiltered_constant_0_5": {
+      "mean": 0.33871,
+      "per_sample_variance": 0.18938
+    },
+    "mean_difference": -0.00008,
+    "independent_standard_error": 0.00053,
+    "variance_ratio": 1.168,
+    "note": "paired: both share the reference's 4096 samples; BSDF sampling only"
+  },
+  "audit": {
+    "wrap_modes": "as documented; useMetadata is black",
+    "colour_spaces": "as documented; one- and two-channel 8-bit images stay linear under auto",
+    "channel_expansion": "as documented; RGBA alpha stays linear under sRGB",
+    "scalar_channels_scale_bias": "as documented",
+    "missing_image": "authored path key, warning, fallback, as documented",
+    "no_file": "key |auto, fallback, as documented",
+    "texcoord_sources": "vertex, indexed face-varying, named set, constant st and missing set as documented",
+    "untranslated_connections": "took their defaults as documented but were never reported; fixed: the adapter now warns per translation",
+    "minification": "no bias; 16.8% more per-sample variance on the minified card under BSDF sampling",
+    "not_covered": [
+      "UDIM",
+      "wrap metadata",
+      "premultiplied alpha",
+      "16-bit and float images",
+      "UsdTransform2d translation"
+    ]
+  },
+  "cost_seconds": {
+    "headless_evidence_ctest": 37.5,
+    "hydra_cpu_ctest": 0.08,
+    "hydra_gpu_ctest": 27.4,
+    "hydra_gpu_ctest_before": 11.6
+  },
+  "not_run": [
+    "viewport",
+    "usdview",
+    "installed Hydra host",
+    "ci-core",
+    "Hydra CTests other than material, texture, material-fixtures and test-tiers"
+  ],
+  "decision": "adopt material-textures-v1, the fixture list and the untranslated-connection warning; no renderer or translator fix needed for wrap modes, colour spaces, channels or texture-coordinate sources; UsdTransform2d translation is a candidate bounded fix, mipmaps are not proposed"
+}
