@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.24)
 # The residency report's procedure and inventory at a small, non-square
-# size: each mode's owners and per-pixel lower bounds. Sizes beyond those
+# size: each mode's owners and per-pixel lower bounds, without and with
+# readback; host mirrors exist only in the second. Sizes beyond those
 # bounds (alignment, driver choices) are observed, never a pass threshold.
 if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT)
   message(FATAL_ERROR "EXECUTABLE and TEST_ROOT are required")
@@ -23,13 +24,14 @@ foreach(rejected "--residency-width;8" "--residency-frames;0" "--residency-mode;
     message(FATAL_ERROR "Invalid option ${rejected} was accepted (${result})")
   endif()
 endforeach()
-set(report "${TEST_ROOT}/residency.json")
 set(width 40)
 set(height 24)
 math(EXPR pixels "${width} * ${height}")
+foreach(read_back 0 1)
+set(report "${TEST_ROOT}/residency-${read_back}.json")
 execute_process(COMMAND "${EXECUTABLE}" --benchmark-residency "${report}"
   --benchmark-label "CTest quoted \"label\"" --residency-width ${width} --residency-height ${height}
-  --residency-frames 2
+  --residency-frames 2 --residency-read-back ${read_back}
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 300)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "Residency benchmark failed (${result}):\n${output}\n${error}")
@@ -39,9 +41,15 @@ string(JSON schema GET "${json}" schema)
 string(JSON status GET "${json}" status)
 string(JSON label GET "${json}" build label)
 string(JSON reported_pixels GET "${json}" procedure pixels)
+# A JSON boolean reads as ON or OFF.
+string(JSON reported_read_back GET "${json}" procedure read_back)
+set(expected_read_back OFF)
+if(read_back)
+  set(expected_read_back ON)
+endif()
 string(JSON count LENGTH "${json}" modes)
 if(NOT schema STREQUAL "lotus-residency-benchmark-v1" OR NOT label STREQUAL "CTest quoted \"label\"" OR
-   NOT reported_pixels EQUAL pixels)
+   NOT reported_pixels EQUAL pixels OR NOT reported_read_back STREQUAL expected_read_back)
   message(FATAL_ERROR "Wrong schema, build or procedure")
 endif()
 if(result STREQUAL "77")
@@ -86,9 +94,17 @@ function(require_group mode owner allocations per_pixel)
   math(EXPR minimum "${per_pixel} * ${pixels}")
   if(NOT group_allocations EQUAL allocations OR group_bytes LESS minimum)
     list(GET ids ${mode} id)
-    message(FATAL_ERROR "${id}: ${owner} has ${group_allocations} allocations of ${group_bytes} bytes; "
-      "expected ${allocations} of at least ${minimum}")
+    message(FATAL_ERROR "${id} (read_back ${read_back}): ${owner} has ${group_allocations} allocations "
+      "of ${group_bytes} bytes; expected ${allocations} of at least ${minimum}")
   endif()
+endfunction()
+
+# A host mirror: present as `require_group` describes only when frames read
+# back, absent otherwise.
+function(require_mirror mode owner allocations per_pixel)
+  math(EXPR allocations "${allocations} * ${read_back}")
+  math(EXPR per_pixel "${per_pixel} * ${read_back}")
+  require_group(${mode} ${owner} ${allocations} ${per_pixel})
 endfunction()
 
 foreach(m RANGE 0 6)
@@ -131,7 +147,7 @@ foreach(m RANGE 0 6)
   # The scene targets: accumulation, colour and depth images, and the
   # colour/depth mirrors, at least 36 and 20 bytes per pixel.
   require_group(${m} targets.scene 3 36)
-  require_group(${m} targets.scene.readback 2 20)
+  require_mirror(${m} targets.scene.readback 2 20)
 endforeach()
 
 # Index: 0 progressive-reference, 1 progressive-wavefront, 2 temporal-metadata,
@@ -143,9 +159,9 @@ require_group(0 wavefront.state 0 0)
 require_group(1 wavefront.state 3 92)
 foreach(m RANGE 2 6)
   require_group(${m} temporal.surfaces 2 128)
-  require_group(${m} temporal.surfaces.readback 1 128)
+  require_mirror(${m} temporal.surfaces.readback 1 128)
   require_group(${m} temporal.validity 1 16)
-  require_group(${m} temporal.validity.readback 1 16)
+  require_mirror(${m} temporal.validity.readback 1 16)
 endforeach()
 foreach(m 2 5)
   require_group(${m} temporal.radiance 0 0)
@@ -153,17 +169,18 @@ endforeach()
 foreach(m 3 4 6)
   # Two 32-byte histories and the 16-byte fresh batch, and their mirror.
   require_group(${m} temporal.radiance 3 80)
-  require_group(${m} temporal.radiance.readback 1 80)
+  require_mirror(${m} temporal.radiance.readback 1 80)
 endforeach()
 require_group(3 temporal.filter 0 0)
 require_group(4 temporal.filter 1 48)
 require_group(6 temporal.filter 1 48)
 foreach(m 5 6)
   require_group(${m} restir.initial 1 48)
-  require_group(${m} restir.initial.readback 1 48)
+  require_mirror(${m} restir.initial.readback 1 48)
   require_group(${m} restir.history 2 384)
-  require_group(${m} restir.history.readback 1 384)
+  require_mirror(${m} restir.history.readback 1 384)
   require_group(${m} restir.spatial 2 208)
-  require_group(${m} restir.spatial.readback 2 208)
+  require_mirror(${m} restir.spatial.readback 2 208)
 endforeach()
 require_group(4 restir.history 0 0)
+endforeach()

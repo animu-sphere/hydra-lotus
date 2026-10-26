@@ -144,8 +144,9 @@ pixel-centre depth hits overwrite the restored depth under the usual depth
 test. Misses and pixels outside the data window retain the restored values.
 Restoration does not restart radiance accumulation or change its background
 sample convention. Each bound colour/depth channel with no clear requires a
-CPU copy and a GPU upload, using the persistent readback buffers as staging;
-it creates no additional GPU allocation. This synchronous foundation path
+CPU copy and a GPU upload, using the target's colour/depth readback mirrors
+as staging; the first restoring or reading-back frame at a size allocates
+them, and they persist with the target. This synchronous foundation path
 does not cache CPU contents, since the host may edit them between passes.
 See the [buffer restoration evidence](../reports/2026-10-09-aov-restoration.md).
 

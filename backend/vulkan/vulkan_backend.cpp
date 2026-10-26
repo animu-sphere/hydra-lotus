@@ -619,9 +619,9 @@ VkRect2D DataScissor(const OffscreenTarget& target) {
           static_cast<std::uint32_t>(y1 - y0)}};
 }
 
-// The images, framebuffer and persistently mapped readback buffers of one
-// target size, for one colour format. The scene targets also hold the
-// radiance accumulation image.
+// The images and framebuffer of one target size, for one colour format, and
+// the persistently mapped colour/depth mirrors once a frame needs them. The
+// scene targets also hold the radiance accumulation image.
 struct Targets {
   VkFormat color_format = VK_FORMAT_UNDEFINED;
   std::uint32_t color_pixel_bytes = 0;
@@ -1106,6 +1106,12 @@ public:
     if (!EnsureTargets(targets, target.width, target.height, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
+    // The mirrors receive read-back products and stage preserved contents;
+    // frames that do neither leave them unallocated.
+    if ((target.read_back || RestoresContents(target)) &&
+        !EnsureTargetMirrors(targets, detail)) {
+      return Evidence(FrameStatus::Fail, detail);
+    }
     if (!StagePreservedContents(target, targets, detail)) {
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1194,9 +1200,7 @@ public:
       targets.initialized = true;
       // The first recording gives fresh images their layouts, which would
       // discard the accumulation if it were submitted again.
-      const bool restored = frame == 0 &&
-                            ((!target.clear_color_enabled && !target.preserved_color.empty()) ||
-                                (!target.clear_depth_enabled && !target.preserved_depth.empty()));
+      const bool restored = frame == 0 && RestoresContents(target);
       if ((initializing || restored) && frame + 1 < submissions) {
         initializing = false;
         if (!Record(draw, target, targets, pass, wavefront, restir, false, detail)) {
@@ -1389,11 +1393,13 @@ public:
       detail = "initial reservoir exceeds the device's storage buffer range";
       return false;
     }
+    // Mirrors are allocated by the first frame that reads them back.
     if (!EnsureTemporalBuffer(restir_initial_, bytes,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             false, detail) ||
-        !EnsureTemporalBuffer(restir_readback_, bytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail))
+        (target.read_back &&
+            !EnsureTemporalBuffer(restir_readback_, bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)))
       return false;
     const VkDescriptorBufferInfo info{restir_initial_.buffer, 0, bytes};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -1416,17 +1422,19 @@ public:
     for (auto& buffer : restir_history_buffers_)
       if (!EnsureTemporalBuffer(buffer, bytes, usage, false, detail))
         return false;
-    if (!EnsureTemporalBuffer(restir_history_readback_, bytes * 2,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail))
+    const bool mirrors = target.read_back;
+    if (mirrors && !EnsureTemporalBuffer(restir_history_readback_, bytes * 2,
+                       VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail))
       return false;
     const VkDeviceSize source_bytes = VkDeviceSize{target.width} * target.height * 16;
     if (restir_spatial_active_ &&
         (!EnsureTemporalBuffer(restir_spatial_input_, bytes, usage, false, detail) ||
-            !EnsureTemporalBuffer(restir_spatial_input_readback_, bytes,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
             !EnsureTemporalBuffer(restir_spatial_sources_, source_bytes, usage, false, detail) ||
-            !EnsureTemporalBuffer(restir_spatial_sources_readback_, source_bytes,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)))
+            (mirrors &&
+                (!EnsureTemporalBuffer(restir_spatial_input_readback_, bytes,
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+                    !EnsureTemporalBuffer(restir_spatial_sources_readback_, source_bytes,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)))))
       return false;
     const VkDescriptorBufferInfo buffers[4] = {
         {restir_spatial_active_ ? restir_spatial_input_.buffer : restir_history_buffers_[temporal_write_].buffer, 0, bytes},
@@ -1721,14 +1729,16 @@ public:
     }
     constexpr VkBufferUsageFlags surface_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    // The host mirrors are allocated by the first frame that reads back.
+    const bool mirrors = target.read_back;
     if (!EnsureTemporalBuffer(temporal_surfaces_[0], bytes, surface_usage, false, detail) ||
         !EnsureTemporalBuffer(temporal_surfaces_[1], bytes, surface_usage, false, detail) ||
-        !EnsureTemporalBuffer(temporal_readback_, bytes * 2,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+        (mirrors && !EnsureTemporalBuffer(temporal_readback_, bytes * 2,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)) ||
         !EnsureTemporalBuffer(temporal_validity_, validity_bytes,
             surface_usage, false, detail) ||
-        !EnsureTemporalBuffer(temporal_validity_readback_, validity_bytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+        (mirrors && !EnsureTemporalBuffer(temporal_validity_readback_, validity_bytes,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)) ||
         !EnsureTemporalBuffer(temporal_constants_, sizeof(TemporalConstants),
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, detail) ||
         !EnsureTemporalBuffer(temporal_instances_,
@@ -1740,8 +1750,9 @@ public:
     if (accumulate &&
         (!EnsureTemporalBuffer(temporal_radiance_[0], radiance_bytes, surface_usage, false, detail) ||
             !EnsureTemporalBuffer(temporal_radiance_[1], radiance_bytes, surface_usage, false, detail) ||
-            !EnsureTemporalBuffer(temporal_radiance_readback_, radiance_bytes * 2 + radiance_bytes / 2,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail) ||
+            (mirrors && !EnsureTemporalBuffer(temporal_radiance_readback_,
+                            radiance_bytes * 2 + radiance_bytes / 2,
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)) ||
             !EnsureTemporalBuffer(temporal_batch_, radiance_bytes / 2, surface_usage, false, detail))) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
@@ -1886,9 +1897,10 @@ public:
       products.validity.resize(pixels);
       std::memcpy(products.validity.data(), temporal_validity_readback_.mapped, validity_bytes);
     }
-    products.surface_bytes = bytes * 4;
+    // Device storage and whichever mirrors a read-back frame allocated.
+    products.surface_bytes = bytes * 2 + temporal_readback_.bytes;
     products.validity_row_pitch = target.width * sizeof(TemporalValidityPixel);
-    products.validity_bytes = validity_bytes * 2;
+    products.validity_bytes = validity_bytes + temporal_validity_readback_.bytes;
     products.metadata_bytes = temporal_constants_.bytes + temporal_instances_.bytes;
     if (accumulate) {
       products.radiance_available = true;
@@ -1909,7 +1921,7 @@ public:
         std::memcpy(evidence.color.payload.data(), scene_targets_.color_mapped,
             evidence.color.payload.size());
       }
-      products.radiance_bytes = radiance_bytes * 4 + temporal_batch_.bytes * 2;
+      products.radiance_bytes = radiance_bytes * 2 + temporal_radiance_readback_.bytes + temporal_batch_.bytes;
       products.batch_samples = evidence.samples_per_pixel;
       products.batch_sample_index = batch_settings.sample_index;
       products.filter_iterations = filter_iterations;
@@ -2175,8 +2187,13 @@ public:
     return VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer(temporal)", detail);
   }
 
-  // Reuse persistent readback buffers as upload staging while no frame is
-  // in flight. The restoration copy finishes before readback overwrites them.
+  static bool RestoresContents(const OffscreenTarget& target) {
+    return (!target.clear_color_enabled && !target.preserved_color.empty()) ||
+           (!target.clear_depth_enabled && !target.preserved_depth.empty());
+  }
+
+  // Reuse the readback mirrors as upload staging while no frame is in
+  // flight. The restoration copy finishes before readback overwrites them.
   bool StagePreservedContents(const OffscreenTarget& target, Targets& targets,
       std::string& detail) {
     auto flush = [&](VkDeviceMemory memory, bool coherent) {
@@ -3226,32 +3243,38 @@ private:
             "vkCreateFramebuffer", detail)) {
       return false;
     }
+    return true;
+  }
 
+  // Created by the first frame at this size that reads back or restores;
+  // they persist with the targets. A failure leaves neither.
+  bool EnsureTargetMirrors(Targets& t, std::string& detail) {
+    if (t.color_mapped != nullptr && t.depth_mapped != nullptr)
+      return true;
+    DestroyTargetMirrors(t);
     const VkDeviceSize pixel_count = VkDeviceSize{t.width} * t.height;
     const VkDeviceSize color_bytes = pixel_count * t.color_pixel_bytes;
     const VkDeviceSize depth_bytes = pixel_count * sizeof(float);
-    if (!CreateHostBuffer(physical_device_, device_, color_bytes,
+    if (CreateHostBuffer(physical_device_, device_, color_bytes,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             t.color_readback,
-            t.color_readback_memory, t.color_readback_coherent, detail) ||
-        !CreateHostBuffer(physical_device_, device_, depth_bytes,
+            t.color_readback_memory, t.color_readback_coherent, detail) &&
+        CreateHostBuffer(physical_device_, device_, depth_bytes,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             t.depth_readback,
-            t.depth_readback_memory, t.depth_readback_coherent, detail)) {
-      return false;
-    }
-    return VulkanOk(vkMapMemory(device_, t.color_readback_memory, 0,
-                        VK_WHOLE_SIZE, 0, &t.color_mapped),
-               "vkMapMemory(color)", detail) &&
-           VulkanOk(vkMapMemory(device_, t.depth_readback_memory, 0,
-                        VK_WHOLE_SIZE, 0, &t.depth_mapped),
-               "vkMapMemory(depth)", detail);
+            t.depth_readback_memory, t.depth_readback_coherent, detail) &&
+        VulkanOk(vkMapMemory(device_, t.color_readback_memory, 0,
+                     VK_WHOLE_SIZE, 0, &t.color_mapped),
+            "vkMapMemory(color)", detail) &&
+        VulkanOk(vkMapMemory(device_, t.depth_readback_memory, 0,
+                     VK_WHOLE_SIZE, 0, &t.depth_mapped),
+            "vkMapMemory(depth)", detail))
+      return true;
+    DestroyTargetMirrors(t);
+    return false;
   }
 
-  // Only called while no frame is in flight: Render waits for every
-  // submission before it returns. Keeps the colour format.
-  void DestroyTargets(Targets& t) {
-    DestroyWavefront(t);
+  void DestroyTargetMirrors(Targets& t) {
     if (t.color_mapped != nullptr) {
       vkUnmapMemory(device_, t.color_readback_memory);
     }
@@ -3262,6 +3285,16 @@ private:
     vkFreeMemory(device_, t.depth_readback_memory, nullptr);
     vkDestroyBuffer(device_, t.color_readback, nullptr);
     vkFreeMemory(device_, t.color_readback_memory, nullptr);
+    t.color_readback = t.depth_readback = VK_NULL_HANDLE;
+    t.color_readback_memory = t.depth_readback_memory = VK_NULL_HANDLE;
+    t.color_mapped = t.depth_mapped = nullptr;
+  }
+
+  // Only called while no frame is in flight: Render waits for every
+  // submission before it returns. Keeps the colour format.
+  void DestroyTargets(Targets& t) {
+    DestroyWavefront(t);
+    DestroyTargetMirrors(t);
     vkDestroyFramebuffer(device_, t.framebuffer, nullptr);
     vkDestroyImageView(device_, t.depth_view, nullptr);
     vkDestroyImage(device_, t.depth_image, nullptr);

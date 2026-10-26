@@ -190,6 +190,10 @@ per size:
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-residency build/residency-1920x1080.json --benchmark-label "5e598b6 + residency; core Release" --residency-width 1920 --residency-height 1080
 ```
 
+The [lazy-mirror remeasurement](../reports/2026-10-26-lazy-readback-mirrors.md)
+used the same command, plus a control with `--residency-read-back 1`, which
+reads every frame back and so allocates the host mirrors.
+
 ## Cornell quality checkpoints
 
 After the default build, measure error against the committed reference with

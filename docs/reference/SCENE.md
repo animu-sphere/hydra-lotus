@@ -424,8 +424,13 @@ memory type their creation chose. Owners are stable names: `scene.pools`,
 `temporal.surfaces`, `temporal.validity`, `temporal.metadata`,
 `temporal.radiance`, `temporal.filter`, `restir.initial`, `restir.history`,
 `restir.spatial` and `present.view`; a `.readback` suffix marks the host
-mirror frames copy that owner's products into. `device_local_bytes` and
-`host_bytes` sum the groups. Swapchain images are counted
+mirror frames copy that owner's products into. A mirror is allocated by the
+first frame that needs it, one with `OffscreenTarget::read_back` (or, for the
+scene targets, one restoring preserved contents through it), and then
+persists with its owner; frames that keep their products on the GPU, as the
+viewport and Hydra's presentation do, allocate none
+([evidence](../reports/2026-10-26-lazy-readback-mirrors.md)).
+`device_local_bytes` and `host_bytes` sum the groups. Swapchain images are counted
 (`swapchain_images`) but their memory belongs to the presentation engine.
 
 When the device exposes `VK_EXT_memory_budget`, the renderer enables it and
@@ -441,7 +446,8 @@ temporal metadata, temporal radiance, SVGF (5 iterations), ReSTIR temporal
 and spatial reuse over metadata, and SVGF with both reuse passes. Each
 samples after creation, after the workload's initial `UpdateScene` and after
 every frame; frames render one sample with `read_back = false`, as the
-viewport and Hydra do. The report (`lotus-residency-benchmark-v1`) gives the
+viewport and Hydra do, unless `--residency-read-back 1` reads every frame
+back. The report (`lotus-residency-benchmark-v1`) gives the
 three kinds of sample per mode and the largest of each sampled sum and heap
 usage, `sampled_peak`: not a continuous peak.
 
@@ -452,12 +458,18 @@ usage, `sampled_peak`: not a continuous peak.
 | `--residency-mode` | all | one mode id |
 | `--residency-width`, `--residency-height` | 1920, 1080 | 16–8192 |
 | `--residency-frames` | 3 | 1–16 |
+| `--residency-read-back` | 0 | 0 or 1 |
 
-CTest `lotus-renderer-residency-benchmark` runs every mode at 40x24 and
-checks each owner's allocation count and per-pixel lower bound, and that
-the groups sum to the totals; its no-driver variant checks the explained
-SKIP. The [residency report](../reports/2026-10-26-frame-residency.md)
-measures 1080p and 4K.
+CTest `lotus-renderer-residency-benchmark` runs every mode at 40x24,
+without and with readback, and checks each owner's allocation count and
+per-pixel lower bound (no `.readback` owner without readback), and that the
+groups sum to the totals; its no-driver variant checks the explained
+SKIP. `lotus-renderer-restir-gpu` checks that frames without readback leave
+the mirrors unallocated and that the first read-back frame after them
+returns the same bytes as a renderer that read back every frame. The
+[residency report](../reports/2026-10-26-frame-residency.md) measures 1080p
+and 4K; [lazy mirrors](../reports/2026-10-26-lazy-readback-mirrors.md)
+remeasure them.
 
 ## Acceleration structures
 
