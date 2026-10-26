@@ -423,8 +423,9 @@ memory type their creation chose. Owners are stable names: `scene.pools`,
 `constants.path`, `targets.bootstrap`, `targets.scene`, `wavefront.state`,
 `temporal.surfaces`, `temporal.validity`, `temporal.metadata`,
 `temporal.radiance`, `temporal.filter`, `restir.initial`, `restir.history`,
-`restir.spatial` and `present.view`; a `.readback` suffix marks the host
-mirror frames copy that owner's products into. A mirror is allocated by the
+`restir.surfaces`, `restir.spatial` and `present.view`; a `.readback` suffix
+marks the host mirror frames copy that owner's products into (`restir.surfaces`
+has none). A mirror is allocated by the
 first frame that needs it, one with `OffscreenTarget::read_back` (or, for the
 scene targets, one restoring preserved contents through it), and then
 persists with its owner; frames that keep their products on the GPU, as the
@@ -447,9 +448,13 @@ and spatial reuse over metadata, and SVGF with both reuse passes. Each
 samples after creation, after the workload's initial `UpdateScene` and after
 every frame; frames render one sample with `read_back = false`, as the
 viewport and Hydra do, unless `--residency-read-back 1` reads every frame
-back. The report (`lotus-residency-benchmark-v1`) gives the
-three kinds of sample per mode and the largest of each sampled sum and heap
-usage, `sampled_peak`: not a continuous peak.
+back. The reservoir modes run temporal and spatial reuse, or temporal reuse
+alone with `--residency-restir-spatial 0`. The report
+(`lotus-residency-benchmark-v1`) gives the three kinds of sample per mode
+and the largest of each sampled sum and heap usage, `sampled_peak`: not a
+continuous peak. `frame_gpu_ms` lists each frame's scene duration and
+reservoir pass timestamps (null without timestamps); frames are not warmed
+up and the scene duration already includes the reservoir passes.
 
 | Option | Default | Range |
 | --- | --- | --- |
@@ -459,11 +464,12 @@ usage, `sampled_peak`: not a continuous peak.
 | `--residency-width`, `--residency-height` | 1920, 1080 | 16–8192 |
 | `--residency-frames` | 3 | 1–16 |
 | `--residency-read-back` | 0 | 0 or 1 |
+| `--residency-restir-spatial` | 1 | 0 or 1 |
 
 CTest `lotus-renderer-residency-benchmark` runs every mode at 40x24,
 without and with readback, and checks each owner's allocation count and
-per-pixel lower bound (no `.readback` owner without readback), and that the
-groups sum to the totals; its no-driver variant checks the explained
+per-pixel lower bound (no `.readback` owner without readback), that the
+groups sum to the totals and that each frame has a timing entry; its no-driver variant checks the explained
 SKIP. `lotus-renderer-restir-gpu` checks that frames without readback leave
 the mirrors unallocated and that the first read-back frame after them
 returns the same bytes as a renderer that read back every frame. The

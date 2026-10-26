@@ -49,6 +49,8 @@ struct Options {
   std::string mode;
   unsigned width = 1920, height = 1080, frames = 3;
   bool read_back = false;
+  // The reservoir modes' spatial pass; temporal reuse is always on.
+  bool restir_spatial = true;
 };
 
 void Require(bool condition, const std::string& why) {
@@ -87,7 +89,7 @@ Options Parse(int argc, char** argv) {
                                 "[--benchmark-label <identity>] [--residency-workload <id>] "
                                 "[--residency-mode <id>] [--residency-width <16..8192>] "
                                 "[--residency-height <16..8192>] [--residency-frames <1..16>] "
-                                "[--residency-read-back <0|1>]");
+                                "[--residency-read-back <0|1>] [--residency-restir-spatial <0|1>]");
   Options options;
   options.report = argv[2];
   for (int i = 3; i < argc; ++i) {
@@ -113,6 +115,8 @@ Options Parse(int argc, char** argv) {
       options.frames = Number(value, 1, 16);
     else if (option == "--residency-read-back")
       options.read_back = Number(value, 0, 1) != 0;
+    else if (option == "--residency-restir-spatial")
+      options.restir_spatial = Number(value, 0, 1) != 0;
     else
       throw std::invalid_argument("unknown benchmark option: " + std::string(option));
   }
@@ -212,13 +216,15 @@ Result Measure(const Mode& mode, const Options& options, const std::filesystem::
     settings.integrator = mode.integrator;
     if (mode.restir) {
       settings.light_sampling = LightSampling::RestirInitial;
-      settings.restir_temporal = settings.restir_spatial = true;
+      settings.restir_temporal = true;
+      settings.restir_spatial = options.restir_spatial;
     }
     TemporalFrameSettings temporal;
     temporal.accumulate_radiance = mode.accumulate;
     temporal.filter_iterations = mode.filter_iterations;
     const auto draw = ExtractDrawSummary(snapshot);
     GpuResidency last;
+    std::ostringstream timings;
     for (unsigned f = 0; f < options.frames; ++f) {
       temporal.frame_index = f;
       const auto frame = mode.temporal ? renderer->RenderTemporalScene(snapshot, target, 1, temporal, settings)
@@ -229,11 +235,26 @@ Result Measure(const Mode& mode, const Options& options, const std::filesystem::
       Require(!options.read_back ||
                   (!frame.color.payload.empty() && (!mode.temporal || !frame.temporal.validity.empty()) &&
                       (!mode.accumulate || !frame.temporal.radiance.empty()) &&
-                      (!mode.restir || !frame.restir.spatial.empty())),
+                      (!mode.restir || !options.restir_spatial || !frame.restir.spatial.empty())),
           "missing read-back products");
       result.device = "{\"name\":" + Quote(frame.device_name) + ",\"api\":" + Quote(frame.api_version) +
                       ",\"driver\":" + Quote(frame.driver_version) + ",\"validation_available\":" +
                       (frame.validation_available ? "true" : "false") + '}';
+      // GPU pass times, null without timestamps; frames are not warmed up.
+      const auto ms = [](bool available, double value) {
+        std::ostringstream number;
+        if (available)
+          number << std::setprecision(9) << value;
+        else
+          number << "null";
+        return number.str();
+      };
+      timings << (f ? "," : "") << "{\"scene\":"
+              << ms(frame.primary_ray_timestamp_available, frame.primary_ray_gpu_ms)
+              << ",\"restir_initial\":" << ms(frame.restir.timestamp_available, frame.restir.initial_gpu_ms)
+              << ",\"restir_temporal\":" << ms(frame.restir.timestamp_available, frame.restir.temporal_gpu_ms)
+              << ",\"restir_spatial\":" << ms(frame.restir.timestamp_available, frame.restir.spatial_gpu_ms)
+              << '}';
       last = renderer->Residency();
       peak.Sample(last);
     }
@@ -244,11 +265,11 @@ Result Measure(const Mode& mode, const Options& options, const std::filesystem::
         << ",\"accumulate_radiance\":" << (mode.accumulate ? "true" : "false")
         << ",\"filter_iterations\":" << mode.filter_iterations
         << ",\"restir_temporal\":" << (mode.restir ? "true" : "false")
-        << ",\"restir_spatial\":" << (mode.restir ? "true" : "false")
+        << ",\"restir_spatial\":" << (mode.restir && options.restir_spatial ? "true" : "false")
         << "},\"budget_available\":" << (last.budget_available ? "true" : "false")
         << ",\"budget_detail\":" << Quote(last.budget_detail)
         << ",\"created\":" << Json(created) << ",\"uploaded\":" << Json(uploaded)
-        << ",\"last_frame\":" << Json(last)
+        << ",\"last_frame\":" << Json(last) << ",\"frame_gpu_ms\":[" << timings.str() << ']'
         << ",\"sampled_peak\":{\"device_local_bytes\":" << peak.device_local_bytes
         << ",\"host_bytes\":" << peak.host_bytes << ",\"heap_process_usage\":";
     if (last.budget_available) {
@@ -327,6 +348,9 @@ int ResidencyBenchmarkMain(int argc, char** argv) {
            "\"last_frame\":\"After the mode's last frame; allocations persist between frames.\","
            "\"heaps\":\"VK_EXT_memory_budget per heap: the driver's estimate of this process's usage and budget; "
            "null without the extension.\","
+           "\"frame_gpu_ms\":\"Per frame: the scene duration (all passes before readback; do not add the "
+           "reservoir passes to it) and the reservoir passes; null without timestamps. Frames are not warmed "
+           "up: the first is the mode's first use.\","
            "\"sampled_peak\":\"The largest value among the created, uploaded and per-frame samples: not a "
            "continuous peak, and transient allocations inside a call (staging, scratch) are only seen if they persist.\"},"
            "\"modes\":[";

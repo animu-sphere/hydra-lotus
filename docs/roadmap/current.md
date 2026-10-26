@@ -66,9 +66,13 @@ when the measurements justify it.
   [Lazy readback mirrors](../reports/2026-10-26-lazy-readback-mirrors.md)
   were adopted: GPU-only frames hold no host mirrors (1.71 GiB less
   host-visible memory for SVGF with reuse at 1080p, 6.83 GiB at 4K) with
-  identical read-back products. Next: compare reservoir-history
-  representations (640 B per pixel on the device under reuse) against the
-  reservoir CPU oracles, bias and moving-scene behaviour.
+  identical read-back products. A
+  [reservoir history split](../reports/2026-10-26-reservoir-history-split.md)
+  was adopted: each frame's source surfaces are stored once beside 64-byte
+  records, so spatial reuse holds 512 instead of 640 B per pixel (1.0 GiB
+  less at 4K) with byte-identical images and faster spatial frames.
+  Remaining: value compaction of the surfaces needs a precision contract;
+  lifetime aliasing stays deferred.
 
 ## Deferred adapter work
 

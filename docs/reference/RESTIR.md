@@ -812,11 +812,16 @@ the resolved `RestirPixel`, explicit `normalization`, `supporting_candidates`,
 `temporal_row_pitch` is `width * sizeof(RestirReusePixel)`. `history_available`
 means a compatible preceding frame exists, not that every pixel accepted it.
 
-Private GPU history records are 192 bytes including source shading data.
-Two device buffers and a two-frame readback mirror add 768 bytes/pixel; with
-initial storage/mirror, fresh capacity totals 864 bytes/pixel when frames read
-back, and the 432 device bytes alone when they do not: mirrors are allocated
-only by the first frame with `read_back`. Allocated
+Private GPU history stores the 64-byte records apart from the 128-byte
+source shading data (exact jittered origin and view depth, normals, outgoing
+direction, evaluated BSDF and identities). The temporal pass writes each
+frame's surfaces once into a current/previous pair; spatial reuse reads them
+and its output shares them, and they are never read back
+([evidence](../reports/2026-10-26-reservoir-history-split.md)). Two record
+buffers, their two-frame readback mirror and the surface pair add
+512 bytes/pixel; with initial storage/mirror, fresh capacity totals
+608 bytes/pixel when frames read back, and 432 device bytes when they do not:
+mirrors are allocated only by the first frame with `read_back`. Allocated
 capacity remains retained across smaller targets and mode switches and is
 included in `reservoir_bytes`. Shared temporal buffers are reported separately.
 Storage-range limits reject before dispatch. `temporal_gpu_ms` times only the
@@ -908,9 +913,9 @@ temporal history is available. `previous_index` in a spatial record identifies
 the receiver's participating temporal correspondence; it does not identify a
 selected spatial source. The source-index diagnostic records all participants.
 
-The immutable input buffer and its readback add 384 bytes/pixel; source-index
-storage and readback add 32. With initial and two-frame history allocations,
-fresh spatial capacity totals 1280 bytes/pixel when frames read back (640
+The immutable input records and their readback add 128 bytes/pixel; source-index
+storage and readback add 32. With initial, two-frame history and surface allocations,
+fresh spatial capacity totals 768 bytes/pixel when frames read back (512
 without the mirrors), excluding shared temporal metadata. Capacities remain retained after smaller targets and mode switches.
 `spatial_gpu_ms` times only the spatial pass, including target/support evaluation
 and selected visibility, excluding readback. `temporal_gpu_ms` still includes

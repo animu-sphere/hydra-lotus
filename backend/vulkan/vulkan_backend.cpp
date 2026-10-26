@@ -124,13 +124,14 @@ struct TemporalBuffer {
   VkDeviceSize bytes = 0;
 };
 
-struct RestirHistoryRecord {
-  RestirReusePixel resolved;
+// Private exact jittered source surface beside each frame's reuse records;
+// mirrored in restir.slang. Never read back.
+struct RestirSurfaceRecord {
   std::array<float, 4> origin, normal, shading_normal, outgoing;
   std::array<float, 4> base_alpha, dielectric_metallic, fresnel;
   std::uint64_t instance_id, material_id;
 };
-static_assert(sizeof(RestirHistoryRecord) == 192);
+static_assert(sizeof(RestirSurfaceRecord) == 128);
 
 // The scene passes' uniform block, std140; mirrored in path_trace.slang.
 struct PathConstants {
@@ -674,6 +675,8 @@ public:
       for (auto& buffer : restir_history_buffers_)
         DestroyTemporalBuffer(buffer);
       DestroyTemporalBuffer(restir_history_readback_);
+      for (auto& buffer : restir_surfaces_)
+        DestroyTemporalBuffer(buffer);
       DestroyTemporalBuffer(restir_spatial_input_);
       DestroyTemporalBuffer(restir_spatial_input_readback_);
       DestroyTemporalBuffer(restir_spatial_sources_);
@@ -946,6 +949,8 @@ public:
     for (const auto& buffer : restir_history_buffers_)
       device_buffer("restir.history", buffer.buffer);
     host_buffer("restir.history.readback", restir_history_readback_.buffer, readback);
+    for (const auto& buffer : restir_surfaces_)
+      device_buffer("restir.surfaces", buffer.buffer);
     device_buffer("restir.spatial", restir_spatial_input_.buffer);
     device_buffer("restir.spatial", restir_spatial_sources_.buffer);
     host_buffer("restir.spatial.readback", restir_spatial_input_readback_.buffer, readback);
@@ -1413,14 +1418,19 @@ public:
   }
 
   bool EnsureRestirHistory(const OffscreenTarget& target, std::string& detail) {
-    const VkDeviceSize bytes = VkDeviceSize{target.width} * target.height * sizeof(RestirHistoryRecord);
-    if (bytes > device_properties_.limits.maxStorageBufferRange) {
+    const VkDeviceSize bytes = VkDeviceSize{target.width} * target.height * sizeof(RestirReusePixel);
+    const VkDeviceSize surface_bytes =
+        VkDeviceSize{target.width} * target.height * sizeof(RestirSurfaceRecord);
+    if (surface_bytes > device_properties_.limits.maxStorageBufferRange) {
       detail = "temporal reservoir exceeds the device's storage buffer range";
       return false;
     }
     constexpr auto usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     for (auto& buffer : restir_history_buffers_)
       if (!EnsureTemporalBuffer(buffer, bytes, usage, false, detail))
+        return false;
+    for (auto& buffer : restir_surfaces_)
+      if (!EnsureTemporalBuffer(buffer, surface_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, detail))
         return false;
     const bool mirrors = target.read_back;
     if (mirrors && !EnsureTemporalBuffer(restir_history_readback_, bytes * 2,
@@ -1436,17 +1446,21 @@ public:
                     !EnsureTemporalBuffer(restir_spatial_sources_readback_, source_bytes,
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)))))
       return false;
-    const VkDescriptorBufferInfo buffers[4] = {
+    // Bindings 17-20 and the current/previous surfaces at 22-23; the spatial
+    // pair is written only when spatial reuse is active.
+    const VkDescriptorBufferInfo buffers[6] = {
+        {restir_surfaces_[temporal_write_].buffer, 0, surface_bytes},
+        {restir_surfaces_[1 - temporal_write_].buffer, 0, surface_bytes},
         {restir_spatial_active_ ? restir_spatial_input_.buffer : restir_history_buffers_[temporal_write_].buffer, 0, bytes},
         {restir_history_buffers_[1 - temporal_write_].buffer, 0, bytes},
         {restir_history_buffers_[temporal_write_].buffer, 0, bytes},
         {restir_spatial_sources_.buffer, 0, source_bytes}};
-    VkWriteDescriptorSet writes[4]{};
-    const unsigned count = restir_spatial_active_ ? 4u : 2u;
+    VkWriteDescriptorSet writes[6]{};
+    const unsigned count = restir_spatial_active_ ? 6u : 4u;
     for (unsigned i = 0; i < count; ++i) {
       writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
       writes[i].dstSet = ray_descriptor_;
-      writes[i].dstBinding = 17 + i;
+      writes[i].dstBinding = i < 2 ? 22 + i : 15 + i;
       writes[i].descriptorCount = 1;
       writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       writes[i].pBufferInfo = &buffers[i];
@@ -1543,6 +1557,8 @@ public:
       return false;
     for (const auto& buffer : restir_history_buffers_)
       products.reservoir_bytes += buffer.bytes;
+    for (const auto& buffer : restir_surfaces_)
+      products.reservoir_bytes += buffer.bytes;
     products.reservoir_bytes += restir_history_readback_.bytes;
     products.reservoir_bytes += restir_spatial_input_.bytes + restir_spatial_input_readback_.bytes +
         restir_spatial_sources_.bytes + restir_spatial_sources_readback_.bytes;
@@ -1597,7 +1613,7 @@ public:
       products.temporal.resize(products.initial.size());
       if (restir_history_available_)
         products.previous.resize(products.initial.size());
-      const auto* records = static_cast<const RestirHistoryRecord*>(restir_history_readback_.mapped);
+      const auto* records = static_cast<const RestirReusePixel*>(restir_history_readback_.mapped);
       const auto* temporal_records = records;
       if (restir_spatial_active_) {
         if (!InvalidateIfNeeded(device_, restir_spatial_input_readback_.memory,
@@ -1605,27 +1621,27 @@ public:
             !InvalidateIfNeeded(device_, restir_spatial_sources_readback_.memory,
                 restir_spatial_sources_readback_.coherent, detail))
           return false;
-        temporal_records = static_cast<const RestirHistoryRecord*>(restir_spatial_input_readback_.mapped);
+        temporal_records = static_cast<const RestirReusePixel*>(restir_spatial_input_readback_.mapped);
         products.spatial.resize(products.initial.size());
         products.spatial_sources.resize(products.initial.size());
         std::memcpy(products.spatial_sources.data(), restir_spatial_sources_readback_.mapped,
             products.spatial_sources.size() * sizeof(products.spatial_sources[0]));
       }
       for (std::size_t i = 0; i < products.initial.size(); ++i) {
-        products.temporal[i] = temporal_records[i].resolved;
+        products.temporal[i] = temporal_records[i];
         if ((products.temporal[i].reservoir.flags & 2) != 0) {
           detail = "temporal reservoir arithmetic is invalid or exceeds GPU float storage";
           return false;
         }
         if (restir_spatial_active_) {
-          products.spatial[i] = records[i].resolved;
+          products.spatial[i] = records[i];
           if ((products.spatial[i].reservoir.flags & 2) != 0) {
             detail = "spatial reservoir arithmetic is invalid or exceeds GPU float storage";
             return false;
           }
         }
         if (restir_history_available_)
-          products.previous[i] = records[products.initial.size() + i].resolved;
+          products.previous[i] = records[products.initial.size() + i];
       }
     }
     return true;
@@ -1707,7 +1723,7 @@ public:
     const auto max_range = device_properties_.limits.maxStorageBufferRange;
     if (std::uint64_t{target.width} * target.height > max_range / sizeof(TemporalPixel) ||
         instances.size() > max_range / sizeof(vulkan_internal::TemporalInstanceRecord) ||
-        (reservoirs && std::uint64_t{target.width} * target.height > max_range / sizeof(RestirHistoryRecord)))
+        (reservoirs && std::uint64_t{target.width} * target.height > max_range / sizeof(RestirSurfaceRecord)))
       return Evidence(FrameStatus::Fail, "temporal metadata exceeds the device's storage buffer range");
     auto batch_settings = settings;
     const auto sample_offset = frame.previous ? temporal_sample_offset_ : 0u;
@@ -2533,7 +2549,7 @@ public:
                       "RestirInitial");
         if (restir_presentable_ == RestirPresentable::Reuse) {
           source.product = restir_history_buffers_[1 - temporal_write_].buffer;
-          source.stride = sizeof(RestirHistoryRecord) / 16;
+          source.stride = sizeof(RestirReusePixel) / 16;
         } else {
           source.product = restir_initial_.buffer;
           source.stride = sizeof(RestirPixel) / 16;
@@ -2888,7 +2904,7 @@ private:
               "vkCreateSampler", detail))
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[22]{};
+    VkDescriptorSetLayoutBinding bindings[24]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -2922,7 +2938,7 @@ private:
       bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     bindings[7].stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (std::uint32_t index = 8; index < 22; ++index) {
+    for (std::uint32_t index = 8; index < 24; ++index) {
       bindings[index].binding = index;
       bindings[index].descriptorType = index == 8
                                            ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -2930,19 +2946,20 @@ private:
       bindings[index].descriptorCount = 1;
       bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (unsigned index = 16; index < 21; ++index)
-      bindings[index].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
-    std::array<VkDescriptorBindingFlags, 22> binding_flags{};
+    for (unsigned index = 16; index < 24; ++index)
+      if (index != 21)
+        bindings[index].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    std::array<VkDescriptorBindingFlags, 24> binding_flags{};
     for (unsigned index = 0; index < binding_flags.size(); ++index)
       if (index == 0 || index == 3 || index >= 7)
         binding_flags[index] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    flags.bindingCount = 22;
+    flags.bindingCount = 24;
     flags.pBindingFlags = binding_flags.data();
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.pNext = &flags;
-    layout.bindingCount = 22;
+    layout.bindingCount = 24;
     layout.pBindings = bindings;
     if (!VulkanOk(vkCreateDescriptorSetLayout(device_, &layout, nullptr,
                       &ray_descriptor_layout_),
@@ -2954,7 +2971,7 @@ private:
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxTextures},
         {VK_DESCRIPTOR_TYPE_SAMPLER, kTextureSamplers},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16}};
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool.maxSets = 1;
     pool.poolSizeCount = 6;
@@ -3502,7 +3519,7 @@ private:
       vkCmdCopyBuffer(command_, restir_initial_.buffer, restir_readback_.buffer, 1, &copy);
       if (restir_temporal_active_) {
         VkBufferCopy history_copy{0, 0,
-            VkDeviceSize{target.width} * target.height * sizeof(RestirHistoryRecord)};
+            VkDeviceSize{target.width} * target.height * sizeof(RestirReusePixel)};
         vkCmdCopyBuffer(command_, restir_history_buffers_[temporal_write_].buffer,
             restir_history_readback_.buffer, 1, &history_copy);
         if (restir_spatial_active_) {
@@ -3731,6 +3748,7 @@ private:
   TemporalBuffer restir_spatial_sources_readback_;
   std::array<TemporalBuffer, 2> restir_history_buffers_{};
   TemporalBuffer restir_history_readback_;
+  std::array<TemporalBuffer, 2> restir_surfaces_{};
   bool restir_history_available_ = false;
   bool restir_temporal_active_ = false;
   bool restir_spatial_active_ = false;

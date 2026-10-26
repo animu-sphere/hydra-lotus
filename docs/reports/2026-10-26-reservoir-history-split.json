@@ -1,0 +1,664 @@
+{
+  "schema": "lotus-reservoir-history-split-v1",
+  "question": "Does storing each frame's reservoir source surfaces once, apart from the 64-byte reuse records, reduce device residency under reuse without changing images, CPU-oracle agreement or time?",
+  "procedure": {
+    "residency": "lotus-headless --benchmark-residency, cornell-v1, 3 frames of 1 sample per mode, fresh renderer per mode, 1920x1080 and 3840x2160 without readback and a 1920x1080 read-back control; compared with build/lazy-mirrors-20261026 (main 0e79fef)",
+    "timing": "lotus-headless --benchmark-residency --residency-mode restir-reuse --residency-frames 16 [--residency-restir-spatial 0|1], cornell-v1, medians of frames 5-16 per run, main and split alternated",
+    "layout_comparison": "as timing, 1920x1080 with spatial reuse, main/split/nested/flat, two runs each",
+    "small_target": "lotus-headless --benchmark-restir --restir-workload glossy-disocclusion --benchmark-size 256 --benchmark-frames 32 --benchmark-warmup 4 --restir-sequences 2 --restir-lights 64 --restir-reference-samples 16 --restir-candidates 8 --restir-history-cap 32 --restir-seed 17, reference integrator",
+    "images": "lotus-headless --benchmark-restir --restir-workload glossy-disocclusion --benchmark-size 32 --benchmark-frames 16 --benchmark-warmup 4 --restir-sequences 2 --restir-lights 64 --restir-reference-samples 16 --restir-candidates 8 --restir-history-cap 32 --restir-seed 17, reference and wavefront integrators, compared bytewise with 2aa9f5f"
+  },
+  "environment": {
+    "build": {
+      "label": "2aa9f5f + split reservoir history; core Release",
+      "compiler": "MSVC 19.51.36256.0",
+      "configuration": "Release",
+      "system": "Windows AMD64"
+    },
+    "device": {
+      "name": "NVIDIA RTX A5000",
+      "api": "1.4.329",
+      "driver": "2504261632",
+      "validation_available": true
+    },
+    "driver": "597.16",
+    "base_commit": "2aa9f5f",
+    "binary_sha256": {
+      "split": "b15a95c22e013181ca1af8a7aebda6f8853e861b54ae6a4b2a97907409dfe4e0",
+      "main": "f4d2d192b4ee3080e1e31be9edc19474eb676f06f5f828e663c1362ec6fda05d"
+    },
+    "validation": "validation and synchronization validation active",
+    "clocks": "not locked",
+    "directory": "build/history-split-20261026"
+  },
+  "layout_bytes_per_pixel_device": {
+    "before": {
+      "initial": 48,
+      "history": 384,
+      "spatial": 208,
+      "total": 640
+    },
+    "split": {
+      "initial": 48,
+      "history": 128,
+      "surfaces": 256,
+      "spatial": 80,
+      "total": 512
+    },
+    "temporal_only_before_and_after": 432
+  },
+  "residency": {
+    "1920x1080": {
+      "other_modes_identical": [
+        "progressive-reference",
+        "progressive-wavefront",
+        "temporal-metadata",
+        "temporal-radiance",
+        "svgf"
+      ],
+      "restir-reuse": {
+        "renderer_device_local_mib": {
+          "before": 1642.3,
+          "after": 1389.2
+        },
+        "renderer_host_mib": {
+          "before": 4.0,
+          "after": 4.0
+        },
+        "process_device_local_heap_mib": {
+          "before": 1786.7,
+          "after": 1533.6
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 265420800
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 530841600
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 165888000
+          }
+        }
+      },
+      "svgf-restir": {
+        "renderer_device_local_mib": {
+          "before": 1895.5,
+          "after": 1642.3
+        },
+        "renderer_host_mib": {
+          "before": 4.0,
+          "after": 4.0
+        },
+        "process_device_local_heap_mib": {
+          "before": 2040.0,
+          "after": 1786.9
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 265420800
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 530841600
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 165888000
+          }
+        }
+      }
+    },
+    "3840x2160": {
+      "other_modes_identical": [
+        "progressive-reference",
+        "progressive-wavefront",
+        "temporal-metadata",
+        "temporal-radiance",
+        "svgf"
+      ],
+      "restir-reuse": {
+        "renderer_device_local_mib": {
+          "before": 6504.4,
+          "after": 5491.9
+        },
+        "renderer_host_mib": {
+          "before": 4.0,
+          "after": 4.0
+        },
+        "process_device_local_heap_mib": {
+          "before": 6648.7,
+          "after": 5636.2
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 398131200
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 1061683200
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 2123366400
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 663552000
+          }
+        }
+      },
+      "svgf-restir": {
+        "renderer_device_local_mib": {
+          "before": 7516.9,
+          "after": 6504.4
+        },
+        "renderer_host_mib": {
+          "before": 4.0,
+          "after": 4.0
+        },
+        "process_device_local_heap_mib": {
+          "before": 7661.2,
+          "after": 6648.7
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 398131200
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 1061683200
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 2123366400
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 663552000
+          }
+        }
+      }
+    },
+    "1920x1080-readback": {
+      "other_modes_identical": [
+        "progressive-reference",
+        "progressive-wavefront",
+        "temporal-metadata",
+        "temporal-radiance",
+        "svgf"
+      ],
+      "restir-reuse": {
+        "renderer_device_local_mib": {
+          "before": 1642.3,
+          "after": 1389.2
+        },
+        "renderer_host_mib": {
+          "before": 1593.9,
+          "after": 834.6
+        },
+        "process_device_local_heap_mib": {
+          "before": 1786.7,
+          "after": 1533.6
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.initial.readback": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 265420800
+          },
+          "restir.history.readback": {
+            "allocations": 1,
+            "bytes": 265420800
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 530841600
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 165888000
+          },
+          "restir.spatial.readback": {
+            "allocations": 2,
+            "bytes": 165888000
+          }
+        }
+      },
+      "svgf-restir": {
+        "renderer_device_local_mib": {
+          "before": 1895.5,
+          "after": 1642.3
+        },
+        "renderer_host_mib": {
+          "before": 1752.1,
+          "after": 992.8
+        },
+        "process_device_local_heap_mib": {
+          "before": 2040.0,
+          "after": 1786.9
+        },
+        "non_reservoir_groups_identical": true,
+        "reservoir_groups_after": {
+          "restir.initial": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.initial.readback": {
+            "allocations": 1,
+            "bytes": 99532800
+          },
+          "restir.history": {
+            "allocations": 2,
+            "bytes": 265420800
+          },
+          "restir.history.readback": {
+            "allocations": 1,
+            "bytes": 265420800
+          },
+          "restir.surfaces": {
+            "allocations": 2,
+            "bytes": 530841600
+          },
+          "restir.spatial": {
+            "allocations": 2,
+            "bytes": 165888000
+          },
+          "restir.spatial.readback": {
+            "allocations": 2,
+            "bytes": 165888000
+          }
+        }
+      }
+    }
+  },
+  "timing_ms": {
+    "1920x1080 spatial=off": {
+      "main": [
+        {
+          "run": 1,
+          "scene": 9.082,
+          "restir_initial": 1.073,
+          "restir_temporal": 2.564,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 8.603
+        },
+        {
+          "run": 2,
+          "scene": 9.166,
+          "restir_initial": 1.073,
+          "restir_temporal": 2.599,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 8.324
+        },
+        {
+          "run": 3,
+          "scene": 10.364,
+          "restir_initial": 1.15,
+          "restir_temporal": 2.767,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 29.046
+        },
+        {
+          "run": 4,
+          "scene": 17.24,
+          "restir_initial": 2.407,
+          "restir_temporal": 4.42,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 32.494
+        },
+        {
+          "run": 5,
+          "scene": 9.529,
+          "restir_initial": 1.075,
+          "restir_temporal": 2.59,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 8.993
+        },
+        {
+          "run": 6,
+          "scene": 9.262,
+          "restir_initial": 1.04,
+          "restir_temporal": 2.552,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 9.182
+        }
+      ],
+      "split": [
+        {
+          "run": 1,
+          "scene": 9.466,
+          "restir_initial": 1.075,
+          "restir_temporal": 2.373,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 8.558
+        },
+        {
+          "run": 2,
+          "scene": 9.996,
+          "restir_initial": 1.021,
+          "restir_temporal": 2.371,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 9.001
+        },
+        {
+          "run": 3,
+          "scene": 9.574,
+          "restir_initial": 1.075,
+          "restir_temporal": 2.378,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 7.726
+        },
+        {
+          "run": 4,
+          "scene": 9.478,
+          "restir_initial": 1.087,
+          "restir_temporal": 2.322,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 47.402
+        },
+        {
+          "run": 5,
+          "scene": 10.429,
+          "restir_initial": 1.23,
+          "restir_temporal": 2.342,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 28.532
+        },
+        {
+          "run": 6,
+          "scene": 9.395,
+          "restir_initial": 1.076,
+          "restir_temporal": 2.306,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 7.741
+        }
+      ],
+      "excluded_runs": {
+        "main": [
+          3,
+          4
+        ],
+        "split": [
+          5
+        ],
+        "reason": "first frames 20-32 ms (power state); kept here, excluded from the report table"
+      }
+    },
+    "1920x1080 spatial=on": {
+      "main": [
+        {
+          "run": 1,
+          "scene": 17.251,
+          "restir_initial": 1.429,
+          "restir_temporal": 3.052,
+          "restir_spatial": 6.086,
+          "first_frame_scene": 27.611
+        },
+        {
+          "run": 2,
+          "scene": 15.293,
+          "restir_initial": 1.081,
+          "restir_temporal": 3.235,
+          "restir_spatial": 5.062,
+          "first_frame_scene": 14.249
+        }
+      ],
+      "split": [
+        {
+          "run": 1,
+          "scene": 12.49,
+          "restir_initial": 1.118,
+          "restir_temporal": 2.36,
+          "restir_spatial": 2.869,
+          "first_frame_scene": 44.558
+        },
+        {
+          "run": 2,
+          "scene": 12.61,
+          "restir_initial": 1.129,
+          "restir_temporal": 2.376,
+          "restir_spatial": 2.903,
+          "first_frame_scene": 34.734
+        }
+      ]
+    },
+    "3840x2160 spatial=off": {
+      "main": [
+        {
+          "run": 1,
+          "scene": 36.068,
+          "restir_initial": 4.028,
+          "restir_temporal": 9.925,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 105.349
+        },
+        {
+          "run": 2,
+          "scene": 36.532,
+          "restir_initial": 4.135,
+          "restir_temporal": 10.381,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 33.04
+        }
+      ],
+      "split": [
+        {
+          "run": 1,
+          "scene": 35.621,
+          "restir_initial": 4.031,
+          "restir_temporal": 10.164,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 31.456
+        },
+        {
+          "run": 2,
+          "scene": 35.322,
+          "restir_initial": 4.075,
+          "restir_temporal": 9.408,
+          "restir_spatial": 0.0,
+          "first_frame_scene": 28.684
+        }
+      ]
+    },
+    "3840x2160 spatial=on": {
+      "main": [
+        {
+          "run": 1,
+          "scene": 57.133,
+          "restir_initial": 4.155,
+          "restir_temporal": 9.987,
+          "restir_spatial": 20.559,
+          "first_frame_scene": 52.822
+        },
+        {
+          "run": 2,
+          "scene": 58.51,
+          "restir_initial": 4.172,
+          "restir_temporal": 10.371,
+          "restir_spatial": 20.952,
+          "first_frame_scene": 58.601
+        }
+      ],
+      "split": [
+        {
+          "run": 1,
+          "scene": 48.414,
+          "restir_initial": 4.1,
+          "restir_temporal": 10.261,
+          "restir_spatial": 12.447,
+          "first_frame_scene": 53.745
+        },
+        {
+          "run": 2,
+          "scene": 50.554,
+          "restir_initial": 4.297,
+          "restir_temporal": 10.274,
+          "restir_spatial": 13.277,
+          "first_frame_scene": 46.572
+        }
+      ]
+    }
+  },
+  "layout_comparison_1920x1080_spatial_on_ms": {
+    "main": [
+      {
+        "scene": 13.758,
+        "restir_temporal": 2.562,
+        "restir_spatial": 4.688
+      },
+      {
+        "scene": 14.425,
+        "restir_temporal": 2.692,
+        "restir_spatial": 4.681
+      }
+    ],
+    "split": [
+      {
+        "scene": 11.767,
+        "restir_temporal": 2.288,
+        "restir_spatial": 2.716
+      },
+      {
+        "scene": 11.464,
+        "restir_temporal": 2.278,
+        "restir_spatial": 2.762
+      }
+    ],
+    "flat": [
+      {
+        "scene": 14.197,
+        "restir_temporal": 3.274,
+        "restir_spatial": 3.667
+      },
+      {
+        "scene": 13.101,
+        "restir_temporal": 2.966,
+        "restir_spatial": 3.629
+      }
+    ],
+    "nested": [
+      {
+        "scene": 12.565,
+        "restir_temporal": 2.443,
+        "restir_spatial": 3.633
+      },
+      {
+        "scene": 13.275,
+        "restir_temporal": 2.458,
+        "restir_spatial": 3.659
+      }
+    ]
+  },
+  "small_target_256x256_ms": {
+    "before-1": {
+      "temporal": {
+        "scene_gpu_ms": 2.131,
+        "temporal_gpu_ms": 0.975,
+        "spatial_gpu_ms": 0
+      },
+      "spatial": {
+        "scene_gpu_ms": 3.541,
+        "temporal_gpu_ms": 0.558,
+        "spatial_gpu_ms": 1.746
+      },
+      "spatiotemporal": {
+        "scene_gpu_ms": 3.459,
+        "temporal_gpu_ms": 0.871,
+        "spatial_gpu_ms": 1.556
+      }
+    },
+    "after-1": {
+      "temporal": {
+        "scene_gpu_ms": 2.24,
+        "temporal_gpu_ms": 1.073,
+        "spatial_gpu_ms": 0
+      },
+      "spatial": {
+        "scene_gpu_ms": 2.954,
+        "temporal_gpu_ms": 0.505,
+        "spatial_gpu_ms": 1.254
+      },
+      "spatiotemporal": {
+        "scene_gpu_ms": 3.34,
+        "temporal_gpu_ms": 1.05,
+        "spatial_gpu_ms": 1.168
+      }
+    },
+    "before-2": {
+      "temporal": {
+        "scene_gpu_ms": 2.205,
+        "temporal_gpu_ms": 1.004,
+        "spatial_gpu_ms": 0
+      },
+      "spatial": {
+        "scene_gpu_ms": 3.165,
+        "temporal_gpu_ms": 0.51,
+        "spatial_gpu_ms": 1.62
+      },
+      "spatiotemporal": {
+        "scene_gpu_ms": 3.372,
+        "temporal_gpu_ms": 0.856,
+        "spatial_gpu_ms": 1.541
+      }
+    },
+    "after-2": {
+      "temporal": {
+        "scene_gpu_ms": 2.324,
+        "temporal_gpu_ms": 1.101,
+        "spatial_gpu_ms": 0
+      },
+      "spatial": {
+        "scene_gpu_ms": 2.982,
+        "temporal_gpu_ms": 0.513,
+        "spatial_gpu_ms": 1.269
+      },
+      "spatiotemporal": {
+        "scene_gpu_ms": 3.463,
+        "temporal_gpu_ms": 1.064,
+        "spatial_gpu_ms": 1.214
+      }
+    }
+  },
+  "correctness": {
+    "images": {
+      "reference": {
+        "files": 37,
+        "byte_identical": 37
+      },
+      "wavefront": {
+        "files": 37,
+        "byte_identical": 37
+      }
+    },
+    "lotus-renderer-restir-gpu": "pass (both integrators), accounting 608/768 B per pixel with readback",
+    "lotus-renderer-residency-benchmark": "pass, including restir.surfaces without mirror and per-frame timings"
+  },
+  "decision": "adopt split"
+}
