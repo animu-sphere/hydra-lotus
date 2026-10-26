@@ -1,0 +1,197 @@
+{
+  "schema": "lotus-material-basics-v1",
+  "question": "Does a committed UsdPreviewSurface fixture for base colour and metallic/roughness extract through Hydra to its independent C++ mirror and render, headless and through Hydra, in agreement with committed Reference PT images?",
+  "procedure": {
+    "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-basics-v1.usda (Success)",
+    "reference": "lotus-headless --write-material-reference validation/reference: BSDF sampling, reference integrator, 64 batches of 64 samples then 4096 samples from sample index 0, 128x128",
+    "headless_check": "ctest -R 'lotus-renderer-evidence|lotus-validation-assets|lotus-renderer-install-tree' in build/cy2026-windows-x86_64-py313-core (renderer.material.fixtures, also from the installed tree)",
+    "hydra": "ctest -R hydra-material-fixtures in build/cy2026-windows-x86_64-py313-lookdev--hydra--renderer-hydra2",
+    "scripts": "python -m unittest discover -s scripts -p 'test_*.py'; python scripts/check_docs.py"
+  },
+  "environment": {
+    "source": "e1c641f plus this change",
+    "os": "Windows AMD64",
+    "compiler": "MSVC 19.51 Release",
+    "device": "NVIDIA RTX A5000",
+    "driver": "597.16",
+    "vulkan_api": "1.4.329",
+    "validation": "validation and synchronization validation active",
+    "clocks": "unlocked",
+    "binaries_sha256": {
+      "lotus-headless.exe": "1eeb1bc6bdfc1a1d6cbd9ed36b841d76eaa283d176e07d94c5d3d19eaf46125a",
+      "lotus-hydra2-material-fixtures-test.exe": "0519cd3a80ae9b21d25be455149a24cb466a95644739ae56bfab2ea43ca61b9c",
+      "hdLotus.dll": "950de055e6e022eab9749ab50c76ae19f30f2d66b55c317937e1178782fbc9a6"
+    }
+  },
+  "reference": {
+    "samples": 4096,
+    "batches": 64,
+    "size": [
+      128,
+      128
+    ],
+    "write_seconds": 4.5,
+    "sha256": {
+      "validation/reference/material-basics-v1-mean.pfm": "dc0fda1547d42c5e05851ca7bddf139cefd5bbcfef33c87d4daf9d1d41972101",
+      "validation/reference/material-basics-v1-variance.pfm": "6d67c119f6a9ae98c4d19c5945b3e1e941fa968040ae8ae9dfee796a0bbc95b0"
+    }
+  },
+  "extraction": {
+    "materials_equal": true,
+    "bindings_equal": true,
+    "triangles_equal": true,
+    "lights_and_environment_equal": true,
+    "float_sets_differing_by_rounding": 0,
+    "tolerance": "2e-6, relative above 1"
+  },
+  "comparisons": {
+    "sample_index": 1048576,
+    "tile_pixels": 8,
+    "rows": [
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 16,
+        "image_z": [
+          -1.37,
+          -0.65,
+          -0.48
+        ],
+        "max_tile_z": 3.01,
+        "mean_tile_z2": 0.99
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 256,
+        "image_z": [
+          -0.48,
+          -0.11,
+          0.57
+        ],
+        "max_tile_z": 3.22,
+        "mean_tile_z2": 0.94
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 16,
+        "image_z": [
+          0.64,
+          0.79,
+          0.76
+        ],
+        "max_tile_z": 2.67,
+        "mean_tile_z2": 0.23
+      },
+      {
+        "frontend": "headless",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.26,
+          0.09,
+          -0.08
+        ],
+        "max_tile_z": 2.07,
+        "mean_tile_z2": 0.27
+      },
+      {
+        "frontend": "headless",
+        "integrator": "wavefront",
+        "light_sampling": "mis",
+        "spp": 16,
+        "image_z": [
+          0.64,
+          0.79,
+          0.76
+        ],
+        "max_tile_z": 2.67,
+        "mean_tile_z2": 0.23
+      },
+      {
+        "frontend": "headless",
+        "integrator": "wavefront",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.26,
+          0.09,
+          -0.08
+        ],
+        "max_tile_z": 2.07,
+        "mean_tile_z2": 0.27
+      },
+      {
+        "frontend": "hydra",
+        "integrator": "reference",
+        "light_sampling": "mis",
+        "spp": 256,
+        "image_z": [
+          0.26,
+          0.09,
+          -0.08
+        ],
+        "max_tile_z": 2.07,
+        "mean_tile_z2": 0.27
+      },
+      {
+        "frontend": "hydra",
+        "integrator": "reference",
+        "light_sampling": "bsdf",
+        "spp": 256,
+        "image_z": [
+          -0.48,
+          -0.11,
+          0.57
+        ],
+        "max_tile_z": 3.22,
+        "mean_tile_z2": 0.94
+      }
+    ],
+    "byte_identical": [
+      "headless wavefront-mis and reference-mis images at 16 and 256 spp",
+      "Hydra and the backend's image of the mirror, NEE/MIS and BSDF, 256 spp"
+    ],
+    "negative_control": {
+      "change": "Metal50 base colour x0.9",
+      "spp": 256,
+      "max_tile_z": 14.85,
+      "rejected": true
+    },
+    "reference_reproduced_bit_for_bit": true
+  },
+  "audit": {
+    "diffuseColor": "clamped as documented",
+    "displayColor": "unbound constant colour as documented",
+    "roughness": "clamped as documented; roughness 0 renders with GGX alpha 1e-3, previously undocumented, now in the material contract",
+    "metallic": "as documented",
+    "ior": "metallic workflow only, as documented",
+    "specular_workflow": "authored metallic and ior not read, as documented",
+    "not_read": [
+      "clearcoat",
+      "clearcoatRoughness",
+      "occlusion",
+      "displacement",
+      "opacityMode"
+    ]
+  },
+  "cost_seconds": {
+    "headless_evidence_ctest": 37.5,
+    "hydra_cpu_ctest": 0.06,
+    "hydra_gpu_ctest": 11.6,
+    "material_check_estimate": "about 3, by sample proportion with the reference write; not timed separately"
+  },
+  "not_run": [
+    "viewport",
+    "usdview",
+    "installed Hydra host",
+    "ci-core",
+    "other Hydra CTests"
+  ],
+  "decision": "adopt the fixture mechanism and material-basics-v1; no renderer or translator fix needed for base colour and metallic/roughness"
+}

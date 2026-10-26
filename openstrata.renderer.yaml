@@ -44,6 +44,7 @@ validation:
     - renderer.path.light_sampling
     - renderer.path.analytic_lights
     - renderer.path.environment
+    - renderer.material.fixtures
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

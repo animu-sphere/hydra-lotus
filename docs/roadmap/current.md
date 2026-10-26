@@ -90,7 +90,12 @@ outside this queue.
   Establish USD fixtures/reference images and Hydra/headless agreement;
   record normal/UV/alpha errors and unsupported inputs, then prioritize
   bounded fixes. Full OpenPBR/MaterialX and subsurface remain outside this
-  subset. Path classification waits for distinct shading classes and
+  subset. The [material basics fixture](../reports/2026-10-26-material-basics.md)
+  established committed USD fixtures with C++ mirrors and reference images:
+  base colour and metallic/roughness extract exactly through Hydra, render
+  byte-identically to the headless mirror and match the reference; no fix
+  was needed, and the roughness-0 floor is now documented. Remaining:
+  textures/UV, normals/normal maps, emission and alpha masks. Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
 
 ## Previous delivery evidence

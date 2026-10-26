@@ -66,7 +66,7 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | Field | Default | Range | Meaning |
 | --- | --- | --- | --- |
 | `base_color` | `(0.18, 0.18, 0.18)` | each in [0, 1] | Lambert albedo, and the metal's reflectance at normal incidence |
-| `roughness` | `0.5` | [0, 1] | GGX roughness; alpha is its square |
+| `roughness` | `0.5` | [0, 1] | GGX roughness; alpha is its square, at least 10⁻³, so 0 is a near-mirror |
 | `metallic` | `0` | [0, 1] | metal fraction; the remainder is a dielectric coat over Lambert |
 | `ior` | `1.5` | finite, ≥ 1 | constant dielectric index relative to air; 1 removes the interface |
 | `use_specular_workflow` | `false` | boolean | use explicit specular F0, ignoring metallic and ior |
@@ -863,6 +863,56 @@ The reference path tracer's images are of one fixed scene, rendered by
   they reproduce the committed mean bit for bit. That is expected only on
   the device and build that wrote the reference, so it does not decide the
   check.
+
+### Material fixtures
+
+LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures are committed USD files in
+`validation/materials/`, each with reference images in
+`validation/reference/`. `scripts/material_fixtures.py write` generates the
+USD files; its `check` command and unit test fail when a committed file
+differs from what it generates. `adapters/common/material_fixtures.cpp`
+mirrors each fixture as a Lotus scene, written independently in C++: what
+the [Hydra translator](#materials) should extract from the file.
+
+**`material-basics-v1`** covers base colour and metallic/roughness, the
+first two items of the
+[audit order](../design/ROADMAP_POLICY.md#practical-foundation-workstreams).
+A 4×4 grid of UV spheres (32 segments, 16 rings, authored vertex normals,
+subdivision scheme none) of radius 0.4 and centres 0.9 apart stands in front
+of an unbound backdrop quad at z = −1 whose `displayColor` is 0.5. A camera
+at z = 6.5 has focal length 50 over a 32 aperture, so the tangent of half
+its field of view is 0.32. A dome of intensity 0.5 and a 3×3 rect light of
+intensity 4 at (1.5, 2.5, 4), turned 20° about Y and −30° about X, light it.
+Every camera ray hits the backdrop or a ball. The rows, from the top:
+
+| Row | Balls | Authored inputs |
+| --- | --- | --- |
+| Base colour | White, Red, Dark, Clamped | `diffuseColor` 0.8 grey, (0.8, 0.1, 0.05) and 0.04 grey; (1.25, 0.5, −0.25) with roughness 1.5, which translate to (1, 0.5, 0) and 1 |
+| Dielectric roughness | Gloss0, Gloss25, Gloss50, Gloss100 | 0.5 grey at roughness 0, 0.25, 0.5 and 1 |
+| Metal roughness | Metal0, Metal25, Metal50, Metal100 | metallic 1 over (0.95, 0.64, 0.54) at roughness 0, 0.25, 0.5 and 1 |
+| Workflows | Metallic25, Metallic75, Ior25, Specular | metallic 0.25 and 0.75 over (0.9, 0.6, 0.2) at roughness 0.3; ior 2.5; `useSpecularWorkflow` with `specularColor` (0.9, 0.6, 0.3), whose authored metallic 1 and ior 3 are not read |
+
+- **Reference.** `lotus-headless --write-material-reference <directory>`
+  renders each mirror in deterministic mode with BSDF sampling from sample
+  index 0: `<fixture>-mean.pfm` holds 4096 samples per pixel in one
+  accumulation, and `<fixture>-variance.pfm` each pixel's per-sample
+  variance, estimated from 64 accumulations of 64 of the same samples.
+- **`renderer.material.fixtures`** renders each mirror from sample index
+  2²⁰ through the reference integrator with BSDF sampling and with NEE/MIS,
+  and through the wavefront integrator with NEE/MIS. Each accumulation
+  stops at 16 and 256 spp and is compared with the reference by the
+  [DES-Q5 metric](#reference-images); `--images` writes the images as
+  `<fixture>-<mode>-NNNNspp.pfm`. The metric must reject the half-rough
+  metal with a 10% darker base colour at 256 spp, and the check records
+  whether the reference's own samples reproduce it bit for bit.
+- **Hydra.** CTest `lotus-renderer-hydra-material-fixtures` opens each USD
+  file through UsdImaging and requires the delegate's scene snapshot to be
+  the mirror: the same materials, bindings, triangles, lights and
+  environment exactly, and the same positions, normals, transforms and
+  camera to float rounding (2·10⁻⁶, relative above 1). Its GPU-gated `-gpu`
+  variant renders the stage through Hydra at 256 spp from sample index 2²⁰
+  under NEE/MIS and BSDF sampling, and compares each image with the same
+  reference by the same metric.
 
 ### Wavefront integrator
 
@@ -1755,7 +1805,9 @@ modes are not supported and warn. Authored bindings always win, including
 missing or unsupported materials. Primvar edits update the colour, and
 binding a surface, removing the colour or removing the mesh releases the
 private material. CTest `lotus-renderer-hydra-material` and its `-gpu`
-variant check these transitions and the rendered radiance.
+variant check these transitions and the rendered radiance; the
+[material fixtures](#material-fixtures) check committed `UsdPreviewSurface`
+assets from file to image.
 
 The adapter decodes each image a material names with Hio
 (`HioImage::OpenForReading` under the source colour space) when the first

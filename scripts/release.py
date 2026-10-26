@@ -22,6 +22,8 @@ REQUIRED = {
     "bin/lotus-headless.exe",
     "bin/reference/cornell-box-mean.pfm",
     "bin/reference/cornell-box-variance.pfm",
+    "bin/reference/material-basics-v1-mean.pfm",
+    "bin/reference/material-basics-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",
