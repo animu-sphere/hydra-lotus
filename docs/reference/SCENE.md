@@ -404,11 +404,60 @@ former per-geometry/per-BLAS allocation-count gate.
 
 Limitations: fixed block sizes can retain slack, large working buffers keep
 their high-water capacity, and live ranges are neither relocated nor
-defragmented. There is no memory-budget extension, eviction policy or sparse
-storage. Noncoherent-only hardware and driver-mandated dedicated allocations
+defragmented. There is no eviction policy or sparse storage; the
+memory-budget extension is only observed, by the
+[renderer residency](#renderer-residency) report. Noncoherent-only hardware and driver-mandated dedicated allocations
 are not measured; explicit dedicated fallback is tested. These are accepted
 storage limitations while the fixed performance baseline evaluates actual
 scene sizes.
+
+### Renderer residency
+
+`OffscreenRenderer::Residency()` returns a `GpuResidency` without recording
+GPU work: every allocation the renderer makes itself, as
+`GpuAllocationGroup`s of an owner and memory kind, with allocation counts
+and Vulkan allocation sizes (alignment included). The scene pools count
+their reserved blocks, split by the memory type's `DEVICE_LOCAL` flag;
+dedicated buffers and images count under their owner, classified by the
+memory type their creation chose. Owners are stable names: `scene.pools`,
+`constants.path`, `targets.bootstrap`, `targets.scene`, `wavefront.state`,
+`temporal.surfaces`, `temporal.validity`, `temporal.metadata`,
+`temporal.radiance`, `temporal.filter`, `restir.initial`, `restir.history`,
+`restir.spatial` and `present.view`; a `.readback` suffix marks the host
+mirror frames copy that owner's products into. `device_local_bytes` and
+`host_bytes` sum the groups. Swapchain images are counted
+(`swapchain_images`) but their memory belongs to the presentation engine.
+
+When the device exposes `VK_EXT_memory_budget`, the renderer enables it and
+each `GpuMemoryHeap` reports the driver's estimate of the whole process's
+usage and budget in that heap; this includes pipelines, descriptor and
+query pools, swapchain images and any other renderer in the process.
+Without the extension `budget_available` is false, `budget_detail` says
+why and both values are 0.
+
+`lotus-headless --benchmark-residency <json-path>` samples `Residency()` in
+seven modes, each on a fresh renderer: progressive reference and wavefront,
+temporal metadata, temporal radiance, SVGF (5 iterations), ReSTIR temporal
+and spatial reuse over metadata, and SVGF with both reuse passes. Each
+samples after creation, after the workload's initial `UpdateScene` and after
+every frame; frames render one sample with `read_back = false`, as the
+viewport and Hydra do. The report (`lotus-residency-benchmark-v1`) gives the
+three kinds of sample per mode and the largest of each sampled sum and heap
+usage, `sampled_peak`: not a continuous peak.
+
+| Option | Default | Range |
+| --- | --- | --- |
+| `--benchmark-label` | empty | build identity |
+| `--residency-workload` | `cornell-v1` | a [fixed workload](#fixed-benchmarks) |
+| `--residency-mode` | all | one mode id |
+| `--residency-width`, `--residency-height` | 1920, 1080 | 16–8192 |
+| `--residency-frames` | 3 | 1–16 |
+
+CTest `lotus-renderer-residency-benchmark` runs every mode at 40x24 and
+checks each owner's allocation count and per-pixel lower bound, and that
+the groups sum to the totals; its no-driver variant checks the explained
+SKIP. The [residency report](../reports/2026-10-26-frame-residency.md)
+measures 1080p and 4K.
 
 ## Acceleration structures
 

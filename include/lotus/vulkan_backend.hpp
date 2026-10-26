@@ -371,6 +371,52 @@ struct GpuMemoryStats {
   bool operator==(const GpuMemoryStats&) const = default;
 };
 
+// One owner's live allocations of one memory kind (OffscreenRenderer::
+// Residency). Owners are stable dotted names, such as "temporal.radiance".
+struct GpuAllocationGroup {
+  std::string owner;
+  // The memory type's DEVICE_LOCAL flag. False is host memory the device
+  // reaches over the bus: readback mirrors, constants and staging.
+  bool device_local = false;
+  // Vulkan allocations, or the scene pools' blocks.
+  std::uint32_t allocations = 0;
+  // Their allocation sizes, alignment padding included.
+  std::uint64_t bytes = 0;
+};
+
+// One memory heap of the renderer's device. With VK_EXT_memory_budget,
+// `process_usage` is the driver's estimate of what this process uses in
+// the heap, including allocations outside the renderer's groups (pipelines,
+// descriptor and query pools, swapchain images, other devices' and other
+// renderers' memory), and `budget` what it can allocate without degrading;
+// both are 0 without the extension.
+struct GpuMemoryHeap {
+  bool device_local = false;
+  std::uint64_t size = 0;
+  std::uint64_t process_usage = 0;
+  std::uint64_t budget = 0;
+};
+
+// What the renderer holds when it is asked: every allocation it makes
+// itself, grouped by owner, and the process's use of each heap.
+struct GpuResidency {
+  // Nonempty groups in a fixed order: the scene pools, the path constants,
+  // the bootstrap and scene targets, the wavefront state, the temporal,
+  // reservoir and presentation buffers. Owners ending in ".readback" are
+  // host mirrors that frames copy their products into.
+  std::vector<GpuAllocationGroup> groups;
+  // The groups' sums.
+  std::uint64_t device_local_bytes = 0;
+  std::uint64_t host_bytes = 0;
+  // Swapchain images, which the presentation engine allocates; their memory
+  // is in the heaps' usage only.
+  std::uint32_t swapchain_images = 0;
+  bool budget_available = false;
+  // Why the heaps' usage and budgets are 0.
+  std::string budget_detail;
+  std::vector<GpuMemoryHeap> heaps;
+};
+
 // What the renderer's GPU scene holds. Counts after "Lifetime" accumulate
 // since the renderer was created.
 struct GpuSceneStats {
@@ -756,6 +802,11 @@ public:
   // usable.
   [[nodiscard]] virtual PresentEvidence Present(std::uint32_t width,
       std::uint32_t height, const PresentView& view = {}) = 0;
+
+  // The renderer's live allocations and the process's heap usage now. It
+  // records no GPU work, and allocations persist between frames, so a call
+  // after a frame sees what that frame held.
+  [[nodiscard]] virtual GpuResidency Residency() const = 0;
 };
 
 struct RayQueryShaders {

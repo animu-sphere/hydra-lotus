@@ -6,6 +6,7 @@ to measure.
 
 | Document | Contents |
 | --- | --- |
+| [2026-10-26-frame-residency.md](2026-10-26-frame-residency.md) | Frame-state residency: every renderer allocation by owner and memory kind with `VK_EXT_memory_budget` process heap usage, seven progressive/temporal/SVGF/ReSTIR modes at 720p, 1080p and 4K, a constant driver residual, per-pixel estimates, unused host mirrors (go) and deferred representation candidates; [data](2026-10-26-frame-residency.json). |
 | [2026-10-25-light-crossing-hierarchy.md](2026-10-25-light-crossing-hierarchy.md) | Analytic-light crossing hierarchy on `many-lights-v1`: linear loop versus hierarchy from one binary under both integrators, image agreement to rounding, low-light-count regression, memory and build cost, adopt decision; [data](2026-10-25-light-crossing-hierarchy.json). |
 | [2026-10-25-light-crossing-cost.md](2026-10-25-light-crossing-cost.md) | Many-light crossing versus selection: light-count control on `many-lights-v1`, crossing-disabled probe, wavefront kernels, go decision for a crossing acceleration experiment and deferred selection; [data](2026-10-25-light-crossing-cost.json). |
 | [2026-10-25-frame-host-split.md](2026-10-25-frame-host-split.md) | Blocking frame host phases (preparation, recording, submission, wait, readback, results) and host-cached readback memory: before/after on the shared workloads, size and validation probes, ReSTIR evidence frames, identical images, adoption decision; [data](2026-10-25-frame-host-split.json). |

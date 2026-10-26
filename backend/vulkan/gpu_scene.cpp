@@ -747,18 +747,6 @@ bool InvalidateBuffer(VkDevice device, const DeviceBuffer& buffer,
       "vkInvalidateMappedMemoryRanges(scene)", detail);
 }
 
-bool HasDeviceExtension(VkPhysicalDevice device, std::string_view name) {
-  std::uint32_t count = 0;
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
-  std::vector<VkExtensionProperties> extensions(count);
-  vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
-      extensions.data());
-  return std::any_of(extensions.begin(), extensions.end(),
-      [&](const VkExtensionProperties& extension) {
-        return name == extension.extensionName;
-      });
-}
-
 // The column-major 4x4 transform's first three rows, row-major, which is
 // how VkTransformMatrixKHR stores it.
 bool ValidRadiance(const std::array<float, 3>& values) {

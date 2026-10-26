@@ -55,6 +55,9 @@ public:
   // Bound buffer/image must be destroyed and all uses complete.
   void Release(MemorySlice& slice);
   [[nodiscard]] GpuMemoryStats Stats() const;
+  // Adds each block, reserved bytes, to the group of its memory kind.
+  void AddResidency(GpuAllocationGroup& device_local,
+      GpuAllocationGroup& host) const;
 
 private:
   struct Block {

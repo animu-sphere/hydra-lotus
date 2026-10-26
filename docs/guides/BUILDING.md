@@ -178,6 +178,18 @@ sides 1, 2, 4, 8 and 16 per integrator and size, for example:
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark build/light-grid.json --benchmark-workload many-lights-v1 --benchmark-light-sampling mis --benchmark-integrator wavefront --benchmark-light-grid 4
 ```
 
+### Renderer residency
+
+`--benchmark-residency` lists the renderer's allocations by owner and the
+process's heap usage in each frame-state mode
+([contract](../reference/SCENE.md#renderer-residency)). The
+[residency report](../reports/2026-10-26-frame-residency.md) ran one process
+per size:
+
+```sh
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --benchmark-residency build/residency-1920x1080.json --benchmark-label "5e598b6 + residency; core Release" --residency-width 1920 --residency-height 1080
+```
+
 ## Cornell quality checkpoints
 
 After the default build, measure error against the committed reference with

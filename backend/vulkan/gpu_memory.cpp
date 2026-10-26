@@ -241,6 +241,19 @@ GpuMemoryStats SceneMemory::Stats() const {
   return stats;
 }
 
+void SceneMemory::AddResidency(GpuAllocationGroup& device_local,
+    GpuAllocationGroup& host) const {
+  for (const auto& block : blocks_) {
+    auto& group = (memory_properties_.memoryTypes[block->memory_type]
+                          .propertyFlags &
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0
+                      ? device_local
+                      : host;
+    ++group.allocations;
+    group.bytes += block->size;
+  }
+}
+
 void SceneMemory::Destroy() {
   for (auto& block : blocks_)
     DestroyBlock(*block);

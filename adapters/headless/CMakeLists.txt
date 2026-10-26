@@ -3,6 +3,7 @@ include(LotusShaders)
 add_executable(lotus-headless
   main.cpp
   benchmarks/benchmark.cpp
+  benchmarks/residency_benchmark.cpp
   benchmarks/restir_benchmark.cpp
   benchmarks/svgf_benchmark.cpp
   "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"

@@ -697,7 +697,8 @@ int BenchmarkMain(int argc, char** argv) {
     if (!Wavefront(options))
       out << "\"rays_per_second\":\"Reference shader has no ray counter; pixel samples are not ray counts.\","
              "\"average_path_depth\":\"Reference shader has no path-depth counter.\",";
-    out << "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM.\"},"
+    out << "\"total_vram_bytes\":\"Scene pool statistics are not total renderer allocations or process VRAM; "
+           "lotus-headless --benchmark-residency reports both.\"},"
            "\"scenes\":[";
     for (std::size_t i = 0; i < results.size(); ++i) {
       const auto& result = results[i];

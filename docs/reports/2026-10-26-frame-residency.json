@@ -1,0 +1,652 @@
+{
+ "schema": "lotus-frame-residency-v1",
+ "question": "Which renderer allocations hold frame state, how large are they per pixel and at 1080p/4K in each temporal/denoise/reservoir mode, and how much of the process's measured heap usage do they explain?",
+ "procedure": "lotus-headless --benchmark-residency, cornell-v1, read_back false (as the viewport and Hydra render), 3 frames of 1 sample per mode, a fresh renderer per mode, one process per size; Residency() after creation, after the initial UpdateScene and after every frame; VK_EXT_memory_budget heap usage; validation and synchronization validation active, plus a 1080p control with the validation layer disabled",
+ "environment": {
+  "build": {
+   "label": "main 5e598b6 + residency",
+   "compiler": "MSVC 19.51.36256.0",
+   "configuration": "Release",
+   "system": "Windows AMD64"
+  },
+  "device": {
+   "name": "NVIDIA RTX A5000",
+   "api": "1.4.329",
+   "driver": "2504261632",
+   "validation_available": true
+  },
+  "driver": "597.16",
+  "base_commit": "5e598b6",
+  "binary_sha256": "7f3e52bc60377b9114c134a01970f7fcf286c19d8e3b72187219e95dceca622a",
+  "directory": "build/residency-20261025"
+ },
+ "sizes": {
+  "1280x720": {
+   "pixels": 921600,
+   "modes": {
+    "progressive-reference": {
+     "renderer_device_local_mib": 49.8,
+     "renderer_host_mib": 21.6,
+     "frame_device_local_bytes_per_pixel": 38.4,
+     "frame_host_bytes_per_pixel": 20.0,
+     "process_device_local_heap_mib": 194.0,
+     "process_host_heap_mib": 69.9,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 48.3,
+     "created_process_heap_mib": [
+      93.8,
+      48.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      52.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      194.0,
+      69.9,
+      0.0
+     ]
+    },
+    "progressive-wavefront": {
+     "renderer_device_local_mib": 130.6,
+     "renderer_host_mib": 21.6,
+     "frame_device_local_bytes_per_pixel": 130.44,
+     "frame_host_bytes_per_pixel": 20.04,
+     "process_device_local_heap_mib": 275.0,
+     "process_host_heap_mib": 77.9,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      52.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      56.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      275.0,
+      77.9,
+      0.0
+     ]
+    },
+    "temporal-metadata": {
+     "renderer_device_local_mib": 176.3,
+     "renderer_host_mib": 148.1,
+     "frame_device_local_bytes_per_pixel": 182.4,
+     "frame_host_bytes_per_pixel": 164.0,
+     "process_device_local_heap_mib": 320.6,
+     "process_host_heap_mib": 204.5,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      320.6,
+      204.5,
+      0.0
+     ]
+    },
+    "temporal-radiance": {
+     "renderer_device_local_mib": 246.6,
+     "renderer_host_mib": 218.5,
+     "frame_device_local_bytes_per_pixel": 262.4,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 390.9,
+     "process_host_heap_mib": 274.8,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      390.9,
+      274.8,
+      0.0
+     ]
+    },
+    "svgf": {
+     "renderer_device_local_mib": 288.8,
+     "renderer_host_mib": 218.5,
+     "frame_device_local_bytes_per_pixel": 310.4,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 433.1,
+     "process_host_heap_mib": 274.8,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      433.1,
+      274.8,
+      0.0
+     ]
+    },
+    "restir-reuse": {
+     "renderer_device_local_mib": 738.8,
+     "renderer_host_mib": 710.6,
+     "frame_device_local_bytes_per_pixel": 822.4,
+     "frame_host_bytes_per_pixel": 804.0,
+     "process_device_local_heap_mib": 883.1,
+     "process_host_heap_mib": 767.0,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      883.1,
+      767.0,
+      0.0
+     ]
+    },
+    "svgf-restir": {
+     "renderer_device_local_mib": 851.3,
+     "renderer_host_mib": 781.0,
+     "frame_device_local_bytes_per_pixel": 950.4,
+     "frame_host_bytes_per_pixel": 884.0,
+     "process_device_local_heap_mib": 995.6,
+     "process_host_heap_mib": 834.8,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      995.6,
+      834.8,
+      0.0
+     ]
+    }
+   }
+  },
+  "1920x1080": {
+   "pixels": 2073600,
+   "modes": {
+    "progressive-reference": {
+     "renderer_device_local_mib": 91.9,
+     "renderer_host_mib": 43.6,
+     "frame_device_local_bytes_per_pixel": 38.4,
+     "frame_host_bytes_per_pixel": 20.0,
+     "process_device_local_heap_mib": 236.2,
+     "process_host_heap_mib": 91.9,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 48.3,
+     "created_process_heap_mib": [
+      93.8,
+      48.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      52.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      236.2,
+      91.9,
+      0.0
+     ]
+    },
+    "progressive-wavefront": {
+     "renderer_device_local_mib": 273.9,
+     "renderer_host_mib": 43.6,
+     "frame_device_local_bytes_per_pixel": 130.42,
+     "frame_host_bytes_per_pixel": 20.02,
+     "process_device_local_heap_mib": 418.3,
+     "process_host_heap_mib": 99.9,
+     "residual_device_local_mib": 144.4,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      52.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      56.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      418.3,
+      99.9,
+      0.0
+     ]
+    },
+    "temporal-metadata": {
+     "renderer_device_local_mib": 376.7,
+     "renderer_host_mib": 328.3,
+     "frame_device_local_bytes_per_pixel": 182.4,
+     "frame_host_bytes_per_pixel": 164.0,
+     "process_device_local_heap_mib": 521.0,
+     "process_host_heap_mib": 384.6,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      521.0,
+      384.6,
+      0.0
+     ]
+    },
+    "temporal-radiance": {
+     "renderer_device_local_mib": 534.9,
+     "renderer_host_mib": 486.5,
+     "frame_device_local_bytes_per_pixel": 262.4,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 679.4,
+     "process_host_heap_mib": 540.3,
+     "residual_device_local_mib": 144.4,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      679.4,
+      540.3,
+      0.0
+     ]
+    },
+    "svgf": {
+     "renderer_device_local_mib": 629.8,
+     "renderer_host_mib": 486.5,
+     "frame_device_local_bytes_per_pixel": 310.4,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 774.3,
+     "process_host_heap_mib": 540.3,
+     "residual_device_local_mib": 144.5,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      774.3,
+      540.3,
+      0.0
+     ]
+    },
+    "restir-reuse": {
+     "renderer_device_local_mib": 1642.3,
+     "renderer_host_mib": 1593.9,
+     "frame_device_local_bytes_per_pixel": 822.4,
+     "frame_host_bytes_per_pixel": 804.0,
+     "process_device_local_heap_mib": 1786.7,
+     "process_host_heap_mib": 1647.8,
+     "residual_device_local_mib": 144.4,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      1786.7,
+      1647.8,
+      0.0
+     ]
+    },
+    "svgf-restir": {
+     "renderer_device_local_mib": 1895.5,
+     "renderer_host_mib": 1752.1,
+     "frame_device_local_bytes_per_pixel": 950.4,
+     "frame_host_bytes_per_pixel": 884.0,
+     "process_device_local_heap_mib": 2040.0,
+     "process_host_heap_mib": 1806.0,
+     "residual_device_local_mib": 144.5,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      2040.0,
+      1806.0,
+      0.0
+     ]
+    }
+   }
+  },
+  "3840x2160": {
+   "pixels": 8294400,
+   "modes": {
+    "progressive-reference": {
+     "renderer_device_local_mib": 302.9,
+     "renderer_host_mib": 162.2,
+     "frame_device_local_bytes_per_pixel": 36.27,
+     "frame_host_bytes_per_pixel": 20.0,
+     "process_device_local_heap_mib": 447.2,
+     "process_host_heap_mib": 210.5,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 48.3,
+     "created_process_heap_mib": [
+      93.8,
+      48.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      52.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      447.2,
+      210.5,
+      0.0
+     ]
+    },
+    "progressive-wavefront": {
+     "renderer_device_local_mib": 1030.6,
+     "renderer_host_mib": 162.2,
+     "frame_device_local_bytes_per_pixel": 128.27,
+     "frame_host_bytes_per_pixel": 20.0,
+     "process_device_local_heap_mib": 1175.0,
+     "process_host_heap_mib": 218.6,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      52.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      56.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      1175.0,
+      218.6,
+      0.0
+     ]
+    },
+    "temporal-metadata": {
+     "renderer_device_local_mib": 1441.9,
+     "renderer_host_mib": 1301.3,
+     "frame_device_local_bytes_per_pixel": 180.27,
+     "frame_host_bytes_per_pixel": 164.0,
+     "process_device_local_heap_mib": 1586.2,
+     "process_host_heap_mib": 1357.6,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 56.3,
+     "created_process_heap_mib": [
+      93.8,
+      56.3,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      60.3,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      1586.2,
+      1357.6,
+      0.0
+     ]
+    },
+    "temporal-radiance": {
+     "renderer_device_local_mib": 2074.8,
+     "renderer_host_mib": 1934.1,
+     "frame_device_local_bytes_per_pixel": 260.27,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 2219.0,
+     "process_host_heap_mib": 1987.9,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      2219.0,
+      1987.9,
+      0.0
+     ]
+    },
+    "svgf": {
+     "renderer_device_local_mib": 2454.4,
+     "renderer_host_mib": 1934.1,
+     "frame_device_local_bytes_per_pixel": 308.27,
+     "frame_host_bytes_per_pixel": 244.0,
+     "process_device_local_heap_mib": 2598.7,
+     "process_host_heap_mib": 1987.9,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      2598.7,
+      1987.9,
+      0.0
+     ]
+    },
+    "restir-reuse": {
+     "renderer_device_local_mib": 6504.4,
+     "renderer_host_mib": 6363.8,
+     "frame_device_local_bytes_per_pixel": 820.27,
+     "frame_host_bytes_per_pixel": 804.0,
+     "process_device_local_heap_mib": 6648.7,
+     "process_host_heap_mib": 6417.6,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      6648.7,
+      6417.6,
+      0.0
+     ]
+    },
+    "svgf-restir": {
+     "renderer_device_local_mib": 7516.9,
+     "renderer_host_mib": 6996.6,
+     "frame_device_local_bytes_per_pixel": 948.27,
+     "frame_host_bytes_per_pixel": 884.0,
+     "process_device_local_heap_mib": 7661.2,
+     "process_host_heap_mib": 7050.4,
+     "residual_device_local_mib": 144.3,
+     "residual_host_mib": 53.8,
+     "created_process_heap_mib": [
+      93.8,
+      53.8,
+      0.0
+     ],
+     "uploaded_process_heap_mib": [
+      156.3,
+      57.8,
+      0.0
+     ],
+     "sampled_peak_process_heap_mib": [
+      7661.2,
+      7050.4,
+      0.0
+     ]
+    }
+   }
+  }
+ },
+ "owners_at_3840x2160": {
+  "targets.scene": {
+   "device_local": true,
+   "allocations": 3,
+   "bytes_per_pixel": 36.27
+  },
+  "targets.scene.readback": {
+   "device_local": false,
+   "allocations": 2,
+   "bytes_per_pixel": 20.0
+  },
+  "wavefront.state": {
+   "device_local": true,
+   "allocations": 3,
+   "bytes_per_pixel": 92.0
+  },
+  "temporal.surfaces": {
+   "device_local": true,
+   "allocations": 2,
+   "bytes_per_pixel": 128.0
+  },
+  "temporal.surfaces.readback": {
+   "device_local": false,
+   "allocations": 1,
+   "bytes_per_pixel": 128.0
+  },
+  "temporal.validity": {
+   "device_local": true,
+   "allocations": 1,
+   "bytes_per_pixel": 16.0
+  },
+  "temporal.validity.readback": {
+   "device_local": false,
+   "allocations": 1,
+   "bytes_per_pixel": 16.0
+  },
+  "temporal.radiance": {
+   "device_local": true,
+   "allocations": 3,
+   "bytes_per_pixel": 80.0
+  },
+  "temporal.radiance.readback": {
+   "device_local": false,
+   "allocations": 1,
+   "bytes_per_pixel": 80.0
+  },
+  "temporal.filter": {
+   "device_local": true,
+   "allocations": 1,
+   "bytes_per_pixel": 48.0
+  },
+  "restir.initial": {
+   "device_local": true,
+   "allocations": 1,
+   "bytes_per_pixel": 48.0
+  },
+  "restir.initial.readback": {
+   "device_local": false,
+   "allocations": 1,
+   "bytes_per_pixel": 48.0
+  },
+  "restir.history": {
+   "device_local": true,
+   "allocations": 2,
+   "bytes_per_pixel": 384.0
+  },
+  "restir.history.readback": {
+   "device_local": false,
+   "allocations": 1,
+   "bytes_per_pixel": 384.0
+  },
+  "restir.spatial": {
+   "device_local": true,
+   "allocations": 2,
+   "bytes_per_pixel": 208.0
+  },
+  "restir.spatial.readback": {
+   "device_local": false,
+   "allocations": 2,
+   "bytes_per_pixel": 208.0
+  }
+ },
+ "validation_layer_control": {
+  "size": "1920x1080",
+  "validation_available": false,
+  "groups_and_heaps_identical": true
+ }
+}

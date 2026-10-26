@@ -60,6 +60,12 @@ when the measurements justify it.
   measurements. Compare only justified representation/reuse candidates
   against timing, precision, CPU oracles and moving-scene history/rejection
   behavior; defer broader layout changes until the baseline identifies them.
+  A [residency inventory](../reports/2026-10-26-frame-residency.md) now
+  lists every renderer allocation by owner with process heap usage at
+  1080p/4K; the renderer's groups explain all frame-sized growth. Next:
+  allocate host readback mirrors only for frames that read back (884 B per
+  pixel unused by Hydra and the viewport), then compare reservoir-history
+  representations.
 
 ## Deferred adapter work
 
