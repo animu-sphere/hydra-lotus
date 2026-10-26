@@ -9,15 +9,10 @@
 #include <lotus/render_world.hpp>
 
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace LotusHeadless {
-
-// The fixture's id: its USD file's and reference images' file name stem.
-inline constexpr std::string_view kMaterialBasics = "material-basics-v1";
-
-// The reference images' size, in pixels, square.
-inline constexpr std::uint32_t kMaterialFixtureSize = 128;
 
 // Replaces the world's camera and scene with material-basics-v1: a 4x4 grid
 // of unit spheres scaled to 0.4 in front of a grey displayColor backdrop,
@@ -29,9 +24,31 @@ inline constexpr std::uint32_t kMaterialFixtureSize = 128;
 // or a ball.
 void SetMaterialBasics(Lotus::RenderWorld& world);
 
-// The key of the material whose base colour the comparison's negative
-// control scales: the half-rough metal.
-inline constexpr std::string_view kMaterialBasicsControl =
-    "/MaterialBasics/Looks/Metal50";
+// Replaces the world's camera and scene with material-textures-v1: a 5x5
+// grid of textured cards under material-basics-v1's camera, lights and
+// backdrop. Rows from the top: wrap modes; colour spaces and channel counts;
+// scalar channels, scale and bias, and lookups without an image;
+// texture-coordinate sources; then connections the translator does not
+// read, which take their defaults, and a minified checker. Texture keys name
+// files relative to validation/materials/, where the translator names their
+// resolved paths; an unresolved file keeps its authored path.
+void SetMaterialTextures(Lotus::RenderWorld& world);
+
+struct MaterialFixture {
+  // Its USD file's and reference images' file name stem.
+  std::string_view id;
+  // Its default prim, whose child Camera sees it.
+  std::string_view root;
+  // The reference images' size, in pixels, square.
+  std::uint32_t size;
+  void (*set)(Lotus::RenderWorld&);
+  // The comparison's negative control: a plausible defect, which the metric
+  // must reject at 256 spp, and its edit of the mirror.
+  std::string_view control;
+  void (*apply_control)(Lotus::RenderWorld&);
+};
+
+// Every committed fixture, in the audit order.
+std::span<const MaterialFixture> MaterialFixtures();
 
 } // namespace LotusHeadless

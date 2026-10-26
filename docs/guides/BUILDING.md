@@ -56,9 +56,10 @@ build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-
 ```
 
 The same run renders the [material fixtures](../reference/SCENE.md#material-fixtures)
-(`renderer.material.fixtures`) into the same directory. Their USD files are
-generated; edit `scripts/material_fixtures.py`, then regenerate the files
-and, when the change alters the images, the fixtures' reference:
+(`renderer.material.fixtures`) into the same directory. Their USD files and
+texture images are generated; edit `scripts/material_fixtures.py`, then
+regenerate the files and, when the change alters the images, the fixtures'
+reference, which `--write-material-reference` writes for every fixture:
 
 ```sh
 python scripts/material_fixtures.py write

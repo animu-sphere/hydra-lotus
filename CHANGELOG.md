@@ -9,6 +9,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Fixed
 
+- The Hydra adapter warns when a `UsdPreviewSurface` input is driven by a
+  shader graph it does not translate, such as a `UsdTransform2d` between
+  the reader and the texture, instead of silently using the input's
+  default ([contract](docs/reference/SCENE.md#materials),
+  [evidence](docs/reports/2026-10-27-material-textures.md)).
+
 - Allocate frame-product, temporal and reservoir readback buffers from
   host-cached memory where the device offers it, so reading back a frame
   no longer performs uncached bus reads; a blocking 128x128 headless frame
@@ -79,6 +85,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   writes the reference and `scripts/material_fixtures.py` the USD files
   ([contract](docs/reference/SCENE.md#material-fixtures),
   [evidence](docs/reports/2026-10-26-material-basics.md)).
+  `material-textures-v1` adds textures and UV: wrap modes, colour spaces,
+  one- to four-channel PNG images, scalar channels, missing images,
+  texture-coordinate sources, untranslated connections and a minified
+  checker, with Hio's decoded texels compared exactly with the mirror's
+  ([evidence](docs/reports/2026-10-27-material-textures.md)).
 
 - `OffscreenRenderer::Residency()` lists every allocation the renderer makes
   by owner and memory kind, with `VK_EXT_memory_budget` process heap usage

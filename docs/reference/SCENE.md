@@ -869,10 +869,14 @@ The reference path tracer's images are of one fixed scene, rendered by
 LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
-USD files; its `check` command and unit test fail when a committed file
-differs from what it generates. `adapters/common/material_fixtures.cpp`
-mirrors each fixture as a Lotus scene, written independently in C++: what
-the [Hydra translator](#materials) should extract from the file.
+USD files and the PNG images in `validation/materials/textures/` (8-bit,
+without gamma or colour-space chunks); its `check` command and unit test
+fail when a committed file differs from what it generates.
+`adapters/common/material_fixtures.cpp` mirrors each fixture as a Lotus
+scene, written independently in C++: what the
+[Hydra translator](#materials) should extract from the file, decoded
+texels included. The mirror keys textures by their files relative to
+`validation/materials/` where the translator names resolved paths.
 
 **`material-basics-v1`** covers base colour and metallic/roughness, the
 first two items of the
@@ -892,27 +896,56 @@ Every camera ray hits the backdrop or a ball. The rows, from the top:
 | Metal roughness | Metal0, Metal25, Metal50, Metal100 | metallic 1 over (0.95, 0.64, 0.54) at roughness 0, 0.25, 0.5 and 1 |
 | Workflows | Metallic25, Metallic75, Ior25, Specular | metallic 0.25 and 0.75 over (0.9, 0.6, 0.2) at roughness 0.3; ior 2.5; `useSpecularWorkflow` with `specularColor` (0.9, 0.6, 0.3), whose authored metallic 1 and ior 3 are not read |
 
+Its negative control is the half-rough metal with a 10% darker base colour.
+
+**`material-textures-v1`** covers textures and UV, the third audit item,
+at 160×160 under the same camera, lights and backdrop. A 5×5 grid of unit
+quads facing the camera, scaled to 0.7 with centres 0.8 apart, carries
+`UsdUVTexture` lookups. Unless stated, a card reads `diffuseColor` from the
+4×4 RGB `palette.png` under `sRGB` with both wraps `clamp`, through a
+`UsdPrimvarReader_float2` of `st`, per face vertex from (0, 0) to (1, 1).
+The images are `palette.png` (red 40 + 60x, green 40 + 60y, blue 200 or 60
+alternating, x and y the texel's column and row from the top), the
+one-channel `ramp.png` (15 + 15(x + 4y)), the two-channel `grey-alpha.png`
+(50 + 60x, alpha 230 − 60y), the RGBA `rgba.png` (220 − 60x, 40 + 60y,
+40 + 60((x + y) mod 4), alpha 30 + 65x) and the one-channel 64×64
+`checker.png` of one-texel cells. The rows, from the top:
+
+| Row | Cards | Authored inputs and expected translation |
+| --- | --- | --- |
+| Wrap modes | UseMetadata, Clamp, Repeat, Mirror, Mixed | `st` from −0.5 to 1.5; wraps unauthored (`useMetadata`, black), `clamp`, `repeat`, `mirror`, and `repeat` in s with `black` in t |
+| Colour spaces and channels | Srgb, Raw, Auto, Grey, GreyAlpha | the palette under `sRGB`, `raw` and unauthored (`auto`, which is sRGB for an 8-bit three-channel image); `ramp.png` and `grey-alpha.png` under `auto`, which stay linear as (r, r, r, 1) and (r, r, r, g), the latter's `a` driving roughness |
+| Channels and images | Alpha, Orm, ScaleBias, Missing, NoFile | `rgba.png` under `sRGB` with roughness from its linear `a`; under `raw`, roughness from `g` and metallic from `b` over a constant copper; the raw palette with scale (2, 2, 2, 1) and bias (−0.5, −0.5, −0.5, 0); an unresolvable `./textures/missing.png`, keyed by that path, with scale 0.5 and fallback (0.9, 0.2, 0.6, 1); no file, keyed `\|auto`, with fallback (0.2, 0.6, 0.9, 1) |
+| Texture-coordinate sources | Vertex, Indexed, Named, Constant, Absent | `st` per vertex; per face vertex indexed by (1, 0, 2, 3), mirroring s; the reader of `uv1`, `st` turned a quarter; an unconnected `st` of (0.6, 0.3); the reader of a missing `absent` set with fallback (0.1, 0.9) |
+| Untranslated connections and minification | Transform2d, SecondSource, ColourOnScalar, ScalarOnColour, Minified | a `UsdTransform2d` between reader and texture; metallic from `ramp.png` through a second reader of `uv1`; roughness from an `rgb` output; `diffuseColor` from an `r` output; each such input takes its default and warns. `checker.png` under `raw` with `repeat`, about 2.4 texels per pixel |
+
+Its negative control is the Repeat card's coordinates half a texel off in
+s, as a texel-centre convention error would place them.
+
 - **Reference.** `lotus-headless --write-material-reference <directory>`
-  renders each mirror in deterministic mode with BSDF sampling from sample
-  index 0: `<fixture>-mean.pfm` holds 4096 samples per pixel in one
-  accumulation, and `<fixture>-variance.pfm` each pixel's per-sample
-  variance, estimated from 64 accumulations of 64 of the same samples.
-- **`renderer.material.fixtures`** renders each mirror from sample index
-  2²⁰ through the reference integrator with BSDF sampling and with NEE/MIS,
-  and through the wavefront integrator with NEE/MIS. Each accumulation
-  stops at 16 and 256 spp and is compared with the reference by the
-  [DES-Q5 metric](#reference-images); `--images` writes the images as
-  `<fixture>-<mode>-NNNNspp.pfm`. The metric must reject the half-rough
-  metal with a 10% darker base colour at 256 spp, and the check records
-  whether the reference's own samples reproduce it bit for bit.
+  renders each mirror in a cleared GPU scene in deterministic mode with BSDF
+  sampling from sample index 0: `<fixture>-mean.pfm` holds 4096 samples per
+  pixel in one accumulation, and `<fixture>-variance.pfm` each pixel's
+  per-sample variance, estimated from 64 accumulations of 64 of the same
+  samples.
+- **`renderer.material.fixtures`** renders each mirror, in a cleared GPU
+  scene, from sample index 2²⁰ through the reference integrator with BSDF
+  sampling and with NEE/MIS, and through the wavefront integrator with
+  NEE/MIS. Each accumulation stops at 16 and 256 spp and is compared with
+  the reference by the [DES-Q5 metric](#reference-images); `--images` writes
+  the images as `<fixture>-<mode>-NNNNspp.pfm`. The metric must reject each
+  fixture's negative control at 256 spp, and the check records whether the
+  reference's own samples reproduce it bit for bit.
 - **Hydra.** CTest `lotus-renderer-hydra-material-fixtures` opens each USD
   file through UsdImaging and requires the delegate's scene snapshot to be
-  the mirror: the same materials, bindings, triangles, lights and
-  environment exactly, and the same positions, normals, transforms and
-  camera to float rounding (2·10⁻⁶, relative above 1). Its GPU-gated `-gpu`
-  variant renders the stage through Hydra at 256 spp from sample index 2²⁰
-  under NEE/MIS and BSDF sampling, and compares each image with the same
-  reference by the same metric.
+  the mirror: the same materials, bindings, triangles, texture coordinates,
+  decoded textures (size, format and texels), lights and environment
+  exactly, and the same positions, normals, transforms and camera to float
+  rounding (2·10⁻⁶, relative above 1). Its GPU-gated `-gpu` variant renders
+  the stage through Hydra at 256 spp from sample index 2²⁰ under NEE/MIS
+  and BSDF sampling, requires each image to be the backend's image of the
+  mirror bit for bit, and compares it with the same reference by the same
+  metric.
 
 ### Wavefront integrator
 
@@ -1785,9 +1818,11 @@ The colour space is `sourceColorSpace`, or the `colorSpace:file` input
 colour space UsdImaging hands it over as: `raw` and linear or data colour
 spaces are raw, `sRGB` and `srgb_*` spaces sRGB, and anything else `auto`.
 A material has one texture-coordinate source, its first lookup's. An input
-driven by anything else (another node type, a colour output on a scalar,
-a `UsdTransform2d` between the reader and the texture, or a second
-texture-coordinate source) takes its default and is reported as connected.
+driven by anything else (another node type, a colour output on a scalar or
+a scalar output on a colour, a `UsdTransform2d` between the reader and the
+texture, or a second texture-coordinate source) takes its default and is
+reported as connected; the adapter warns, naming the material and those
+inputs, whenever it translates the material.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.

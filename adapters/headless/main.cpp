@@ -3434,46 +3434,52 @@ constexpr std::uint32_t kMaterialReferenceSamples = 4096;
 constexpr std::uint32_t kMaterialReferenceBatches = 64;
 constexpr std::array<std::uint32_t, 2> kMaterialLevels{16, 256};
 
-void SetMaterialFixtureScene(PathScenes& scenes) {
-  LotusHeadless::SetMaterialBasics(scenes.World());
-  scenes.Target().width = LotusHeadless::kMaterialFixtureSize;
-  scenes.Target().height = LotusHeadless::kMaterialFixtureSize;
+// The fixture's mirror in a cleared GPU scene, so that its slots and images
+// do not depend on the fixtures before it.
+std::string SetMaterialFixtureScene(
+    PathScenes& scenes, const LotusHeadless::MaterialFixture& fixture) {
+  if (auto failure = scenes.Clear(); !failure.empty()) return failure;
+  fixture.set(scenes.World());
+  scenes.Target().width = fixture.size;
+  scenes.Target().height = fixture.size;
   scenes.Target().clear_color = {0.0F, 0.0F, 0.0F, 0.0F};
+  return {};
 }
 
 std::string WriteMaterialReference(
     PathScenes& scenes, const std::filesystem::path& directory) {
-  SetMaterialFixtureScene(scenes);
   scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
-  return WriteReferenceFiles(scenes, directory,
-      std::string(LotusHeadless::kMaterialBasics), kMaterialReferenceSamples,
-      kMaterialReferenceBatches);
+  for (const LotusHeadless::MaterialFixture& fixture : LotusHeadless::MaterialFixtures()) {
+    const std::string stem(fixture.id);
+    std::string failure = SetMaterialFixtureScene(scenes, fixture);
+    if (failure.empty())
+      failure = WriteReferenceFiles(scenes, directory, stem,
+          kMaterialReferenceSamples, kMaterialReferenceBatches);
+    if (!failure.empty()) return stem + ": " + failure;
+  }
+  return {};
 }
 
-// material-basics-v1, the scene the Hydra fixture test requires its USD
-// file to extract to, rendered by BSDF sampling and NEE/MIS through the
-// reference integrator and by NEE/MIS through the wavefront one, at
-// kMaterialLevels in one accumulation each from an independent sample
-// index, and each compared with the committed reference by the DES-Q5
-// metric; images are written to `images` when it is not empty. Then the
-// metric must reject the half-rough metal 10% darker, and the reference's
-// own samples are compared bitwise with it, for the record.
-std::string MaterialFixturesFailure(PathScenes& scenes,
+// One fixture, the scene the Hydra fixture test requires its USD file to
+// extract to, rendered by BSDF sampling and NEE/MIS through the reference
+// integrator and by NEE/MIS through the wavefront one, at kMaterialLevels
+// in one accumulation each from an independent sample index, and each
+// compared with the committed reference by the DES-Q5 metric; images are
+// written to `images` when it is not empty. Then the metric must reject the
+// fixture's negative control, and the reference's own samples are compared
+// bitwise with it, for the record.
+std::string MaterialFixtureFailure(PathScenes& scenes,
+    const LotusHeadless::MaterialFixture& fixture,
     const std::filesystem::path& reference_directory,
     const std::filesystem::path& images) {
-  const std::string stem(LotusHeadless::kMaterialBasics);
+  const std::string stem(fixture.id);
   LotusHeadless::Reference reference;
   if (auto failure = ReadReferenceFiles(reference_directory, stem,
-          kMaterialReferenceSamples, LotusHeadless::kMaterialFixtureSize, reference);
+          kMaterialReferenceSamples, fixture.size, reference);
       !failure.empty())
     return failure;
-  if (!images.empty()) {
-    std::error_code error;
-    std::filesystem::create_directories(images, error);
-    if (error)
-      return "cannot create " + images.string() + ": " + error.message();
-  }
-  SetMaterialFixtureScene(scenes);
+  if (auto failure = SetMaterialFixtureScene(scenes, fixture); !failure.empty())
+    return failure;
 
   struct Mode {
     const char* name;
@@ -3516,8 +3522,8 @@ std::string MaterialFixturesFailure(PathScenes& scenes,
       if (!comparison.failure.empty())
         return std::string(mode.name) + ": " + comparison.failure;
       std::ostringstream line;
-      line << std::fixed << std::setprecision(2) << mode.name << ' ' << level
-           << " spp: image z " << comparison.image_z[0] << ' '
+      line << std::fixed << std::setprecision(2) << stem << ' ' << mode.name
+           << ' ' << level << " spp: image z " << comparison.image_z[0] << ' '
            << comparison.image_z[1] << ' ' << comparison.image_z[2] << ", "
            << comparison.tile << "px tiles max |z| " << comparison.max_tile_z
            << " mean z^2 " << comparison.mean_tile_z2;
@@ -3525,32 +3531,30 @@ std::string MaterialFixturesFailure(PathScenes& scenes,
     }
   }
 
-  // The metric's power: the half-rough metal 10% darker must not match.
+  // The metric's power: the negative control must not match.
   scenes.SetIntegrator(Lotus::Integrator::Reference);
   scenes.SetLightSampling(Lotus::LightSampling::Mis);
-  const std::string control(LotusHeadless::kMaterialBasicsControl);
-  const Lotus::Material metal = scenes.World().Commit().scene->materials.at(control);
-  Lotus::Material darker = metal;
-  for (float& channel : darker.base_color) channel *= 0.9F;
-  scenes.World().SetMaterial(control, darker);
+  const std::string control(fixture.control);
+  fixture.apply_control(scenes.World());
   LotusHeadless::RgbImage rejected_image;
   if (auto failure = RenderReferenceImage(scenes, kComparedSampleIndex,
           kMaterialLevels.back(), rejected_image);
       !failure.empty())
-    return "metal 10% darker: " + failure;
+    return control + ": " + failure;
   const LotusHeadless::Comparison rejected =
       LotusHeadless::Compare(rejected_image, kMaterialLevels.back(), reference);
   if (rejected.failure.empty())
-    return "the comparison accepted the half-rough metal 10% darker: max |z| " +
+    return "the comparison accepted " + control + ": max |z| " +
            std::to_string(rejected.max_tile_z);
   std::ostringstream line;
-  line << std::fixed << std::setprecision(2)
-       << "half-rough metal 10% darker rejected at max |z| " << rejected.max_tile_z;
+  line << std::fixed << std::setprecision(2) << stem << ": " << control
+       << " rejected at max |z| " << rejected.max_tile_z;
   scenes.Summarize(line.str());
-  scenes.World().SetMaterial(control, metal);
 
   // On the device and build that wrote the reference, deterministic mode
   // reproduces it bit for bit; elsewhere it need not.
+  if (auto failure = SetMaterialFixtureScene(scenes, fixture); !failure.empty())
+    return failure;
   scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
   LotusHeadless::RgbImage own;
   if (auto failure =
@@ -3561,10 +3565,28 @@ std::string MaterialFixturesFailure(PathScenes& scenes,
   for (std::size_t i = 0; i < own.values.size(); ++i)
     differing +=
         std::memcmp(&own.values[i], &reference.mean.values[i], sizeof(float)) != 0;
-  scenes.Summarize(differing == 0
-                       ? std::string("the reference's samples reproduce it bit for bit")
-                       : "the reference's samples differ from it in " +
-                             std::to_string(differing) + " values");
+  scenes.Summarize(stem + (differing == 0
+                               ? std::string(": the reference's samples reproduce it bit for bit")
+                               : ": the reference's samples differ from it in " +
+                                     std::to_string(differing) + " values"));
+  return {};
+}
+
+// Every committed fixture, in order.
+std::string MaterialFixturesFailure(PathScenes& scenes,
+    const std::filesystem::path& reference_directory,
+    const std::filesystem::path& images) {
+  if (!images.empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(images, error);
+    if (error)
+      return "cannot create " + images.string() + ": " + error.message();
+  }
+  for (const LotusHeadless::MaterialFixture& fixture : LotusHeadless::MaterialFixtures())
+    if (auto failure =
+            MaterialFixtureFailure(scenes, fixture, reference_directory, images);
+        !failure.empty())
+      return std::string(fixture.id) + ": " + failure;
   return {};
 }
 
