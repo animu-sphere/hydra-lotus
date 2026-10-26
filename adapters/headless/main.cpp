@@ -3,6 +3,7 @@
 #include <lotus/render_world.hpp>
 #include <lotus/vulkan_backend.hpp>
 
+#include "common/material_fixtures.hpp"
 #include "common/reference.hpp"
 #include "benchmarks/benchmark.hpp"
 #include "benchmarks/residency_benchmark.hpp"
@@ -3214,8 +3215,8 @@ std::filesystem::path ReferenceImagePath(
   return directory / name.str();
 }
 
-// The scene colour product's RGB. Every sample of the reference scene hits,
-// so every pixel's alpha must be 1.
+// The scene colour product's RGB. Every sample of the reference scene and of
+// the material fixtures hits, so every pixel's alpha must be 1.
 std::string ToRgb(const Lotus::ColorProduct& color, LotusHeadless::RgbImage& image) {
   const std::vector<float> values = ColorValues(color);
   image.width = color.width;
@@ -3224,7 +3225,7 @@ std::string ToRgb(const Lotus::ColorProduct& color, LotusHeadless::RgbImage& ima
   for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
     if (values[pixel * 4 + 3] != 1.0F)
       return "alpha " + std::to_string(values[pixel * 4 + 3]) + " at pixel " +
-             std::to_string(pixel) + ": a sample missed the Cornell box";
+             std::to_string(pixel) + ": a sample missed the scene";
     image.values.insert(image.values.end(), &values[pixel * 4], &values[pixel * 4 + 3]);
   }
   return {};
@@ -3252,20 +3253,21 @@ std::string RenderReferenceImage(PathScenes& scenes, std::uint32_t sample_index,
   return ToRgb(frame.color, image);
 }
 
-// Deterministic mode: the reference's mean is kReferenceSamples from sample
-// index 0 in one accumulation, and its per-sample variance is estimated from
-// kReferenceBatches accumulations of the same samples. The batches come
-// first: the first one starts at sample index 0 too, and would continue a
-// preceding accumulation from there.
-std::string WriteReference(PathScenes& scenes, const std::filesystem::path& directory) {
-  SetReferenceScene(scenes);
-  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
-  constexpr std::uint32_t kBatch = kReferenceSamples / kReferenceBatches;
+// Deterministic mode: a reference's mean is `samples` from sample index 0 in
+// one accumulation of the scenes' scene, and its per-sample variance is
+// estimated from `batches` accumulations of the same samples. The batches
+// come first: the first one starts at sample index 0 too, and would continue
+// a preceding accumulation from there. Writes <stem>-mean.pfm and
+// <stem>-variance.pfm.
+std::string WriteReferenceFiles(PathScenes& scenes,
+    const std::filesystem::path& directory, const std::string& stem,
+    std::uint32_t samples, std::uint32_t batches) {
+  const std::uint32_t per_batch = samples / batches;
   std::vector<double> sum;
   std::vector<double> squares;
-  for (std::uint32_t batch = 0; batch < kReferenceBatches; ++batch) {
+  for (std::uint32_t batch = 0; batch < batches; ++batch) {
     LotusHeadless::RgbImage image;
-    if (auto failure = RenderReferenceImage(scenes, batch * kBatch, kBatch, image);
+    if (auto failure = RenderReferenceImage(scenes, batch * per_batch, per_batch, image);
         !failure.empty())
       return "batch " + std::to_string(batch) + ": " + failure;
     sum.resize(image.values.size());
@@ -3276,8 +3278,8 @@ std::string WriteReference(PathScenes& scenes, const std::filesystem::path& dire
     }
   }
   LotusHeadless::Reference reference;
-  reference.samples = kReferenceSamples;
-  if (auto failure = RenderReferenceImage(scenes, 0, kReferenceSamples, reference.mean);
+  reference.samples = samples;
+  if (auto failure = RenderReferenceImage(scenes, 0, samples, reference.mean);
       !failure.empty())
     return failure;
   const std::size_t count = reference.mean.values.size();
@@ -3285,24 +3287,50 @@ std::string WriteReference(PathScenes& scenes, const std::filesystem::path& dire
     return "the batches and the mean differ in size";
   reference.variance = reference.mean;
   for (std::size_t i = 0; i < count; ++i) {
-    const double mean = sum[i] / kReferenceBatches;
+    const double mean = sum[i] / batches;
     // The batches hold the mean's samples; only the summation order differs.
     if (std::abs(mean - reference.mean.values[i]) > 1e-6 + 1e-4 * std::abs(mean))
       return "the batches' mean " + std::to_string(mean) + " differs from " +
              std::to_string(reference.mean.values[i]) + " at value " +
              std::to_string(i);
     const double batch_variance = std::max(0.0,
-        (squares[i] - kReferenceBatches * mean * mean) / (kReferenceBatches - 1));
-    reference.variance.values[i] = static_cast<float>(batch_variance * kBatch);
+        (squares[i] - batches * mean * mean) / (batches - 1));
+    reference.variance.values[i] = static_cast<float>(batch_variance * per_batch);
   }
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (auto failure = LotusHeadless::WritePfm(
-          directory / "cornell-box-mean.pfm", reference.mean);
+          directory / (stem + "-mean.pfm"), reference.mean);
       !failure.empty())
     return failure;
   return LotusHeadless::WritePfm(
-      directory / "cornell-box-variance.pfm", reference.variance);
+      directory / (stem + "-variance.pfm"), reference.variance);
+}
+
+std::string WriteReference(PathScenes& scenes, const std::filesystem::path& directory) {
+  SetReferenceScene(scenes);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  return WriteReferenceFiles(
+      scenes, directory, "cornell-box", kReferenceSamples, kReferenceBatches);
+}
+
+// Reads <stem>-mean.pfm and <stem>-variance.pfm, of `samples` per pixel and
+// `size` pixels square.
+std::string ReadReferenceFiles(const std::filesystem::path& directory,
+    const std::string& stem, std::uint32_t samples, std::uint32_t size,
+    LotusHeadless::Reference& reference) {
+  reference.samples = samples;
+  if (auto failure = LotusHeadless::ReadPfm(
+          directory / (stem + "-mean.pfm"), reference.mean);
+      !failure.empty())
+    return failure;
+  if (auto failure = LotusHeadless::ReadPfm(
+          directory / (stem + "-variance.pfm"), reference.variance);
+      !failure.empty())
+    return failure;
+  if (reference.mean.width != size || reference.mean.height != size)
+    return stem + "'s reference is not " + std::to_string(size) + " pixels square";
+  return {};
 }
 
 // The reference images: the Cornell box rendered at each of
@@ -3316,19 +3344,10 @@ std::string ReferenceFailure(PathScenes& scenes,
     const std::filesystem::path& reference_directory,
     const std::filesystem::path& images) {
   LotusHeadless::Reference reference;
-  reference.samples = kReferenceSamples;
-  if (auto failure = LotusHeadless::ReadPfm(
-          reference_directory / "cornell-box-mean.pfm", reference.mean);
+  if (auto failure = ReadReferenceFiles(reference_directory, "cornell-box",
+          kReferenceSamples, LotusHeadless::kReferenceSize, reference);
       !failure.empty())
     return failure;
-  if (auto failure = LotusHeadless::ReadPfm(
-          reference_directory / "cornell-box-variance.pfm", reference.variance);
-      !failure.empty())
-    return failure;
-  if (reference.mean.width != LotusHeadless::kReferenceSize ||
-      reference.mean.height != LotusHeadless::kReferenceSize)
-    return "the reference is not " +
-           std::to_string(LotusHeadless::kReferenceSize) + " pixels square";
   if (!images.empty()) {
     std::error_code error;
     std::filesystem::create_directories(images, error);
@@ -3398,6 +3417,146 @@ std::string ReferenceFailure(PathScenes& scenes,
   scenes.SetLightSampling(light_sampling);
   if (!own_failure.empty())
     return "the reference's samples: " + own_failure;
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < own.values.size(); ++i)
+    differing +=
+        std::memcmp(&own.values[i], &reference.mean.values[i], sizeof(float)) != 0;
+  scenes.Summarize(differing == 0
+                       ? std::string("the reference's samples reproduce it bit for bit")
+                       : "the reference's samples differ from it in " +
+                             std::to_string(differing) + " values");
+  return {};
+}
+
+// The material fixtures' references (LOTUS-MATERIAL-01): more samples than
+// the Cornell box's, for their near-mirror balls.
+constexpr std::uint32_t kMaterialReferenceSamples = 4096;
+constexpr std::uint32_t kMaterialReferenceBatches = 64;
+constexpr std::array<std::uint32_t, 2> kMaterialLevels{16, 256};
+
+void SetMaterialFixtureScene(PathScenes& scenes) {
+  LotusHeadless::SetMaterialBasics(scenes.World());
+  scenes.Target().width = LotusHeadless::kMaterialFixtureSize;
+  scenes.Target().height = LotusHeadless::kMaterialFixtureSize;
+  scenes.Target().clear_color = {0.0F, 0.0F, 0.0F, 0.0F};
+}
+
+std::string WriteMaterialReference(
+    PathScenes& scenes, const std::filesystem::path& directory) {
+  SetMaterialFixtureScene(scenes);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  return WriteReferenceFiles(scenes, directory,
+      std::string(LotusHeadless::kMaterialBasics), kMaterialReferenceSamples,
+      kMaterialReferenceBatches);
+}
+
+// material-basics-v1, the scene the Hydra fixture test requires its USD
+// file to extract to, rendered by BSDF sampling and NEE/MIS through the
+// reference integrator and by NEE/MIS through the wavefront one, at
+// kMaterialLevels in one accumulation each from an independent sample
+// index, and each compared with the committed reference by the DES-Q5
+// metric; images are written to `images` when it is not empty. Then the
+// metric must reject the half-rough metal 10% darker, and the reference's
+// own samples are compared bitwise with it, for the record.
+std::string MaterialFixturesFailure(PathScenes& scenes,
+    const std::filesystem::path& reference_directory,
+    const std::filesystem::path& images) {
+  const std::string stem(LotusHeadless::kMaterialBasics);
+  LotusHeadless::Reference reference;
+  if (auto failure = ReadReferenceFiles(reference_directory, stem,
+          kMaterialReferenceSamples, LotusHeadless::kMaterialFixtureSize, reference);
+      !failure.empty())
+    return failure;
+  if (!images.empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(images, error);
+    if (error)
+      return "cannot create " + images.string() + ": " + error.message();
+  }
+  SetMaterialFixtureScene(scenes);
+
+  struct Mode {
+    const char* name;
+    Lotus::Integrator integrator;
+    Lotus::LightSampling light_sampling;
+  };
+  constexpr Mode kModes[] = {
+      {"reference-bsdf", Lotus::Integrator::Reference, Lotus::LightSampling::Bsdf},
+      {"reference-mis", Lotus::Integrator::Reference, Lotus::LightSampling::Mis},
+      {"wavefront-mis", Lotus::Integrator::Wavefront, Lotus::LightSampling::Mis}};
+  for (const Mode& mode : kModes) {
+    scenes.SetIntegrator(mode.integrator);
+    scenes.SetLightSampling(mode.light_sampling);
+    Lotus::PathTracingSettings settings;
+    settings.sample_index = kComparedSampleIndex;
+    std::uint32_t rendered = 0;
+    for (const std::uint32_t level : kMaterialLevels) {
+      Lotus::GpuFrameEvidence frame;
+      if (auto failure = scenes.Render(settings, frame, level - rendered);
+          !failure.empty())
+        return std::string(mode.name) + ": " + failure;
+      rendered = level;
+      if (frame.samples_per_pixel != level)
+        return std::string(mode.name) + ": the accumulation holds " +
+               std::to_string(frame.samples_per_pixel) + " samples instead of " +
+               std::to_string(level);
+      LotusHeadless::RgbImage image;
+      if (auto failure = ToRgb(frame.color, image); !failure.empty())
+        return std::string(mode.name) + ": " + failure;
+      if (!images.empty()) {
+        std::ostringstream name;
+        name << stem << '-' << mode.name << '-' << std::setw(4)
+             << std::setfill('0') << level << "spp.pfm";
+        if (auto failure = LotusHeadless::WritePfm(images / name.str(), image);
+            !failure.empty())
+          return failure;
+      }
+      const LotusHeadless::Comparison comparison =
+          LotusHeadless::Compare(image, level, reference);
+      if (!comparison.failure.empty())
+        return std::string(mode.name) + ": " + comparison.failure;
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(2) << mode.name << ' ' << level
+           << " spp: image z " << comparison.image_z[0] << ' '
+           << comparison.image_z[1] << ' ' << comparison.image_z[2] << ", "
+           << comparison.tile << "px tiles max |z| " << comparison.max_tile_z
+           << " mean z^2 " << comparison.mean_tile_z2;
+      scenes.Summarize(line.str());
+    }
+  }
+
+  // The metric's power: the half-rough metal 10% darker must not match.
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  scenes.SetLightSampling(Lotus::LightSampling::Mis);
+  const std::string control(LotusHeadless::kMaterialBasicsControl);
+  const Lotus::Material metal = scenes.World().Commit().scene->materials.at(control);
+  Lotus::Material darker = metal;
+  for (float& channel : darker.base_color) channel *= 0.9F;
+  scenes.World().SetMaterial(control, darker);
+  LotusHeadless::RgbImage rejected_image;
+  if (auto failure = RenderReferenceImage(scenes, kComparedSampleIndex,
+          kMaterialLevels.back(), rejected_image);
+      !failure.empty())
+    return "metal 10% darker: " + failure;
+  const LotusHeadless::Comparison rejected =
+      LotusHeadless::Compare(rejected_image, kMaterialLevels.back(), reference);
+  if (rejected.failure.empty())
+    return "the comparison accepted the half-rough metal 10% darker: max |z| " +
+           std::to_string(rejected.max_tile_z);
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(2)
+       << "half-rough metal 10% darker rejected at max |z| " << rejected.max_tile_z;
+  scenes.Summarize(line.str());
+  scenes.World().SetMaterial(control, metal);
+
+  // On the device and build that wrote the reference, deterministic mode
+  // reproduces it bit for bit; elsewhere it need not.
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  LotusHeadless::RgbImage own;
+  if (auto failure =
+          RenderReferenceImage(scenes, 0, kMaterialReferenceSamples, own);
+      !failure.empty())
+    return "the reference's samples: " + failure;
   std::size_t differing = 0;
   for (std::size_t i = 0; i < own.values.size(); ++i)
     differing +=
@@ -4934,6 +5093,7 @@ int main(int argc, char** argv) {
   std::filesystem::path assets_directory = executable_directory / "assets";
   std::filesystem::path images;
   std::filesystem::path write_reference;
+  std::filesystem::path write_material_reference;
   for (int index = 1; index < argc; ++index) {
     const std::string_view argument(argv[index]);
     if (argument == "--report" && index + 1 < argc) {
@@ -4948,11 +5108,14 @@ int main(int argc, char** argv) {
       images = argv[++index];
     } else if (argument == "--write-reference" && index + 1 < argc) {
       write_reference = argv[++index];
+    } else if (argument == "--write-material-reference" && index + 1 < argc) {
+      write_material_reference = argv[++index];
     } else {
       std::cerr << "usage: lotus-headless [--report <path>] [--install-tree]\n"
                    "           [--reference <directory>] [--assets <directory>]\n"
                    "           [--images <directory>]\n"
                    "       lotus-headless --write-reference <directory>\n"
+                   "       lotus-headless --write-material-reference <directory>\n"
                    "       lotus-headless --benchmark <json-path> [--benchmark-label <identity>]\n"
                    "           [--benchmark-frames <count>] [--benchmark-warmup <count>]\n"
                    "       lotus-headless --benchmark-restir <json-path> [measurement options]\n"
@@ -4981,7 +5144,7 @@ int main(int argc, char** argv) {
   const std::unique_ptr<Lotus::OffscreenRenderer> renderer =
       Lotus::CreateOffscreenRenderer(shaders.vertex, shaders.fragment, setup_status,
           setup_error, shaders.ray_query);
-  if (!write_reference.empty()) {
+  if (!write_reference.empty() || !write_material_reference.empty()) {
     if (!renderer) {
       std::cerr << "cannot create the renderer: " << setup_error << '\n';
       return 1;
@@ -4991,11 +5154,24 @@ int main(int argc, char** argv) {
       return 1;
     }
     PathScenes scenes(*renderer);
-    if (const auto failure = WriteReference(scenes, write_reference); !failure.empty()) {
-      std::cerr << "cannot write the reference: " << failure << '\n';
-      return 1;
+    if (!write_reference.empty()) {
+      if (const auto failure = WriteReference(scenes, write_reference); !failure.empty()) {
+        std::cerr << "cannot write the reference: " << failure << '\n';
+        return 1;
+      }
+      std::cout << "wrote the reference to " << write_reference.string() << '\n';
     }
-    std::cout << "wrote the reference to " << write_reference.string() << '\n';
+    if (!write_material_reference.empty()) {
+      std::string failure = scenes.Clear();
+      if (failure.empty())
+        failure = WriteMaterialReference(scenes, write_material_reference);
+      if (!failure.empty()) {
+        std::cerr << "cannot write the material reference: " << failure << '\n';
+        return 1;
+      }
+      std::cout << "wrote the material reference to "
+                << write_material_reference.string() << '\n';
+    }
     return 0;
   }
   // The scene runs first, so the frames' validation count covers it too.
@@ -5224,6 +5400,13 @@ int main(int argc, char** argv) {
         light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
         return failure;
       });
+      run("renderer.material.fixtures", [&](PathScenes& material_scenes) {
+        std::string failure =
+            MaterialFixturesFailure(material_scenes, reference_directory, images);
+        material_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        material_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -5239,6 +5422,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.light_sampling", "skip", ray_query.detail});
       checks.push_back({"renderer.path.analytic_lights", "skip", ray_query.detail});
       checks.push_back({"renderer.path.environment", "skip", ray_query.detail});
+      checks.push_back({"renderer.material.fixtures", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -5256,6 +5440,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.light_sampling", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.environment", Status(setup_status), setup_error});
+    checks.push_back({"renderer.material.fixtures", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

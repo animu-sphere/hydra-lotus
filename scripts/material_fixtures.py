@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Write or check the committed UsdPreviewSurface material fixtures.
+
+Each fixture is authored here as USD text, with no OpenUSD dependency, and
+mirrored as a Lotus scene in adapters/common/material_fixtures.cpp. The
+Hydra fixture test requires the two to agree; the headless check renders
+the mirror against the committed reference images.
+"""
+
+import argparse
+import math
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+DIRECTORY = ROOT / "validation" / "materials"
+
+# The unit sphere's tessellation: segments around +Y, rings pole to pole.
+SEGMENTS = 32
+RINGS = 16
+
+
+def fixed(value):
+    """`value` rounded to a multiple of 1e-6, as the C++ mirror rounds it."""
+    units = round(value * 1_000_000)
+    sign = "-" if units < 0 else ""
+    units = abs(units)
+    return f"{sign}{units // 1_000_000}.{units % 1_000_000:06d}"
+
+
+def sphere():
+    """Points, face vertex counts and indices of the unit sphere.
+
+    Ring i (1..RINGS-1) is at polar angle pi*i/RINGS; segment j at azimuth
+    2*pi*j/SEGMENTS, with x = sin(theta)cos(phi) and z = -sin(theta)sin(phi).
+    Faces wind counter-clockwise seen from outside: triangles at the poles,
+    quads between rings.
+    """
+    points = [(0.0, 1.0, 0.0)]
+    for i in range(1, RINGS):
+        theta = math.pi * i / RINGS
+        for j in range(SEGMENTS):
+            phi = 2 * math.pi * j / SEGMENTS
+            points.append((math.sin(theta) * math.cos(phi), math.cos(theta),
+                           -math.sin(theta) * math.sin(phi)))
+    points.append((0.0, -1.0, 0.0))
+    bottom = len(points) - 1
+
+    def ring(i, j):
+        return 1 + (i - 1) * SEGMENTS + j % SEGMENTS
+
+    counts, indices = [], []
+    for j in range(SEGMENTS):
+        counts.append(3)
+        indices += [0, ring(1, j), ring(1, j + 1)]
+    for i in range(1, RINGS - 1):
+        for j in range(SEGMENTS):
+            counts.append(4)
+            indices += [ring(i, j), ring(i + 1, j), ring(i + 1, j + 1), ring(i, j + 1)]
+    for j in range(SEGMENTS):
+        counts.append(3)
+        indices += [ring(RINGS - 1, j), bottom, ring(RINGS - 1, j + 1)]
+    return points, counts, indices
+
+
+def vectors(values):
+    return ", ".join("(" + ", ".join(fixed(c) for c in v) + ")" for v in values)
+
+
+def integers(values):
+    return ", ".join(str(v) for v in values)
+
+
+# material-basics-v1: the policy's first two audit items, base colour and
+# metallic/roughness, on a 4x4 grid of spheres. Rows from the top: base
+# colours, dielectric roughness, metal roughness, then partial metallic,
+# metallic-workflow ior and the specular workflow. Each entry is the ball's
+# name and its UsdPreviewSurface inputs, as authored; out-of-range and
+# ignored values are deliberate.
+BASICS = [
+    [("White", {"diffuseColor": (0.8, 0.8, 0.8)}),
+     ("Red", {"diffuseColor": (0.8, 0.1, 0.05)}),
+     ("Dark", {"diffuseColor": (0.04, 0.04, 0.04)}),
+     ("Clamped", {"diffuseColor": (1.25, 0.5, -0.25), "roughness": 1.5})],
+    [("Gloss0", {"diffuseColor": (0.5, 0.5, 0.5), "roughness": 0.0}),
+     ("Gloss25", {"diffuseColor": (0.5, 0.5, 0.5), "roughness": 0.25}),
+     ("Gloss50", {"diffuseColor": (0.5, 0.5, 0.5), "roughness": 0.5}),
+     ("Gloss100", {"diffuseColor": (0.5, 0.5, 0.5), "roughness": 1.0})],
+    [("Metal0", {"diffuseColor": (0.95, 0.64, 0.54), "metallic": 1.0, "roughness": 0.0}),
+     ("Metal25", {"diffuseColor": (0.95, 0.64, 0.54), "metallic": 1.0, "roughness": 0.25}),
+     ("Metal50", {"diffuseColor": (0.95, 0.64, 0.54), "metallic": 1.0, "roughness": 0.5}),
+     ("Metal100", {"diffuseColor": (0.95, 0.64, 0.54), "metallic": 1.0, "roughness": 1.0})],
+    [("Metallic25", {"diffuseColor": (0.9, 0.6, 0.2), "metallic": 0.25, "roughness": 0.3}),
+     ("Metallic75", {"diffuseColor": (0.9, 0.6, 0.2), "metallic": 0.75, "roughness": 0.3}),
+     ("Ior25", {"diffuseColor": (0.1, 0.2, 0.6), "roughness": 0.1, "ior": 2.5}),
+     ("Specular", {"diffuseColor": (0.05, 0.05, 0.05), "roughness": 0.2,
+                   "useSpecularWorkflow": 1, "specularColor": (0.9, 0.6, 0.3),
+                   "metallic": 1.0, "ior": 3.0})],
+]
+# Ball centres: columns left to right, rows top to bottom.
+COLUMNS = (-1.35, -0.45, 0.45, 1.35)
+ROWS = (1.35, 0.45, -0.45, -1.35)
+
+
+def number(value):
+    return repr(float(value)).removesuffix(".0") if float(value).is_integer() else repr(value)
+
+
+def shader_input(name, value):
+    if name == "useSpecularWorkflow":
+        return f"int inputs:{name} = {value}"
+    if isinstance(value, tuple):
+        return f"color3f inputs:{name} = ({', '.join(number(c) for c in value)})"
+    return f"float inputs:{name} = {number(value)}"
+
+
+def basics():
+    points, counts, indices = sphere()
+    lines = [
+        "#usda 1.0",
+        "(",
+        '    defaultPrim = "MaterialBasics"',
+        "    metersPerUnit = 1",
+        '    upAxis = "Y"',
+        ")",
+        "",
+        "# Generated by scripts/material_fixtures.py; edit it there. Mirrored by",
+        "# adapters/common/material_fixtures.cpp (SetMaterialBasics).",
+        "",
+        "# The unit sphere every ball inherits, with its authored vertex normals.",
+        'class Mesh "_Ball"',
+        "{",
+        f"    int[] faceVertexCounts = [{integers(counts)}]",
+        f"    int[] faceVertexIndices = [{integers(indices)}]",
+        f"    normal3f[] normals = [{vectors(points)}]",
+        f"    point3f[] points = [{vectors(points)}]",
+        '    uniform token subdivisionScheme = "none"',
+        "}",
+        "",
+        'def Xform "MaterialBasics"',
+        "{",
+        '    def Camera "Camera"',
+        "    {",
+        "        float2 clippingRange = (1, 100)",
+        "        float focalLength = 50",
+        "        float horizontalAperture = 32",
+        "        float verticalAperture = 32",
+        "        double3 xformOp:translate = (0, 0, 6.5)",
+        '        uniform token[] xformOpOrder = ["xformOp:translate"]',
+        "    }",
+        "",
+        '    def DomeLight "Dome"',
+        "    {",
+        "        float inputs:intensity = 0.5",
+        "    }",
+        "",
+        '    def RectLight "Key"',
+        "    {",
+        "        float inputs:height = 3",
+        "        float inputs:intensity = 4",
+        "        float inputs:width = 3",
+        "        float xformOp:rotateX = -30",
+        "        float xformOp:rotateY = 20",
+        "        double3 xformOp:translate = (1.5, 2.5, 4)",
+        '        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateY", "xformOp:rotateX"]',
+        "    }",
+        "",
+        "    # Unbound: lit by its displayColor.",
+        '    def Mesh "Backdrop"',
+        "    {",
+        "        int[] faceVertexCounts = [4]",
+        "        int[] faceVertexIndices = [0, 1, 2, 3]",
+        "        point3f[] points = [(-3, -3, -1), (3, -3, -1), (3, 3, -1), (-3, 3, -1)]",
+        "        color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]",
+        '        uniform token subdivisionScheme = "none"',
+        "    }",
+        "",
+        '    def Scope "Looks"',
+        "    {",
+    ]
+    names = [name for row in BASICS for name, _ in row]
+    for row in BASICS:
+        for name, inputs in row:
+            lines += [
+                f'        def Material "{name}"',
+                "        {",
+                f"            token outputs:surface.connect = </MaterialBasics/Looks/{name}/Surface.outputs:surface>",
+                "",
+                '            def Shader "Surface"',
+                "            {",
+                '                uniform token info:id = "UsdPreviewSurface"',
+            ]
+            lines += [f"                {shader_input(k, inputs[k])}" for k in sorted(inputs)]
+            lines += ["                token outputs:surface", "            }", "        }"]
+            if name != names[-1]:
+                lines.append("")
+    lines += ["    }", "", '    def Scope "Balls"', "    {"]
+    for y, row in zip(ROWS, BASICS):
+        for x, (name, _) in zip(COLUMNS, row):
+            lines += [
+                f'        def Mesh "{name}" (',
+                '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                "            prepend inherits = </_Ball>",
+                "        )",
+                "        {",
+                f"            rel material:binding = </MaterialBasics/Looks/{name}>",
+                "            float3 xformOp:scale = (0.4, 0.4, 0.4)",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                "        }",
+            ]
+            if name != names[-1]:
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
+FIXTURES = {"material-basics-v1.usda": basics}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command", choices=("write", "check"))
+    args = parser.parse_args(argv)
+    stale = []
+    for name, generate in FIXTURES.items():
+        path = DIRECTORY / name
+        text = generate()
+        if args.command == "write":
+            DIRECTORY.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8", newline="\n")
+        elif not path.exists() or path.read_text(encoding="utf-8") != text:
+            stale.append(name)
+    for name in stale:
+        print(f"{name} differs from scripts/material_fixtures.py", file=sys.stderr)
+    return 1 if stale else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

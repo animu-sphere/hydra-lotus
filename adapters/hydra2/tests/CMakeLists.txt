@@ -60,6 +60,17 @@ target_include_directories(lotus-hydra2-dome-texture-test
   PRIVATE "${PROJECT_SOURCE_DIR}/adapters")
 target_compile_definitions(lotus-hydra2-dome-texture-test PRIVATE
   LOTUS_ASSETS_DIRECTORY="${PROJECT_SOURCE_DIR}/validation/assets")
+lotus_add_hydra_test(NAME material-fixtures
+  SOURCES material_fixtures_test.cpp
+    "${PROJECT_SOURCE_DIR}/adapters/common/material_fixtures.cpp"
+    "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"
+  LIBRARIES ${_runtime} Lotus::RenderExtraction Lotus::RenderWorld Lotus::Vulkan
+    ${_stage})
+target_include_directories(lotus-hydra2-material-fixtures-test
+  PRIVATE "${PROJECT_SOURCE_DIR}/adapters")
+target_compile_definitions(lotus-hydra2-material-fixtures-test PRIVATE
+  LOTUS_MATERIAL_FIXTURES_DIRECTORY="${PROJECT_SOURCE_DIR}/validation/materials"
+  LOTUS_REFERENCE_DIRECTORY="${PROJECT_SOURCE_DIR}/validation/reference")
 # The plugin probe loads hdLotus through plug, so it links no Lotus target.
 add_executable(lotus-hydra2-probe plugin_probe.cpp)
 target_link_libraries(lotus-hydra2-probe PRIVATE hd plug Lotus::Warnings)
@@ -113,6 +124,10 @@ add_test(NAME lotus-renderer-hydra-material
   COMMAND lotus-hydra2-material-test)
 add_test(NAME lotus-renderer-hydra-material-gpu
   COMMAND lotus-hydra2-material-test --gpu)
+add_test(NAME lotus-renderer-hydra-material-fixtures
+  COMMAND lotus-hydra2-material-fixtures-test)
+add_test(NAME lotus-renderer-hydra-material-fixtures-gpu
+  COMMAND lotus-hydra2-material-fixtures-test --gpu)
 add_test(NAME lotus-renderer-hydra-normals
   COMMAND lotus-hydra2-normals-test)
 add_test(NAME lotus-renderer-hydra-texture
@@ -131,6 +146,7 @@ set(_lotus_hydra_gpu_tests
   lotus-renderer-hydra-analytic-lights-gpu
   lotus-renderer-hydra-dome-texture-gpu
   lotus-renderer-hydra-material-gpu
+  lotus-renderer-hydra-material-fixtures-gpu
   lotus-renderer-hydra-texture-gpu)
 set_tests_properties(${_lotus_hydra_gpu_tests} PROPERTIES SKIP_RETURN_CODE 77)
 # Every test above loads the OpenUSD runtime's DLLs; the rest need no device.

@@ -55,6 +55,16 @@ files:
 build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-reference validation/reference
 ```
 
+The same run renders the [material fixtures](../reference/SCENE.md#material-fixtures)
+(`renderer.material.fixtures`) into the same directory. Their USD files are
+generated; edit `scripts/material_fixtures.py`, then regenerate the files
+and, when the change alters the images, the fixtures' reference:
+
+```sh
+python scripts/material_fixtures.py write
+build/cy2026-windows-x86_64-py313-core/adapters/headless/lotus-headless --write-material-reference validation/reference
+```
+
 ## Test tiers
 
 Every CTest carries one [tier](../design/TEST_POLICY.md#2-tiers) label:

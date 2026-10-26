@@ -37,7 +37,7 @@ that moment every file is project-owned; the template is not re-applied.
 | `adapters/headless/` | `lotus-headless` | — | headless runner; writes `renderer-report.json`, renders the reference scene and compares it with the committed reference; its separate benchmark mode writes timing JSON and PFM images ([scene reference](../reference/SCENE.md#fixed-benchmarks)) |
 | `adapters/viewport/` | `lotus-viewport` | — | standalone GLFW window, with a Dear ImGui developer UI for the renderer controls, debug views and timing HUD, presenting the renderer's progressive output: the headless reference scene by default, a USD stage through the Hydra runtime when built with `LOTUS_ENABLE_HYDRA2` as well ([building guide](../guides/BUILDING.md#the-standalone-viewport)); optional (`LOTUS_ENABLE_VIEWPORT`) |
 | `adapters/hydra2/` | `hdLotus`, `lotus-hydra2-runtime`, `lotus-hydra2-host-dependencies` | — | the `HdRenderDelegate` adapter, coarse mesh extraction with authored or computed shading normals into the core scene ([scene reference](../reference/SCENE.md#hydra-extraction)), constant dome lighting ([lights](../reference/SCENE.md#lights)), and CPU AOV storage/binding validation ([AOV reference](../reference/AOVS.md)); the interface target carries the host-side OpenUSD libraries for the Hydra-enabled viewport; optional (`LOTUS_ENABLE_HYDRA2`) |
-| `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_ENABLE_VULKAN` only, not installed); `validation/reference/` holds the committed reference images; `validation/assets/` holds third-party inputs (OpenUSD's Stinson Beach image) with their licence and a `manifest.json` of source, revision, size and SHA-256, which `lotus-validation-assets` checks |
+| `validation/` | CTest executables and scripts | — | core boundary, evidence and install-tree checks; `lotus-synchronization-validation-test` uses the private Vulkan instance helper to check clean writes and an intentionally missing barrier (`LOTUS_ENABLE_VULKAN` only, not installed); `validation/reference/` holds the committed reference images; `validation/materials/` holds the generated `UsdPreviewSurface` fixture stages; `validation/assets/` holds third-party inputs (OpenUSD's Stinson Beach image) with their licence and a `manifest.json` of source, revision, size and SHA-256, which `lotus-validation-assets` checks |
 
 `adapters/hydra2/` is OpenStrata's name for the Hydra scene-input slot; the code
 is a classic `HdRenderDelegate` ([DESIGN_POLICY.md](../design/DESIGN_POLICY.md)
@@ -120,9 +120,12 @@ keep benchmark data separate from renderer correctness evidence.
 
 `adapters/common/workloads.{hpp,cpp}` owns versioned procedural benchmark
 fixtures; `adapters/common/reference.{hpp,cpp}` owns the Cornell fixture,
-image I/O and reference comparisons. Headless, viewport and the reservoir
-GPU test compile these shared sources directly; no new library or core
-dependency is introduced. The internal `LotusHeadless` namespace is retained.
+image I/O and reference comparisons; `adapters/common/material_fixtures.{hpp,cpp}`
+owns the C++ mirrors of the committed USD material fixtures in
+`validation/materials/`, which `scripts/material_fixtures.py` generates.
+Headless, viewport, the reservoir GPU test and the Hydra fixture test compile
+these shared sources directly; no new library or core dependency is
+introduced. The internal `LotusHeadless` namespace is retained.
 `validation/performance-workloads.json` fixes static comparison settings and
 workload IDs. `scripts/performance_baseline.py` drives either or both adapters
 sequentially and preserves raw reports, logs and image hashes.

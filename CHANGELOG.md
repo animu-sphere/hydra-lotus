@@ -69,6 +69,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- Committed `UsdPreviewSurface` material fixtures with C++ mirrors and
+  reference images (LOTUS-MATERIAL-01). `material-basics-v1` covers base
+  colour and metallic/roughness: the headless check
+  `renderer.material.fixtures` compares both integrators with the
+  reference, and CTest `lotus-renderer-hydra-material-fixtures` requires
+  Hydra's extraction to equal the mirror and, on a GPU, its image to equal
+  the mirror's bit for bit. `lotus-headless --write-material-reference`
+  writes the reference and `scripts/material_fixtures.py` the USD files
+  ([contract](docs/reference/SCENE.md#material-fixtures),
+  [evidence](docs/reports/2026-10-26-material-basics.md)).
+
 - `OffscreenRenderer::Residency()` lists every allocation the renderer makes
   by owner and memory kind, with `VK_EXT_memory_budget` process heap usage
   when the device exposes it; `lotus-headless --benchmark-residency` samples

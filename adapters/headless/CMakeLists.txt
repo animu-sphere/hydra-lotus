@@ -6,6 +6,7 @@ add_executable(lotus-headless
   benchmarks/residency_benchmark.cpp
   benchmarks/restir_benchmark.cpp
   benchmarks/svgf_benchmark.cpp
+  "${PROJECT_SOURCE_DIR}/adapters/common/material_fixtures.cpp"
   "${PROJECT_SOURCE_DIR}/adapters/common/reference.cpp"
   "${PROJECT_SOURCE_DIR}/adapters/common/workloads.cpp")
 target_include_directories(lotus-headless PRIVATE "${PROJECT_SOURCE_DIR}/adapters")
@@ -27,7 +28,9 @@ endif()
 # The committed reference images, beside the executable as the shaders are.
 set(_reference_files
   "${PROJECT_SOURCE_DIR}/validation/reference/cornell-box-mean.pfm"
-  "${PROJECT_SOURCE_DIR}/validation/reference/cornell-box-variance.pfm")
+  "${PROJECT_SOURCE_DIR}/validation/reference/cornell-box-variance.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-basics-v1-mean.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-basics-v1-variance.pfm")
 add_custom_command(TARGET lotus-headless POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:lotus-headless>/reference"
