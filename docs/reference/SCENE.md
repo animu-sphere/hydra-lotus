@@ -922,6 +922,32 @@ one-channel `ramp.png` (15 + 15(x + 4y)), the two-channel `grey-alpha.png`
 Its negative control is the Repeat card's coordinates half a texel off in
 s, as a texel-centre convention error would place them.
 
+**`material-normals-v1`** covers shading normals, tangents and normal
+maps, the fourth audit item, at 160×160 under the same camera, lights and
+backdrop, on the same 5×5 grid. Spheres are a coarse unit sphere (16
+segments, 8 rings, subdivision scheme `none` unless stated) scaled to 0.35;
+cards are `material-textures-v1`'s, with `st` per face vertex from (0, 0) to
+(1, 1). The mesh-normal rows share a 0.6 grey material of roughness 0.3;
+the others are 0.7 grey at roughness 0.4 and read `normal` from the RGB
+4×4 `tilts.png` (red 32 + 64x, green 224 − 64y, blue 200) under `raw` with
+scale (2, 2, 2, 1), bias (−1, −1, −1, 0) and `clamp`, unless stated: a dome
+tilted towards increasing s on the right and increasing t at the top.
+`tilts-dx.png` stores the same dome with green 31 + 64y, running down as
+DirectX-convention maps do. The rows, from the top:
+
+| Row | Objects | Authored inputs and expected extraction |
+| --- | --- | --- |
+| Mesh-normal interpolation | Faceted, Vertex, FaceVarying, Uniform, Primvar | no normals (geometric shading); vertex `normals`; `primvars:normals` per face vertex indexed by the face-vertex indices; `uniform` face-centroid directions; `primvars:normals` per vertex over a `normals` attribute of (0, 0, 1), which loses |
+| Meshes without usable normals | Computed, LeftHanded, Malformed, Bilinear, Inward | `catmullClark` without normals, Storm's coarse smooth normals; the same with every face reversed under `leftHanded`, which triangulates and computes to the same normals; three vertex normals for 114 points under `catmullClark`, which warn and are computed; `bilinear` without normals, geometric; vertex normals pointing inwards, which the shader turns to the geometric side |
+| Normal-map encodings | Mapped, Auto, Unscaled, DirectX, Constant | the map as above; without `sourceColorSpace`, so `auto` decodes the 8-bit map as sRGB; under `raw` without scale and bias, read as signed values in [0, 1]; `tilts-dx.png` with scale (2, −2, 2, 1) and bias (−1, 1, −1, 0), the Mapped card's normals again; the constant (0.4, 0.3, 0.866), which names no texture-coordinate set and so takes the normal-only frame |
+| Tangent frames | MirroredS, Rotated, MirroredTransform, Stretched, AbsentSet | the Mapped material with `st` mirrored in s; turned a quarter; under scale (−0.7, 0.7, 0.7); under scale (0.7, 0.35, 0.7); the reader of a missing `absent` set with fallback (0.25, 0.75), one texel at the normal-only frame |
+| Normal maps on spheres | SphereVertex, SphereFaceted, SphereComputed, SphereGlossy, SphereConstant | `st` per face vertex, longitude by latitude times (4, 2), with the map under `repeat`: over vertex normals, no normals and `catmullClark` normals; over vertex normals on a copper metal of roughness 0.25; the Constant material over vertex normals |
+
+Its negative control is the Mapped material's green read flipped, as a
+DirectX/OpenGL convention error would read it; it changes five cards.
+`usdchecker` reports the Auto, Unscaled and DirectX lookups, which depart
+from the specification's normal-map encoding on purpose.
+
 - **Reference.** `lotus-headless --write-material-reference <directory>`
   renders each mirror in a cleared GPU scene in deterministic mode with BSDF
   sampling from sample index 0: `<fixture>-mean.pfm` holds 4096 samples per
@@ -1817,7 +1843,9 @@ lookup:
 The colour space is `sourceColorSpace`, or the `colorSpace:file` input
 colour space UsdImaging hands it over as: `raw` and linear or data colour
 spaces are raw, `sRGB` and `srgb_*` spaces sRGB, and anything else `auto`.
-A material has one texture-coordinate source, its first lookup's. An input
+A material has one texture-coordinate source, its first lookup's; a
+material without lookups names none, so a constant normal there always
+takes the normal-only tangent frame, even on a mesh with `st`. An input
 driven by anything else (another node type, a colour output on a scalar or
 a scalar output on a colour, a `UsdTransform2d` between the reader and the
 texture, or a second texture-coordinate source) takes its default and is

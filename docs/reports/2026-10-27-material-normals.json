@@ -1,0 +1,212 @@
+{
+ "schema": "lotus-material-normals-v1",
+ "question": "Does a committed UsdPreviewSurface fixture for shading normals, tangents and normal maps extract through Hydra, authored and computed mesh normals included, to its independent C++ mirror and render, headless and through Hydra, in agreement with committed Reference PT images; and which normal behaviours need a fix?",
+ "procedure": {
+  "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-normals-v1.usda (fails only on the Auto, Unscaled and DirectX lookups, which depart from the normal-map encoding on purpose)",
+  "reference": "lotus-headless --write-material-reference validation/reference: every fixture in a cleared GPU scene, BSDF sampling, reference integrator, 64 batches of 64 samples then 4096 samples from sample index 0; material-normals-v1 at 160x160",
+  "headless_check": "the lotus-headless post-build report in build/cy2026-windows-x86_64-py313-core (renderer.material.fixtures), then ctest -R 'lotus-validation-assets|lotus-renderer-evidence|lotus-renderer-install-tree|lotus-test-tiers'",
+  "hydra": "ost build --profile lookdev --intent hydra (build/cy2026-windows-x86_64-py313-lookdev--hydra), then ctest -R material-fixtures",
+  "scripts": "python -m unittest test_material_fixtures; python scripts/material_fixtures.py check; python scripts/check_docs.py"
+ },
+ "environment": {
+  "source": "a84c19c plus this change",
+  "os": "Windows AMD64",
+  "compiler": "MSVC 19.51 Release",
+  "device": "NVIDIA RTX A5000",
+  "driver": "597.16",
+  "vulkan_api": "1.4.329",
+  "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime",
+  "validation": "validation and synchronization validation active",
+  "clocks": "unlocked",
+  "binaries_sha256": {
+   "lotus-headless.exe": "59535f7ab6ac757d442fdad6f08cc2e7700013b8e973738f53eeb9179947c655",
+   "lotus-hydra2-material-fixtures-test.exe": "9f43c365bfa89563fc80772eb4d63321f3001a7de5323e4432c64111c5bf6147",
+   "hdLotus.dll": "af1bdcc47604f2a677562f7f32f2874ea05d355796fc12aa90049594c1174858"
+  }
+ },
+ "fixture_sha256": {
+  "validation/materials/material-normals-v1.usda": "b61d2c04b943037ce66e36621dc5f9b1960ad52e7204e108d1a52294a5382f32",
+  "validation/materials/textures/tilts.png": "5806d32589cd97ca0248a8d71c16c68c4d3525c21b5babd3ad431a84bd6b8ed8",
+  "validation/materials/textures/tilts-dx.png": "8a57412d53fcb1f88a1ad2509cbb06b3c0115fea9156842cd2ab2aca018e34aa"
+ },
+ "reference": {
+  "samples": 4096,
+  "batches": 64,
+  "size": [
+   160,
+   160
+  ],
+  "write_seconds_all_fixtures": 7.3,
+  "other_fixtures_rewritten_byte_identical": true,
+  "sha256": {
+   "validation/reference/material-normals-v1-mean.pfm": "82684a56d0263c1ed67179569b0975a3a27bbe5725fc92c52dbcbca4bac125d1",
+   "validation/reference/material-normals-v1-variance.pfm": "1eb4466c808dbec60d613c0f96d94692be5194243183771d381bf87da04af1a4"
+  }
+ },
+ "extraction": {
+  "materials_equal": true,
+  "textures_equal": [
+   "textures/tilts.png|raw Rgba8Unorm",
+   "textures/tilts.png|auto Rgba8Srgb",
+   "textures/tilts-dx.png|raw Rgba8Unorm"
+  ],
+  "texcoords_equal": true,
+  "bindings_equal": true,
+  "triangles_equal": true,
+  "lights_and_environment_equal": true,
+  "float_sets_differing_by_rounding": 0,
+  "computed_normals": "Computed, LeftHanded, Malformed and SphereComputed equal the mirror's float reimplementation of Hd_SmoothNormals bit for bit",
+  "left_handed_quads": "HdMeshUtil triangulates a left-handed quad (v0, v1, v2, v3) as (v2, v1, v0), (v2, v0, v3) and a left-handed triangle as (v0, v2, v1)",
+  "warnings": [
+   "Lotus ignores the normals of /MaterialNormals/Objects/Malformed: a vertex or varying primvar needs one value per point"
+  ]
+ },
+ "comparisons": {
+  "sample_index": 1048576,
+  "tile_pixels": 8,
+  "rows": [
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 16,
+    "image_z": [
+     1.47,
+     1.42,
+     1.41
+    ],
+    "max_tile_z": 3.61,
+    "mean_tile_z2": 1.02
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 256,
+    "image_z": [
+     -0.2,
+     -0.23,
+     -0.24
+    ],
+    "max_tile_z": 3.09,
+    "mean_tile_z2": 1.0
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 16,
+    "image_z": [
+     0.1,
+     0.13,
+     0.14
+    ],
+    "max_tile_z": 1.88,
+    "mean_tile_z2": 0.13
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     0.5,
+     0.54,
+     0.55
+    ],
+    "max_tile_z": 1.65,
+    "mean_tile_z2": 0.18
+   },
+   {
+    "frontend": "headless",
+    "integrator": "wavefront",
+    "light_sampling": "mis",
+    "spp": 16,
+    "image_z": [
+     0.1,
+     0.13,
+     0.14
+    ],
+    "max_tile_z": 1.88,
+    "mean_tile_z2": 0.13
+   },
+   {
+    "frontend": "headless",
+    "integrator": "wavefront",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     0.5,
+     0.54,
+     0.55
+    ],
+    "max_tile_z": 1.65,
+    "mean_tile_z2": 0.18
+   },
+   {
+    "frontend": "hydra",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     0.5,
+     0.54,
+     0.55
+    ],
+    "max_tile_z": 1.65,
+    "mean_tile_z2": 0.18
+   },
+   {
+    "frontend": "hydra",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 256,
+    "image_z": [
+     -0.2,
+     -0.23,
+     -0.24
+    ],
+    "max_tile_z": 3.09,
+    "mean_tile_z2": 1.0
+   }
+  ],
+  "byte_identical": [
+   "headless wavefront-mis and reference-mis images at 16 and 256 spp",
+   "Hydra and the backend's image of the mirror, NEE/MIS and BSDF, 256 spp"
+  ],
+  "negative_control": {
+   "change": "the Mapped material's normal lookup with green scale -2 and bias 1 (five cards)",
+   "spp": 256,
+   "max_tile_z": 64.46,
+   "rejected": true
+  },
+  "reference_reproduced_bit_for_bit": true,
+  "other_fixtures_rows_unchanged": true
+ },
+ "audit": {
+  "authored_interpolations": "as documented; vertex, indexed face-varying and uniform normals reach every corner",
+  "primvar_over_attribute": "as documented; primvars:normals wins",
+  "computed_normals": "as documented; Storm's coarse smooth normals for catmullClark without usable normals",
+  "left_handed": "as documented; same normals as the right-handed sphere",
+  "malformed_normals": "as documented; warns and falls back to computed normals",
+  "bilinear_and_none": "as documented; geometric shading",
+  "inward_normals": "as documented; turned to the geometric side",
+  "normal_map_encoding": "as documented; no implicit decoding, auto 8-bit RGB is sRGB, an authored green flip reads a DirectX map",
+  "constant_tangent_normal": "documented now: through Hydra a material without lookups names no texture-coordinate set, so a constant normal takes the normal-only frame",
+  "tangent_frames": "as documented; mirrored, rotated, mirrored-transform and stretched mappings render the dome lit from the same side (visual; the arithmetic is renderer.path.normal_maps' oracle check)",
+  "curved_surfaces": "as documented; per-hit triangle frames on longitude-latitude spheres",
+  "fixes": []
+ },
+ "timing_seconds": {
+  "headless_report_all_checks": 48,
+  "hydra_material_fixtures_cpu": 0.09,
+  "hydra_material_fixtures_gpu": 45.3,
+  "hydra_material_fixtures_gpu_before": 27.4
+ },
+ "not_run": [
+  "viewport, usdview and the installed Hydra host with the fixture",
+  "ci-core",
+  "Hydra CTests other than the two material-fixture CTests",
+  "third-party production assets"
+ ]
+}

@@ -101,7 +101,13 @@ outside this queue.
   connections such as `UsdTransform2d` silently took their defaults and now
   warn; translating `UsdTransform2d` is a candidate bounded fix. Minification
   without mipmaps is unbiased, with 17% more per-sample variance on the
-  minified card. Remaining: normals/normal maps, emission and alpha masks.
+  minified card. The [normals fixture](../reports/2026-10-27-material-normals.md)
+  adds authored and computed mesh normals, normal-map encodings and tangent
+  frames; Hydra's normals, Storm's computed ones included, equal the
+  mirror's exactly, and none needs a fix. A constant tangent normal through
+  Hydra names no texture-coordinate set and takes the normal-only frame;
+  this is now documented, and naming `st` for it is a candidate bounded fix.
+  Remaining: emission and alpha masks.
   Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
 
