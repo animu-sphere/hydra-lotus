@@ -24,6 +24,7 @@
 #include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/changeTracker.h>
+#include <pxr/imaging/hd/geomSubset.h>
 #include <pxr/imaging/hd/instancer.h>
 #include <pxr/imaging/hd/light.h>
 #include <pxr/imaging/hd/material.h>
@@ -1471,6 +1472,14 @@ public:
                                 primvars_dirty;
     if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
       topology_ = GetMeshTopology(delegate);
+      // Per-face materials are not supported: the mesh's own binding covers
+      // every face.
+      if (std::any_of(topology_.GetGeomSubsets().begin(), topology_.GetGeomSubsets().end(),
+              [](const HdGeomSubset& subset) { return !subset.materialId.IsEmpty(); })) {
+        TF_WARN("Lotus ignores the GeomSubset material bindings of %s: the "
+                "mesh's own binding covers every face",
+            GetId().GetText());
+      }
     }
     if (!initialized_ ||
         HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points)) {

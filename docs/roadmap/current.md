@@ -107,7 +107,12 @@ outside this queue.
   mirror's exactly, and none needs a fix. A constant tangent normal through
   Hydra names no texture-coordinate set and takes the normal-only frame;
   this is now documented, and naming `st` for it is a candidate bounded fix.
-  Remaining: emission and alpha masks.
+  The [emission fixture](../reports/2026-10-27-material-emission.md) adds
+  constant, clamped and non-finite emission, emitters' sides and transforms,
+  8-bit and HDR emission maps and fallbacks; they extract and render as
+  documented and need no fix. `GeomSubset` material bindings were silently
+  ignored and now warn; per-face materials are a candidate bounded fix.
+  Remaining: alpha masks.
   Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
 

@@ -869,8 +869,9 @@ The reference path tracer's images are of one fixed scene, rendered by
 LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
-USD files and the PNG images in `validation/materials/textures/` (8-bit,
-without gamma or colour-space chunks); its `check` command and unit test
+USD files and the images in `validation/materials/textures/`: 8-bit PNG
+images without gamma or colour-space chunks, and a Radiance HDR image with
+flat scanlines; its `check` command and unit test
 fail when a committed file differs from what it generates.
 `adapters/common/material_fixtures.cpp` mirrors each fixture as a Lotus
 scene, written independently in C++: what the
@@ -947,6 +948,29 @@ Its negative control is the Mapped material's green read flipped, as a
 DirectX/OpenGL convention error would read it; it changes five cards.
 `usdchecker` reports the Auto, Unscaled and DirectX lookups, which depart
 from the specification's normal-map encoding on purpose.
+
+**`material-emission-v1`** covers emission, the fifth audit item, at
+160×160 under the same camera, lights and backdrop, on the same 5×5 grid of
+`material-normals-v1`'s cards and coarse spheres. Unless stated, a material
+authors only `emissiveColor`, its other inputs taking their defaults; cards
+have no texture coordinates, and textured ones `st` per face vertex from
+(0, 0) to (1, 1), reading `material-textures-v1`'s images under `clamp`.
+`glow.hdr` is a 4×4 Radiance image whose texel at column x and row y from
+the top has mantissas (240 − 50x, 80 + 50x, 160) and exponent 127 + y, so
+it decodes exactly to the mantissas times 2^(y − 9): from at most 0.47 on
+the top row to 3.75 on the bottom one. The rows, from the top:
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Constant emission | Warm, Bright, Dim, Clamped, NonFinite | (1, 0.6, 0.2); (6, 6, 6), above 1 and kept; (0.05, 0.1, 0.2); (2, −1, 0.5), which translates to (2, 0, 0.5); (inf, 1, 1), whose non-finite component leaves the default (0, 0, 0) |
+| Emitters' surfaces and transforms | Metal, Back, Mirrored, Stretched, Sphere | (0.6, 0.2, 0.1) over a copper metal of roughness 0.25 on a sphere with vertex normals; Warm on a card wound clockwise, seen from behind; under scale (−0.7, 0.7, 0.7); under scale (0.7, 0.35, 0.7); (0.4, 0.8, 1) on a sphere without normals |
+| 8-bit emission maps | Srgb, Raw, Auto, Grey, ScaleBias | the palette under `sRGB`, `raw` and unauthored (`auto`, sRGB); `ramp.png` under `auto`, linear (r, r, r); the raw palette with scale (3, 3, 3, 1) and bias (0.2, 0.1, 0, 0) |
+| Fallbacks and HDR maps | Missing, Inverted, Hdr, HdrAuto, HdrSrgb | an unresolvable `./textures/missing.png` with fallback (2, 1, 0.5, 1); the raw palette with scale (−1, −1, −1, 1) and bias (1, 1, 1, 0); `glow.hdr` under `raw` and unauthored, both linear `Rgba32Float`, and under `sRGB`, which the adapter decodes on the CPU |
+| Arrangements in assets | Tilted, TexturedSphere, Shared, Unlit, Subset | Warm on a card turned 60° about X; the sRGB palette under `repeat` on a sphere with `st` longitude by latitude times (4, 2); one sRGB palette lookup driving both `diffuseColor` and `emissiveColor`; the same emission over `diffuseColor` (0, 0, 0) and `ior` 1, which removes the specular interface, as an unlit asset would be authored; a card of two quads bound to a 0.6 grey of roughness 0.3 whose right face a `GeomSubset` binds to Warm, which the adapter ignores with a warning |
+
+Its negative control is the sRGB palette decoded as raw, as a colour-space
+error would read an emission map; it changes four objects. `usdchecker`
+reports only the unresolvable `missing.png`.
 
 - **Reference.** `lotus-headless --write-material-reference <directory>`
   renders each mirror in a cleared GPU scene in deterministic mode with BSDF
@@ -1087,7 +1111,8 @@ order. Changing it restarts the accumulation.
   computed in double precision, times its material's emission estimate:
   the mean of its RGB emission, or for a lookup the bound
   `max(scale, 0) + max(bias, 0)` for texels in [0, 1], or the fallback
-  when the key names no texture. An environment image gets the last
+  when the key names no texture. A float texture's texels may exceed 1, and
+  the bound then underestimates its triangles' weight. An environment image gets the last
   entry, weighed as a distant light is by the flux through a disk of the
   scene's radius over 2π: π² R² times the mean of its distribution's cell
   values. Each [analytic light](#analytic-lights)
@@ -1810,7 +1835,10 @@ parameters or resource are dirty and stores the result under its `SdfPath`
 string; destroying the sprim removes it. A mesh binds to its
 `GetMaterialId` path, read when its material id is dirty, so a material's
 value edit rewrites only the material table and a binding change only the
-instances. The fallback material sprim is never stored.
+instances. The fallback material sprim is never stored. Per-face materials
+are not supported: `GeomSubset` material bindings are ignored, the mesh's
+own binding covering every face, and the adapter warns, naming the mesh,
+whenever it reads a topology with such a binding.
 
 The material translator (`adapters/hydra2/src/material_translator.*`) reads
 the network's surface terminal when it is a `UsdPreviewSurface`:

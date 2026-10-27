@@ -28,6 +28,8 @@ REQUIRED = {
     "bin/reference/material-textures-v1-variance.pfm",
     "bin/reference/material-normals-v1-mean.pfm",
     "bin/reference/material-normals-v1-variance.pfm",
+    "bin/reference/material-emission-v1-mean.pfm",
+    "bin/reference/material-emission-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",
