@@ -69,6 +69,18 @@ class MaterialFixturesTest(unittest.TestCase):
         for row in fixtures.TEXTURES:
             self.assertEqual(len(row), len(fixtures.CARD_COLUMNS))
 
+    def test_normals_fixture_primvars_fit_the_coarse_sphere(self):
+        points, counts, _ = fixtures.sphere(fixtures.COARSE_SEGMENTS, fixtures.COARSE_RINGS)
+        self.assertEqual(len(fixtures.latlong((1, 1))), sum(counts))
+        normals = fixtures.face_normals()
+        self.assertEqual(len(normals), len(counts))
+        for normal in normals:
+            self.assertAlmostEqual(sum(c * c for c in normal), 1.0)
+        text = fixtures.normals()
+        self.assertEqual(text.count('        def Mesh "'), 25)
+        for name, _ in fixtures.NORMAL_LOOKS:
+            self.assertIn(f"</MaterialNormals/Looks/{name}>", text)
+
     def test_fixed_spelling(self):
         self.assertEqual(fixtures.fixed(0.5), "0.500000")
         self.assertEqual(fixtures.fixed(-1e-9), "0.000000")

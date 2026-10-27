@@ -34,6 +34,16 @@ void SetMaterialBasics(Lotus::RenderWorld& world);
 // resolved paths; an unresolved file keeps its authored path.
 void SetMaterialTextures(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-normals-v1: a 5x5 grid
+// of coarse spheres and cards under material-basics-v1's camera, lights and
+// backdrop. Rows from the top: authored mesh-normal interpolations; meshes
+// without usable normals (computed for catmullClark, geometric for bilinear)
+// and inward normals; normal-map encodings and a constant tangent normal;
+// tangent frames under mirrored, rotated, mirrored-transform and stretched
+// mappings and an absent texture-coordinate set; then normal maps on spheres
+// with lat-long coordinates. Computed normals are Storm's, in float.
+void SetMaterialNormals(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "material_fixtures.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -431,12 +432,336 @@ void SetMaterialTextures(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// scripts/material_fixtures.py's coarse sphere.
+constexpr std::uint32_t kCoarseSegments = 16;
+constexpr std::uint32_t kCoarseRings = 8;
+
+using Point = std::array<double, 3>;
+using Normal = std::array<float, 3>;
+
+std::array<float, 3> Fixed(const Point& point) {
+  return {Fixed(point[0]), Fixed(point[1]), Fixed(point[2])};
+}
+
+// A mesh as the adapter triangulates it: fans from each face's first vertex,
+// or, left-handed, (v0, v[k + 1], v[k]) and for a quad (v2, v1, v0),
+// (v2, v0, v3), so that every triangle winds counter-clockwise seen from
+// outside. Each corner remembers its vertex, face and face-vertex index, to
+// expand primvars of any interpolation.
+struct Polygons {
+  std::vector<Point> points;
+  std::vector<std::vector<std::uint32_t>> faces;
+  bool left_handed = false;
+
+  struct Corner {
+    std::uint32_t vertex;
+    std::uint32_t face;
+    std::uint32_t face_vertex;
+  };
+
+  std::vector<Corner> Corners() const {
+    std::vector<Corner> corners;
+    std::uint32_t first = 0;
+    for (std::uint32_t face = 0; face < faces.size(); ++face) {
+      const auto& vertices = faces[face];
+      std::vector<std::array<std::uint32_t, 3>> triangles;
+      if (left_handed && vertices.size() == 4) {
+        // HdMeshUtil starts a left-handed quad's triangles at its third vertex.
+        triangles = {{2, 1, 0}, {2, 0, 3}};
+      } else {
+        for (std::uint32_t k = 1; k + 1 < vertices.size(); ++k)
+          triangles.push_back(left_handed ? std::array{0U, k + 1, k} : std::array{0U, k, k + 1});
+      }
+      for (const auto& triangle : triangles)
+        for (const std::uint32_t i : triangle) corners.push_back({vertices[i], face, first + i});
+      first += static_cast<std::uint32_t>(vertices.size());
+    }
+    return corners;
+  }
+
+  Lotus::MeshGeometry Geometry() const {
+    Lotus::MeshGeometry mesh;
+    for (const Point& point : points) mesh.positions.push_back(Fixed(point));
+    const auto corners = Corners();
+    for (std::size_t i = 0; i < corners.size(); i += 3) {
+      mesh.triangles.push_back(
+          {corners[i].vertex, corners[i + 1].vertex, corners[i + 2].vertex});
+      mesh.source_faces.push_back(corners[i].face);
+    }
+    return mesh;
+  }
+
+  // Storm's coarse smooth normals, as Hd_SmoothNormals computes them in
+  // float: each vertex sums cross(next - vertex, previous - vertex) over its
+  // faces' corners in face order, reversed for left-handed faces, then
+  // divides by the float length as GfVec3f::Normalize does.
+  std::vector<Normal> SmoothNormals() const {
+    const auto positions = Geometry().positions;
+    std::vector<Normal> sums(points.size(), Normal{0.0F, 0.0F, 0.0F});
+    for (const auto& vertices : faces) {
+      const std::size_t count = vertices.size();
+      for (std::size_t i = 0; i < count; ++i) {
+        const auto& curr = positions[vertices[i]];
+        auto prev = positions[vertices[(i + count - 1) % count]];
+        auto next = positions[vertices[(i + 1) % count]];
+        if (left_handed) std::swap(prev, next);
+        const Normal a{next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]};
+        const Normal b{prev[0] - curr[0], prev[1] - curr[1], prev[2] - curr[2]};
+        Normal& sum = sums[vertices[i]];
+        sum[0] += a[1] * b[2] - a[2] * b[1];
+        sum[1] += a[2] * b[0] - a[0] * b[2];
+        sum[2] += a[0] * b[1] - a[1] * b[0];
+      }
+    }
+    for (Normal& sum : sums) {
+      const float length = std::sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+      const double scale = 1.0 / std::max(length, 1e-10F);
+      for (float& c : sum) c = static_cast<float>(c * scale);
+    }
+    return sums;
+  }
+};
+
+// The coarse unit sphere, faces counter-clockwise seen from outside; with
+// `reversed`, each face's vertices in reverse under left-handed orientation.
+Polygons CoarseSphere(bool reversed = false) {
+  Polygons sphere;
+  sphere.points.push_back({0.0, 1.0, 0.0});
+  for (std::uint32_t i = 1; i < kCoarseRings; ++i) {
+    const double theta = kPi * i / kCoarseRings;
+    for (std::uint32_t j = 0; j < kCoarseSegments; ++j) {
+      const double phi = 2 * kPi * j / kCoarseSegments;
+      sphere.points.push_back({std::sin(theta) * std::cos(phi), std::cos(theta),
+          -std::sin(theta) * std::sin(phi)});
+    }
+  }
+  sphere.points.push_back({0.0, -1.0, 0.0});
+  const auto bottom = static_cast<std::uint32_t>(sphere.points.size() - 1);
+  const auto ring = [](std::uint32_t i, std::uint32_t j) {
+    return 1 + (i - 1) * kCoarseSegments + j % kCoarseSegments;
+  };
+  for (std::uint32_t j = 0; j < kCoarseSegments; ++j)
+    sphere.faces.push_back({0, ring(1, j), ring(1, j + 1)});
+  for (std::uint32_t i = 1; i + 1 < kCoarseRings; ++i)
+    for (std::uint32_t j = 0; j < kCoarseSegments; ++j)
+      sphere.faces.push_back(
+          {ring(i, j), ring(i + 1, j), ring(i + 1, j + 1), ring(i, j + 1)});
+  for (std::uint32_t j = 0; j < kCoarseSegments; ++j)
+    sphere.faces.push_back({ring(kCoarseRings - 1, j), bottom, ring(kCoarseRings - 1, j + 1)});
+  if (reversed) {
+    for (auto& face : sphere.faces) std::reverse(face.begin(), face.end());
+    sphere.left_handed = true;
+  }
+  return sphere;
+}
+
+// The coarse sphere's (s, t) per face vertex, in face order, times `scale`:
+// scripts/material_fixtures.py's latlong.
+std::vector<std::array<float, 2>> LatLong(std::array<double, 2> scale) {
+  const double segments = kCoarseSegments, rings = kCoarseRings;
+  std::vector<std::array<float, 2>> values;
+  const auto st = [&](double s, double t) {
+    values.push_back({static_cast<float>(s * scale[0]), static_cast<float>(t * scale[1])});
+  };
+  for (std::uint32_t j = 0; j < kCoarseSegments; ++j) {
+    st((j + 0.5) / segments, 1);
+    st(j / segments, 1 - 1 / rings);
+    st((j + 1) / segments, 1 - 1 / rings);
+  }
+  for (std::uint32_t i = 1; i + 1 < kCoarseRings; ++i)
+    for (std::uint32_t j = 0; j < kCoarseSegments; ++j) {
+      const double top = 1 - i / rings, bottom = 1 - (i + 1) / rings;
+      st(j / segments, top);
+      st(j / segments, bottom);
+      st((j + 1) / segments, bottom);
+      st((j + 1) / segments, top);
+    }
+  for (std::uint32_t j = 0; j < kCoarseSegments; ++j) {
+    st(j / segments, 1 / rings);
+    st((j + 0.5) / segments, 0);
+    st((j + 1) / segments, 1 / rings);
+  }
+  return values;
+}
+
+Texel Tilts(std::uint32_t x, std::uint32_t y) {
+  return {std::uint8_t(32 + 64 * x), std::uint8_t(224 - 64 * y), 200, 255};
+}
+
+Texel TiltsDirectX(std::uint32_t x, std::uint32_t y) {
+  return {std::uint8_t(32 + 64 * x), std::uint8_t(31 + 64 * y), 200, 255};
+}
+
+// An unsigned normal map decoded to signed by scale 2 and bias -1.
+Lotus::TextureInput NormalMap(const std::string& file, const std::string& space = "raw",
+    Lotus::TextureWrap wrap = Lotus::TextureWrap::Clamp) {
+  Lotus::TextureInput lookup = Lookup(file, space, wrap, wrap);
+  lookup.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  lookup.bias = {-1.0F, -1.0F, -1.0F, 0.0F};
+  return lookup;
+}
+
+Lotus::Material Bumpy(std::optional<Lotus::TextureInput> normal) {
+  Lotus::Material material = Dielectric({0.7F, 0.7F, 0.7F}, 0.4F);
+  if (normal) material.texcoords = "st";
+  material.normal_texture = std::move(normal);
+  return material;
+}
+
+// As a DirectX/OpenGL green convention error would read the map.
+void FlippedGreen(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialNormals/Looks/Mapped";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  material.normal_texture->scale[1] = -2.0F;
+  material.normal_texture->bias[1] = 1.0F;
+  world.SetMaterial(key, material);
+}
+
+} // namespace
+
+void SetMaterialNormals(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialNormals";
+  SetStudio(world, root);
+
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+  // Under auto the 8-bit three-channel map is sRGB.
+  world.SetTexture("textures/tilts.png|auto", Image(4, Lotus::TextureFormat::Rgba8Srgb, Tilts));
+  world.SetTexture("textures/tilts-dx.png|raw", Image(4, kUnorm, TiltsDirectX));
+
+  Lotus::TextureInput unscaled = Lookup("tilts.png", "raw");
+  Lotus::TextureInput directx = NormalMap("tilts-dx.png");
+  directx.scale[1] = -2.0F;
+  directx.bias[1] = 1.0F;
+  // Without a lookup the constant names no texture-coordinate set, so it
+  // takes the normal-only frame whether or not the mesh has st.
+  Lotus::Material constant = Bumpy(std::nullopt);
+  constant.normal = {0.4F, 0.3F, 0.866F};
+  Lotus::Material absent = Bumpy(NormalMap("tilts.png"));
+  absent.texcoords = "absent";
+  absent.texcoord_fallback = {0.25F, 0.75F};
+  Lotus::Material glossy = Metal({0.95F, 0.64F, 0.54F}, 0.25F, 1.0F);
+  glossy.normal_texture = NormalMap("tilts.png", "raw", Lotus::TextureWrap::Repeat);
+  glossy.texcoords = "st";
+  const std::map<std::string, Lotus::Material> looks{
+      {"Smooth", Dielectric({0.6F, 0.6F, 0.6F}, 0.3F)},
+      {"Mapped", Bumpy(NormalMap("tilts.png"))},
+      {"Auto", Bumpy(NormalMap("tilts.png", "auto"))},
+      {"Unscaled", Bumpy(unscaled)},
+      {"DirectX", Bumpy(directx)},
+      {"Constant", constant},
+      {"AbsentSet", absent},
+      {"SphereMapped", Bumpy(NormalMap("tilts.png", "raw", Lotus::TextureWrap::Repeat))},
+      {"SphereGlossy", glossy},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  // Expands per-vertex, uniform or face-varying values to the corners.
+  const Polygons sphere = CoarseSphere();
+  const auto corners = sphere.Corners();
+  const auto per_vertex = [&](const std::vector<Normal>& values) {
+    std::vector<Normal> result;
+    for (const auto& corner : corners) result.push_back(values[corner.vertex]);
+    return result;
+  };
+  std::vector<Normal> points, inward, face_normals;
+  for (const Point& point : sphere.points) {
+    points.push_back(Fixed(point));
+    inward.push_back(Fixed(Point{-point[0], -point[1], -point[2]}));
+  }
+  for (const auto& face : sphere.faces) {
+    Point centre{0.0, 0.0, 0.0};
+    for (const auto vertex : face)
+      for (int k = 0; k < 3; ++k) centre[k] += sphere.points[vertex][k];
+    const double length =
+        std::sqrt(centre[0] * centre[0] + centre[1] * centre[1] + centre[2] * centre[2]);
+    face_normals.push_back(Fixed(Point{centre[0] / length, centre[1] / length,
+        centre[2] / length}));
+  }
+  std::vector<Normal> uniform;
+  for (const auto& corner : corners) uniform.push_back(face_normals[corner.face]);
+  const auto latlong = LatLong({4.0, 2.0});
+  std::vector<std::array<float, 2>> mapped_st;
+  for (const auto& corner : corners) mapped_st.push_back(latlong[corner.face_vertex]);
+
+  const auto sphere_mesh = [&](std::vector<Normal> normals, bool mapped) {
+    Lotus::MeshGeometry mesh = sphere.Geometry();
+    mesh.normals = std::move(normals);
+    if (mapped) mesh.texcoords["st"] = mapped_st;
+    return mesh;
+  };
+  const std::vector<Normal> smooth = per_vertex(sphere.SmoothNormals());
+  const Polygons reversed = CoarseSphere(true);
+  Lotus::MeshGeometry left_handed = reversed.Geometry();
+  const auto reversed_smooth = reversed.SmoothNormals();
+  for (const auto& corner : reversed.Corners())
+    left_handed.normals.push_back(reversed_smooth[corner.vertex]);
+  const auto card = [](const Face& st) { return Card({{"st", Corners(st)}}); };
+
+  struct Entry {
+    const char* name;
+    const char* material;
+    Lotus::MeshGeometry geometry;
+    std::array<float, 3> scale;
+  };
+  constexpr std::array<float, 3> kSphere{0.35F, 0.35F, 0.35F};
+  constexpr std::array<float, 3> kCard{0.7F, 0.7F, 0.7F};
+  const std::array<Entry, 25> objects{{
+      {"Faceted", "Smooth", sphere_mesh({}, false), kSphere},
+      {"Vertex", "Smooth", sphere_mesh(per_vertex(points), false), kSphere},
+      // Indexed by the face-vertex indices: the vertex normals again.
+      {"FaceVarying", "Smooth", sphere_mesh(per_vertex(points), false), kSphere},
+      {"Uniform", "Smooth", sphere_mesh(uniform, false), kSphere},
+      // primvars:normals wins over the normals attribute's (0, 0, 1).
+      {"Primvar", "Smooth", sphere_mesh(per_vertex(points), false), kSphere},
+      {"Computed", "Smooth", sphere_mesh(smooth, false), kSphere},
+      {"LeftHanded", "Smooth", left_handed, kSphere},
+      // Three normals for 114 points: ignored, so catmullClark computes them.
+      {"Malformed", "Smooth", sphere_mesh(smooth, false), kSphere},
+      {"Bilinear", "Smooth", sphere_mesh({}, false), kSphere},
+      // The shader turns them to the geometric normal's side.
+      {"Inward", "Smooth", sphere_mesh(per_vertex(inward), false), kSphere},
+      {"Mapped", "Mapped", card(kUnit), kCard},
+      {"Auto", "Auto", card(kUnit), kCard},
+      {"Unscaled", "Unscaled", card(kUnit), kCard},
+      {"DirectX", "DirectX", card(kUnit), kCard},
+      {"Constant", "Constant", card(kUnit), kCard},
+      {"MirroredS", "Mapped", card({{{1, 0}, {0, 0}, {0, 1}, {1, 1}}}), kCard},
+      {"Rotated", "Mapped", card(kTurned), kCard},
+      {"MirroredTransform", "Mapped", card(kUnit), {-0.7F, 0.7F, 0.7F}},
+      {"Stretched", "Mapped", card(kUnit), {0.7F, 0.35F, 0.7F}},
+      {"AbsentSet", "AbsentSet", card(kUnit), kCard},
+      {"SphereVertex", "SphereMapped", sphere_mesh(per_vertex(points), true), kSphere},
+      {"SphereFaceted", "SphereMapped", sphere_mesh({}, true), kSphere},
+      {"SphereComputed", "SphereMapped", sphere_mesh(smooth, true), kSphere},
+      {"SphereGlossy", "SphereGlossy", sphere_mesh(per_vertex(points), true), kSphere},
+      {"SphereConstant", "Constant", sphere_mesh(per_vertex(points), true), kSphere},
+  }};
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const std::string mesh = root + "/Objects/" + objects[i].name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = objects[i].scale[0];
+    placed.world_from_object[5] = objects[i].scale[1];
+    placed.world_from_object[10] = objects[i].scale[2];
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, objects[i].geometry, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + objects[i].material);
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
           "the half-rough metal 10% darker", DarkerMetal},
       {"material-textures-v1", "/MaterialTextures", 160, SetMaterialTextures,
           "the repeating card half a texel off", ShiftedRepeat},
+      {"material-normals-v1", "/MaterialNormals", 160, SetMaterialNormals,
+          "the normal map's green read flipped", FlippedGreen},
   };
   return kFixtures;
 }

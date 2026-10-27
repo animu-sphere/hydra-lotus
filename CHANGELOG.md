@@ -90,6 +90,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   texture-coordinate sources, untranslated connections and a minified
   checker, with Hio's decoded texels compared exactly with the mirror's
   ([evidence](docs/reports/2026-10-27-material-textures.md)).
+  `material-normals-v1` adds shading normals and normal maps: authored
+  interpolations, computed, left-handed and malformed meshes, normal-map
+  encodings, tangent frames and normal maps on spheres, with Storm's
+  computed normals compared exactly with the mirror's
+  ([evidence](docs/reports/2026-10-27-material-normals.md)).
 
 - `OffscreenRenderer::Residency()` lists every allocation the renderer makes
   by owner and memory kind, with `VK_EXT_memory_budget` process heap usage
