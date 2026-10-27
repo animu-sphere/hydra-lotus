@@ -112,7 +112,14 @@ outside this queue.
   8-bit and HDR emission maps and fallbacks; they extract and render as
   documented and need no fix. `GeomSubset` material bindings were silently
   ignored and now warn; per-face materials are a candidate bounded fix.
-  Remaining: alpha masks.
+  The [alpha fixture](../reports/2026-10-27-material-alpha.md) completes the
+  audit order with constant coverage, thresholds and masks from every
+  channel layout, inverted, black-bordered, missing and minified masks,
+  stacked layers and masked emitters; they extract and render as documented
+  and need no fix. A texture-driven `opacityThreshold` already warned;
+  `displayOpacity` on unbound meshes is not read, and reading it is a
+  candidate bounded fix.
+  Remaining: prioritize the candidate bounded fixes.
   Path classification waits for distinct shading classes and
   measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
 

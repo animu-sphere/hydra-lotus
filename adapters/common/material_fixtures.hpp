@@ -54,6 +54,17 @@ void SetMaterialNormals(Lotus::RenderWorld& world);
 // an unlit material and a GeomSubset binding the adapter does not read.
 void SetMaterialEmission(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-alpha-v1: a 5x5 grid of
+// cards and a coarse sphere under material-basics-v1's camera, lights and
+// backdrop. Rows from the top: constant coverage, clamped values and an
+// unread opacityMode included; constant thresholds, non-finite values and a
+// texture-driven threshold the translator does not read; masks from alpha,
+// grey-alpha, one-channel and alpha-less images; stochastic, inverted,
+// black-bordered, missing and minified masks; then stacked layers, a masked
+// sphere, masked and half-covered emitters and an unbound card whose
+// displayOpacity is not read.
+void SetMaterialAlpha(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;

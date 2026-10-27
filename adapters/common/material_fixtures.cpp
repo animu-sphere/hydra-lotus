@@ -939,6 +939,196 @@ void SetMaterialEmission(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// scripts/material_fixtures.py's cutout.png: a green gradient whose alpha is
+// an opaque disc, a ring of 96 and transparent corners.
+Texel Cutout(std::uint32_t x, std::uint32_t y) {
+  const int dx = 2 * static_cast<int>(x) - 7, dy = 2 * static_cast<int>(y) - 7;
+  const int distance = dx * dx + dy * dy;
+  return {std::uint8_t(60 + 20 * x), std::uint8_t(200 - 15 * y), 60,
+      std::uint8_t(distance <= 26 ? 255 : distance <= 50 ? 96 : 0)};
+}
+
+Lotus::Material Covered(float opacity, float threshold = 0.0F) {
+  Lotus::Material material;
+  material.base_color = {0.2F, 0.6F, 0.7F};
+  material.opacity = opacity;
+  material.opacity_threshold = threshold;
+  return material;
+}
+
+// A material whose base colour and coverage are `lookup`'s RGB and alpha,
+// at st.
+Lotus::Material Masked(const Lotus::TextureInput& lookup, float threshold = 0.5F) {
+  Lotus::Material material = Textured(lookup);
+  material.opacity_texture = Channel(lookup, 3);
+  material.opacity_threshold = threshold;
+  return material;
+}
+
+// As a decoder that treats alpha as colour would read the sRGB images.
+void SrgbAlpha(Lotus::RenderWorld& world) {
+  for (const auto& [key, texture] : world.Commit().scene->textures) {
+    if (texture->format != Lotus::TextureFormat::Rgba8Srgb) continue;
+    Lotus::Texture decoded = *texture;
+    for (std::size_t i = 3; i < decoded.texels.size(); i += 4) {
+      const double value = decoded.texels[i] / 255.0;
+      const double linear =
+          value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+      decoded.texels[i] = static_cast<std::uint8_t>(std::lround(linear * 255.0));
+    }
+    world.SetTexture(key, std::move(decoded));
+  }
+}
+
+} // namespace
+
+void SetMaterialAlpha(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialAlpha";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  // Under auto the 8-bit two-channel image stays linear.
+  world.SetTexture("textures/rgba.png|sRGB", Image(4, kSrgb, Rgba));
+  world.SetTexture("textures/cutout.png|sRGB", Image(8, kSrgb, Cutout));
+  world.SetTexture("textures/grey-alpha.png|auto", Image(4, kUnorm, GreyAlpha));
+  world.SetTexture("textures/ramp.png|raw", Image(4, kUnorm, Ramp));
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/checker.png|raw", Image(64, kUnorm, Checker));
+
+  using Lotus::TextureWrap;
+  Lotus::Material ramp = Covered(1.0F, 0.5F);
+  ramp.opacity_texture = Channel(Lookup("ramp.png", "raw"), 0);
+  ramp.texcoords = "st";
+  Lotus::TextureInput inverse = Channel(Lookup("cutout.png", "sRGB"), 3);
+  inverse.scale = {1.0F, 1.0F, 1.0F, -1.0F};
+  inverse.bias = {0.0F, 0.0F, 0.0F, 1.0F};
+  Lotus::Material inverted = Covered(1.0F, 0.5F);
+  inverted.opacity_texture = inverse;
+  inverted.texcoords = "st";
+  // The unresolved file keeps its authored path and returns its fallback.
+  Lotus::TextureInput missing = Lookup("palette.png", "sRGB");
+  missing.texture = "./textures/missing.png|sRGB";
+  missing.fallback = {0.9F, 0.2F, 0.6F, 0.3F};
+  Lotus::Material minified = Covered(1.0F, 0.5F);
+  minified.opacity_texture =
+      Channel(Lookup("checker.png", "raw", TextureWrap::Repeat, TextureWrap::Repeat), 0);
+  minified.texcoords = "st";
+  Lotus::Material glowing_mask = Masked(Lookup("cutout.png", "sRGB"));
+  glowing_mask.base_color_texture.reset();
+  glowing_mask.emission = {1.0F, 0.6F, 0.2F};
+  Lotus::Material glowing_half = Emissive({1.0F, 0.6F, 0.2F});
+  glowing_half.opacity = 0.5F;
+  const std::map<std::string, Lotus::Material> looks{
+      {"Half", Covered(0.5F)},
+      {"Quarter", Covered(0.25F)},
+      {"Zero", Covered(0.0F)},
+      // opacityMode is not read: presence as for every material.
+      {"Presence", Covered(0.5F)},
+      // Authored opacity 1.5 and threshold 2: equal once clamped.
+      {"Clamped", Covered(1.0F, 1.0F)},
+      {"Below", Covered(0.4F, 0.5F)},
+      {"Equal", Covered(0.5F, 0.5F)},
+      {"Above", Covered(0.6F, 0.5F)},
+      // Authored -inf and inf, which keep the defaults.
+      {"NonFinite", Covered(1.0F)},
+      // The threshold's texture connection is not translated.
+      {"ThresholdMap", Covered(0.5F)},
+      {"Alpha", Masked(Lookup("rgba.png", "sRGB"))},
+      {"Cutout", Masked(Lookup("cutout.png", "sRGB"))},
+      {"GreyAlpha", Masked(Lookup("grey-alpha.png", "auto"))},
+      {"Ramp", ramp},
+      {"NoAlpha", Masked(Lookup("palette.png", "sRGB"))},
+      {"Fractional", Masked(Lookup("cutout.png", "sRGB"), 0.0F)},
+      {"Inverted", inverted},
+      {"BlackBorder",
+          Masked(Lookup("palette.png", "sRGB", TextureWrap::Black, TextureWrap::Black))},
+      {"Missing", Masked(missing, 0.0F)},
+      {"Minified", minified},
+      {"SphereCutout",
+          Masked(Lookup("cutout.png", "sRGB", TextureWrap::Repeat, TextureWrap::Repeat))},
+      {"GlowingMask", glowing_mask},
+      {"GlowingHalf", glowing_half},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  const Polygons sphere = CoarseSphere();
+  const auto latlong = LatLong({4.0, 2.0});
+  Lotus::MeshGeometry masked_sphere = sphere.Geometry();
+  for (const auto& corner : sphere.Corners()) {
+    masked_sphere.normals.push_back(Fixed(sphere.points[corner.vertex]));
+    masked_sphere.texcoords["st"].push_back(latlong[corner.face_vertex]);
+  }
+  const Lotus::MeshGeometry plain = Card({});
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  const Lotus::MeshGeometry wide = Card({{"st", Corners(kWide)}});
+  Lotus::MeshGeometry stacked;
+  stacked.positions = {{-0.5F, -0.5F, 0.0F}, {0.5F, -0.5F, 0.0F}, {0.5F, 0.5F, 0.0F},
+      {-0.5F, 0.5F, 0.0F}, {-0.15F, -0.15F, 0.4F}, {0.45F, -0.15F, 0.4F},
+      {0.45F, 0.45F, 0.4F}, {-0.15F, 0.45F, 0.4F}};
+  stacked.triangles = {{0, 1, 2}, {0, 2, 3}, {4, 5, 6}, {4, 6, 7}};
+  stacked.source_faces = {0, 0, 1, 1};
+
+  struct Entry {
+    const char* name;
+    // Unbound when null.
+    const char* material;
+    const Lotus::MeshGeometry& geometry;
+    float scale;
+  };
+  constexpr float kSphere = 0.35F;
+  constexpr float kCard = 0.7F;
+  const std::array<Entry, 25> objects{{
+      {"Half", "Half", plain, kCard},
+      {"Quarter", "Quarter", plain, kCard},
+      {"Zero", "Zero", plain, kCard},
+      {"Presence", "Presence", plain, kCard},
+      {"Clamped", "Clamped", plain, kCard},
+      {"Below", "Below", plain, kCard},
+      {"Equal", "Equal", plain, kCard},
+      {"Above", "Above", plain, kCard},
+      {"NonFinite", "NonFinite", plain, kCard},
+      {"ThresholdMap", "ThresholdMap", mapped, kCard},
+      {"Alpha", "Alpha", mapped, kCard},
+      {"Cutout", "Cutout", mapped, kCard},
+      {"GreyAlpha", "GreyAlpha", mapped, kCard},
+      {"Ramp", "Ramp", mapped, kCard},
+      {"NoAlpha", "NoAlpha", mapped, kCard},
+      {"Fractional", "Fractional", mapped, kCard},
+      {"Inverted", "Inverted", mapped, kCard},
+      {"BlackBorder", "BlackBorder", wide, kCard},
+      {"Missing", "Missing", mapped, kCard},
+      {"Minified", "Minified", mapped, kCard},
+      {"Stacked", "Half", stacked, kCard},
+      {"SphereCutout", "SphereCutout", masked_sphere, kSphere},
+      {"GlowingMask", "GlowingMask", mapped, kCard},
+      {"GlowingHalf", "GlowingHalf", plain, kCard},
+      // displayOpacity 0.3 is not read.
+      {"DisplayOpacity", nullptr, plain, kCard},
+  }};
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const Entry& object = objects[i];
+    const std::string mesh = root + "/Objects/" + object.name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = object.scale;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, object.geometry, placed);
+    if (object.material != nullptr) {
+      world.BindMaterial(mesh, root + "/Looks/" + object.material);
+    } else {
+      const std::string display = mesh + ".lotus:displayColor";
+      world.SetMaterial(display, Dielectric({0.2F, 0.6F, 0.7F}));
+      world.BindMaterial(mesh, display);
+    }
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -949,6 +1139,8 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the normal map's green read flipped", FlippedGreen},
       {"material-emission-v1", "/MaterialEmission", 160, SetMaterialEmission,
           "the sRGB emission map decoded as raw", RawEmission},
+      {"material-alpha-v1", "/MaterialAlpha", 160, SetMaterialAlpha,
+          "the sRGB images' alpha decoded as sRGB", SrgbAlpha},
   };
   return kFixtures;
 }

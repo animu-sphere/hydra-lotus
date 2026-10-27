@@ -1,0 +1,123 @@
+{
+  "schema": "lotus-material-alpha-v1",
+  "question": "Does a committed UsdPreviewSurface fixture for alpha masks extract through Hydra, Hio's decoded alpha texels included, to its C++ mirror, match its reference images headless and through Hydra, and show coverage, thresholds and masks as documented?",
+  "procedure": {
+    "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-alpha-v1.usda (fails only on the deliberately unresolvable ./textures/missing.png)",
+    "reference": "lotus-headless --write-material-reference validation/reference: every fixture in a cleared GPU scene, BSDF sampling from sample index 0, 4096 spp mean, per-sample variance from 64 batches of 64",
+    "headless_check": "cmake --build build/cy2026-windows-x86_64-py313-core --target lotus-headless (its post-build report, renderer.material.fixtures included); images under build/cy2026-windows-x86_64-py313-core/reference-images",
+    "hydra": "cmake --build build/cy2026-windows-x86_64-py313-lookdev--hydra after deleting 23 objects with no recorded dependencies; ctest -R 'material-fixtures|test-tiers'",
+    "core_ctests": "ctest -R 'evidence|assets|install-tree|test-tiers' in build/cy2026-windows-x86_64-py313-core",
+    "scripts": "python -m unittest test_material_fixtures; python scripts/material_fixtures.py check; python scripts/check_docs.py"
+  },
+  "environment": {
+    "source": "1b95029 plus this change",
+    "os": "Windows AMD64",
+    "compiler": "MSVC 19.51 Release",
+    "device": "NVIDIA RTX A5000",
+    "driver": "597.16",
+    "vulkan_api": "1.4.329",
+    "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime",
+    "validation": "validation and synchronization validation active",
+    "clocks": "unlocked",
+    "binaries_sha256": {
+      "lotus-headless.exe": "fa96cd02d767b08555f87e0d4d05cea75df52699c89b71cef8a66bf0c007a381",
+      "lotus-hydra2-material-fixtures-test.exe": "870cdb389e4887c85e560b1588319a6cab586c9ea170f613a75776d3211cb460",
+      "hdLotus.dll": "d65b106dd7b1b0c3c7e643d02f8f2dcf81e4e54d1df889db1382ed8196ef76ac"
+    }
+  },
+  "fixture_sha256": {
+    "validation/materials/material-alpha-v1.usda": "b593c6020e702dab26ce62aaac24743f259bd03ec41e10e5e3d47291b386dc32",
+    "validation/materials/textures/cutout.png": "f9d03d4509d9eb7f424d716c28dc32148a7b44f890636fe635b45d4b0f7e79d7"
+  },
+  "fixture_sha256_note": "the USD file as the generator writes it, with LF line endings",
+  "reference": {
+    "samples": 4096,
+    "batches": 64,
+    "size": [160, 160],
+    "write_seconds_all_fixtures": 11.3,
+    "other_fixtures_rewritten_byte_identical": true,
+    "sha256": {
+      "validation/reference/material-alpha-v1-mean.pfm": "f6e7cbd1295d95b42792dda1fe7205df1f3a862e6c30f964fa8f888471262201",
+      "validation/reference/material-alpha-v1-variance.pfm": "bf8c544901fc371dd4307ba97413417fe6f7ed2cddb0b26c925af7ca902a960e"
+    }
+  },
+  "extraction": {
+    "materials_equal": true,
+    "textures_equal": [
+      "textures/rgba.png|sRGB",
+      "textures/cutout.png|sRGB",
+      "textures/grey-alpha.png|auto",
+      "textures/ramp.png|raw",
+      "textures/palette.png|sRGB",
+      "textures/checker.png|raw"
+    ],
+    "texcoords_equal": true,
+    "bindings_equal": true,
+    "triangles_equal": true,
+    "lights_and_environment_equal": true,
+    "float_sets_differing_by_rounding": 0,
+    "warnings": [
+      "Lotus uses the defaults of /MaterialAlpha/Looks/ThresholdMap inputs whose shader graph it does not translate: opacityThreshold",
+      "Lotus cannot read the texture ./textures/missing.png of /MaterialAlpha/Looks/Missing: it cannot be opened as an image"
+    ]
+  },
+  "comparisons": {
+    "sample_index": 1048576,
+    "tile_pixels": 8,
+    "rows": [
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "bsdf", "spp": 16, "image_z": [0.86, 0.19, -0.24], "max_tile_z": 2.95, "mean_tile_z2": 0.94},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "bsdf", "spp": 256, "image_z": [-1.0, -0.26, -0.66], "max_tile_z": 3.32, "mean_tile_z2": 1.06},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "mis", "spp": 16, "image_z": [0.56, 0.27, 0.21], "max_tile_z": 1.26, "mean_tile_z2": 0.07},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "mis", "spp": 256, "image_z": [0.18, 0.25, 0.14], "max_tile_z": 1.39, "mean_tile_z2": 0.12},
+      {"frontend": "headless", "integrator": "wavefront", "light_sampling": "mis", "spp": 16, "image_z": [0.56, 0.27, 0.21], "max_tile_z": 1.26, "mean_tile_z2": 0.07},
+      {"frontend": "headless", "integrator": "wavefront", "light_sampling": "mis", "spp": 256, "image_z": [0.18, 0.25, 0.14], "max_tile_z": 1.39, "mean_tile_z2": 0.12},
+      {"frontend": "hydra", "integrator": "reference", "light_sampling": "mis", "spp": 256, "image_z": [0.18, 0.25, 0.14], "max_tile_z": 1.39, "mean_tile_z2": 0.12},
+      {"frontend": "hydra", "integrator": "reference", "light_sampling": "bsdf", "spp": 256, "image_z": [-1.0, -0.26, -0.66], "max_tile_z": 3.32, "mean_tile_z2": 1.06}
+    ],
+    "byte_identical": [
+      "headless wavefront NEE/MIS images equal the reference integrator's at 16 and 256 spp (cmp of the --images PFM files)",
+      "each Hydra image equals the backend's image of the mirror"
+    ],
+    "negative_control": {
+      "change": "alpha of every Rgba8Srgb texture decoded as sRGB and re-quantized to 8 bits (rgba.png and cutout.png change; the palette's alpha 255 does not): Alpha, Cutout, Fractional, Inverted, SphereCutout and GlowingMask",
+      "spp": 256,
+      "max_tile_z": 62.72,
+      "rejected": true
+    },
+    "reference_reproduced_bit_for_bit": true,
+    "other_fixtures_rows_unchanged": true
+  },
+  "audit": {
+    "constant_coverage": "as documented; stochastic presence coverage at threshold 0",
+    "opacity_mode": "as documented; not read, presence for every material, departing from the specification's default transparent mode",
+    "clamped_and_non_finite": "as documented; 1.5 and 2 clamp to 1 and 1 and accept at equality; -inf and inf keep 1 and 0",
+    "thresholds": "as documented; 0.4 rejected, 0.5 and 0.6 accepted under 0.5",
+    "texture_driven_threshold": "as documented; reported as an untranslated connection and warned; the translator section now names it",
+    "channel_layouts": "as documented; RGBA, grey-alpha, one-channel r and alpha-less images, Hio texels exact",
+    "srgb_alpha": "as documented; linear alpha in Rgba8Srgb",
+    "stochastic_texture_coverage_and_inversion": "as documented",
+    "black_borders": "as documented; transparent black outside [0, 1]",
+    "missing_images": "as documented; the fallback's fourth component is the coverage",
+    "minified_masks": "as documented; no mipmaps",
+    "layers_and_far_sides": "as documented",
+    "masked_emitters": "as documented; NEE/MIS agrees with the BSDF-sampled reference",
+    "covered_emitter_light_estimate": "documented now: the light-table weight ignores coverage, which costs variance only",
+    "display_opacity": "as documented; not read and not warned; reading it is a candidate fix",
+    "fixes": []
+  },
+  "timing_seconds": {
+    "headless_post_build_report_all_checks": 56,
+    "hydra_material_fixtures_cpu": 0.12,
+    "hydra_material_fixtures_gpu": 73.44,
+    "hydra_material_fixtures_gpu_before": 61.65,
+    "core_evidence_assets_install_tree_test_tiers": 79.25
+  },
+  "not_run": [
+    "viewport, usdview and the installed Hydra host with the fixture",
+    "ci-core",
+    "Hydra CTests other than lotus-renderer-hydra-material-fixtures, its -gpu variant and lotus-test-tiers",
+    "core CTests other than lotus-validation-assets, lotus-renderer-evidence, lotus-renderer-install-tree and lotus-test-tiers",
+    "depth and surface diagnostics of the fixture",
+    "isolated variance cost of stochastic coverage"
+  ]
+}

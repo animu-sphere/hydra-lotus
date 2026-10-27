@@ -101,6 +101,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   mirror's ([evidence](docs/reports/2026-10-27-material-emission.md)).
   The Hydra adapter now warns when a mesh's `GeomSubset` material bindings
   are ignored; the mesh's own binding covers every face, as before.
+  `material-alpha-v1` adds alpha masks: constant coverage and thresholds,
+  clamped and non-finite values, masks from RGBA, grey-alpha, one-channel
+  and alpha-less images, inverted, black-bordered, missing and minified
+  masks, stacked layers, a masked sphere and masked emitters, compared
+  exactly with the mirror's
+  ([evidence](docs/reports/2026-10-27-material-alpha.md)).
 
 - `OffscreenRenderer::Residency()` lists every allocation the renderer makes
   by owner and memory kind, with `VK_EXT_memory_budget` process heap usage
