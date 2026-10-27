@@ -754,6 +754,191 @@ void SetMaterialNormals(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// scripts/material_fixtures.py's GLOW, as stb decodes Radiance RGBE:
+// mantissa * 2^(exponent - 136) in float, alpha 1. Under sRGB the adapter
+// decodes each colour component in double, as for any float image Hio
+// reports sRGB.
+Lotus::Texture Glow(bool srgb) {
+  Lotus::Texture texture;
+  texture.width = texture.height = 4;
+  texture.format = Lotus::TextureFormat::Rgba32Float;
+  for (std::uint32_t y = 0; y < 4; ++y)
+    for (std::uint32_t x = 0; x < 4; ++x) {
+      const float unit = std::ldexp(1.0F, static_cast<int>(127 + y) - 136);
+      std::array<double, 4> value{(240 - 50 * x) * unit, (80 + 50 * x) * unit, 160 * unit, 1.0};
+      for (int c = 0; c < 4; ++c) {
+        if (srgb && c < 3)
+          value[c] = value[c] <= 0.04045 ? value[c] / 12.92
+                                         : std::pow((value[c] + 0.055) / 1.055, 2.4);
+        const auto texel = static_cast<float>(value[c]);
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(&texel);
+        texture.texels.insert(texture.texels.end(), bytes, bytes + sizeof(texel));
+      }
+    }
+  return texture;
+}
+
+Lotus::Material Emissive(const std::array<float, 3>& emission) {
+  Lotus::Material material;
+  material.emission = emission;
+  return material;
+}
+
+// A material whose emission is `lookup`, at st.
+Lotus::Material Glowing(Lotus::TextureInput lookup) {
+  Lotus::Material material;
+  material.emission_texture = std::move(lookup);
+  material.texcoords = "st";
+  return material;
+}
+
+// As a colour-space error would decode the sRGB emission map.
+void RawEmission(Lotus::RenderWorld& world) {
+  const std::string key = "textures/palette.png|sRGB";
+  Lotus::Texture texture = *world.Commit().scene->textures.at(key);
+  texture.format = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture(key, std::move(texture));
+}
+
+} // namespace
+
+void SetMaterialEmission(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialEmission";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/palette.png|raw", Image(4, kUnorm, Palette));
+  world.SetTexture("textures/palette.png|auto", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/ramp.png|auto", Image(4, kUnorm, Ramp));
+  // Under raw and auto the float image stays linear.
+  world.SetTexture("textures/glow.hdr|raw", Glow(false));
+  world.SetTexture("textures/glow.hdr|auto", Glow(false));
+  world.SetTexture("textures/glow.hdr|sRGB", Glow(true));
+
+  using Lotus::TextureWrap;
+  Lotus::Material metal = Metal({0.95F, 0.64F, 0.54F}, 0.25F, 1.0F);
+  metal.emission = {0.6F, 0.2F, 0.1F};
+  Lotus::TextureInput scale_bias = Lookup("palette.png", "raw");
+  scale_bias.scale = {3.0F, 3.0F, 3.0F, 1.0F};
+  scale_bias.bias = {0.2F, 0.1F, 0.0F, 0.0F};
+  // The unresolved file keeps its authored path and returns its fallback.
+  Lotus::TextureInput missing = Lookup("palette.png", "sRGB");
+  missing.texture = "./textures/missing.png|sRGB";
+  missing.fallback = {2.0F, 1.0F, 0.5F, 1.0F};
+  Lotus::TextureInput inverted = Lookup("palette.png", "raw");
+  inverted.scale = {-1.0F, -1.0F, -1.0F, 1.0F};
+  inverted.bias = {1.0F, 1.0F, 1.0F, 0.0F};
+  Lotus::Material shared = Glowing(Lookup("palette.png", "sRGB"));
+  shared.base_color_texture = Lookup("palette.png", "sRGB");
+  Lotus::Material unlit = Glowing(Lookup("palette.png", "sRGB"));
+  unlit.base_color = {0.0F, 0.0F, 0.0F};
+  unlit.ior = 1.0F;
+  const std::map<std::string, Lotus::Material> looks{
+      {"Warm", Emissive({1.0F, 0.6F, 0.2F})},
+      {"Bright", Emissive({6.0F, 6.0F, 6.0F})},
+      {"Dim", Emissive({0.05F, 0.1F, 0.2F})},
+      // Authored (2, -1, 0.5).
+      {"Clamped", Emissive({2.0F, 0.0F, 0.5F})},
+      // Authored (inf, 1, 1): a non-finite component keeps the default.
+      {"NonFinite", Lotus::Material{}},
+      {"Metal", metal},
+      {"Cool", Emissive({0.4F, 0.8F, 1.0F})},
+      {"Srgb", Glowing(Lookup("palette.png", "sRGB"))},
+      {"Raw", Glowing(Lookup("palette.png", "raw"))},
+      {"Auto", Glowing(Lookup("palette.png", "auto"))},
+      {"Grey", Glowing(Lookup("ramp.png", "auto"))},
+      {"ScaleBias", Glowing(scale_bias)},
+      {"Missing", Glowing(missing)},
+      {"Inverted", Glowing(inverted)},
+      {"Hdr", Glowing(Lookup("glow.hdr", "raw"))},
+      {"HdrAuto", Glowing(Lookup("glow.hdr", "auto"))},
+      {"HdrSrgb", Glowing(Lookup("glow.hdr", "sRGB"))},
+      {"SphereTextured",
+          Glowing(Lookup("palette.png", "sRGB", TextureWrap::Repeat, TextureWrap::Repeat))},
+      {"Shared", shared},
+      {"Unlit", unlit},
+      {"Base", Dielectric({0.6F, 0.6F, 0.6F}, 0.3F)},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  const Polygons sphere = CoarseSphere();
+  const auto corners = sphere.Corners();
+  Lotus::MeshGeometry faceted = sphere.Geometry();
+  Lotus::MeshGeometry smooth = faceted;
+  for (const auto& corner : corners) smooth.normals.push_back(Fixed(sphere.points[corner.vertex]));
+  Lotus::MeshGeometry textured = faceted;
+  const auto latlong = LatLong({4.0, 2.0});
+  for (const auto& corner : corners) textured.texcoords["st"].push_back(latlong[corner.face_vertex]);
+  const Lotus::MeshGeometry plain = Card({});
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  // Wound clockwise seen from the camera: (0, 3, 2), (0, 2, 1).
+  Lotus::MeshGeometry back = plain;
+  back.triangles = {{0, 3, 2}, {0, 2, 1}};
+  // Two quads; the GeomSubset that binds the right one is not read, so the
+  // whole card takes the mesh's binding.
+  Lotus::MeshGeometry split;
+  split.positions = {{-0.5F, -0.5F, 0.0F}, {0.0F, -0.5F, 0.0F}, {0.5F, -0.5F, 0.0F},
+      {0.5F, 0.5F, 0.0F}, {0.0F, 0.5F, 0.0F}, {-0.5F, 0.5F, 0.0F}};
+  split.triangles = {{0, 1, 4}, {0, 4, 5}, {1, 2, 3}, {1, 3, 4}};
+  split.source_faces = {0, 0, 1, 1};
+
+  struct Entry {
+    const char* name;
+    const char* material;
+    const Lotus::MeshGeometry& geometry;
+    std::array<float, 3> scale;
+    double rotate_x;
+  };
+  constexpr std::array<float, 3> kSphere{0.35F, 0.35F, 0.35F};
+  constexpr std::array<float, 3> kCard{0.7F, 0.7F, 0.7F};
+  const std::array<Entry, 25> objects{{
+      {"Warm", "Warm", plain, kCard, 0},
+      {"Bright", "Bright", plain, kCard, 0},
+      {"Dim", "Dim", plain, kCard, 0},
+      {"Clamped", "Clamped", plain, kCard, 0},
+      {"NonFinite", "NonFinite", plain, kCard, 0},
+      {"Metal", "Metal", smooth, kSphere, 0},
+      {"Back", "Warm", back, kCard, 0},
+      {"Mirrored", "Warm", plain, {-0.7F, 0.7F, 0.7F}, 0},
+      {"Stretched", "Warm", plain, {0.7F, 0.35F, 0.7F}, 0},
+      {"Sphere", "Cool", faceted, kSphere, 0},
+      {"Srgb", "Srgb", mapped, kCard, 0},
+      {"Raw", "Raw", mapped, kCard, 0},
+      {"Auto", "Auto", mapped, kCard, 0},
+      {"Grey", "Grey", mapped, kCard, 0},
+      {"ScaleBias", "ScaleBias", mapped, kCard, 0},
+      {"Missing", "Missing", mapped, kCard, 0},
+      {"Inverted", "Inverted", mapped, kCard, 0},
+      {"Hdr", "Hdr", mapped, kCard, 0},
+      {"HdrAuto", "HdrAuto", mapped, kCard, 0},
+      {"HdrSrgb", "HdrSrgb", mapped, kCard, 0},
+      {"Tilted", "Warm", plain, kCard, 60},
+      {"TexturedSphere", "SphereTextured", textured, kSphere, 0},
+      {"Shared", "Shared", mapped, kCard, 0},
+      {"Unlit", "Unlit", mapped, kCard, 0},
+      {"Subset", "Base", split, kCard, 0},
+  }};
+  constexpr std::array<double, 5> kColumns{-1.6, -0.8, 0.0, 0.8, 1.6};
+  constexpr std::array<double, 5> kRows{1.6, 0.8, 0.0, -0.8, -1.6};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const Entry& object = objects[i];
+    const std::string mesh = root + "/Objects/" + object.name;
+    const Matrix4d translation{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+        kColumns[i % 5], kRows[i / 5], 0, 1};
+    const Matrix4d scale{object.scale[0], 0, 0, 0, 0, object.scale[1], 0, 0,
+        0, 0, object.scale[2], 0, 0, 0, 0, 1};
+    Lotus::MeshInstance placed;
+    placed.world_from_object =
+        ToFloat(Multiply(translation, Multiply(RotationX(object.rotate_x), scale)));
+    world.SetMesh(mesh, object.geometry, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + object.material);
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -762,6 +947,8 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the repeating card half a texel off", ShiftedRepeat},
       {"material-normals-v1", "/MaterialNormals", 160, SetMaterialNormals,
           "the normal map's green read flipped", FlippedGreen},
+      {"material-emission-v1", "/MaterialEmission", 160, SetMaterialEmission,
+          "the sRGB emission map decoded as raw", RawEmission},
   };
   return kFixtures;
 }

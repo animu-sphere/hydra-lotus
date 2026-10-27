@@ -272,8 +272,9 @@ UNIT = ((0, 0), (1, 0), (1, 1), (0, 1))
 WIDE = ((-0.5, -0.5), (1.5, -0.5), (1.5, 1.5), (-0.5, 1.5))
 # Each input's USD type, by node type.
 INPUT_TYPES = {
-    "UsdPreviewSurface": {"diffuseColor": "color3f", "metallic": "float",
-                          "normal": "normal3f", "roughness": "float"},
+    "UsdPreviewSurface": {"diffuseColor": "color3f", "emissiveColor": "color3f",
+                          "ior": "float", "metallic": "float", "normal": "normal3f",
+                          "roughness": "float"},
     "UsdUVTexture": {"bias": "float4", "fallback": "float4", "file": "asset",
                      "scale": "float4", "sourceColorSpace": "token", "st": "float2",
                      "wrapS": "token", "wrapT": "token"},
@@ -573,6 +574,22 @@ def face_normals():
     return normals
 
 
+def sphere_class():
+    """The class of the coarse unit sphere, without normals."""
+    points, counts, indices = sphere(COARSE_SEGMENTS, COARSE_RINGS)
+    return [
+        "# The coarse unit sphere the spheres inherit, without normals.",
+        'class Mesh "_Sphere"',
+        "{",
+        f"    int[] faceVertexCounts = [{integers(counts)}]",
+        f"    int[] faceVertexIndices = [{integers(indices)}]",
+        f"    point3f[] points = [{vectors(points)}]",
+        '    uniform token subdivisionScheme = "none"',
+        "}",
+        "",
+    ]
+
+
 def normal_map(file, space="raw", wrap="clamp", st=output("Reader", "result"), **inputs):
     """A UsdUVTexture node reading an unsigned normal map, decoded to signed
     by scale 2 and bias -1 unless given otherwise."""
@@ -679,18 +696,7 @@ def normals():
          ("SphereGlossy", "_Sphere", "SphereGlossy", vertex + mapped_st, sphere_scale),
          ("SphereConstant", "_Sphere", "Constant", vertex + mapped_st, sphere_scale)],
     ]
-    sphere_class = [
-        "# The coarse unit sphere the spheres inherit, without normals.",
-        'class Mesh "_Sphere"',
-        "{",
-        f"    int[] faceVertexCounts = [{integers(counts)}]",
-        f"    int[] faceVertexIndices = [{integers(indices)}]",
-        f"    point3f[] points = [{vectors(points)}]",
-        '    uniform token subdivisionScheme = "none"',
-        "}",
-        "",
-    ]
-    lines = header("MaterialNormals", "SetMaterialNormals", sphere_class + CARD_CLASS)
+    lines = header("MaterialNormals", "SetMaterialNormals", sphere_class() + CARD_CLASS)
     lines += looks("MaterialNormals", NORMAL_LOOKS)
     lines += ["", '    def Scope "Objects"', "    {"]
     for y, row in zip(CARD_ROWS, rows):
@@ -714,12 +720,163 @@ def normals():
     return "\n".join(lines)
 
 
+def radiance(width, height, texel):
+    """A Radiance RGBE image whose texel at column x and row y from the top
+    has the bytes texel(x, y): three mantissas and a shared exponent, so it
+    decodes to mantissa * 2^(exponent - 136) exactly. Scanlines are flat, as
+    they must be below a width of 8."""
+    header = f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {height} +X {width}\n".encode()
+    return header + bytes(c for y in range(height) for x in range(width) for c in texel(x, y))
+
+
+# material-emission-v1's HDR image: red falling and green rising with the
+# column, constant blue, doubling down each row, from at most 0.47 on the
+# top row to 3.75 on the bottom one.
+GLOW = (4, 4, lambda x, y: (240 - 50 * x, 80 + 50 * x, 160, 127 + y))
+
+WARM = (1, 0.6, 0.2)
+# material-emission-v1's materials. Unless stated, base colour and the other
+# inputs take their defaults; textured emission reads the palette under
+# clamp at st.
+EMISSION_LOOKS = [
+    ("Warm", card({"emissiveColor": WARM})),
+    ("Bright", card({"emissiveColor": (6, 6, 6)})),
+    ("Dim", card({"emissiveColor": (0.05, 0.1, 0.2)})),
+    ("Clamped", card({"emissiveColor": (2, -1, 0.5)})),
+    ("NonFinite", card({"emissiveColor": (math.inf, 1, 1)})),
+    ("Metal", card({"diffuseColor": COPPER, "metallic": 1, "roughness": 0.25,
+                    "emissiveColor": (0.6, 0.2, 0.1)})),
+    ("Cool", card({"emissiveColor": (0.4, 0.8, 1)})),
+    ("Srgb", card({"emissiveColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                  Reader=reader())),
+    ("Raw", card({"emissiveColor": RGB}, Texture=texture("palette.png", "raw"),
+                 Reader=reader())),
+    ("Auto", card({"emissiveColor": RGB}, Texture=texture("palette.png"), Reader=reader())),
+    ("Grey", card({"emissiveColor": RGB}, Texture=texture("ramp.png"), Reader=reader())),
+    ("ScaleBias", card({"emissiveColor": RGB},
+                       Texture=texture("palette.png", "raw", scale=(3, 3, 3, 1),
+                                       bias=(0.2, 0.1, 0, 0)),
+                       Reader=reader())),
+    ("Missing", card({"emissiveColor": RGB},
+                     Texture=texture("missing.png", "sRGB", fallback=(2, 1, 0.5, 1)),
+                     Reader=reader())),
+    ("Inverted", card({"emissiveColor": RGB},
+                      Texture=texture("palette.png", "raw", scale=(-1, -1, -1, 1),
+                                      bias=(1, 1, 1, 0)),
+                      Reader=reader())),
+    ("Hdr", card({"emissiveColor": RGB}, Texture=texture("glow.hdr", "raw"), Reader=reader())),
+    ("HdrAuto", card({"emissiveColor": RGB}, Texture=texture("glow.hdr"), Reader=reader())),
+    ("HdrSrgb", card({"emissiveColor": RGB}, Texture=texture("glow.hdr", "sRGB"),
+                     Reader=reader())),
+    ("SphereTextured", card({"emissiveColor": RGB},
+                            Texture=texture("palette.png", "sRGB", wrap="repeat"),
+                            Reader=reader())),
+    ("Shared", card({"diffuseColor": RGB, "emissiveColor": RGB},
+                    Texture=texture("palette.png", "sRGB"), Reader=reader())),
+    # An unlit asset: no diffuse, and ior 1 removes the specular interface.
+    ("Unlit", card({"diffuseColor": (0, 0, 0), "ior": 1, "emissiveColor": RGB},
+                   Texture=texture("palette.png", "sRGB"), Reader=reader())),
+    ("Base", card({"diffuseColor": (0.6, 0.6, 0.6), "roughness": 0.3})),
+]
+
+
+def quoted(token):
+    return f'"{token}"'
+
+
+def emission():
+    unit_st = primvar("st", UNIT)
+    sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
+    # A card of two quads, left and right, whose right face a GeomSubset
+    # binds to an emissive material over the mesh's grey.
+    split = [
+        "            int[] faceVertexCounts = [4, 4]",
+        "            int[] faceVertexIndices = [0, 1, 4, 5, 1, 2, 3, 4]",
+        "            point3f[] points = [(-0.5, -0.5, 0), (0, -0.5, 0), (0.5, -0.5, 0), "
+        "(0.5, 0.5, 0), (0, 0.5, 0), (-0.5, 0.5, 0)]",
+        '            uniform token subsetFamily:materialBind:familyType = "nonOverlapping"',
+    ]
+    panel = [
+        "",
+        '            def GeomSubset "Panel" (',
+        '                prepend apiSchemas = ["MaterialBindingAPI"]',
+        "            )",
+        "            {",
+        '                uniform token elementType = "face"',
+        '                uniform token familyName = "materialBind"',
+        "                int[] indices = [1]",
+        "                rel material:binding = </MaterialEmission/Looks/Warm>",
+        "            }",
+    ]
+    # Rows from the top: constant emission; emitters' surfaces, sides and
+    # transforms; 8-bit emission maps; fallbacks and HDR maps; then a tilted
+    # emitter, a textured sphere and arrangements real assets use. Each entry
+    # is the object's name, the class it inherits, its material, the lines it
+    # adds before its transform, its scale, its rotation about X in degrees
+    # and the lines it adds after.
+    rows = [
+        [("Warm", "_Card", "Warm", [], card_scale, None, []),
+         ("Bright", "_Card", "Bright", [], card_scale, None, []),
+         ("Dim", "_Card", "Dim", [], card_scale, None, []),
+         ("Clamped", "_Card", "Clamped", [], card_scale, None, []),
+         ("NonFinite", "_Card", "NonFinite", [], card_scale, None, [])],
+        [("Metal", "_Sphere", "Metal", normal_attribute(
+            "normals", sphere(COARSE_SEGMENTS, COARSE_RINGS)[0]), sphere_scale, None, []),
+         ("Back", "_Card", "Warm", ["            int[] faceVertexIndices = [0, 3, 2, 1]"],
+          card_scale, None, []),
+         ("Mirrored", "_Card", "Warm", [], (-0.7, 0.7, 0.7), None, []),
+         ("Stretched", "_Card", "Warm", [], (0.7, 0.35, 0.7), None, []),
+         ("Sphere", "_Sphere", "Cool", [], sphere_scale, None, [])],
+        [(name, "_Card", name, unit_st, card_scale, None, [])
+         for name in ("Srgb", "Raw", "Auto", "Grey", "ScaleBias")],
+        [(name, "_Card", name, unit_st, card_scale, None, [])
+         for name in ("Missing", "Inverted", "Hdr", "HdrAuto", "HdrSrgb")],
+        [("Tilted", "_Card", "Warm", [], card_scale, 60, []),
+         ("TexturedSphere", "_Sphere", "SphereTextured", primvar("st", latlong((4, 2))),
+          sphere_scale, None, []),
+         ("Shared", "_Card", "Shared", unit_st, card_scale, None, []),
+         ("Unlit", "_Card", "Unlit", unit_st, card_scale, None, []),
+         ("Subset", "_Card", "Base", split, card_scale, None, panel)],
+    ]
+    lines = header("MaterialEmission", "SetMaterialEmission", sphere_class() + CARD_CLASS)
+    lines += looks("MaterialEmission", EMISSION_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for y, row in zip(CARD_ROWS, rows):
+        for x, (name, base, material, extra, scale, rotate_x, after) in zip(CARD_COLUMNS, row):
+            ops = ["xformOp:translate", "xformOp:scale"]
+            rotation = []
+            if rotate_x is not None:
+                ops.insert(1, "xformOp:rotateX")
+                rotation = [f"            float xformOp:rotateX = {number(rotate_x)}"]
+            lines += [
+                f'        def Mesh "{name}" (',
+                '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                f"            prepend inherits = </{base}>",
+                "        )",
+                "        {",
+                f"            rel material:binding = </MaterialEmission/Looks/{material}>",
+                *extra,
+                *rotation,
+                f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                f"            uniform token[] xformOpOrder = [{', '.join(map(quoted, ops))}]",
+                *after,
+                "        }",
+            ]
+            if (x, y) != (CARD_COLUMNS[-1], CARD_ROWS[-1]):
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
 # Every committed file, relative to DIRECTORY: USD text or image bytes.
 FIXTURES = {
     "material-basics-v1.usda": basics,
     "material-textures-v1.usda": textures,
     "material-normals-v1.usda": normals,
+    "material-emission-v1.usda": emission,
     **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
+    "textures/glow.hdr": lambda: radiance(*GLOW),
 }
 
 

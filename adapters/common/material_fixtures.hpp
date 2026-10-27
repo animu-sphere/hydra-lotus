@@ -44,6 +44,16 @@ void SetMaterialTextures(Lotus::RenderWorld& world);
 // with lat-long coordinates. Computed normals are Storm's, in float.
 void SetMaterialNormals(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-emission-v1: a 5x5 grid
+// of cards and coarse spheres under material-basics-v1's camera, lights and
+// backdrop. Rows from the top: constant emission, clamped and non-finite
+// values included; an emissive metal, a back-facing card, mirrored and
+// stretched transforms and a sphere; 8-bit emission maps; a missing image's
+// fallback, an inverted lookup and an HDR image under three colour spaces;
+// then a tilted card, a textured sphere, a map shared with the base colour,
+// an unlit material and a GeomSubset binding the adapter does not read.
+void SetMaterialEmission(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;

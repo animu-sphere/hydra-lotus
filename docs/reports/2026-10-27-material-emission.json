@@ -1,0 +1,280 @@
+{
+ "schema": "lotus-material-emission-v1",
+ "question": "Does a committed UsdPreviewSurface fixture for emission extract through Hydra, Hio's decoded HDR texels included, to its independent C++ mirror and render, headless and through Hydra, in agreement with committed Reference PT images under BSDF sampling and NEE/MIS; and which emission behaviours need a fix?",
+ "procedure": {
+  "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-emission-v1.usda (fails only on the unresolvable ./textures/missing.png, authored on purpose)",
+  "reference": "lotus-headless --write-material-reference validation/reference: every fixture in a cleared GPU scene, BSDF sampling, reference integrator, 64 batches of 64 samples then 4096 samples from sample index 0; material-emission-v1 at 160x160",
+  "headless_check": "cmake --build build/cy2026-windows-x86_64-py313-core --target lotus-headless (its post-build report, renderer.material.fixtures), then ctest -R 'lotus-validation-assets|lotus-renderer-evidence|lotus-renderer-install-tree|lotus-test-tiers'",
+  "hydra": "cmake --build build/cy2026-windows-x86_64-py313-lookdev--hydra --target lotus-hydra2-material-fixtures-test, then ctest -R lotus-renderer-hydra-material-fixtures",
+  "scripts": "python -m unittest test_material_fixtures; python scripts/material_fixtures.py check; python scripts/check_docs.py"
+ },
+ "environment": {
+  "source": "2a2ab47 plus this change",
+  "os": "Windows AMD64",
+  "compiler": "MSVC 19.51 Release",
+  "device": "NVIDIA RTX A5000",
+  "driver": "597.16",
+  "vulkan_api": "1.4.329",
+  "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime",
+  "validation": "validation and synchronization validation active",
+  "clocks": "unlocked",
+  "binaries_sha256": {
+   "lotus-headless.exe": "1e870b63b4bac61ec9c8cd35f44ed730cd98f5726637268db1a6678f7bb6234e",
+   "lotus-hydra2-material-fixtures-test.exe": "ffdf76023a1169b78a1c58b92d03a9250de0d812f281b044847898ff6721a3e8",
+   "hdLotus.dll": "030b25fcfb2ea0160728f956476556996c292897b11308c55d8aece1d5f3c681"
+  }
+ },
+ "fixture_sha256": {
+  "validation/materials/material-emission-v1.usda": "25762e1e45e6754a01225436ac693ce9586f59607b7840b3060600057025b695",
+  "validation/materials/textures/glow.hdr": "2d365fe3b61ccd60b94b49e5d503adb3fd6ca313864fba7e845983145d66a05c"
+ },
+ "reference": {
+  "samples": 4096,
+  "batches": 64,
+  "size": [
+   160,
+   160
+  ],
+  "write_seconds_all_fixtures": 13.1,
+  "other_fixtures_rewritten_byte_identical": true,
+  "sha256": {
+   "validation/reference/material-emission-v1-mean.pfm": "b6d675f902375d309176dc69dce40d8ba5c9f42844e8128d2d8155c0da725a0d",
+   "validation/reference/material-emission-v1-variance.pfm": "99d6db726a9dfa54f98f035a9694642ef5dbb56ec9871dc81704bc57baeed74d"
+  }
+ },
+ "extraction": {
+  "materials_equal": true,
+  "textures_equal": [
+   "textures/palette.png|sRGB Rgba8Srgb",
+   "textures/palette.png|raw Rgba8Unorm",
+   "textures/palette.png|auto Rgba8Srgb",
+   "textures/ramp.png|auto Rgba8Unorm",
+   "textures/glow.hdr|raw Rgba32Float",
+   "textures/glow.hdr|auto Rgba32Float (linear)",
+   "textures/glow.hdr|sRGB Rgba32Float (decoded on the CPU)"
+  ],
+  "texcoords_equal": true,
+  "bindings_equal": true,
+  "triangles_equal": true,
+  "lights_and_environment_equal": true,
+  "float_sets_differing_by_rounding": 0,
+  "warnings": [
+   "Lotus cannot read the texture ./textures/missing.png of /MaterialEmission/Looks/Missing: it cannot be opened as an image",
+   "Lotus ignores the GeomSubset material bindings of /MaterialEmission/Objects/Subset: the mesh's own binding covers every face"
+  ]
+ },
+ "comparisons": {
+  "sample_index": 1048576,
+  "tile_pixels": 8,
+  "rows": [
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 16,
+    "image_z": [
+     0.38,
+     0.59,
+     0.67
+    ],
+    "max_tile_z": 3.66,
+    "mean_tile_z2": 0.92
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 256,
+    "image_z": [
+     0.71,
+     0.65,
+     0.75
+    ],
+    "max_tile_z": 3.95,
+    "mean_tile_z2": 1.03
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 16,
+    "image_z": [
+     -0.54,
+     -1.11,
+     -0.75
+    ],
+    "max_tile_z": 2.83,
+    "mean_tile_z2": 0.3
+   },
+   {
+    "frontend": "headless",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     -0.87,
+     -0.18,
+     -0.29
+    ],
+    "max_tile_z": 2.57,
+    "mean_tile_z2": 0.39
+   },
+   {
+    "frontend": "headless",
+    "integrator": "wavefront",
+    "light_sampling": "mis",
+    "spp": 16,
+    "image_z": [
+     -0.54,
+     -1.11,
+     -0.75
+    ],
+    "max_tile_z": 2.83,
+    "mean_tile_z2": 0.3
+   },
+   {
+    "frontend": "headless",
+    "integrator": "wavefront",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     -0.87,
+     -0.18,
+     -0.29
+    ],
+    "max_tile_z": 2.57,
+    "mean_tile_z2": 0.39
+   },
+   {
+    "frontend": "hydra",
+    "integrator": "reference",
+    "light_sampling": "mis",
+    "spp": 256,
+    "image_z": [
+     -0.87,
+     -0.18,
+     -0.29
+    ],
+    "max_tile_z": 2.57,
+    "mean_tile_z2": 0.39
+   },
+   {
+    "frontend": "hydra",
+    "integrator": "reference",
+    "light_sampling": "bsdf",
+    "spp": 256,
+    "image_z": [
+     0.71,
+     0.65,
+     0.75
+    ],
+    "max_tile_z": 3.95,
+    "mean_tile_z2": 1.03
+   }
+  ],
+  "byte_identical": [
+   "headless wavefront-mis and reference-mis images at 16 and 256 spp",
+   "Hydra and the backend's image of the mirror, NEE/MIS and BSDF, 256 spp"
+  ],
+  "negative_control": {
+   "change": "textures/palette.png|sRGB decoded as Rgba8Unorm (Srgb, TexturedSphere, Shared and Unlit)",
+   "spp": 256,
+   "max_tile_z": 4005.2,
+   "rejected": true
+  },
+  "reference_reproduced_bit_for_bit": true,
+  "other_fixtures_rows_unchanged": true
+ },
+ "reference_pixels": {
+  "method": "mean of the committed reference over a block at each object's projected centre: 8x8 pixels for Warm, Back, Mirrored, Stretched and NonFinite, 4x4 for Tilted, 6x6 for the others",
+  "warm_emission": [
+   1.0,
+   0.6,
+   0.2
+  ],
+  "radiance": {
+   "Warm": [
+    1.1517,
+    0.7503,
+    0.35
+   ],
+   "Back": [
+    1.1665,
+    0.7648,
+    0.3643
+   ],
+   "Mirrored": [
+    1.1936,
+    0.7936,
+    0.3936
+   ],
+   "Stretched": [
+    1.2132,
+    0.8141,
+    0.4145
+   ],
+   "Tilted": [
+    1.1011,
+    0.7005,
+    0.3005
+   ],
+   "NonFinite": [
+    0.2364,
+    0.2373,
+    0.2377
+   ],
+   "Subset left face": [
+    0.4034,
+    0.4035,
+    0.4035
+   ],
+   "Subset right face": [
+    0.4,
+    0.4,
+    0.4
+   ]
+  },
+  "per_sample_variance": {
+   "Srgb": [
+    0.02904,
+    0.02896,
+    0.02947
+   ],
+   "Unlit": [
+    9e-05,
+    9e-05,
+    0.0003
+   ]
+  }
+ },
+ "audit": {
+  "constant_emission": "as documented; non-negative clamp, no upper clamp",
+  "non_finite_values": "as documented; (inf, 1, 1) leaves the default (0, 0, 0)",
+  "emission_and_bsdf": "as documented; emission beside the full BSDF",
+  "two_sided_emission": "as documented; a card seen from behind shows the same emission",
+  "transforms_and_angle": "as documented; mirrored, stretched and tilted emitters show the same emission, and NEE/MIS agrees with the reference",
+  "eight_bit_maps": "as documented",
+  "fallbacks_and_inverted_lookups": "as documented",
+  "hdr_maps": "as documented; Rgba32Float, linear under raw and auto, CPU-decoded under sRGB, texels exact",
+  "float_map_light_estimate": "documented now: the [0, 1] bound underestimates float texels above 1, which costs variance only",
+  "unlit_assets": "as documented; diffuseColor 0 with ior 1 reflects nothing",
+  "shared_lookups": "as documented",
+  "geom_subset_bindings": "fixed: silently ignored before; the adapter now warns, and per-face materials remain unsupported",
+  "fixes": [
+   "adapters/hydra2/src/adapter.cpp warns when a mesh's topology carries GeomSubset material bindings"
+  ]
+ },
+ "timing_seconds": {
+  "headless_link_and_report_all_checks": 54.2,
+  "hydra_material_fixtures_cpu": 0.1,
+  "hydra_material_fixtures_gpu": 61.65,
+  "hydra_material_fixtures_gpu_before": 45.3
+ },
+ "not_run": [
+  "viewport, usdview and the installed Hydra host with the fixture",
+  "ci-core",
+  "Hydra CTests other than the two material-fixture CTests",
+  "light-table entries and weights (only their images were compared)",
+  "third-party production assets"
+ ]
+}

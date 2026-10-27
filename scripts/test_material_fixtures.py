@@ -81,6 +81,32 @@ class MaterialFixturesTest(unittest.TestCase):
         for name, _ in fixtures.NORMAL_LOOKS:
             self.assertIn(f"</MaterialNormals/Looks/{name}>", text)
 
+    def test_radiance_image_decodes_to_its_texels(self):
+        width, height, texel = fixtures.GLOW
+        data = fixtures.radiance(width, height, texel)
+        header, pixels = data.split(b"\n\n", 1)
+        self.assertEqual(header.split(b"\n"), [b"#?RADIANCE", b"FORMAT=32-bit_rle_rgbe"])
+        resolution, pixels = pixels.split(b"\n", 1)
+        self.assertEqual(resolution, f"-Y {height} +X {width}".encode())
+        # Flat scanlines, which readers expect below a width of 8.
+        self.assertLess(width, 8)
+        self.assertEqual(len(pixels), width * height * 4)
+        for y in range(height):
+            for x in range(width):
+                at = (y * width + x) * 4
+                self.assertEqual(tuple(pixels[at:at + 4]), texel(x, y))
+                self.assertGreaterEqual(max(pixels[at:at + 3]), 128, "normalized mantissas")
+
+    def test_emission_fixture_binds_its_looks(self):
+        text = fixtures.emission()
+        self.assertEqual(text.count('        def Mesh "'), 25)
+        self.assertEqual(text.count('def GeomSubset "'), 1)
+        names = [name for name, _ in fixtures.EMISSION_LOOKS]
+        self.assertEqual(len(names), len(set(names)))
+        for name in names:
+            self.assertIn(f"</MaterialEmission/Looks/{name}>", text)
+        self.assertIn("color3f inputs:emissiveColor = (inf, 1, 1)", text)
+
     def test_fixed_spelling(self):
         self.assertEqual(fixtures.fixed(0.5), "0.500000")
         self.assertEqual(fixtures.fixed(-1e-9), "0.000000")

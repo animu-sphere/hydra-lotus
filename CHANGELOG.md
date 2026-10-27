@@ -95,6 +95,12 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   encodings, tangent frames and normal maps on spheres, with Storm's
   computed normals compared exactly with the mirror's
   ([evidence](docs/reports/2026-10-27-material-normals.md)).
+  `material-emission-v1` adds emission: constant, clamped and non-finite
+  values, emitters' sides and transforms, 8-bit emission maps, fallbacks and
+  a Radiance HDR map under three colour spaces, compared exactly with the
+  mirror's ([evidence](docs/reports/2026-10-27-material-emission.md)).
+  The Hydra adapter now warns when a mesh's `GeomSubset` material bindings
+  are ignored; the mesh's own binding covers every face, as before.
 
 - `OffscreenRenderer::Residency()` lists every allocation the renderer makes
   by owner and memory kind, with `VK_EXT_memory_budget` process heap usage
