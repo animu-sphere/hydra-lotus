@@ -7,8 +7,10 @@ by the [development strategy](../design/POST_V060_STRATEGY.md).
 ## Execution order
 
 Start with the [practical foundation milestone](README.md#v070--performance--production-foundation).
-Measure first, select bottleneck fixes, establish material fixtures, then
-compare memory optimizations. The contracts and exit evidence are the
+Measure first, select bottleneck fixes and compare memory optimizations;
+the material fixtures are
+[established](../reports/2026-10-28-material-foundation-closure.md). The
+contracts and exit evidence are the
 [workstream policy's](../design/ROADMAP_POLICY.md#practical-foundation-workstreams).
 Only the following bounded tasks are active; later work enters this queue
 when the measurements justify it.
@@ -81,47 +83,12 @@ These retain their parent-phase assignments. The
 only the foundation subsets described here; broader parent-phase work stays
 outside this queue.
 
-- [ ] **LOTUS-MATERIAL-01 — Representative material fixtures (P1).**
-  Workstream C, Renderer Phase 8 subset: audit UsdPreviewSurface assets in
-  the policy's order against the
-  [material contract](../reference/SCENE.md#materials-and-environment),
-  [Hydra extraction](../reference/SCENE.md#hydra-extraction) and
-  [capability matrix](../reference/CAPABILITY_MATRIX.md).
-  Establish USD fixtures/reference images and Hydra/headless agreement;
-  record normal/UV/alpha errors and unsupported inputs, then prioritize
-  bounded fixes. Full OpenPBR/MaterialX and subsurface remain outside this
-  subset. The [material basics fixture](../reports/2026-10-26-material-basics.md)
-  established committed USD fixtures with C++ mirrors and reference images:
-  base colour and metallic/roughness extract exactly through Hydra, render
-  byte-identically to the headless mirror and match the reference; no fix
-  was needed, and the roughness-0 floor is now documented. The
-  [textures fixture](../reports/2026-10-27-material-textures.md) adds wrap
-  modes, colour spaces, channel counts and texture-coordinate sources, with
-  Hio's decoded texels equal to the mirror's; they need no fix. Untranslated
-  connections such as `UsdTransform2d` silently took their defaults and now
-  warn; translating `UsdTransform2d` is a candidate bounded fix. Minification
-  without mipmaps is unbiased, with 17% more per-sample variance on the
-  minified card. The [normals fixture](../reports/2026-10-27-material-normals.md)
-  adds authored and computed mesh normals, normal-map encodings and tangent
-  frames; Hydra's normals, Storm's computed ones included, equal the
-  mirror's exactly, and none needs a fix. A constant tangent normal through
-  Hydra names no texture-coordinate set and takes the normal-only frame;
-  this is now documented, and naming `st` for it is a candidate bounded fix.
-  The [emission fixture](../reports/2026-10-27-material-emission.md) adds
-  constant, clamped and non-finite emission, emitters' sides and transforms,
-  8-bit and HDR emission maps and fallbacks; they extract and render as
-  documented and need no fix. `GeomSubset` material bindings were silently
-  ignored and now warn; per-face materials are a candidate bounded fix.
-  The [alpha fixture](../reports/2026-10-27-material-alpha.md) completes the
-  audit order with constant coverage, thresholds and masks from every
-  channel layout, inverted, black-bordered, missing and minified masks,
-  stacked layers and masked emitters; they extract and render as documented
-  and need no fix. A texture-driven `opacityThreshold` already warned;
-  `displayOpacity` on unbound meshes is not read, and reading it is a
-  candidate bounded fix.
-  Remaining: prioritize the candidate bounded fixes.
-  Path classification waits for distinct shading classes and
-  measured benefit over its [existing upper bound](../reports/2026-10-11-wavefront-camera-resolve.md#path-classification).
+No adapter task is active. LOTUS-MATERIAL-01 closed with committed
+fixtures for every item of workstream C's audit order
+([closure review](../reports/2026-10-28-material-foundation-closure.md));
+its candidate fixes and path classification are deferred to Renderer
+Phase 8, and the light-table estimates to Renderer Phase 9, until an asset
+or measurement demonstrates the need.
 
 ## Previous delivery evidence
 

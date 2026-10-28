@@ -107,10 +107,10 @@ Linux, macOS, AMD and Intel GPUs are not measured.
   the required products are color and depth. Additional debug channels are
   introduced with their producing passes; temporal outputs belong to
   Renderer Phase 4.
-- Acceleration for many analytic lights and production material/scene
-  coverage are assigned to Renderer Phase 9 and Renderer Phase 8
-  respectively in the
-  [deferred adapter work](../roadmap/current.md#deferred-adapter-work).
+- Light selection for many analytic lights and production material/scene
+  coverage beyond the
+  [material foundation](../reports/2026-10-28-material-foundation-closure.md)
+  are assigned to Renderer Phase 9 and Renderer Phase 8 respectively.
   Platform/backend expansion remains outside the measured configuration
   set. These limitations do not weaken deterministic reference, validation
   or dependency-boundary requirements.
