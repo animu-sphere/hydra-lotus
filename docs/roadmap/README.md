@@ -11,7 +11,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | Next measurements, material fixtures, memory inventory and light profiling. |
+| [current.md](current.md) | Where v0.7.0 left off, and deferred adapter work. |
 
 ## Sequences
 
@@ -56,25 +56,27 @@ completion of its parent phase.
 | Renderer Phase 8 — Production material support | ⬜ | full phase unscheduled; selected foundation subset in the practical-foundation delivery below |
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | full phase unscheduled; selected profiling subset in the practical-foundation delivery below |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
-| Practical foundation — cross-phase delivery | ⬜ scope adopted; implementation not started | [v0.7.0 — Performance & Production Foundation](#v070--performance--production-foundation) |
+| Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
 
 ## v0.7.0 — Performance & Production Foundation
 
 Adopt the [development strategy](../design/POST_V060_STRATEGY.md) for the next
 delivery: correct practical scene rendering, GPU efficiency and everyday use.
 This is a delivery milestone across existing paths and selected later-phase
-subsets, with no whole-phase exit implied. No release date is fixed.
+subsets, with no whole-phase exit implied. It shipped on 2026-10-28.
 
 | Workstream | Delivery scope | Contract and exit evidence |
 | --- | --- | --- |
-| A (P0) — GPU observation and selected optimization | Shared headless/viewport baseline, major cost attribution and measured fixes to existing paths. | [Practical foundation workstreams](../design/ROADMAP_POLICY.md#practical-foundation-workstreams), A. |
-| B (P1) — VRAM / temporal buffers | Ownership, lifetimes, peak residency and justified representation/reuse comparisons. LOTUS-MEMORY-01 [inventoried frame-state residency](../reports/2026-10-26-frame-residency.md#candidates-and-decisions) at 1080p/4K and adopted [lazy readback mirrors](../reports/2026-10-26-lazy-readback-mirrors.md#decision) (6.83 GiB less host memory at 4K with SVGF and reuse) and a [reservoir history split](../reports/2026-10-26-reservoir-history-split.md#decision) (1.0 GiB less device memory at 4K with spatial reuse); value compaction deferred. | Same policy, B. |
+| A (P0) — GPU observation and selected optimization | Shared headless/viewport baseline, major cost attribution and measured fixes to existing paths. LOTUS-PERF-01 [explained and fixed the baseline's three leading costs](../reports/2026-10-28-practical-foundation-closure.md#decision): [cached readback](../reports/2026-10-25-frame-host-split.md#decisions) (about 1.1 ms less per 128x128 frame), the light crossing hierarchy (workstream D) and [changed-section staging](../reports/2026-10-25-changed-section-staging.md#decision) (67% fewer staged bytes under deformation), with identical images. | [Practical foundation workstreams](../design/ROADMAP_POLICY.md#practical-foundation-workstreams), A. |
+| B (P1) — VRAM / temporal buffers | Ownership, lifetimes, peak residency and justified representation/reuse comparisons. LOTUS-MEMORY-01 [inventoried frame-state residency](../reports/2026-10-26-frame-residency.md#candidates-and-decisions) at 1080p/4K and adopted [lazy readback mirrors](../reports/2026-10-26-lazy-readback-mirrors.md#decision) (6.83 GiB less host memory at 4K with SVGF and reuse) and a [reservoir history split](../reports/2026-10-26-reservoir-history-split.md#decision) (1.0 GiB less device memory at 4K with spatial reuse); LOTUS-MEMORY-01 is [closed](../reports/2026-10-28-practical-foundation-closure.md#workstream-b-exit-evidence), value compaction deferred to Renderer Phase 7. | Same policy, B. |
 | C (P1) — Material foundation | Selected Renderer Phase 8 fixture, coverage and correctness work on real USD assets. LOTUS-MATERIAL-01 [established committed fixtures](../reports/2026-10-26-material-basics.md#decision) with Hydra/headless agreement and reference images; base colour and metallic/roughness need no fix, [textures/UV](../reports/2026-10-27-material-textures.md#decision) need none beyond a warning for untranslated connections, [normals/normal maps](../reports/2026-10-27-material-normals.md#decision) need none, [emission](../reports/2026-10-27-material-emission.md#decision) needs none beyond a warning for ignored `GeomSubset` bindings, and [alpha masks](../reports/2026-10-27-material-alpha.md#decision) need none. LOTUS-MATERIAL-01 is [closed](../reports/2026-10-28-material-foundation-closure.md#decision); its candidate fixes wait in Renderer Phase 8 for a demonstrated asset gap. | Same policy, C; full production materials remain outside this subset. |
 | D (P1) — Light profiling | Selected Renderer Phase 9 investigation separating intersection and selection; acceleration implementation is conditional. LOTUS-LIGHT-05 [attributed the many-light cost to crossing tests](../reports/2026-10-25-light-crossing-cost.md#decisions) (go) and deferred selection; LOTUS-LIGHT-06 [adopted a crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision) (256-light frame 5.3–8.0× faster). | Same policy, D; a measured deferral is a valid investigation outcome. |
 
-The [active queue](current.md#execution-order) contains only the first bounded
-tasks. Establish the benchmark, select bottleneck fixes, add representative
-material fixtures and compare memory optimizations. An unmeasured speedup,
+Every workstream met its exit evidence and shipped in
+[v0.7.0](../releases/v0.7.0.md); the [active queue](current.md#execution-order)
+is empty until the next delivery is planned. The milestone established the
+benchmark, selected bottleneck fixes, added representative material
+fixtures and compared memory optimizations. An unmeasured speedup,
 ReSTIR GI, complete MaterialX support and a UI redesign are not exit gates.
 Reference-quality and dynamic-history regressions remain disqualifying.
 

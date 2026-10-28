@@ -7,6 +7,19 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
+The performance and production foundation release completes the v0.7.0
+practical-foundation milestone. A shared headless/viewport baseline
+explained its three leading costs, and each was fixed with identical images:
+cached readback, a light crossing hierarchy (a 256-light frame 5.3–8.0x
+faster) and changed-section staging for deformation. Lazy readback mirrors
+and a split reservoir history cut the 4K frame state of SVGF with both
+reuse passes by 6.83 GiB of host and 1.0 GiB of device memory. Committed `UsdPreviewSurface` fixtures with
+reference images check base colour, metallic/roughness, textures, normals,
+emission and alpha masks through Hydra and headless. See the
+[release record](docs/releases/v0.7.0.md).
+
 ### Fixed
 
 - The Hydra adapter warns when a `UsdPreviewSurface` input is driven by a
