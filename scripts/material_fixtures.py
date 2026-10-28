@@ -245,6 +245,13 @@ def png(width, height, channels, texel):
             chunk(b"IEND", b""))
 
 
+def cutout_alpha(x, y):
+    """cutout.png's alpha at column x and row y from the top, by the squared
+    distance of the texel's centre from the image's, in half texels."""
+    distance = (2 * x - 7) ** 2 + (2 * y - 7) ** 2
+    return 255 if distance <= 26 else 96 if distance <= 50 else 0
+
+
 # material-textures-v1's images in validation/materials/textures/: width,
 # height, channels and each texel's channels as a function of its column x
 # and row y from the top. The C++ mirror computes the same values.
@@ -263,6 +270,9 @@ IMAGES = {
     # dome with green running down, as DirectX-convention maps store it.
     "tilts.png": (4, 4, 3, lambda x, y: (32 + 64 * x, 224 - 64 * y, 200)),
     "tilts-dx.png": (4, 4, 3, lambda x, y: (32 + 64 * x, 31 + 64 * y, 200)),
+    # material-alpha-v1's cut-out: a green gradient whose alpha is an opaque
+    # disc of 24 texels, a ring of 20 at 96 and 20 transparent ones outside.
+    "cutout.png": (8, 8, 4, lambda x, y: (60 + 20 * x, 200 - 15 * y, 60, cutout_alpha(x, y))),
 }
 
 # Texture coordinates per face vertex of the card quad, whose points run
@@ -274,7 +284,8 @@ WIDE = ((-0.5, -0.5), (1.5, -0.5), (1.5, 1.5), (-0.5, 1.5))
 INPUT_TYPES = {
     "UsdPreviewSurface": {"diffuseColor": "color3f", "emissiveColor": "color3f",
                           "ior": "float", "metallic": "float", "normal": "normal3f",
-                          "roughness": "float"},
+                          "opacity": "float", "opacityMode": "token",
+                          "opacityThreshold": "float", "roughness": "float"},
     "UsdUVTexture": {"bias": "float4", "fallback": "float4", "file": "asset",
                      "scale": "float4", "sourceColorSpace": "token", "st": "float2",
                      "wrapS": "token", "wrapT": "token"},
@@ -869,12 +880,139 @@ def emission():
     return "\n".join(lines)
 
 
+TEAL = (0.2, 0.6, 0.7)
+ALPHA = output("Texture", "a")
+
+
+def masked(file, space="sRGB", threshold=0.5, **inputs):
+    """A material whose base colour and coverage are an image's RGB and
+    alpha, read at st under `threshold`."""
+    surface = {"diffuseColor": RGB, "opacity": ALPHA}
+    if threshold:
+        surface["opacityThreshold"] = threshold
+    return card(surface, Texture=texture(file, space, **inputs), Reader=reader())
+
+
+# material-alpha-v1's materials. Constant cards are teal; masks threshold at
+# 0.5 unless stated.
+ALPHA_LOOKS = [
+    ("Half", card({"diffuseColor": TEAL, "opacity": 0.5})),
+    ("Quarter", card({"diffuseColor": TEAL, "opacity": 0.25})),
+    ("Zero", card({"diffuseColor": TEAL, "opacity": 0})),
+    ("Presence", card({"diffuseColor": TEAL, "opacity": 0.5, "opacityMode": "presence"})),
+    ("Clamped", card({"diffuseColor": TEAL, "opacity": 1.5, "opacityThreshold": 2})),
+    ("Below", card({"diffuseColor": TEAL, "opacity": 0.4, "opacityThreshold": 0.5})),
+    ("Equal", card({"diffuseColor": TEAL, "opacity": 0.5, "opacityThreshold": 0.5})),
+    ("Above", card({"diffuseColor": TEAL, "opacity": 0.6, "opacityThreshold": 0.5})),
+    ("NonFinite", card({"diffuseColor": TEAL, "opacity": -math.inf,
+                        "opacityThreshold": math.inf})),
+    # The specification makes the threshold interface-only: not a texture input.
+    ("ThresholdMap", card({"diffuseColor": TEAL, "opacity": 0.5,
+                           "opacityThreshold": output("Ramp", "r")},
+                          Ramp=texture("ramp.png", "raw"), Reader=reader())),
+    ("Alpha", masked("rgba.png")),
+    ("Cutout", masked("cutout.png")),
+    ("GreyAlpha", masked("grey-alpha.png", None)),
+    ("Ramp", card({"diffuseColor": TEAL, "opacity": output("Texture", "r"),
+                   "opacityThreshold": 0.5},
+                  Texture=texture("ramp.png", "raw"), Reader=reader())),
+    ("NoAlpha", masked("palette.png")),
+    ("Fractional", masked("cutout.png", threshold=0)),
+    ("Inverted", card({"diffuseColor": TEAL, "opacity": ALPHA, "opacityThreshold": 0.5},
+                      Texture=texture("cutout.png", "sRGB", scale=(1, 1, 1, -1),
+                                      bias=(0, 0, 0, 1)),
+                      Reader=reader())),
+    ("BlackBorder", masked("palette.png", wrap="black")),
+    ("Missing", masked("missing.png", threshold=0, fallback=(0.9, 0.2, 0.6, 0.3))),
+    ("Minified", card({"diffuseColor": TEAL, "opacity": output("Texture", "r"),
+                       "opacityThreshold": 0.5},
+                      Texture=texture("checker.png", "raw", wrap="repeat"), Reader=reader())),
+    ("SphereCutout", masked("cutout.png", wrap="repeat")),
+    ("GlowingMask", card({"emissiveColor": WARM, "opacity": ALPHA, "opacityThreshold": 0.5},
+                         Texture=texture("cutout.png", "sRGB"), Reader=reader())),
+    ("GlowingHalf", card({"emissiveColor": WARM, "opacity": 0.5})),
+]
+
+
+def alpha():
+    unit_st = primvar("st", UNIT)
+    sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
+    # Two quads, the back one the unit card and a smaller one 0.4 in front of
+    # it, overlapping its upper right.
+    stacked = [
+        "            int[] faceVertexCounts = [4, 4]",
+        "            int[] faceVertexIndices = [0, 1, 2, 3, 4, 5, 6, 7]",
+        "            point3f[] points = [(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), "
+        "(-0.5, 0.5, 0), (-0.15, -0.15, 0.4), (0.45, -0.15, 0.4), (0.45, 0.45, 0.4), "
+        "(-0.15, 0.45, 0.4)]",
+    ]
+    # Unbound, as geometry without a material is authored for Storm.
+    display = [
+        "            color3f[] primvars:displayColor = [(0.2, 0.6, 0.7)]",
+        "            float[] primvars:displayOpacity = [0.3]",
+    ]
+    points = sphere(COARSE_SEGMENTS, COARSE_RINGS)[0]
+    # Rows from the top: constant coverage; constant thresholds; masks by
+    # channel and image; lookups' coverage, inversion, borders, fallbacks and
+    # minification; then arrangements real assets use. Each entry is the
+    # object's name, the class it inherits, its material (None for unbound),
+    # the lines it adds and its scale.
+    rows = [
+        [(name, "_Card", name, [], card_scale)
+         for name in ("Half", "Quarter", "Zero", "Presence", "Clamped")],
+        [(name, "_Card", name, unit_st if name == "ThresholdMap" else [], card_scale)
+         for name in ("Below", "Equal", "Above", "NonFinite", "ThresholdMap")],
+        [(name, "_Card", name, unit_st, card_scale)
+         for name in ("Alpha", "Cutout", "GreyAlpha", "Ramp", "NoAlpha")],
+        [("Fractional", "_Card", "Fractional", unit_st, card_scale),
+         ("Inverted", "_Card", "Inverted", unit_st, card_scale),
+         ("BlackBorder", "_Card", "BlackBorder", primvar("st", WIDE), card_scale),
+         ("Missing", "_Card", "Missing", unit_st, card_scale),
+         ("Minified", "_Card", "Minified", unit_st, card_scale)],
+        [("Stacked", "_Card", "Half", stacked, card_scale),
+         ("SphereCutout", "_Sphere", "SphereCutout",
+          normal_attribute("normals", points) + primvar("st", latlong((4, 2))), sphere_scale),
+         ("GlowingMask", "_Card", "GlowingMask", unit_st, card_scale),
+         ("GlowingHalf", "_Card", "GlowingHalf", [], card_scale),
+         ("DisplayOpacity", "_Card", None, display, card_scale)],
+    ]
+    lines = header("MaterialAlpha", "SetMaterialAlpha", sphere_class() + CARD_CLASS)
+    lines += looks("MaterialAlpha", ALPHA_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for y, row in zip(CARD_ROWS, rows):
+        for x, (name, base, material, extra, scale) in zip(CARD_COLUMNS, row):
+            if material is None:
+                lines += [f'        def Mesh "{name}" (', f"            prepend inherits = </{base}>",
+                          "        )", "        {"]
+            else:
+                lines += [
+                    f'        def Mesh "{name}" (',
+                    '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                    f"            prepend inherits = </{base}>",
+                    "        )",
+                    "        {",
+                    f"            rel material:binding = </MaterialAlpha/Looks/{material}>",
+                ]
+            lines += [
+                *extra,
+                f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                "        }",
+            ]
+            if (x, y) != (CARD_COLUMNS[-1], CARD_ROWS[-1]):
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
 # Every committed file, relative to DIRECTORY: USD text or image bytes.
 FIXTURES = {
     "material-basics-v1.usda": basics,
     "material-textures-v1.usda": textures,
     "material-normals-v1.usda": normals,
     "material-emission-v1.usda": emission,
+    "material-alpha-v1.usda": alpha,
     **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
     "textures/glow.hdr": lambda: radiance(*GLOW),
 }

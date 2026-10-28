@@ -107,6 +107,26 @@ class MaterialFixturesTest(unittest.TestCase):
             self.assertIn(f"</MaterialEmission/Looks/{name}>", text)
         self.assertIn("color3f inputs:emissiveColor = (inf, 1, 1)", text)
 
+    def test_alpha_fixture_binds_its_looks(self):
+        text = fixtures.alpha()
+        self.assertEqual(text.count('        def Mesh "'), 25)
+        # Only the displayOpacity card is unbound.
+        self.assertEqual(text.count("rel material:binding"), 24)
+        names = [name for name, _ in fixtures.ALPHA_LOOKS]
+        self.assertEqual(len(names), len(set(names)))
+        for name in names:
+            self.assertIn(f"</MaterialAlpha/Looks/{name}>", text)
+        self.assertIn("float inputs:opacity = -inf", text)
+        self.assertIn("float inputs:opacityThreshold.connect = ", text)
+
+    def test_cutout_alpha_is_a_disc_and_a_ring(self):
+        levels = [fixtures.cutout_alpha(x, y) for y in range(8) for x in range(8)]
+        self.assertEqual((levels.count(255), levels.count(96), levels.count(0)), (24, 20, 20))
+        for x in range(8):
+            for y in range(8):
+                self.assertEqual(fixtures.cutout_alpha(x, y), fixtures.cutout_alpha(7 - x, y))
+                self.assertEqual(fixtures.cutout_alpha(x, y), fixtures.cutout_alpha(y, x))
+
     def test_fixed_spelling(self):
         self.assertEqual(fixtures.fixed(0.5), "0.500000")
         self.assertEqual(fixtures.fixed(-1e-9), "0.000000")

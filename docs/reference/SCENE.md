@@ -972,6 +972,29 @@ Its negative control is the sRGB palette decoded as raw, as a colour-space
 error would read an emission map; it changes four objects. `usdchecker`
 reports only the unresolvable `missing.png`.
 
+**`material-alpha-v1`** covers alpha masks, the sixth and last audit item,
+at 160×160 under the same camera, lights and backdrop, on the same 5×5 grid
+of cards and coarse spheres. Constant cards are teal, (0.2, 0.6, 0.7);
+masks read `opacity` from a lookup's `a` and `diffuseColor` from its `rgb`
+under `clamp` at `st` per face vertex from (0, 0) to (1, 1), with
+`opacityThreshold` 0.5, unless stated. `cutout.png` is an 8×8 RGBA image
+of red 60 + 20x, green 200 − 15y and blue 60, whose alpha is 255 on a disc
+of 24 texels, 96 on a ring of 20 around it and 0 in the 20 corner texels.
+The rows, from the top:
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Constant coverage | Half, Quarter, Zero, Presence, Clamped | `opacity` 0.5, 0.25 and 0, stochastic coverage; 0.5 with `opacityMode = presence`, which is not read, so Presence is Half; opacity 1.5 and threshold 2, which clamp to 1 and 1 and accept |
+| Constant thresholds | Below, Equal, Above, NonFinite, ThresholdMap | opacity 0.4, 0.5 and 0.6 under threshold 0.5: rejected, accepted at equality, accepted; opacity −inf and threshold inf, which keep the defaults 1 and 0; opacity 0.5 under a threshold connected to `ramp.png`'s `r`, which takes the default 0 and warns |
+| Masks by image | Alpha, Cutout, GreyAlpha, Ramp, NoAlpha | `rgba.png` under `sRGB`, whose linear alpha rises with x; `cutout.png` under `sRGB`; `grey-alpha.png` unauthored, linear, its `a` the image's second channel; teal with `opacity` from `ramp.png`'s `r` under `raw`; the RGB palette under `sRGB`, whose `a` is 1 |
+| Lookups | Fractional, Inverted, BlackBorder, Missing, Minified | `cutout.png` without a threshold, stochastic; teal with `cutout.png`'s alpha under scale (1, 1, 1, −1) and bias (0, 0, 0, 1), a hole; the palette under `black` with `st` from −0.5 to 1.5, whose border is transparent black; an unresolvable `./textures/missing.png` with fallback (0.9, 0.2, 0.6, 0.3) without a threshold, coverage 0.3; teal with `opacity` from `checker.png`'s `r` under `raw` and `repeat`, about 2.4 texels per pixel |
+| Arrangements in assets | Stacked, SphereCutout, GlowingMask, GlowingHalf, DisplayOpacity | two quads bound to Half, the unit card and a 0.6 one 0.4 in front of its upper right; `cutout.png` under `repeat` on a sphere with vertex normals and `st` longitude by latitude times (4, 2), whose far side shows through; `emissiveColor` (1, 0.6, 0.2) masked by `cutout.png`'s alpha; the same emission at `opacity` 0.5; an unbound card with `displayColor` teal and `displayOpacity` 0.3, which is not read |
+
+Its negative control decodes the alpha of the 8-bit sRGB images as sRGB,
+as a decoder treating alpha as colour would; it changes six objects.
+`usdchecker` reports only the unresolvable `missing.png`, not the
+threshold's connection.
+
 - **Reference.** `lotus-headless --write-material-reference <directory>`
   renders each mirror in a cleared GPU scene in deterministic mode with BSDF
   sampling from sample index 0: `<fixture>-mean.pfm` holds 4096 samples per
@@ -1112,7 +1135,10 @@ order. Changing it restarts the accumulation.
   the mean of its RGB emission, or for a lookup the bound
   `max(scale, 0) + max(bias, 0)` for texels in [0, 1], or the fallback
   when the key names no texture. A float texture's texels may exceed 1, and
-  the bound then underestimates its triangles' weight. An environment image gets the last
+  the bound then underestimates its triangles' weight. Coverage is not part
+  of the estimate: a masked or partly covered emitter keeps its whole
+  weight, and samples landing where it is not present contribute nothing.
+  An environment image gets the last
   entry, weighed as a distant light is by the flux through a disk of the
   scene's radius over 2π: π² R² times the mean of its distribution's cell
   values. Each [analytic light](#analytic-lights)
@@ -1882,13 +1908,15 @@ inputs, whenever it translates the material.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. Any other surface shader, or a network without a
 surface, warns and leaves the default material.
-Texture-driven ior is reported as an untranslated connection. `opacityMode`,
+Texture-driven `ior` and `opacityThreshold`, which the specification makes
+interface-only, are reported as untranslated connections. `opacityMode`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
 
 A mesh without a material binding uses its constant `displayColor` as
 linear RGB base colour, with components clamped to [0, 1], and the other
-material defaults. The adapter stores this private material under the
+material defaults; its `displayOpacity` is not read, so the mesh is
+opaque. The adapter stores this private material under the
 mesh's `lotus:displayColor` property path, which cannot collide with a
 material prim path. Indexed constants are supported; absent, empty,
 malformed or non-finite colours use the default grey. Other interpolation
