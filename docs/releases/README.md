@@ -11,6 +11,7 @@ dry runs, asset naming and publication.
 
 | Version | Record | Theme |
 | --- | --- | --- |
+| [v0.7.0](v0.7.0.md) | [Performance and production foundation release](v0.7.0.md) | Shared headless/viewport performance baseline with its three leading costs fixed (cached readback, light crossing hierarchy, changed-section staging), a residency inventory with lazy readback mirrors and split reservoir history, and committed `UsdPreviewSurface` fixtures with reference images and Hydra/headless agreement. |
 | [v0.6.0](v0.6.0.md) | [Interactive rendering release](v0.6.0.md) | SVGF-class denoising under both integrators (moments, variance, edge-aware à-trous filtering, reference comparison), switched and inspected at run time in the standalone viewport and through Hydra; test tiers. |
 | [v0.5.2](v0.5.2.md) | [Viewport foundation release](v0.5.2.md) | Standalone viewport presenting progressive path tracing without readback, USD stages through Hydra, usdview navigation, run-time renderer controls, GPU debug views and a timing HUD. |
 | [v0.5.1](v0.5.1.md) | [ReSTIR DI closure release](v0.5.1.md) | Exit review of the ReSTIR DI investigation: NEE/MIS stays the default, initial-only reservoirs for many lights of similar importance, reuse not worth using as a renderer path. |
