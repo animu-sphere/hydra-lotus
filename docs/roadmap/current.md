@@ -23,7 +23,8 @@ here. The survey's stages are its acceptance check.
   Renderer Phase 8 subset, the fifth lobe of the
   [design policy's material order](../design/DESIGN_POLICY.md#17-material).
   Write the transport contract first, then implement it in the material IR,
-  both integrators and the translator. The contract covers the BTDF
+  both integrators and the translator. The
+  [proposed contract](../design/TRANSMISSION.md) covers the BTDF
   (smooth and rough GGX refraction with Fresnel, reciprocity and the
   radiance scaling across the interface), the IR fields (a transmission
   weight and colour, and thin versus solid walls), entering and leaving
