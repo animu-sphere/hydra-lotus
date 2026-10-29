@@ -1129,6 +1129,187 @@ void SetMaterialAlpha(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// A Standard Surface's material: the IR with Standard Surface's base colour
+// and roughness defaults, then `base` and `roughness` where given.
+Lotus::Material Standard(const std::array<float, 3>& base = {0.8F, 0.8F, 0.8F},
+    float roughness = 0.2F) {
+  return Dielectric(base, roughness);
+}
+
+// A MaterialX image lookup: its address modes default to periodic.
+Lotus::TextureInput Periodic(const std::string& file, const std::string& space) {
+  return Lookup(file, space, Lotus::TextureWrap::Repeat, Lotus::TextureWrap::Repeat);
+}
+
+// A Standard Surface whose base_color is `lookup`, at `texcoords`.
+Lotus::Material StandardTextured(Lotus::TextureInput lookup, std::string texcoords = "st") {
+  Lotus::Material material = Standard();
+  material.base_color_texture = std::move(lookup);
+  material.texcoords = std::move(texcoords);
+  return material;
+}
+
+// An ND_normalmap of tilts.png with scale `scale`.
+Lotus::Material StandardBumpy(float scale) {
+  Lotus::Material material = Standard({0.7F, 0.7F, 0.7F}, 0.4F);
+  Lotus::TextureInput lookup = Periodic("tilts.png", "raw");
+  lookup.scale = {2.0F * scale, 2.0F * scale, 2.0F, 1.0F};
+  lookup.bias = {-scale, -scale, -1.0F, 0.0F};
+  lookup.fallback = {-scale, -scale, -1.0F, 1.0F};
+  material.normal_texture = lookup;
+  material.texcoords = "st";
+  return material;
+}
+
+// As a translator that ignored the base weight would read the image.
+void UnweightedImage(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialMtlx/Looks/WeightedImage";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  material.base_color_texture->scale = {1.0F, 1.0F, 1.0F, 1.0F};
+  world.SetMaterial(key, material);
+}
+
+} // namespace
+
+void SetMaterialMtlx(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialMtlx";
+  SetStudio(world, root);
+
+  // MaterialX images are raw unless their colour space is an sRGB one.
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/palette.png|raw", Image(4, kUnorm, Palette));
+  world.SetTexture("textures/rgba.png|raw", Image(4, kUnorm, Rgba));
+  world.SetTexture("textures/ramp.png|raw", Image(4, kUnorm, Ramp));
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+
+  using Lotus::TextureWrap;
+  constexpr std::array<float, 3> kTeal{0.2F, 0.6F, 0.7F};
+  constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
+  constexpr std::array<float, 3> kBlack{0.0F, 0.0F, 0.0F};
+  Lotus::Material metal = Standard(kCopper, 0.3F);
+  metal.metallic = 1.0F;
+  Lotus::Material ior = Standard({0.1F, 0.2F, 0.6F}, 0.1F);
+  ior.ior = 2.5F;
+  Lotus::Material no_specular = Standard({0.6F, 0.6F, 0.6F}, 0.1F);
+  no_specular.ior = 1.0F;
+  // emission x emission_color, in float.
+  Lotus::Material emissive = Standard(kBlack);
+  emissive.emission = {2.0F * 1.0F, 2.0F * 0.6F, 2.0F * 0.2F};
+  Lotus::Material opacity = Standard(kTeal);
+  opacity.opacity = 0.5F;
+  // base 1.5 x (1, 0.5, -0.25), metalness -1 and roughness 1.5, clamped.
+  Lotus::Material clamped = Standard({1.0F, 1.5F * 0.5F, 0.0F}, 1.0F);
+  Lotus::TextureInput weighted = Periodic("palette.png", "sRGB");
+  weighted.scale = {0.5F, 0.5F, 0.5F, 1.0F};
+  weighted.fallback = {0.0F, 0.0F, 0.0F, 1.0F};
+  Lotus::Material channels = Standard(kCopper);
+  channels.metallic_texture = Channel(Periodic("rgba.png", "raw"), 2);
+  channels.roughness_texture = Periodic("ramp.png", "raw");
+  channels.texcoords = "st";
+  Lotus::Material emission_map = Standard(kBlack);
+  emission_map.emission_texture = Periodic("palette.png", "raw");
+  emission_map.texcoords = "st";
+  const std::map<std::string, Lotus::Material> looks{
+      {"Defaults", Standard()},
+      {"Weighted", Standard({0.5F * 0.9F, 0.5F * 0.3F, 0.5F * 0.1F})},
+      {"Metal", metal},
+      {"Ior", ior},
+      {"NoSpecular", no_specular},
+      {"Emissive", emissive},
+      {"Opacity", opacity},
+      {"Clamped", clamped},
+      // coat, sheen and transmission are not represented.
+      {"Lobes", Standard(kTeal)},
+      // The MaterialX surface wins over the red UsdPreviewSurface.
+      {"Precedence", Standard({0.1F, 0.2F, 0.8F})},
+      {"Srgb", StandardTextured(Periodic("palette.png", "sRGB"))},
+      {"Raw", StandardTextured(Periodic("palette.png", "raw"))},
+      {"WeightedImage", StandardTextured(weighted)},
+      {"Channels", channels},
+      {"EmissionMap", emission_map},
+      {"Clamp", StandardTextured(Lookup("palette.png", "sRGB"))},
+      {"Mirror", StandardTextured(Lookup("palette.png", "sRGB", TextureWrap::Mirror,
+                     TextureWrap::Mirror))},
+      {"Constant", StandardTextured(Lookup("palette.png", "sRGB", TextureWrap::Black,
+                       TextureWrap::Black))},
+      {"Named", StandardTextured(Periodic("palette.png", "sRGB"), "uv1")},
+      {"NormalMap", StandardBumpy(1.0F)},
+      {"NormalScale", StandardBumpy(0.5F)},
+      {"Tiled", StandardTextured(Periodic("palette.png", "sRGB"))},
+      // An image without a file is its default.
+      {"Fileless", Standard({0.2F, 0.6F, 0.9F})},
+      // ND_multiply is not read: base_color keeps its default.
+      {"Untranslated", Standard()},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  const Polygons sphere = CoarseSphere();
+  const auto corners = sphere.Corners();
+  Lotus::MeshGeometry smooth = sphere.Geometry();
+  for (const auto& corner : corners) smooth.normals.push_back(Fixed(sphere.points[corner.vertex]));
+  Lotus::MeshGeometry bumpy = smooth;
+  const auto latlong = LatLong({4.0, 2.0});
+  for (const auto& corner : corners) bumpy.texcoords["st"].push_back(latlong[corner.face_vertex]);
+  const Lotus::MeshGeometry plain = Card({});
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  const Lotus::MeshGeometry wide = Card({{"st", Corners(kWide)}});
+  const Lotus::MeshGeometry named =
+      Card({{"st", Corners(kUnit)}, {"uv1", Corners(kTurned)}});
+
+  struct Entry {
+    const char* name;
+    const char* material;
+    const Lotus::MeshGeometry& geometry;
+    float scale;
+  };
+  constexpr float kSphere = 0.35F;
+  constexpr float kCard = 0.7F;
+  const std::array<Entry, 25> objects{{
+      {"Defaults", "Defaults", smooth, kSphere},
+      {"Weighted", "Weighted", smooth, kSphere},
+      {"Metal", "Metal", smooth, kSphere},
+      {"Ior", "Ior", smooth, kSphere},
+      {"NoSpecular", "NoSpecular", smooth, kSphere},
+      {"Emissive", "Emissive", plain, kCard},
+      {"Opacity", "Opacity", plain, kCard},
+      {"Clamped", "Clamped", plain, kCard},
+      {"Lobes", "Lobes", plain, kCard},
+      {"Precedence", "Precedence", plain, kCard},
+      {"Srgb", "Srgb", mapped, kCard},
+      {"Raw", "Raw", mapped, kCard},
+      {"WeightedImage", "WeightedImage", mapped, kCard},
+      {"Channels", "Channels", mapped, kCard},
+      {"EmissionMap", "EmissionMap", mapped, kCard},
+      {"Periodic", "Srgb", wide, kCard},
+      {"Clamp", "Clamp", wide, kCard},
+      {"Mirror", "Mirror", wide, kCard},
+      {"Constant", "Constant", wide, kCard},
+      {"Named", "Named", named, kCard},
+      {"NormalMap", "NormalMap", bumpy, kSphere},
+      {"NormalScale", "NormalScale", mapped, kCard},
+      {"Tiled", "Tiled", mapped, kCard},
+      {"Fileless", "Fileless", plain, kCard},
+      {"Untranslated", "Untranslated", mapped, kCard},
+  }};
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const Entry& object = objects[i];
+    const std::string mesh = root + "/Objects/" + object.name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = object.scale;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, object.geometry, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + object.material);
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -1141,6 +1322,8 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the sRGB emission map decoded as raw", RawEmission},
       {"material-alpha-v1", "/MaterialAlpha", 160, SetMaterialAlpha,
           "the sRGB images' alpha decoded as sRGB", SrgbAlpha},
+      {"material-mtlx-v1", "/MaterialMtlx", 160, SetMaterialMtlx,
+          "the weighted image's base weight ignored", UnweightedImage},
   };
   return kFixtures;
 }

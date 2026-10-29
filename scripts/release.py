@@ -32,6 +32,8 @@ REQUIRED = {
     "bin/reference/material-emission-v1-variance.pfm",
     "bin/reference/material-alpha-v1-mean.pfm",
     "bin/reference/material-alpha-v1-variance.pfm",
+    "bin/reference/material-mtlx-v1-mean.pfm",
+    "bin/reference/material-mtlx-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",

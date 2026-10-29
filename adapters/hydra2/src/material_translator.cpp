@@ -14,7 +14,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <initializer_list>
 #include <optional>
+#include <string_view>
+#include <utility>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -55,7 +59,44 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (mirror)
     (raw)
     (sRGB)
-    ((automatic, "auto")));
+    ((automatic, "auto"))
+    (mtlx)
+    ((mtlxPreviewSurface, "ND_UsdPreviewSurface_surfaceshader"))
+    ((standardSurface, "ND_standard_surface_surfaceshader"))
+    ((texcoordVector2, "ND_texcoord_vector2"))
+    ((geompropvalueVector2, "ND_geompropvalue_vector2"))
+    (base)
+    (base_color)
+    (metalness)
+    (specular)
+    (specular_color)
+    (specular_roughness)
+    (specular_IOR)
+    (emission)
+    (emission_color)
+    (coat)
+    (diffuse_roughness)
+    (sheen)
+    (specular_anisotropy)
+    (subsurface)
+    (thin_film_thickness)
+    (transmission)
+    (texcoord)
+    (uaddressmode)
+    (vaddressmode)
+    ((defaultValue, "default"))
+    (uvtiling)
+    (uvoffset)
+    (realworldimagesize)
+    (realworldtilesize)
+    (index)
+    (geomprop)
+    (in)
+    (space)
+    (tangent)
+    (bitangent)
+    (constant)
+    (periodic));
 
 std::optional<double> ReadScalar(const VtValue& value) {
   if (value.IsHolding<float>()) return value.UncheckedGet<float>();
@@ -148,6 +189,610 @@ TfToken ReadColorSpace(const HdMaterialNode2& texture) {
   return Tokens->automatic;
 }
 
+const VtValue* Parameter(const HdMaterialNode2& node, const TfToken& name) {
+  const auto parameter = node.parameters.find(name);
+  return parameter == node.parameters.end() ? nullptr : &parameter->second;
+}
+
+const HdMaterialConnection2* Connection(const HdMaterialNode2& node,
+    const TfToken& input) {
+  const auto connected = node.inputConnections.find(input);
+  return connected == node.inputConnections.end() || connected->second.empty()
+             ? nullptr
+             : &connected->second.front();
+}
+
+// A file input's image path: resolved, or as authored when it does not
+// resolve; empty when there is none.
+std::string ReadFile(const HdMaterialNode2& node) {
+  if (const VtValue* asset = Parameter(node, Tokens->file)) {
+    if (asset->IsHolding<SdfAssetPath>()) {
+      const SdfAssetPath& path = asset->UncheckedGet<SdfAssetPath>();
+      return path.GetResolvedPath().empty() ? path.GetAssetPath()
+                                            : path.GetResolvedPath();
+    }
+    if (asset->IsHolding<std::string>()) {
+      return asset->UncheckedGet<std::string>();
+    }
+  }
+  return {};
+}
+
+// The key of `file` under `color_space`, which the translation then
+// requests once.
+std::string RequestTexture(HdLotusMaterialTranslation& translation,
+    const std::string& file, const TfToken& color_space) {
+  std::string key = HdLotusTextureKey(file, color_space);
+  // Without a file, the key names no image, so the lookup returns its
+  // fallback.
+  if (!file.empty()) {
+    const HdLotusTextureRequest request{key, file, color_space};
+    if (std::find(translation.textures.begin(), translation.textures.end(),
+            request) == translation.textures.end()) {
+      translation.textures.push_back(request);
+    }
+  }
+  return key;
+}
+
+// Whether the material can take a lookup at these texture coordinates: a
+// material has one texture-coordinate source, its first lookup's.
+bool SameTexcoords(const Lotus::Material& material, const std::string& texcoords,
+    const std::array<float, 2>& fallback) {
+  return !Lotus::HasTextureInputs(material) ||
+         (material.texcoords == texcoords && material.texcoord_fallback == fallback);
+}
+
+// One output of a MaterialX node graph: constant components, or a texture
+// lookup whose channels hold them.
+struct GraphValue {
+  // 1 (float) to 4 (color4 and vector4).
+  std::size_t width = 1;
+  std::array<float, 4> constant{};
+  std::optional<Lotus::TextureInput> lookup;
+  // Where the lookup reads, or, for a texture-coordinate node, the mesh's
+  // coordinate set and the value on a mesh without it.
+  std::string texcoords;
+  std::array<float, 2> texcoord_fallback{0.0F, 0.0F};
+  // A texture-coordinate node's output, which only an image's texcoord
+  // input reads.
+  bool coordinates = false;
+  // An ND_normalmap's output: a tangent-space normal.
+  bool normal_map = false;
+  // The lookup's image, which the translation requests once a material
+  // input takes the lookup.
+  std::string file;
+  TfToken color_space;
+};
+
+GraphValue ConstantValue(std::initializer_list<float> components) {
+  GraphValue value;
+  value.width = components.size();
+  std::copy(components.begin(), components.end(), value.constant.begin());
+  return value;
+}
+
+// A MaterialX value of one to four finite components: a scalar, a vector or
+// a colour of either precision.
+std::optional<GraphValue> ReadComponents(const VtValue& value) {
+  GraphValue result;
+  std::array<double, 4> read{};
+  if (const auto scalar = ReadScalar(value)) {
+    read[0] = *scalar;
+  } else if (value.IsHolding<GfVec2f>() || value.IsHolding<GfVec2d>()) {
+    result.width = 2;
+    const GfVec2d vector = value.IsHolding<GfVec2f>()
+                               ? GfVec2d(value.UncheckedGet<GfVec2f>())
+                               : value.UncheckedGet<GfVec2d>();
+    read = {vector[0], vector[1], 0.0, 0.0};
+  } else if (const auto color = ReadColor(value)) {
+    result.width = 3;
+    read = {(*color)[0], (*color)[1], (*color)[2], 0.0};
+  } else if (value.IsHolding<GfVec4f>() || value.IsHolding<GfVec4d>()) {
+    result.width = 4;
+    const GfVec4d vector = value.IsHolding<GfVec4f>()
+                               ? GfVec4d(value.UncheckedGet<GfVec4f>())
+                               : value.UncheckedGet<GfVec4d>();
+    read = {vector[0], vector[1], vector[2], vector[3]};
+  } else {
+    return std::nullopt;
+  }
+  for (std::size_t c = 0; c < result.width; ++c) {
+    result.constant[c] = static_cast<float>(read[c]);
+    if (!std::isfinite(result.constant[c])) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
+// The component count of a MaterialX type named at the end of `id`, as in
+// ND_image_color3; 0 for other types.
+std::size_t TypeWidth(std::string_view id) {
+  constexpr std::pair<std::string_view, std::size_t> kTypes[] = {{"_float", 1},
+      {"_vector2", 2}, {"_color3", 3}, {"_vector3", 3}, {"_color4", 4},
+      {"_vector4", 4}};
+  for (const auto& [suffix, width] : kTypes) {
+    if (id.ends_with(suffix)) return width;
+  }
+  return 0;
+}
+
+// An ND_image address mode; constant reads transparent black outside the
+// image, which is its default value only when that is zero.
+Lotus::TextureWrap ReadAddressMode(const VtValue* value) {
+  const TfToken mode = ReadToken(value);
+  if (mode == Tokens->constant) return Lotus::TextureWrap::Black;
+  if (mode == Tokens->clamp) return Lotus::TextureWrap::Clamp;
+  if (mode == Tokens->mirror) return Lotus::TextureWrap::Mirror;
+  return Lotus::TextureWrap::Repeat;
+}
+
+// Evaluates MaterialX node graphs into constants and texture lookups.
+class GraphReader {
+public:
+  explicit GraphReader(const HdMaterialNetwork2& network) : network_(network) {
+  }
+
+  // An input of `node`: its connection's value, its authored constant, or
+  // `fallback` when it has neither or the constant is not a finite value.
+  // Nothing when the connection is a graph this does not translate.
+  std::optional<GraphValue> Input(const HdMaterialNode2& node,
+      const TfToken& input, const GraphValue& fallback) {
+    if (const HdMaterialConnection2* connection = Connection(node, input)) {
+      return Output(*connection, 0);
+    }
+    if (const VtValue* constant = Parameter(node, input)) {
+      if (auto read = ReadComponents(*constant)) {
+        return read;
+      }
+    }
+    return fallback;
+  }
+
+private:
+  // A graph this deep is cyclic or beyond any authored network.
+  static constexpr int kMaxDepth = 64;
+
+  std::optional<GraphValue> Output(const HdMaterialConnection2& connection,
+      int depth) {
+    const auto upstream = network_.nodes.find(connection.upstreamNode);
+    if (depth > kMaxDepth || upstream == network_.nodes.end()) {
+      return std::nullopt;
+    }
+    const HdMaterialNode2& node = upstream->second;
+    const std::string& id = node.nodeTypeId.GetString();
+    if (id.starts_with("ND_image_") || id.starts_with("ND_tiledimage_")) {
+      return Image(node, id.starts_with("ND_tiledimage_"), depth);
+    }
+    if (node.nodeTypeId == Tokens->texcoordVector2) {
+      if (const VtValue* index = Parameter(node, Tokens->index);
+          index != nullptr && ReadScalar(*index).value_or(-1.0) != 0.0) {
+        return std::nullopt;
+      }
+      GraphValue value;
+      value.coordinates = true;
+      value.texcoords = "st";
+      return value;
+    }
+    if (node.nodeTypeId == Tokens->geompropvalueVector2) {
+      GraphValue value;
+      value.coordinates = true;
+      value.texcoords = ReadToken(Parameter(node, Tokens->geomprop)).GetString();
+      value.texcoord_fallback =
+          ReadVector<2, GfVec2f, GfVec2d>(Parameter(node, Tokens->defaultValue))
+              .value_or(value.texcoord_fallback);
+      return value;
+    }
+    if (id.starts_with("ND_extract_")) {
+      return Extract(node, depth);
+    }
+    if (id.starts_with("ND_convert_")) {
+      return Convert(node, id, depth);
+    }
+    if (id.starts_with("ND_normalmap")) {
+      return NormalMap(node, depth);
+    }
+    return std::nullopt;
+  }
+
+  // An input inside the graph, as Input reads it.
+  std::optional<GraphValue> Upstream(const HdMaterialNode2& node,
+      const TfToken& input, const GraphValue& fallback, int depth) {
+    if (const HdMaterialConnection2* connection = Connection(node, input)) {
+      return Output(*connection, depth + 1);
+    }
+    if (const VtValue* constant = Parameter(node, input)) {
+      if (auto read = ReadComponents(*constant)) {
+        return read;
+      }
+    }
+    return fallback;
+  }
+
+  // ND_image and untiled ND_tiledimage: a lookup of the file at the
+  // texcoord input (the st primvar by default), or, without a file, the
+  // default value. Colour spaces other than sRGB's are read as raw.
+  std::optional<GraphValue> Image(const HdMaterialNode2& node, bool tiled,
+      int depth) {
+    const std::size_t width = TypeWidth(node.nodeTypeId.GetString());
+    if (width == 0 || width == 2) {
+      return std::nullopt;
+    }
+    if (tiled) {
+      const auto identity = [&](const TfToken& name, float component) {
+        const VtValue* value = Parameter(node, name);
+        const auto read = value != nullptr
+                              ? ReadVector<2, GfVec2f, GfVec2d>(value)
+                              : std::optional<std::array<float, 2>>(
+                                    std::array<float, 2>{component, component});
+        return read == std::array<float, 2>{component, component};
+      };
+      if (!identity(Tokens->uvtiling, 1.0F) || !identity(Tokens->uvoffset, 0.0F) ||
+          Connection(node, Tokens->uvtiling) || Connection(node, Tokens->uvoffset) ||
+          Parameter(node, Tokens->realworldimagesize) ||
+          Parameter(node, Tokens->realworldtilesize) ||
+          Connection(node, Tokens->realworldimagesize) ||
+          Connection(node, Tokens->realworldtilesize)) {
+        return std::nullopt;
+      }
+    }
+    GraphValue value;
+    value.width = width;
+    value.constant = {0.0F, 0.0F, 0.0F, width == 4 ? 0.0F : 1.0F};
+    if (const VtValue* fallback = Parameter(node, Tokens->defaultValue)) {
+      if (const auto read = ReadComponents(*fallback); read && read->width == width) {
+        for (std::size_t c = 0; c < width; ++c) value.constant[c] = read->constant[c];
+      }
+    }
+    if (width == 1) {
+      value.constant = {value.constant[0], value.constant[0], value.constant[0], 1.0F};
+    }
+    const std::string file = ReadFile(node);
+    if (file.empty()) {
+      return value;
+    }
+
+    value.texcoords = "st";
+    if (const HdMaterialConnection2* texcoord = Connection(node, Tokens->texcoord)) {
+      const auto coordinates = Output(*texcoord, depth + 1);
+      if (!coordinates || !coordinates->coordinates) {
+        return std::nullopt;
+      }
+      value.texcoords = coordinates->texcoords;
+      value.texcoord_fallback = coordinates->texcoord_fallback;
+    } else if (const auto constant = ReadVector<2, GfVec2f, GfVec2d>(
+                   Parameter(node, Tokens->texcoord))) {
+      value.texcoords.clear();
+      value.texcoord_fallback = *constant;
+    }
+    const TfToken color_space = ReadColorSpace(node) == Tokens->sRGB
+                                    ? Tokens->sRGB
+                                    : Tokens->raw;
+    Lotus::TextureInput lookup;
+    lookup.texture = HdLotusTextureKey(file, color_space);
+    value.file = file;
+    value.color_space = color_space;
+    lookup.wrap_s = ReadAddressMode(Parameter(node, Tokens->uaddressmode));
+    lookup.wrap_t = ReadAddressMode(Parameter(node, Tokens->vaddressmode));
+    lookup.fallback = value.constant;
+    value.lookup = std::move(lookup);
+    return value;
+  }
+
+  // ND_extract: one component, a lookup's channel.
+  std::optional<GraphValue> Extract(const HdMaterialNode2& node, int depth) {
+    auto value = Upstream(node, Tokens->in, ConstantValue({0, 0, 0}), depth);
+    const auto index = ReadScalar(
+        Parameter(node, Tokens->index) ? *Parameter(node, Tokens->index) : VtValue(0));
+    if (!value || value->coordinates || value->normal_map || !index ||
+        *index < 0 || *index >= static_cast<double>(value->width) ||
+        Connection(node, Tokens->index)) {
+      return std::nullopt;
+    }
+    const auto channel = static_cast<std::uint32_t>(*index);
+    GraphValue result = *value;
+    result.width = 1;
+    result.constant = {value->constant[channel], value->constant[channel],
+        value->constant[channel], 1.0F};
+    if (result.lookup) {
+      if (result.lookup->channel != 0) {
+        return std::nullopt;
+      }
+      result.lookup->channel = channel;
+    }
+    return result;
+  }
+
+  // ND_convert between scalars, vectors and colours: a scalar constant
+  // spreads to every component; a lookup keeps its channels, so it converts
+  // only between types of three or four components.
+  std::optional<GraphValue> Convert(const HdMaterialNode2& node,
+      const std::string& id, int depth) {
+    const std::size_t to = TypeWidth(id);
+    const std::size_t from = TypeWidth(id.substr(0, id.rfind('_')));
+    auto value = Upstream(node, Tokens->in, GraphValue{from}, depth);
+    if (to == 0 || from == 0 || !value || value->coordinates || value->normal_map ||
+        value->width != from) {
+      return std::nullopt;
+    }
+    if (value->lookup) {
+      if (from < 3 || to < 3) {
+        return std::nullopt;
+      }
+    } else if (from == 1) {
+      value->constant.fill(value->constant[0]);
+    } else if (to == 4 && from < 4) {
+      value->constant[3] = 1.0F;
+    }
+    value->width = to;
+    return value;
+  }
+
+  // ND_normalmap: the image's unsigned tangent-space normal, signed and its
+  // x and y scaled, in the default tangent frame.
+  std::optional<GraphValue> NormalMap(const HdMaterialNode2& node, int depth) {
+    for (const TfToken& frame : {Tokens->normal, Tokens->tangent, Tokens->bitangent}) {
+      if (Parameter(node, frame) != nullptr || Connection(node, frame) != nullptr) {
+        return std::nullopt;
+      }
+    }
+    if (const VtValue* space = Parameter(node, Tokens->space);
+        space != nullptr && ReadToken(space) != TfToken("tangent")) {
+      return std::nullopt;
+    }
+    auto value = Upstream(node, Tokens->in, ConstantValue({0.5F, 0.5F, 1.0F}), depth);
+    auto scale = Upstream(node, Tokens->scale, ConstantValue({1.0F}), depth);
+    if (!value || value->coordinates || value->normal_map || value->width != 3 ||
+        (value->lookup && value->lookup->channel != 0) || !scale ||
+        scale->lookup || scale->coordinates || scale->width > 2) {
+      return std::nullopt;
+    }
+    const std::array<float, 3> factor{scale->constant[0],
+        scale->width == 2 ? scale->constant[1] : scale->constant[0], 1.0F};
+    value->normal_map = true;
+    for (std::size_t c = 0; c < 3; ++c) {
+      value->constant[c] = (2.0F * value->constant[c] - 1.0F) * factor[c];
+      if (value->lookup) {
+        Lotus::TextureInput& lookup = *value->lookup;
+        lookup.scale[c] = 2.0F * lookup.scale[c] * factor[c];
+        lookup.bias[c] = (2.0F * lookup.bias[c] - 1.0F) * factor[c];
+        lookup.fallback[c] = (2.0F * lookup.fallback[c] - 1.0F) * factor[c];
+      }
+    }
+    return value;
+  }
+
+  const HdMaterialNetwork2& network_;
+};
+
+// `value` times `weight`, component by component, where a scalar scales
+// every component. Nothing when both are lookups, or a scalar lookup would
+// have to spread over a colour.
+std::optional<GraphValue> Multiply(GraphValue value, GraphValue weight) {
+  if (value.lookup && weight.lookup) {
+    return std::nullopt;
+  }
+  if (weight.lookup) {
+    std::swap(value, weight);
+  }
+  if (value.lookup && value.width == 1 && weight.width > 1) {
+    return std::nullopt;
+  }
+  const auto factor = [&](std::size_t c) {
+    return weight.width == 1 ? weight.constant[0] : weight.constant[c];
+  };
+  if (value.lookup) {
+    Lotus::TextureInput& lookup = *value.lookup;
+    const std::size_t first = value.width == 1 ? lookup.channel : 0;
+    const std::size_t last = value.width == 1 ? lookup.channel + 1 : 3;
+    for (std::size_t c = first; c < last; ++c) {
+      const float f = factor(value.width == 1 ? 0 : c);
+      lookup.scale[c] *= f;
+      lookup.bias[c] *= f;
+      lookup.fallback[c] *= f;
+    }
+    return value;
+  }
+  const std::size_t width = std::max(value.width, weight.width);
+  if (value.width == 1) {
+    value.constant.fill(value.constant[0]);
+  }
+  for (std::size_t c = 0; c < width; ++c) {
+    value.constant[c] *= factor(c);
+  }
+  value.width = width;
+  return value;
+}
+
+// Translates an ND_standard_surface_surfaceshader node.
+class StandardSurfaceReader {
+public:
+  StandardSurfaceReader(const HdMaterialNetwork2& network,
+      const HdMaterialNode2& node, HdLotusMaterialTranslation& translation)
+      : node_(node), translation_(translation), graph_(network) {
+  }
+
+  void Translate() {
+    Lotus::Material& material = translation_.material;
+    constexpr double kLargest = 3.4e38;
+    // Standard Surface's defaults where the IR's differ.
+    material.base_color = {0.8F, 0.8F, 0.8F};
+    material.roughness = 0.2F;
+
+    Color(Weighted(Tokens->base, Tokens->base_color, ConstantValue({0.8F, 0.8F, 0.8F})),
+        material.base_color, material.base_color_texture, 0.0, 1.0);
+    Color(Weighted(Tokens->emission, Tokens->emission_color,
+              ConstantValue({1.0F, 1.0F, 1.0F}), 0.0F),
+        material.emission, material.emission_texture, 0.0, kLargest);
+    Scalar(Tokens->metalness, material.metallic, &material.metallic_texture,
+        0.0, 1.0);
+    Scalar(Tokens->specular_roughness, material.roughness,
+        &material.roughness_texture, 0.0, 1.0);
+    Scalar(Tokens->specular_IOR, material.ior, nullptr, 1.0, kLargest);
+    Specular();
+    Opacity();
+    Normal();
+    for (const TfToken& lobe : {Tokens->coat, Tokens->diffuse_roughness,
+             Tokens->sheen, Tokens->specular_anisotropy, Tokens->subsurface,
+             Tokens->thin_film_thickness, Tokens->transmission}) {
+      const auto weight = graph_.Input(node_, lobe, ConstantValue({0.0F}));
+      if (!weight || weight->lookup || weight->constant[0] != 0.0F) {
+        translation_.unrepresented_inputs.push_back(lobe);
+      }
+    }
+  }
+
+private:
+  // A value read from one or two inputs, nothing when it is a graph this
+  // does not translate, and which of those inputs are connected.
+  struct Reading {
+    std::optional<GraphValue> value;
+    std::vector<TfToken> connected;
+  };
+
+  Reading Input(const TfToken& input, const GraphValue& fallback) {
+    Reading reading{graph_.Input(node_, input, fallback), {}};
+    if (Connection(node_, input) != nullptr) {
+      reading.connected.push_back(input);
+    }
+    if (reading.value && (reading.value->coordinates || reading.value->normal_map ||
+                             reading.value->width != fallback.width)) {
+      reading.value.reset();
+    }
+    return reading;
+  }
+
+  // A colour times its scalar weight, as base and emission are.
+  Reading Weighted(const TfToken& weight, const TfToken& color,
+      const GraphValue& color_fallback, float weight_fallback = 1.0F) {
+    const Reading scale = Input(weight, ConstantValue({weight_fallback}));
+    Reading reading = Input(color, color_fallback);
+    reading.connected.insert(
+        reading.connected.begin(), scale.connected.begin(), scale.connected.end());
+    reading.value = scale.value && reading.value
+                        ? Multiply(*reading.value, *scale.value)
+                        : std::nullopt;
+    return reading;
+  }
+
+  // Whether a lookup at the value's coordinates fits the material, which
+  // then reads there and requests its image.
+  bool Place(const GraphValue& value) {
+    Lotus::Material& material = translation_.material;
+    if (!SameTexcoords(material, value.texcoords, value.texcoord_fallback)) {
+      return false;
+    }
+    material.texcoords = value.texcoords;
+    material.texcoord_fallback = value.texcoord_fallback;
+    RequestTexture(translation_, value.file, value.color_space);
+    return true;
+  }
+
+  // A reading the material cannot take leaves the input's default and
+  // reports its connected inputs.
+  void Untranslated(const Reading& reading) {
+    translation_.connected_inputs.insert(translation_.connected_inputs.end(),
+        reading.connected.begin(), reading.connected.end());
+  }
+
+  void Color(const Reading& reading, std::array<float, 3>& value,
+      std::optional<Lotus::TextureInput>& lookup, double low, double high) {
+    const auto& result = reading.value;
+    if (!result || (result->lookup &&
+                       (result->lookup->channel != 0 || !Place(*result)))) {
+      Untranslated(reading);
+      return;
+    }
+    if (result->lookup) {
+      lookup = result->lookup;
+      return;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      value[c] = static_cast<float>(std::clamp<double>(result->constant[c], low, high));
+    }
+  }
+
+  void Scalar(const TfToken& input, float& value,
+      std::optional<Lotus::TextureInput>* lookup, double low, double high) {
+    const Reading reading = Input(input, ConstantValue({value}));
+    const auto& result = reading.value;
+    if (!result || (result->lookup && (lookup == nullptr || !Place(*result)))) {
+      Untranslated(reading);
+      return;
+    }
+    if (result->lookup) {
+      *lookup = result->lookup;
+      return;
+    }
+    value = static_cast<float>(std::clamp<double>(result->constant[0], low, high));
+  }
+
+  // specular 0 removes the dielectric interface; specular 1 with a white
+  // specular_color is the IR's. Other weights and tints are not represented.
+  void Specular() {
+    const auto weight = graph_.Input(node_, Tokens->specular, ConstantValue({1.0F}));
+    if (weight && !weight->lookup && weight->constant[0] == 0.0F) {
+      translation_.material.ior = 1.0F;
+      return;
+    }
+    if (!weight || weight->lookup || weight->constant[0] != 1.0F) {
+      translation_.unrepresented_inputs.push_back(Tokens->specular);
+    }
+    const auto tint = graph_.Input(node_, Tokens->specular_color,
+        ConstantValue({1.0F, 1.0F, 1.0F}));
+    if (!tint || tint->lookup || tint->constant[0] != 1.0F ||
+        tint->constant[1] != 1.0F || tint->constant[2] != 1.0F) {
+      translation_.unrepresented_inputs.push_back(Tokens->specular_color);
+    }
+  }
+
+  // A grey constant opacity is coverage; a coloured one is not represented,
+  // and its mean is used.
+  void Opacity() {
+    const Reading reading = Input(Tokens->opacity, ConstantValue({1.0F, 1.0F, 1.0F}));
+    const auto& result = reading.value;
+    if (!result || result->lookup) {
+      Untranslated(reading);
+      return;
+    }
+    const auto& [r, g, b, a] = result->constant;
+    if (r != g || g != b) {
+      translation_.unrepresented_inputs.push_back(Tokens->opacity);
+    }
+    translation_.material.opacity = static_cast<float>(
+        std::clamp((double(r) + double(g) + double(b)) / 3.0, 0.0, 1.0));
+  }
+
+  // A normal map, or the constant of one without an image; an authored
+  // world-space normal is not represented.
+  void Normal() {
+    Lotus::Material& material = translation_.material;
+    if (Connection(node_, Tokens->normal) == nullptr) {
+      if (Parameter(node_, Tokens->normal) != nullptr) {
+        translation_.unrepresented_inputs.push_back(Tokens->normal);
+      }
+      return;
+    }
+    const auto value = graph_.Input(node_, Tokens->normal, GraphValue{});
+    if (!value || !value->normal_map || (value->lookup && !Place(*value))) {
+      translation_.connected_inputs.push_back(Tokens->normal);
+      return;
+    }
+    if (value->lookup) {
+      material.normal_texture = value->lookup;
+      return;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      material.normal[c] = std::clamp(value->constant[c], -1.0F, 1.0F);
+    }
+  }
+
+  const HdMaterialNode2& node_;
+  HdLotusMaterialTranslation& translation_;
+  GraphReader graph_;
+};
+
 class SurfaceReader {
 public:
   SurfaceReader(const HdMaterialNetwork2& network, const HdMaterialNode2& node,
@@ -182,20 +827,6 @@ public:
   }
 
 private:
-  static const VtValue* Parameter(const HdMaterialNode2& node,
-      const TfToken& name) {
-    const auto parameter = node.parameters.find(name);
-    return parameter == node.parameters.end() ? nullptr : &parameter->second;
-  }
-
-  static const HdMaterialConnection2* Connection(const HdMaterialNode2& node,
-      const TfToken& input) {
-    const auto connected = node.inputConnections.find(input);
-    return connected == node.inputConnections.end() || connected->second.empty()
-               ? nullptr
-               : &connected->second.front();
-  }
-
   // The input's authored constant, or nothing when it is unauthored or
   // driven by a connection. A connection is translated into `lookup` when
   // it is a lookup this reads, and recorded as a connected input otherwise.
@@ -258,9 +889,7 @@ private:
               .value_or(texcoord_fallback);
     }
     Lotus::Material& material = translation_.material;
-    if (Lotus::HasTextureInputs(material) &&
-        (material.texcoords != texcoords ||
-            material.texcoord_fallback != texcoord_fallback)) {
+    if (!SameTexcoords(material, texcoords, texcoord_fallback)) {
       return false;
     }
 
@@ -273,27 +902,8 @@ private:
     result.fallback =
         ReadVector<4, GfVec4f, GfVec4d>(Parameter(texture, Tokens->fallback))
             .value_or(result.fallback);
-    const TfToken color_space = ReadColorSpace(texture);
-    std::string file;
-    if (const VtValue* asset = Parameter(texture, Tokens->file)) {
-      if (asset->IsHolding<SdfAssetPath>()) {
-        const SdfAssetPath& path = asset->UncheckedGet<SdfAssetPath>();
-        file = path.GetResolvedPath().empty() ? path.GetAssetPath()
-                                              : path.GetResolvedPath();
-      } else if (asset->IsHolding<std::string>()) {
-        file = asset->UncheckedGet<std::string>();
-      }
-    }
-    // Without a file, the key names no image, so the lookup returns its
-    // fallback.
-    result.texture = HdLotusTextureKey(file, color_space);
-    if (!file.empty()) {
-      const HdLotusTextureRequest request{result.texture, file, color_space};
-      if (std::find(translation_.textures.begin(), translation_.textures.end(),
-              request) == translation_.textures.end()) {
-        translation_.textures.push_back(request);
-      }
-    }
+    result.texture =
+        RequestTexture(translation_, ReadFile(texture), ReadColorSpace(texture));
     material.texcoords = texcoords;
     material.texcoord_fallback = texcoord_fallback;
     lookup = std::move(result);
@@ -312,6 +922,11 @@ std::string HdLotusTextureKey(const std::string& file,
   return file + "|" + source_color_space.GetString();
 }
 
+const TfTokenVector& HdLotusMaterialRenderContexts() {
+  static const TfTokenVector contexts{Tokens->mtlx};
+  return contexts;
+}
+
 HdLotusMaterialTranslation HdLotusTranslateMaterial(
     const HdMaterialNetworkMap& network) {
   HdLotusMaterialTranslation translation;
@@ -327,10 +942,16 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
     translation.unsupported = "the surface terminal names no shader node";
     return translation;
   }
-  if (node->second.nodeTypeId != Tokens->UsdPreviewSurface) {
+  if (node->second.nodeTypeId == Tokens->standardSurface) {
+    StandardSurfaceReader(converted, node->second, translation).Translate();
+    return translation;
+  }
+  if (node->second.nodeTypeId != Tokens->UsdPreviewSurface &&
+      node->second.nodeTypeId != Tokens->mtlxPreviewSurface) {
     translation.unsupported = "the surface shader is " +
                               node->second.nodeTypeId.GetString() +
-                              ", not UsdPreviewSurface";
+                              ", neither UsdPreviewSurface nor "
+                              "ND_standard_surface_surfaceshader";
     return translation;
   }
 

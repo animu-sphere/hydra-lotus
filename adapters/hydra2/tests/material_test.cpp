@@ -206,6 +206,222 @@ HdMaterialNetworkMap Surface(const TfToken& identifier,
   return map;
 }
 
+// One node of a hand-built MaterialX graph.
+struct GraphNode {
+  std::string name;
+  std::string id;
+  std::map<TfToken, VtValue> parameters;
+};
+
+// A connection from node `from`'s output to node `to`'s input; "Surface"
+// names the standard surface.
+struct GraphLink {
+  std::string from;
+  std::string output;
+  std::string to;
+  std::string input;
+};
+
+// A standard surface with these parameters, driven by these nodes.
+HdMaterialNetworkMap StandardSurface(std::map<TfToken, VtValue> parameters,
+    const std::vector<GraphNode>& nodes = {},
+    const std::vector<GraphLink>& links = {}) {
+  HdMaterialNetworkMap map =
+      Surface(TfToken("ND_standard_surface_surfaceshader"), std::move(parameters));
+  HdMaterialNetwork& network = map.map[HdMaterialTerminalTokens->surface];
+  for (auto node = nodes.rbegin(); node != nodes.rend(); ++node) {
+    HdMaterialNode added;
+    added.path = SdfPath("/Material/" + node->name);
+    added.identifier = TfToken(node->id);
+    added.parameters = node->parameters;
+    network.nodes.insert(network.nodes.begin(), added);
+  }
+  for (const GraphLink& link : links) {
+    network.relationships.push_back({SdfPath("/Material/" + link.from),
+        TfToken(link.output), SdfPath("/Material/" + link.to),
+        TfToken(link.input)});
+  }
+  return map;
+}
+
+std::vector<TfToken> Tokens(std::initializer_list<const char*> names) {
+  std::vector<TfToken> tokens;
+  for (const char* name : names) tokens.emplace_back(name);
+  return tokens;
+}
+
+void MaterialXCases() {
+  // Standard Surface's defaults, then constants: base and emission weights
+  // scale their colours, and specular 0 removes the dielectric interface.
+  HdLotusMaterialTranslation translation =
+      HdLotusTranslateMaterial(StandardSurface({}));
+  Lotus::Material expected;
+  expected.base_color = {0.8F, 0.8F, 0.8F};
+  expected.roughness = 0.2F;
+  Check(translation.unsupported.empty() && translation.connected_inputs.empty() &&
+            translation.unrepresented_inputs.empty(),
+      "an empty standard surface reported a problem");
+  Expect("standard surface defaults", translation.material, expected);
+
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("base"), VtValue(0.5F)},
+          {TfToken("base_color"), VtValue(GfVec3f(0.8F, 0.4F, 0.2F))},
+          {TfToken("metalness"), VtValue(0.75F)},
+          {TfToken("specular_roughness"), VtValue(1.5F)},
+          {TfToken("specular_IOR"), VtValue(2.0F)},
+          {TfToken("emission"), VtValue(2.0F)},
+          {TfToken("emission_color"), VtValue(GfVec3f(1.0F, 0.5F, 0.0F))},
+          {TfToken("opacity"), VtValue(GfVec3f(0.25F))}}));
+  expected = MakeMaterial({0.4F, 0.2F, 0.1F}, 1.0F, 0.75F, {2.0F, 1.0F, 0.0F}, 2.0F);
+  expected.opacity = 0.25F;
+  Expect("standard surface constants", translation.material, expected);
+  Check(translation.unrepresented_inputs.empty(),
+      "represented constants were reported");
+
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("specular"), VtValue(0.0F)},
+          {TfToken("specular_color"), VtValue(GfVec3f(0.5F))},
+          {TfToken("specular_IOR"), VtValue(2.0F)}}));
+  Check(translation.material.ior == 1.0F && translation.unrepresented_inputs.empty(),
+      "specular 0 did not remove the dielectric interface");
+
+  // Inputs the IR cannot represent are named, in a fixed order.
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("specular"), VtValue(0.5F)},
+          {TfToken("specular_color"), VtValue(GfVec3f(1.0F, 0.9F, 0.8F))},
+          {TfToken("transmission"), VtValue(1.0F)},
+          {TfToken("coat"), VtValue(0.5F)},
+          {TfToken("sheen"), VtValue(0.0F)},
+          {TfToken("opacity"), VtValue(GfVec3f(1.0F, 0.5F, 0.0F))},
+          {TfToken("normal"), VtValue(GfVec3f(0.0F, 1.0F, 0.0F))}}));
+  Check(translation.unrepresented_inputs ==
+            Tokens({"specular", "specular_color", "opacity", "normal", "coat",
+                "transmission"}),
+      "unrepresented inputs were not reported");
+  Check(translation.material.opacity == 0.5F,
+      "a coloured opacity did not use its mean");
+
+  // Graphs: an sRGB colour image weighted by base, a raw scalar image, an
+  // extracted channel, a converted colour and a scaled normal map, all at
+  // st. A fileless image is its default.
+  const std::map<TfToken, VtValue> srgb{
+      {TfToken("file"), VtValue(SdfAssetPath("colour.png"))},
+      {TfToken("colorSpace:file"), VtValue(TfToken("srgb_texture"))}};
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("base"), VtValue(0.5F)}, {TfToken("emission"), VtValue(2.0F)}},
+      {{"Colour", "ND_image_color3", srgb},
+          {"Rough", "ND_tiledimage_float",
+              {{TfToken("file"), VtValue(SdfAssetPath("rough.png"))},
+                  {TfToken("uaddressmode"), VtValue(std::string("clamp"))},
+                  {TfToken("vaddressmode"), VtValue(std::string("mirror"))}}},
+          {"Orm", "ND_image_vector3",
+              {{TfToken("file"), VtValue(SdfAssetPath("orm.png"))},
+                  {TfToken("texcoord"), VtValue()}}},
+          {"Metal", "ND_extract_vector3", {{TfToken("index"), VtValue(2)}}},
+          {"Glow", "ND_convert_vector3_color3", {}},
+          {"Bumps", "ND_image_vector3",
+              {{TfToken("file"), VtValue(SdfAssetPath("normal.png"))}}},
+          {"Normal", "ND_normalmap_vector2",
+              {{TfToken("scale"), VtValue(GfVec2f(0.5F, 0.25F))}}},
+          {"Blank", "ND_image_float", {{TfToken("default"), VtValue(0.75F)}}},
+          {"Coords", "ND_texcoord_vector2", {}}},
+      {{"Colour", "out", "Surface", "base_color"},
+          {"Coords", "out", "Colour", "texcoord"},
+          {"Rough", "out", "Surface", "specular_roughness"},
+          {"Orm", "out", "Metal", "in"},
+          {"Metal", "out", "Surface", "metalness"},
+          {"Orm", "out", "Glow", "in"},
+          {"Glow", "out", "Surface", "emission_color"},
+          {"Bumps", "out", "Normal", "in"},
+          {"Normal", "out", "Surface", "normal"},
+          {"Blank", "out", "Surface", "coat"}}));
+  Lotus::TextureInput colour{HdLotusTextureKey("colour.png", TfToken("sRGB"))};
+  colour.wrap_s = colour.wrap_t = Lotus::TextureWrap::Repeat;
+  colour.scale = {0.5F, 0.5F, 0.5F, 1.0F};
+  colour.fallback = {0.0F, 0.0F, 0.0F, 1.0F};
+  Lotus::TextureInput rough{HdLotusTextureKey("rough.png", TfToken("raw"))};
+  rough.wrap_s = Lotus::TextureWrap::Clamp;
+  rough.wrap_t = Lotus::TextureWrap::Mirror;
+  Lotus::TextureInput metal{HdLotusTextureKey("orm.png", TfToken("raw")), 2};
+  metal.wrap_s = metal.wrap_t = Lotus::TextureWrap::Repeat;
+  Lotus::TextureInput glow = metal;
+  glow.channel = 0;
+  glow.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  Lotus::TextureInput normal{HdLotusTextureKey("normal.png", TfToken("raw"))};
+  normal.wrap_s = normal.wrap_t = Lotus::TextureWrap::Repeat;
+  normal.scale = {1.0F, 0.5F, 2.0F, 1.0F};
+  normal.bias = {-0.5F, -0.25F, -1.0F, 0.0F};
+  normal.fallback = {-0.5F, -0.25F, -1.0F, 1.0F};
+  expected = Lotus::Material{};
+  expected.base_color = {0.8F, 0.8F, 0.8F};
+  expected.roughness = 0.2F;
+  expected.base_color_texture = colour;
+  expected.roughness_texture = rough;
+  expected.metallic_texture = metal;
+  expected.emission_texture = glow;
+  expected.normal_texture = normal;
+  expected.texcoords = "st";
+  Expect("standard surface graph", translation.material, expected);
+  Check(translation.material.base_color_texture == colour &&
+            translation.material.roughness_texture == rough &&
+            translation.material.metallic_texture == metal &&
+            translation.material.emission_texture == glow &&
+            translation.material.normal_texture == normal,
+      "the graph's lookups differ");
+  Check(translation.connected_inputs.empty() &&
+            translation.unrepresented_inputs == Tokens({"coat"}) &&
+            translation.textures.size() == 4,
+      "the graph reported " + std::to_string(translation.connected_inputs.size()) +
+          " untranslated and " +
+          std::to_string(translation.unrepresented_inputs.size()) +
+          " unrepresented inputs and " +
+          std::to_string(translation.textures.size()) + " textures");
+
+  // Untranslated graphs keep their defaults: an unknown node, a tiled image,
+  // a second coordinate set, a scalar lookup spread over a colour and a
+  // normal that is no normal map.
+  translation = HdLotusTranslateMaterial(StandardSurface({},
+      {{"Colour", "ND_image_color3", srgb},
+          {"Multiply", "ND_multiply_float", {}},
+          {"Tiled", "ND_tiledimage_float",
+              {{TfToken("file"), VtValue(SdfAssetPath("rough.png"))},
+                  {TfToken("uvtiling"), VtValue(GfVec2f(2.0F))}}},
+          {"Second", "ND_image_float",
+              {{TfToken("file"), VtValue(SdfAssetPath("metal.png"))}}},
+          {"Coords", "ND_geompropvalue_vector2",
+              {{TfToken("geomprop"), VtValue(std::string("uv1"))}}},
+          {"Weight", "ND_image_float",
+              {{TfToken("file"), VtValue(SdfAssetPath("glow.png"))}}},
+          {"Bumps", "ND_image_vector3",
+              {{TfToken("file"), VtValue(SdfAssetPath("normal.png"))}}}},
+      {{"Colour", "out", "Surface", "base_color"},
+          {"Multiply", "out", "Surface", "specular_IOR"},
+          {"Tiled", "out", "Surface", "specular_roughness"},
+          {"Coords", "out", "Second", "texcoord"},
+          {"Second", "out", "Surface", "metalness"},
+          {"Weight", "out", "Surface", "emission"},
+          {"Bumps", "out", "Surface", "normal"}}));
+  Check(translation.connected_inputs ==
+            Tokens({"emission", "metalness", "specular_roughness",
+                "specular_IOR", "normal"}),
+      "untranslated graphs were not reported");
+  Check(translation.material.metallic == 0 && translation.material.roughness == 0.2F &&
+            !translation.material.metallic_texture &&
+            !translation.material.emission_texture &&
+            translation.material.base_color_texture,
+      "untranslated graphs did not keep their defaults");
+
+  // The MaterialX UsdPreviewSurface reads as the universal one.
+  translation = HdLotusTranslateMaterial(
+      Surface(TfToken("ND_UsdPreviewSurface_surfaceshader"),
+          {{TfToken("diffuseColor"), VtValue(GfVec3f(0.5F))}}));
+  Check(translation.unsupported.empty() &&
+            translation.material.base_color == std::array<float, 3>{0.5F, 0.5F, 0.5F},
+      "the MaterialX UsdPreviewSurface was not read");
+  Check(HdLotusMaterialRenderContexts() == Tokens({"mtlx"}),
+      "the delegate does not request MaterialX networks");
+}
+
 void TranslatorCases() {
   const TfToken preview("UsdPreviewSurface");
   HdLotusMaterialTranslation translation =
@@ -215,8 +431,8 @@ void TranslatorCases() {
       "an empty network was not reported as unsupported");
 
   translation = HdLotusTranslateMaterial(
-      Surface(TfToken("ND_standard_surface_surfaceshader"), {}));
-  Check(translation.unsupported.find("ND_standard_surface_surfaceshader") !=
+      Surface(TfToken("ND_open_pbr_surface_surfaceshader"), {}));
+  Check(translation.unsupported.find("ND_open_pbr_surface_surfaceshader") !=
             std::string::npos,
       "an unsupported surface shader was not named");
 
@@ -284,6 +500,8 @@ void TranslatorCases() {
                                            TfToken("roughness")} &&
             translation.textures.empty(),
       "the untranslated connection was not reported");
+
+  MaterialXCases();
 }
 
 // Syncs and executes one render pass.

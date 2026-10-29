@@ -1,0 +1,113 @@
+{
+  "schema": "lotus-materialx-standard-surface-v1",
+  "question": "Does the Hydra delegate translate MaterialX Standard Surface networks into the existing material IR, so that a committed MaterialX fixture extracts to its mirror and matches its reference headless and through Hydra, and the surveyed MaterialX assets render their authored materials?",
+  "procedure": {
+    "fixture": "python scripts/material_fixtures.py write; usdchecker validation/materials/material-mtlx-v1.usda (Success)",
+    "reference": "lotus-headless --write-material-reference <scratch directory>: every fixture in a cleared GPU scene, BSDF sampling from sample index 0, 4096 spp mean and 64x64 variance; the five existing fixtures' files compared with cmp, then the new fixture's two files adopted",
+    "headless_check": "ost build --profile lookdev --intent hydra and ost build (core): each post-build report's renderer.material.fixtures",
+    "hydra": "ctest -R 'lotus-renderer-hydra-material(-fixtures)?(-gpu)?$' and ctest -R hydra -LE gpu in build/cy2026-windows-x86_64-py313-lookdev--hydra; no object had zero recorded dependencies before or after the builds",
+    "core_ctests": "ctest -R 'evidence|assets|install-tree|test-tiers' in build/cy2026-windows-x86_64-py313-core",
+    "scripts": "python -m unittest discover -s scripts -p 'test_*.py'; python scripts/material_fixtures.py check; python scripts/check_docs.py",
+    "survey_assets": "usdrecord --renderer Lotus with the change installed to a scratch prefix, and usdrecord --renderer GL with an empty plugin path as the Storm control, on OpenChessSet, StandardShaderBall (authored camera) and MaterialXTest; local overrides added a camera and a uniform dome to OpenChessSet, and blocked the shader-ball ground's outputs:mtlx:surface for Storm"
+  },
+  "environment": {
+    "source": "e556173 plus this change",
+    "os": "Windows AMD64",
+    "compiler": "MSVC 19.51 Release",
+    "device": "NVIDIA RTX A5000",
+    "driver": "597.16",
+    "vulkan_api": "1.4.329",
+    "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime (OpenUSD 26.08)",
+    "validation": "validation and synchronization validation active",
+    "clocks": "unlocked",
+    "binaries_sha256": {
+      "core/lotus-headless.exe": "45103926048480d4466032352b28493a00e002325af32121e75dd5f82a7a36ae",
+      "lookdev--hydra/lotus-headless.exe": "6361164c52cd217ee7fadb08277119b6b6691a267e998adfe9a00372d9c56662",
+      "lookdev--hydra/lotus-hydra2-material-fixtures-test.exe": "5c488c0a044cea3547681a63cfa462f90e949bbb9682f1eee21d59c5d86470ad",
+      "lookdev--hydra/lotus-hydra2-material-test.exe": "5e5297d684cbb82af312ac7d8e05aa0cd009adf9b08f23bb5e29685a868bc15f",
+      "lookdev--hydra/hdLotus.dll": "f6610a7ed4596f23aa4c4829d5e10b50ec981e9ee15cb3e71331506381ace45b"
+    }
+  },
+  "fixture_sha256": {
+    "validation/materials/material-mtlx-v1.usda": "19ed440c5293c6febef947e599844c99740d068e8276a52186d0c5361a72086a"
+  },
+  "fixture_sha256_note": "the USD file as the generator writes it, with LF line endings; it reuses the committed PNG images",
+  "reference": {
+    "samples": 4096,
+    "batches": 64,
+    "size": [160, 160],
+    "write_seconds_all_fixtures": 12.0,
+    "other_fixtures_rewritten_byte_identical": true,
+    "sha256": {
+      "validation/reference/material-mtlx-v1-mean.pfm": "e05050022f3a039d48ad0fa1ad8af8749b4cd33253600a49ed77377f7f844379",
+      "validation/reference/material-mtlx-v1-variance.pfm": "cde8b3a84f8637318584d9aa48988c2dac81717032f3fe38d0ae888dc95f8386"
+    }
+  },
+  "extraction": {
+    "materials_equal": true,
+    "textures_equal": ["textures/palette.png|sRGB", "textures/palette.png|raw", "textures/rgba.png|raw", "textures/ramp.png|raw", "textures/tilts.png|raw"],
+    "texcoords_equal": true,
+    "bindings_equal": true,
+    "triangles_equal": true,
+    "lights_and_environment_equal": true,
+    "float_sets_differing_by_rounding": 0,
+    "warnings": [
+      "Lotus ignores /MaterialMtlx/Looks/Lobes inputs its material cannot represent: coat, sheen, transmission",
+      "Lotus uses the defaults of /MaterialMtlx/Looks/Untranslated inputs whose shader graph it does not translate: base_color"
+    ]
+  },
+  "comparisons": {
+    "sample_index": 1048576,
+    "tile_pixels": 8,
+    "rows": [
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "bsdf", "spp": 16, "image_z": [-0.28, -0.46, -0.54], "max_tile_z": 3.62, "mean_tile_z2": 1.11},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "bsdf", "spp": 256, "image_z": [-0.00, 0.38, 0.07], "max_tile_z": 3.21, "mean_tile_z2": 1.06},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "nee_mis", "spp": 16, "image_z": [0.43, 0.32, 0.19], "max_tile_z": 3.00, "mean_tile_z2": 0.17},
+      {"frontend": "headless", "integrator": "reference", "light_sampling": "nee_mis", "spp": 256, "image_z": [0.27, 0.51, 0.50], "max_tile_z": 2.31, "mean_tile_z2": 0.24},
+      {"frontend": "headless", "integrator": "wavefront", "light_sampling": "nee_mis", "spp": 16, "image_z": [0.43, 0.32, 0.19], "max_tile_z": 3.00, "mean_tile_z2": 0.17},
+      {"frontend": "headless", "integrator": "wavefront", "light_sampling": "nee_mis", "spp": 256, "image_z": [0.27, 0.51, 0.50], "max_tile_z": 2.31, "mean_tile_z2": 0.24},
+      {"frontend": "hydra", "integrator": "reference", "light_sampling": "nee_mis", "spp": 256, "image_z": [0.27, 0.51, 0.50], "max_tile_z": 2.31, "mean_tile_z2": 0.24}
+    ],
+    "byte_identical": [
+      "headless wavefront NEE/MIS statistics equal the reference integrator's at 16 and 256 spp",
+      "each Hydra image (NEE/MIS and BSDF, 256 spp) is the backend's image of the mirror bit for bit"
+    ],
+    "negative_control": {"change": "WeightedImage's base weight ignored (lookup scale 1)", "spp": 256, "max_tile_z": 85.30, "rejected": true},
+    "reference_reproduced_bit_for_bit": true,
+    "other_fixtures_checks_pass": true
+  },
+  "audit": {
+    "network_selection": "fixed; the delegate requests the mtlx render context",
+    "precedence": "decided; a MaterialX surface wins over a UsdPreviewSurface, as in Storm",
+    "defaults_and_weights": "as documented; base colour 0.8 and roughness 0.2; base and emission multiply their colours and a lookup's scale, bias and fallback",
+    "metalness_roughness_ior": "as documented; clamped as for UsdPreviewSurface",
+    "specular_weight": "as documented; 0 sets ior 1, other weights except 1 warn",
+    "opacity": "as documented; grey constant coverage",
+    "unrepresented_lobes": "as documented; ignored with one warning per material",
+    "images_and_colour_spaces": "as documented; srgb_* is sRGB, anything else raw; Hio texels exact",
+    "channels_and_conversions": "as documented",
+    "address_modes_and_coordinates": "as documented; periodic by default, constant transparent black, st unless connected",
+    "normal_maps": "as documented; scale 2 and bias -1, x and y times scale",
+    "untranslated_graphs": "as documented; default kept, input warned, image not decoded"
+  },
+  "survey_assets": {
+    "OpenChessSet": {"before": "49 'no surface terminal' warnings, default grey everywhere", "after": "authored base colour, metalness, roughness and normal maps on every mesh", "warnings": {"subsurface": 8, "transmission": 8}},
+    "StandardShaderBall": {"before": "4 'no surface terminal' warnings; even grey ground", "after": "numbered ground grid; example materials translated", "warnings": ["sss_bars: diffuse_roughness", "bubblegum: specular, subsurface", "glass: transmission", "gold: specular_color", "5 displayColor interpolation warnings (LOTUS-MATERIAL-02)"]},
+    "MaterialXTest": {"after": "brass translated with a coat warning; its roughness image path resolves to ./textures/./textures/brass_roughness.jpg, which neither renderer opens"},
+    "shader_ball_ground": "st spans t from 0 to -1; the UsdPreviewSurface lookup's useMetadata wraps read black in Lotus; the MaterialX ND_image repeats by default; Storm with the MaterialX output blocked shows no grid; the 7500x7500 half EXR decodes"
+  },
+  "timing_seconds": {
+    "write_reference_all_fixtures": 12.0,
+    "hydra_material_cpu": 0.06,
+    "hydra_material_fixtures_cpu": 0.13,
+    "hydra_material_gpu": 3.93,
+    "hydra_material_fixtures_gpu": 71.36,
+    "core_evidence_assets_install_tree_test_tiers": 80.98
+  },
+  "not_run": [
+    "the full Hydra CTest suite and the viewport, research and ci-core trees",
+    "usdview and the installed Hydra host with the fixture",
+    "survey stages other than the three MaterialX ones",
+    "radiance comparison with Storm"
+  ]
+}

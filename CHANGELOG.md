@@ -13,6 +13,20 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   light features and classifies Lotus's Hydra warnings in `usdrecord` logs.
   An [asset gap survey](docs/reports/2026-10-29-asset-gap-survey.md) of 18
   third-party stages used it to select the v0.8.0 tasks.
+- The Hydra delegate requests MaterialX networks and translates
+  `ND_standard_surface_surfaceshader` into the material IR: base colour,
+  metalness, specular roughness and IOR, emission, grey opacity and normal
+  maps, through image, tiled-image, texture-coordinate, extract, convert and
+  normal-map nodes. A material's MaterialX surface wins over its
+  `UsdPreviewSurface`, as in Storm. Inputs the IR cannot represent, such as
+  transmission, subsurface and coat, warn and are ignored. The committed
+  `material-mtlx-v1` fixture checks the translation from file to image
+  ([report](docs/reports/2026-10-29-materialx-standard-surface.md)).
+
+### Fixed
+
+- MaterialX-only materials, such as OpenChessSet's, no longer render with
+  the default material, and StandardShaderBall's ground shows its texture.
 
 ## [0.7.0] - 2026-10-28
 

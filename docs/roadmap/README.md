@@ -57,7 +57,7 @@ completion of its parent phase.
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | full phase unscheduled; selected profiling subset in the practical-foundation delivery below |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
-| Materials & Lighting — cross-phase delivery | 🚧 tasks selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a MaterialX Standard Surface subset, texture transforms, per-face materials and primvar colour, and skinned meshes; no lighting task, since no asset demonstrated a lighting gap; selected subsets only | v0.8.0 ([plan](#v080--materials--lighting)) |
+| Materials & Lighting — cross-phase delivery | 🚧 tasks selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a MaterialX Standard Surface subset ([done](../reports/2026-10-29-materialx-standard-surface.md#decision)), a dielectric transmission lobe, texture transforms, per-face materials and primvar colour, and skinned meshes; no lighting task, since no asset demonstrated a lighting gap; selected subsets only | v0.8.0 ([plan](#v080--materials--lighting)) |
 
 ## v0.8.0 — Materials & Lighting
 
@@ -73,13 +73,15 @@ therefore not met, and light selection stays in Renderer Phase 9.
 | Task | Delivery scope | Exit evidence |
 | --- | --- | --- |
 | LOTUS-MTLX-01 (P0, Renderer Phase 8 subset) | MaterialX Standard Surface into the existing material IR; inputs it cannot represent warn | Committed fixture with mirror, references and Hydra/headless agreement; OpenChessSet and StandardShaderBall show their authored materials |
+| LOTUS-TRANSMISSION-01 (P1, Renderer Phase 8 subset) | A transport contract, then a dielectric transmission lobe in the IR, both integrators and the Standard Surface translation | Reviewed contract; analytic and white-furnace checks; committed fixture with mirror, references and Hydra/headless agreement; OpenChessSet's pawn tops and the shader ball's glass render as glass |
 | LOTUS-MATERIAL-02 (P1, Renderer Phase 8 subset) | `UsdTransform2d`, `GeomSubset` per-face materials, colour primvars, unbound `displayOpacity` | Committed fixtures per case; the survey's stages lose those warnings |
 | LOTUS-SKEL-01 (P1, Hydra adapter) | Skinned meshes at their posed points | Committed skinned fixture against OpenUSD's skinning; the survey's skinned meshes render |
 
 The [active queue](current.md#execution-order) owns each task's details and
-deferred remainder. Transmission, subsurface, coat, OpenPBR and lighting
-work are not exit gates. They enter only with an asset gap and, for new
-lobes, a transport contract. Reference-quality regressions remain
+deferred remainder. Transmission entered after LOTUS-MTLX-01: OpenChessSet
+and StandardShaderBall use it, and its task starts with a transport
+contract. Subsurface, coat, OpenPBR and lighting work are not exit gates.
+They enter only with an asset gap and, for new lobes, a transport contract. Reference-quality regressions remain
 disqualifying.
 
 ## v0.7.0 — Performance & Production Foundation

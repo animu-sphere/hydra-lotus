@@ -65,6 +65,18 @@ void SetMaterialEmission(Lotus::RenderWorld& world);
 // displayOpacity is not read.
 void SetMaterialAlpha(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-mtlx-v1: a 5x5 grid of
+// coarse spheres and cards under material-basics-v1's camera, lights and
+// backdrop, every material a MaterialX Standard Surface. Rows from the top:
+// constants on spheres (defaults, base weight, metal, ior, specular 0);
+// emission, grey opacity, clamped values, lobes the IR lacks and a material
+// whose MaterialX surface wins over its UsdPreviewSurface; sRGB and raw
+// images, a weighted image, extracted channels and a converted emission map;
+// periodic, clamp, mirror and constant address modes and a named coordinate
+// set; then normal maps, an identity tiled image, an image without a file
+// and a node the translator does not read.
+void SetMaterialMtlx(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;
