@@ -101,6 +101,17 @@ struct Material {
   // without a scattering event). This is presence, not refractive glass.
   float opacity = 1.0F;
   float opacity_threshold = 0.0F;
+  // The share in [0, 1] of the non-metal part that is a dielectric
+  // interface transmitting light, with `roughness` and `ior`, instead of the
+  // dielectric over Lambert (docs/design/TRANSMISSION.md). Positive values
+  // require the metallic workflow. Constant-only.
+  float transmission = 0.0F;
+  // The tint of the light the interface transmits, applied at every
+  // crossing; each component in [0, 1]. Constant-only.
+  std::array<float, 3> transmission_color{1.0F, 1.0F, 1.0F};
+  // The transmitting surface is a thin wall enclosing no medium. Otherwise
+  // it bounds a closed solid whose triangles wind outwards.
+  bool thin_walled = false;
 
   std::optional<TextureInput> base_color_texture;
   std::optional<TextureInput> roughness_texture;

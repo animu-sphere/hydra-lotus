@@ -11,11 +11,11 @@ import common.spectrum;
 // path_capacity 16-byte entries, one per slot, so a kernel loads and stores
 // only the parts of PathState it uses rather than the whole state. A
 // slot's pixel index is the slot itself, and the depth of a path in bounce
-// b's queues is b, so neither is stored. No transport step sets flags yet,
-// so they are not stored either.
+// b's queues is b, so neither is stored. The one flag shares the last
+// density's word.
 public static const uint kOriginSection = 0;     // ray origin, TMin
 public static const uint kDirectionSection = 1;  // ray direction, TMax
-public static const uint kThroughputSection = 2; // throughput, last pdf
+public static const uint kThroughputSection = 2; // throughput, last pdf/flags
 // Radiance and random-number state; once the path has ended, its sample.
 public static const uint kRadianceSection = 3;
 // Instance, primitive, barycentrics.

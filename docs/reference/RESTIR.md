@@ -814,7 +814,11 @@ means a compatible preceding frame exists, not that every pixel accepted it.
 
 Private GPU history stores the 64-byte records apart from the 128-byte
 source shading data (exact jittered origin and view depth, normals, outgoing
-direction, evaluated BSDF and identities). The temporal pass writes each
+direction, evaluated BSDF and identities). Two otherwise unused lanes hold a
+transmitting surface's transmitted share, negated for a thin wall, and its
+relative index, negated when smooth, so the record stays 128 bytes; targets
+are reflection-side, and a fully delta surface keeps empty reservoirs
+([transmission contract](../design/TRANSMISSION.md#8-reservoirs-and-temporal-inputs)). The temporal pass writes each
 frame's surfaces once into a current/previous pair; spatial reuse reads them
 and its output shares them, and they are never read back
 ([evidence](../reports/2026-10-26-reservoir-history-split.md)). Two record

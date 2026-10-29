@@ -417,6 +417,8 @@ def value(kind, authored):
         return f"@{authored}@"
     if kind in ("string", "token"):
         return f'"{authored}"'
+    if kind == "bool":
+        return "true" if authored else "false"
     if isinstance(authored, tuple):
         return f"({', '.join(number(c) for c in authored)})"
     return number(authored)
@@ -1007,14 +1009,17 @@ def alpha():
     return "\n".join(lines)
 
 
-# material-mtlx-v1's MaterialX node inputs' and outputs' USD types, by node
+# The MaterialX fixtures' node inputs' and outputs' USD types, by node
 # definition, as usdMtlx converts them.
 MTLX_INPUT_TYPES = {
     "ND_standard_surface_surfaceshader": {
         "base": "float", "base_color": "color3f", "coat": "float", "emission": "float",
         "emission_color": "color3f", "metalness": "float", "normal": "float3",
         "opacity": "color3f", "sheen": "float", "specular": "float",
-        "specular_IOR": "float", "specular_roughness": "float", "transmission": "float"},
+        "specular_IOR": "float", "specular_roughness": "float", "subsurface": "float",
+        "thin_walled": "bool", "transmission": "float", "transmission_color": "color3f",
+        "transmission_depth": "float", "transmission_dispersion": "float",
+        "transmission_scatter": "color3f"},
     "ND_image_color3": {"default": "color3f", "file": "asset", "texcoord": "float2",
                         "uaddressmode": "string", "vaddressmode": "string"},
     "ND_image_float": {"file": "asset"},
@@ -1070,7 +1075,7 @@ MTLX_LOOKS = [
     ("Clamped", mtlx({"base": 1.5, "base_color": (1, 0.5, -0.25), "metalness": -1,
                       "specular_roughness": 1.5})),
     # Lobes the material IR lacks are reported and ignored.
-    ("Lobes", mtlx({"base_color": TEAL, "coat": 1, "sheen": 0.5, "transmission": 1})),
+    ("Lobes", mtlx({"base_color": TEAL, "coat": 1, "sheen": 0.5, "subsurface": 1})),
     # Both surfaces: the MaterialX one wins.
     ("Precedence", mtlx({"base_color": (0.1, 0.2, 0.8)},
                         preview={"diffuseColor": (0.8, 0.1, 0.05)})),
@@ -1226,6 +1231,87 @@ def materialx():
     return "\n".join(lines)
 
 
+# material-transmission-v1's materials, every one a Standard Surface whose
+# transmission is a constant unless named otherwise.
+AMBER = (0.9, 0.45, 0.15)
+TRANSMISSION_LOOKS = [
+    ("Smooth", mtlx({"transmission": 1, "specular_roughness": 0})),
+    ("Rough", mtlx({"transmission": 1, "specular_roughness": 0.35})),
+    ("Tinted", mtlx({"transmission": 1, "transmission_color": AMBER,
+                     "specular_roughness": 0})),
+    # Index 1: straight through, tinted, at any roughness.
+    ("Matched", mtlx({"transmission": 1, "transmission_color": (0.5, 0.8, 0.9),
+                      "specular_IOR": 1, "specular_roughness": 0.4})),
+    ("Partial", mtlx({"transmission": 0.5, "base_color": TEAL, "metalness": 0.25,
+                      "specular_roughness": 0.15})),
+    ("ThinSmooth", mtlx({"transmission": 1, "thin_walled": True,
+                         "specular_roughness": 0})),
+    ("ThinRough", mtlx({"transmission": 1, "thin_walled": True,
+                        "specular_roughness": 0.4})),
+    ("ThinTinted", mtlx({"transmission": 1, "thin_walled": True,
+                         "transmission_color": (0.3, 0.7, 0.9), "specular_roughness": 0.1})),
+    ("ThinMatched", mtlx({"transmission": 1, "thin_walled": True,
+                          "transmission_color": (0.9, 0.6, 0.3), "specular_IOR": 1})),
+    ("ThinDense", mtlx({"transmission": 1, "thin_walled": True, "specular_IOR": 2.42,
+                        "specular_roughness": 0})),
+    # Under a positive depth the colour is absorption, which is not
+    # represented: the light stays untinted.
+    ("Depth", mtlx({"transmission": 1, "transmission_color": AMBER,
+                    "transmission_depth": 0.5, "specular_roughness": 0})),
+    # specular 0 keeps specular_IOR to refract with.
+    ("NoSpecular", mtlx({"transmission": 1, "specular": 0, "specular_IOR": 1.5,
+                         "specular_roughness": 0.2})),
+    # The medium's scattering and dispersion are ignored.
+    ("Ignored", mtlx({"transmission": 1, "transmission_scatter": (0.5, 0.2, 0.1),
+                      "transmission_dispersion": 20, "specular_roughness": 0.1})),
+    # A graph-driven transmission keeps its default, 0.
+    ("Graph", mtlx({"transmission": output("Ramp", OUT), "base_color": TEAL,
+                    "specular_roughness": 0.3},
+                   Ramp=image("float", "ramp.png"))),
+]
+
+
+def transmission():
+    sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
+    smooth = normal_attribute("normals", sphere(COARSE_SEGMENTS, COARSE_RINGS)[0])
+    # Rows from the top, at the grid's middle three rows: solid spheres;
+    # thin-walled cards; then a mirrored sphere and inputs that are not
+    # represented. Each entry is the object's name, the class it inherits,
+    # its material, the lines it adds and its scale.
+    rows = [
+        [(name, "_Sphere", name, smooth, sphere_scale)
+         for name in ("Smooth", "Rough", "Tinted", "Matched", "Partial")],
+        [(name, "_Card", name, [], card_scale)
+         for name in ("ThinSmooth", "ThinRough", "ThinTinted", "ThinMatched", "ThinDense")],
+        [("Mirrored", "_Sphere", "Smooth", smooth, (-0.35, 0.35, 0.35))] +
+        [(name, "_Sphere", name, smooth, sphere_scale)
+         for name in ("Depth", "NoSpecular", "Ignored", "Graph")],
+    ]
+    lines = header("MaterialTransmission", "SetMaterialTransmission",
+                   sphere_class() + CARD_CLASS)
+    lines += mtlx_looks("MaterialTransmission", TRANSMISSION_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for y, row in zip(CARD_ROWS[1:4], rows):
+        for x, (name, base, material, extra, scale) in zip(CARD_COLUMNS, row):
+            lines += [
+                f'        def Mesh "{name}" (',
+                '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                f"            prepend inherits = </{base}>",
+                "        )",
+                "        {",
+                f"            rel material:binding = </MaterialTransmission/Looks/{material}>",
+                *extra,
+                f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                "        }",
+            ]
+            if (x, y) != (CARD_COLUMNS[-1], CARD_ROWS[3]):
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
 # Every committed file, relative to DIRECTORY: USD text or image bytes.
 FIXTURES = {
     "material-basics-v1.usda": basics,
@@ -1234,6 +1320,8 @@ FIXTURES = {
     "material-emission-v1.usda": emission,
     "material-alpha-v1.usda": alpha,
     "material-mtlx-v1.usda": materialx,
+    "material-transmission-v1.usda": transmission,
+
     **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
     "textures/glow.hdr": lambda: radiance(*GLOW),
 }

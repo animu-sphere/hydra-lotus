@@ -37,7 +37,9 @@ struct RestirReuse {
 struct RestirSurface {
   float4 origin;
   float4 normal; // w: dielectric_f90
+  // w: the transmitted share, negated for a thin wall.
   float4 shading_normal;
+  // w: the interface's relative index, negated when it is smooth.
   float4 outgoing;
   float4 base_alpha;
   float4 dielectric_metallic;
@@ -162,6 +164,12 @@ Spectrum HistoryContribution(RestirSurface source, uint light, LightSample sampl
   bsdf.dielectric_f90 = source.normal.w;
   bsdf.f0 = SpectrumFromRgb(source.fresnel.xyz);
   bsdf.f90 = source.fresnel.w;
+  // Targets are reflection-side, which the transmission colour never tints.
+  bsdf.transmission = abs(source.shading_normal.w);
+  bsdf.transmission_color = SpectrumConstant(1.0);
+  bsdf.eta = abs(source.outgoing.w);
+  bsdf.thin_walled = source.shading_normal.w < 0.0;
+  bsdf.smooth = source.outgoing.w < 0.0;
   if (!(sample.pdf > 0.0) || dot(sample.direction, source.normal.xyz) <= 0.0)
     return SpectrumConstant(0.0);
   const ShadingFrame basis = MakeShadingFrame(source.shading_normal.xyz);
@@ -223,8 +231,10 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
     receiver.origin = float4(origin, CurrentViewDepth(surface.position));
     receiver.normal = float4(surface.normal, surface.bsdf.dielectric_f90);
-    receiver.shading_normal = float4(surface.shading_normal, 0.0);
-    receiver.outgoing = float4(wo, 0.0);
+    receiver.shading_normal = float4(surface.shading_normal,
+        surface.bsdf.thin_walled ? -surface.bsdf.transmission : surface.bsdf.transmission);
+    receiver.outgoing = float4(wo, surface.bsdf.smooth ? -surface.bsdf.eta : surface.bsdf.eta);
+
     receiver.base_alpha = float4(SpectrumToRgb(surface.bsdf.base_color), surface.bsdf.alpha);
     receiver.dielectric_metallic = float4(SpectrumToRgb(surface.bsdf.dielectric_f0), surface.bsdf.metallic);
     receiver.fresnel = float4(SpectrumToRgb(surface.bsdf.f0), surface.bsdf.f90);

@@ -1,18 +1,21 @@
 ---
-status: proposed
+status: accepted
 owner: hydra-lotus
 ---
 
 # Dielectric transmission
 
-> Status: **proposed**, 2026-10-29. This document is the transport contract
-> for the fifth lobe of the
+> Status: **accepted**, 2026-10-29, and
+> [implemented](../reports/2026-10-29-dielectric-transmission.md). This
+> document is the transport contract for the fifth lobe of the
 > [design policy's material order](DESIGN_POLICY.md#17-material), written
-> before any code as LOTUS-TRANSMISSION-01 requires. It extends the
-> implemented [material contract](../reference/SCENE.md#materials-and-environment)
+> before any code as LOTUS-TRANSMISSION-01 requires and merged without
+> review changes. It extends the
+> [material contract](../reference/SCENE.md#materials-and-environment)
 > and [path tracing contract](../reference/SCENE.md#path-tracing); where it
-> is silent they hold unchanged. Implemented behaviour will be documented
-> in the [scene reference](../reference/SCENE.md), which then owns it.
+> is silent they hold unchanged. The implemented behaviour is documented in
+> the [scene reference](../reference/SCENE.md), which owns it. One clause
+> changed in implementation: §5's `BsdfPdf` covers reflection only.
 
 ## 1. Scope
 
@@ -173,11 +176,15 @@ check's bitwise reproduction are unaffected.
   `tint · G2 / G1 / η²` for a rough refraction, 1 and `tint / η²` for the
   smooth ones, and the thin wall's without `η²`; the densities cancel
   analytically, as they do today for a pure metal.
-- `BsdfPdf` is the non-delta lobes' mixture density, `P_t` times the
-  transmitted share's density (`F · D_vis / (4 wo·h)` for reflection, `(1
-  − F) · D_vis · |wi·h| / (wi·h + wo·h / η)²` for refraction) plus
-  `(1 − P_t)` times the existing mixture. Delta lobes have no density and
-  `BsdfEvalCos` returns no value for them.
+- `BsdfPdf` is the non-delta reflection lobes' mixture density: `P_t`
+  times the transmitted share's rough reflection density
+  `F · D_vis / (4 wo·h)`, plus `(1 − P_t)` times the existing mixture.
+  `BsdfEvalCos` likewise covers reflection only. Delta lobes have no value
+  or density. The refraction density `(1 − F) · D_vis · |wi·h| /
+  (wi·h + wo·h / η)²` is never read, since every transmission event's
+  light is unweighted (§6), so neither function evaluates refraction; its
+  sampling weight above is derived from it.
+
 - Each transmission event counts as a scattering event towards
   `max_bounces` and Russian roulette, so a solid consumes at least two.
 

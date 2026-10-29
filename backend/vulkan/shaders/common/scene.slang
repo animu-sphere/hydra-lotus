@@ -63,8 +63,11 @@ public struct MaterialRecord {
   public float4 emission_metallic;
   public float4 texcoord_fallback;
   public float4 normal;
+  // Opacity, opacity threshold, the thin-walled flag.
   public float4 opacity;
   public float4 specular_ior;
+  // Transmission colour, then transmission.
+  public float4 transmission;
   public TextureInputRecord inputs[7];
 };
 
@@ -238,7 +241,8 @@ public RayDesc CameraRay(float2 ndc) {
 
 public struct SurfaceHit {
   public float3 position;
-  // The geometric normal, facing the incoming ray. Surfaces are two-sided.
+  // The geometric normal, facing the incoming ray. Surfaces are two-sided;
+  // which side of a solid the ray is on is in `bsdf`.
   public float3 normal;
   // The normal the BSDF is evaluated around: on the geometric normal's side
   // and facing the incoming ray.
@@ -1110,9 +1114,21 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
         TangentFrame(instance, hit, p1 - p0, p2 - p0, surface.shading_normal),
         surface.normal, direction);
   }
+  // The solid's outward normal is the winding normal of its object-space
+  // triangle, which a mirroring transform reverses in world space.
+  bool entering = true;
+  if (material.transmission.w > 0.0) {
+    const float3 c0 = mul(instance.world_from_object, float4(1.0, 0.0, 0.0, 0.0)).xyz;
+    const float3 c1 = mul(instance.world_from_object, float4(0.0, 1.0, 0.0, 0.0)).xyz;
+    const float3 c2 = mul(instance.world_from_object, float4(0.0, 0.0, 1.0, 0.0)).xyz;
+    const float3 outward = dot(c0, cross(c1, c2)) < 0.0 ? -normal : normal;
+    entering = dot(outward, direction) < 0.0;
+  }
   surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
       surface.roughness, surface.metallic, material.specular_ior.w,
-      material.normal.w != 0.0, SpectrumFromRgb(specular));
+      material.normal.w != 0.0, SpectrumFromRgb(specular),
+      material.transmission.w, SpectrumFromRgb(material.transmission.xyz),
+      material.opacity.z != 0.0, entering);
   surface.emission = SpectrumFromRgb(emission);
   return surface;
 }
