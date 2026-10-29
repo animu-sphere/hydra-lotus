@@ -1,0 +1,737 @@
+{
+ "survey": "LOTUS-ASSET-01 asset gap survey",
+ "date": "2026-10-29",
+ "build": "b217d3e",
+ "environment": {
+  "os": "Windows 11 x86_64",
+  "gpu": "NVIDIA RTX A5000",
+  "driver": "597.16",
+  "openusd": "26.08 lookdev runtime (OpenStrata 0.23.14)",
+  "python": "3.13"
+ },
+ "render": {
+  "tool": "usdrecord",
+  "width": 640,
+  "renderers": [
+   "Lotus (installed hdLotus, default settings)",
+   "Storm (Lotus removed from PXR_PLUGINPATH_NAME)"
+  ],
+  "lighting": "scene lights, else usdrecord's default lighting"
+ },
+ "root": "<usd_sample>",
+ "assets": [
+  {
+   "stage": "assets/full_assets/OpenChessSet/chess_set.usda",
+   "gprims": {
+    "Mesh": 21
+   },
+   "subdivision": {
+    "catmullClark": 21
+   },
+   "bound_gprims": {
+    "MaterialX only (ND_standard_surface_surfaceshader)": 21
+   },
+   "materials": 21,
+   "surface_shaders": {
+    "ND_standard_surface_surfaceshader": 41
+   },
+   "lobes": {
+    "ND_standard_surface_surfaceshader": {
+     "metalness (texture)": 29,
+     "subsurface (texture)": 8,
+     "transmission": 4
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 42,
+   "texture_formats": {
+    "jpg": 42
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "no surface terminal": 49
+   },
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/full_assets/StandardShaderBall/standard_shader_ball_scene.usda",
+   "gprims": {
+    "Mesh": 12
+   },
+   "subdivision": {
+    "catmullClark": 4,
+    "none": 8
+   },
+   "bound_gprims": {
+    "universal <node graph>": 2,
+    "UsdPreviewSurface + MaterialX": 2
+   },
+   "materials": 3,
+   "surface_shaders": {
+    "ND_standard_surface_surfaceshader": 14,
+    "UsdPreviewSurface": 13
+   },
+   "lobes": {
+    "ND_standard_surface_surfaceshader": {
+     "emission (texture)": 1,
+     "diffuse_roughness": 1,
+     "subsurface": 1,
+     "transmission": 1,
+     "metalness": 1
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 9,
+   "texture_formats": {
+    "exr": 9
+   },
+   "udim_textures": 0,
+   "lights": {
+    "RectLight": 5
+   },
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "unbound non-constant displayColor": 2
+   },
+   "camera": "/standard_shader_ball_scene/camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "no surface terminal": 4,
+    "displayColor ignored": 5
+   },
+   "lotus_warning_details": {
+    "displayColor ignored: only constant interpolation is supported": 5
+   }
+  },
+  {
+   "stage": "assets/full_assets/CarbonFrameBike/CarbonFrameBike.usdz",
+   "gprims": {
+    "Mesh": 331
+   },
+   "subdivision": {
+    "none": 331
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 331
+   },
+   "materials": 31,
+   "surface_shaders": {
+    "UsdPreviewSurface": 31
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic": 19
+    }
+   },
+   "preview_graphs": {
+    "normal: UsdUVTexture <- UsdTransform2d": 8,
+    "diffuseColor: UsdUVTexture <- UsdTransform2d": 3
+   },
+   "preview_unread_inputs": {},
+   "textures": 10,
+   "texture_formats": {
+    "jpg": 8,
+    "png": 2
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "skinned meshes": 4
+   },
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "untranslated connection": 9,
+    "mesh rejected": 4,
+    "displayColor ignored": 2
+   },
+   "lotus_warning_details": {
+    "input normal": 8,
+    "input diffuseColor": 3,
+    "mesh rejected: face vertex index is out of range": 4,
+    "displayColor ignored: only constant interpolation is supported": 2
+   }
+  },
+  {
+   "stage": "assets/full_assets/ElephantWithMonochord/SoC-ElephantWithMonochord.usdz",
+   "gprims": {
+    "Mesh": 3
+   },
+   "subdivision": {
+    "none": 3
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 3
+   },
+   "materials": 2,
+   "surface_shaders": {
+    "UsdPreviewSurface": 2
+   },
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 2,
+   "texture_formats": {
+    "png": 2
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "skinned meshes": 2
+   },
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "mesh rejected": 2
+   },
+   "lotus_warning_details": {
+    "mesh rejected: face vertex index is out of range": 2
+   }
+  },
+  {
+   "stage": "assets/full_assets/McUsd/McUsd.usda",
+   "gprims": {
+    "Mesh": 23
+   },
+   "subdivision": {
+    "catmullClark": 23
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 23
+   },
+   "materials": 23,
+   "surface_shaders": {
+    "UsdPreviewSurface": 23
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic (texture)": 9,
+     "opacity (texture)": 9
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 74,
+   "texture_formats": {
+    "png": 74
+   },
+   "udim_textures": 0,
+   "lights": {
+    "DistantLight": 1,
+    "DomeLight": 1
+   },
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "/Camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/full_assets/Teapot/Teapot.usd",
+   "gprims": {
+    "Mesh": 1
+   },
+   "subdivision": {
+    "catmullClark": 1
+   },
+   "bound_gprims": {
+    "universal <node graph>": 1
+   },
+   "materials": 1,
+   "surface_shaders": {
+    "UsdPreviewSurface": 2
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic (texture)": 1
+    }
+   },
+   "preview_graphs": {
+    "diffuseColor: UsdPrimvarReader_float3": 1
+   },
+   "preview_unread_inputs": {},
+   "textures": 2,
+   "texture_formats": {
+    "jpg": 2
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "untranslated connection": 1,
+    "GeomSubset bindings ignored": 1
+   },
+   "lotus_warning_details": {
+    "input diffuseColor": 1
+   }
+  },
+  {
+   "stage": "assets/full_assets/cookie/usd_cookie.usdz",
+   "gprims": {
+    "Mesh": 1
+   },
+   "subdivision": {
+    "none": 1
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 1
+   },
+   "materials": 1,
+   "surface_shaders": {
+    "UsdPreviewSurface": 1
+   },
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 1,
+   "texture_formats": {
+    "png": 1
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "Kitchen_set/Kitchen_set/Kitchen_set.usd",
+   "gprims": {
+    "Mesh": 1788
+   },
+   "subdivision": {
+    "catmullClark": 1788
+   },
+   "bound_gprims": {},
+   "materials": 0,
+   "surface_shaders": {},
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 0,
+   "texture_formats": {},
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "unbound displayColor": 1784,
+    "unbound displayOpacity < 1": 13
+   },
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "not Lotus": 76
+   },
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "AutodeskTelescope/AutodeskTelescope.usdz",
+   "gprims": {
+    "Mesh": 345
+   },
+   "subdivision": {
+    "none": 345
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 344,
+    "no surface": 1
+   },
+   "materials": 29,
+   "surface_shaders": {
+    "UsdPreviewSurface": 28
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic": 7,
+     "opacity < 1": 1
+    }
+   },
+   "preview_graphs": {
+    "diffuseColor: node graph of UsdPrimvarReader_float2, UsdTransform2d, UsdUVTexture": 9,
+    "normal: node graph of UsdPrimvarReader_float2, UsdTransform2d, UsdUVTexture": 1
+   },
+   "preview_unread_inputs": {},
+   "textures": 10,
+   "texture_formats": {
+    "png": 10
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "GeomSubset material bindings": 627
+   },
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "untranslated connection": 10,
+    "no surface terminal": 1,
+    "GeomSubset bindings ignored": 82
+   },
+   "lotus_warning_details": {
+    "input diffuseColor": 9,
+    "input normal": 1
+   }
+  },
+  {
+   "stage": "assets/test_assets/USDZ/DamagedHelmet/DamagedHelmet.usdz",
+   "gprims": {
+    "Mesh": 1
+   },
+   "subdivision": {
+    "none": 1
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 1
+   },
+   "materials": 1,
+   "surface_shaders": {
+    "UsdPreviewSurface": 1
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic (texture)": 1
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 5,
+   "texture_formats": {
+    "jpg": 5
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "pixar/Mat_2021.usd",
+   "gprims": {
+    "Mesh": 3
+   },
+   "subdivision": {
+    "catmullClark": 3
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 3
+   },
+   "materials": 3,
+   "surface_shaders": {
+    "UsdPreviewSurface": 3
+   },
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 0,
+   "texture_formats": {},
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/MaterialXTest/basicTextured.usda",
+   "gprims": {
+    "Mesh": 1
+   },
+   "subdivision": {
+    "none": 1
+   },
+   "bound_gprims": {
+    "MaterialX only (ND_standard_surface_surfaceshader)": 1
+   },
+   "materials": 1,
+   "surface_shaders": {
+    "ND_UsdPreviewSurface_surfaceshader": 2,
+    "ND_standard_surface_surfaceshader": 2
+   },
+   "lobes": {
+    "ND_standard_surface_surfaceshader": {
+     "metalness": 1,
+     "coat": 1
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 2,
+   "texture_formats": {
+    "jpg": 2
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "no surface terminal": 2
+   },
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/TextureTransformTest/TextureTransformTest.usd",
+   "gprims": {
+    "Mesh": 12
+   },
+   "subdivision": {
+    "none": 12
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 12
+   },
+   "materials": 9,
+   "surface_shaders": {
+    "UsdPreviewSurface": 9
+   },
+   "lobes": {},
+   "preview_graphs": {
+    "diffuseColor: UsdUVTexture <- UsdTransform2d": 6
+   },
+   "preview_unread_inputs": {},
+   "textures": 5,
+   "texture_formats": {
+    "png": 5
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "untranslated connection": 6
+   },
+   "lotus_warning_details": {
+    "input diffuseColor": 6
+   }
+  },
+  {
+   "stage": "assets/test_assets/NormalsTextureBiasAndScale/NormalsTextureBiasAndScale.usda",
+   "gprims": {
+    "Mesh": 3
+   },
+   "subdivision": {
+    "catmullClark": 3
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 3
+   },
+   "materials": 3,
+   "surface_shaders": {
+    "UsdPreviewSurface": 3
+   },
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 3,
+   "texture_formats": {
+    "png": 3
+   },
+   "udim_textures": 0,
+   "lights": {
+    "DistantLight": 4
+   },
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "/Camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/RoughnessTest/RoughnessTest.usdz",
+   "gprims": {
+    "Mesh": 6
+   },
+   "subdivision": {
+    "none": 6
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 6
+   },
+   "materials": 6,
+   "surface_shaders": {
+    "UsdPreviewSurface": 6
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "metallic": 6,
+     "opacity (texture)": 6
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 2,
+   "texture_formats": {
+    "tga": 1,
+    "png": 1
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/AlphaBlendModeTest/AlphaBlendModeTest.usd",
+   "gprims": {
+    "Mesh": 9
+   },
+   "subdivision": {
+    "none": 9
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 9
+   },
+   "materials": 6,
+   "surface_shaders": {
+    "UsdPreviewSurface": 6
+   },
+   "lobes": {
+    "UsdPreviewSurface": {
+     "opacity (texture)": 4,
+     "metallic (texture)": 1
+    }
+   },
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 4,
+   "texture_formats": {
+    "png": 4
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/TextureCoordinateTest/TextureCoordinateTest.usda",
+   "gprims": {
+    "Mesh": 5
+   },
+   "subdivision": {
+    "none": 5
+   },
+   "bound_gprims": {
+    "UsdPreviewSurface": 5
+   },
+   "materials": 5,
+   "surface_shaders": {
+    "UsdPreviewSurface": 5
+   },
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 1,
+   "texture_formats": {
+    "png": 1
+   },
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {},
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {},
+   "lotus_warning_details": {}
+  },
+  {
+   "stage": "assets/test_assets/PrimvarInterpolation/primvar_interpolation.usda",
+   "gprims": {
+    "Mesh": 7
+   },
+   "subdivision": {
+    "catmullClark": 7
+   },
+   "bound_gprims": {},
+   "materials": 0,
+   "surface_shaders": {},
+   "lobes": {},
+   "preview_graphs": {},
+   "preview_unread_inputs": {},
+   "textures": 0,
+   "texture_formats": {},
+   "udim_textures": 0,
+   "lights": {},
+   "unsupported_lights": [],
+   "light_attributes": {},
+   "counts": {
+    "unbound displayColor": 1,
+    "unbound non-constant displayColor": 6
+   },
+   "camera": "usdrecord free camera",
+   "lotus_exit": 0,
+   "storm_exit": 0,
+   "lotus_warnings": {
+    "displayColor ignored": 6
+   },
+   "lotus_warning_details": {
+    "displayColor ignored: only constant interpolation is supported": 6
+   }
+  }
+ ]
+}
