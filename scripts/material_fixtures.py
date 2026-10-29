@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Write or check the committed UsdPreviewSurface material fixtures.
+"""Write or check the committed material fixtures.
 
-Each fixture is authored here as USD text and PNG images, with no OpenUSD
+Each fixture is authored here as USD text and PNG images, its materials
+UsdPreviewSurface or MaterialX Standard Surface networks, with no OpenUSD
 or imaging dependency, and mirrored as a Lotus scene in
 adapters/common/material_fixtures.cpp. The Hydra fixture test requires the
 two to agree; the headless check renders the mirror against the committed
@@ -1006,6 +1007,225 @@ def alpha():
     return "\n".join(lines)
 
 
+# material-mtlx-v1's MaterialX node inputs' and outputs' USD types, by node
+# definition, as usdMtlx converts them.
+MTLX_INPUT_TYPES = {
+    "ND_standard_surface_surfaceshader": {
+        "base": "float", "base_color": "color3f", "coat": "float", "emission": "float",
+        "emission_color": "color3f", "metalness": "float", "normal": "float3",
+        "opacity": "color3f", "sheen": "float", "specular": "float",
+        "specular_IOR": "float", "specular_roughness": "float", "transmission": "float"},
+    "ND_image_color3": {"default": "color3f", "file": "asset", "texcoord": "float2",
+                        "uaddressmode": "string", "vaddressmode": "string"},
+    "ND_image_float": {"file": "asset"},
+    "ND_image_vector3": {"file": "asset"},
+    "ND_tiledimage_color3": {"file": "asset", "uvtiling": "float2"},
+    "ND_geompropvalue_vector2": {"geomprop": "string"},
+    "ND_extract_vector3": {"in": "float3", "index": "int"},
+    "ND_convert_vector3_color3": {"in": "float3"},
+    "ND_normalmap_vector2": {"in": "float3", "scale": "float2"},
+    "ND_multiply_color3FA": {"in1": "color3f", "in2": "float"},
+}
+MTLX_OUTPUT_TYPES = {
+    "ND_image_color3": "color3f", "ND_image_float": "float", "ND_image_vector3": "float3",
+    "ND_tiledimage_color3": "color3f", "ND_geompropvalue_vector2": "float2",
+    "ND_extract_vector3": "float", "ND_convert_vector3_color3": "color3f",
+    "ND_normalmap_vector2": "float3", "ND_multiply_color3FA": "color3f",
+}
+OUT = "out"
+
+
+def image(kind, file=None, space=None, **inputs):
+    """An ND_image node of output type `kind` reading
+    validation/materials/textures/<file>, in the MaterialX colour space
+    `space` when given."""
+    authored = dict(inputs)
+    if file is not None:
+        authored["file"] = f"./textures/{file}"
+    if space is not None:
+        authored["colorSpace"] = space
+    return (f"ND_image_{kind}", authored)
+
+
+def mtlx(surface, preview=None, **nodes):
+    """A material: its Standard Surface inputs, the UsdPreviewSurface inputs
+    of a universal surface beside it, and its other MaterialX nodes."""
+    return {"surface": surface, "preview": preview, "nodes": nodes}
+
+
+SRGB_PALETTE = image("color3", "palette.png", "srgb_texture")
+PALETTE_LOOKUP = {"base_color": output("Image", OUT)}
+# material-mtlx-v1's materials. Constant cards are teal.
+MTLX_LOOKS = [
+    ("Defaults", mtlx({})),
+    ("Weighted", mtlx({"base": 0.5, "base_color": (0.9, 0.3, 0.1)})),
+    ("Metal", mtlx({"base_color": (0.95, 0.64, 0.54), "metalness": 1,
+                    "specular_roughness": 0.3})),
+    ("Ior", mtlx({"base_color": (0.1, 0.2, 0.6), "specular_IOR": 2.5,
+                  "specular_roughness": 0.1})),
+    ("NoSpecular", mtlx({"base_color": (0.6, 0.6, 0.6), "specular": 0,
+                         "specular_roughness": 0.1})),
+    ("Emissive", mtlx({"base_color": (0, 0, 0), "emission": 2, "emission_color": WARM})),
+    ("Opacity", mtlx({"base_color": TEAL, "opacity": (0.5, 0.5, 0.5)})),
+    ("Clamped", mtlx({"base": 1.5, "base_color": (1, 0.5, -0.25), "metalness": -1,
+                      "specular_roughness": 1.5})),
+    # Lobes the material IR lacks are reported and ignored.
+    ("Lobes", mtlx({"base_color": TEAL, "coat": 1, "sheen": 0.5, "transmission": 1})),
+    # Both surfaces: the MaterialX one wins.
+    ("Precedence", mtlx({"base_color": (0.1, 0.2, 0.8)},
+                        preview={"diffuseColor": (0.8, 0.1, 0.05)})),
+    ("Srgb", mtlx(PALETTE_LOOKUP, Image=SRGB_PALETTE)),
+    ("Raw", mtlx(PALETTE_LOOKUP, Image=image("color3", "palette.png"))),
+    ("WeightedImage", mtlx({"base": 0.5, **PALETTE_LOOKUP}, Image=SRGB_PALETTE)),
+    ("Channels", mtlx({"base_color": (0.95, 0.64, 0.54),
+                       "metalness": output("Metal", OUT),
+                       "specular_roughness": output("Ramp", OUT)},
+                      Metal=("ND_extract_vector3", {"in": output("Orm", OUT), "index": 2}),
+                      Orm=image("vector3", "rgba.png"), Ramp=image("float", "ramp.png"))),
+    ("EmissionMap", mtlx({"base_color": (0, 0, 0), "emission": 1,
+                          "emission_color": output("Glow", OUT)},
+                         Glow=("ND_convert_vector3_color3", {"in": output("Image", OUT)}),
+                         Image=image("vector3", "palette.png"))),
+    ("Clamp", mtlx(PALETTE_LOOKUP, Image=image("color3", "palette.png", "srgb_texture",
+                                               uaddressmode="clamp", vaddressmode="clamp"))),
+    ("Mirror", mtlx(PALETTE_LOOKUP, Image=image("color3", "palette.png", "srgb_texture",
+                                                uaddressmode="mirror", vaddressmode="mirror"))),
+    ("Constant", mtlx(PALETTE_LOOKUP,
+                      Image=image("color3", "palette.png", "srgb_texture",
+                                  uaddressmode="constant", vaddressmode="constant"))),
+    ("Named", mtlx(PALETTE_LOOKUP,
+                   Image=image("color3", "palette.png", "srgb_texture",
+                               texcoord=output("Coords", OUT)),
+                   Coords=("ND_geompropvalue_vector2", {"geomprop": "uv1"}))),
+    ("NormalMap", mtlx({"base_color": (0.7, 0.7, 0.7), "normal": output("Normal", OUT),
+                        "specular_roughness": 0.4},
+                       Normal=("ND_normalmap_vector2", {"in": output("Bumps", OUT)}),
+                       Bumps=image("vector3", "tilts.png"))),
+    ("NormalScale", mtlx({"base_color": (0.7, 0.7, 0.7), "normal": output("Normal", OUT),
+                          "specular_roughness": 0.4},
+                         Normal=("ND_normalmap_vector2",
+                                 {"in": output("Bumps", OUT), "scale": (0.5, 0.5)}),
+                         Bumps=image("vector3", "tilts.png"))),
+    ("Tiled", mtlx(PALETTE_LOOKUP,
+                   Image=("ND_tiledimage_color3", {"file": "./textures/palette.png",
+                                                   "colorSpace": "srgb_texture",
+                                                   "uvtiling": (1, 1)}))),
+    ("Fileless", mtlx(PALETTE_LOOKUP, Image=image("color3", default=(0.2, 0.6, 0.9)))),
+    # A node the translator does not read: the input keeps its default.
+    ("Untranslated", mtlx({"base_color": output("Multiply", OUT)},
+                          Multiply=("ND_multiply_color3FA",
+                                    {"in1": output("Image", OUT), "in2": 0.5}),
+                          Image=SRGB_PALETTE)),
+]
+
+
+def mtlx_shader(material, name, kind, inputs, outputs):
+    """A MaterialX Shader prim's lines, inputs in name order, an image's
+    file with its colour space, then `outputs` (name, type) pairs."""
+    lines = [f'            def Shader "{name}"', "            {",
+             f'                uniform token info:id = "{kind}"']
+    for key in sorted(inputs):
+        if key == "colorSpace":
+            continue
+        authored = inputs[key]
+        prefix = f"{MTLX_INPUT_TYPES[kind][key]} inputs:{key}"
+        if isinstance(authored, tuple) and authored and authored[0] == "connect":
+            lines.append(f"                {prefix}.connect = "
+                         f"<{material}/{authored[1]}.outputs:{authored[2]}>")
+        elif key == "file" and "colorSpace" in inputs:
+            lines += [f"                {prefix} = @{authored}@ (",
+                      f'                    colorSpace = "{inputs["colorSpace"]}"',
+                      "                )"]
+        else:
+            lines.append(f"                {prefix} = "
+                         f"{value(MTLX_INPUT_TYPES[kind][key], authored)}")
+    lines += [f"                {output_type} outputs:{output_name}"
+              for output_name, output_type in outputs]
+    return lines + ["            }"]
+
+
+def mtlx_looks(root, materials):
+    """The Looks scope of `root`'s (name, MaterialX material) pairs."""
+    lines = ['    def Scope "Looks"', "    {"]
+    for index, (name, material) in enumerate(materials):
+        path = f"/{root}/Looks/{name}"
+        lines += [
+            f'        def Material "{name}"',
+            "        {",
+            f"            token outputs:mtlx:surface.connect = <{path}/Surface.outputs:out>",
+        ]
+        if material["preview"] is not None:
+            lines.append(f"            token outputs:surface.connect = "
+                         f"<{path}/Preview.outputs:surface>")
+            lines += [""] + shader(path, "Preview", "UsdPreviewSurface", material["preview"])
+            lines += ["                token outputs:surface", "            }"]
+        lines += [""] + mtlx_shader(path, "Surface", "ND_standard_surface_surfaceshader",
+                                    material["surface"], [("out", "token")])
+        for node in sorted(material["nodes"]):
+            kind, inputs = material["nodes"][node]
+            lines += [""] + mtlx_shader(path, node, kind, inputs,
+                                        [("out", MTLX_OUTPUT_TYPES[kind])])
+        lines.append("        }")
+        if index + 1 < len(materials):
+            lines.append("")
+    return lines + ["    }"]
+
+
+def materialx():
+    unit_st = primvar("st", UNIT)
+    wide_st = primvar("st", WIDE)
+    named_st = unit_st + primvar("uv1", ((1, 0), (1, 1), (0, 1), (0, 0)))
+    sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
+    smooth = normal_attribute("normals", sphere(COARSE_SEGMENTS, COARSE_RINGS)[0])
+    # Rows from the top: constants on spheres; constants on cards, ignored
+    # lobes and surface precedence; images, weights and channels; address
+    # modes over WIDE and a named coordinate set; then normal maps, an
+    # identity tiled image, an image without a file and an untranslated
+    # node. Each entry is the object's name, the class it inherits, its
+    # material, the lines it adds and its scale.
+    rows = [
+        [(name, "_Sphere", name, smooth, sphere_scale)
+         for name in ("Defaults", "Weighted", "Metal", "Ior", "NoSpecular")],
+        [(name, "_Card", name, [], card_scale)
+         for name in ("Emissive", "Opacity", "Clamped", "Lobes", "Precedence")],
+        [(name, "_Card", name, unit_st, card_scale)
+         for name in ("Srgb", "Raw", "WeightedImage", "Channels", "EmissionMap")],
+        [("Periodic", "_Card", "Srgb", wide_st, card_scale),
+         ("Clamp", "_Card", "Clamp", wide_st, card_scale),
+         ("Mirror", "_Card", "Mirror", wide_st, card_scale),
+         ("Constant", "_Card", "Constant", wide_st, card_scale),
+         ("Named", "_Card", "Named", named_st, card_scale)],
+        [("NormalMap", "_Sphere", "NormalMap", smooth + primvar("st", latlong((4, 2))),
+          sphere_scale),
+         ("NormalScale", "_Card", "NormalScale", unit_st, card_scale),
+         ("Tiled", "_Card", "Tiled", unit_st, card_scale),
+         ("Fileless", "_Card", "Fileless", [], card_scale),
+         ("Untranslated", "_Card", "Untranslated", unit_st, card_scale)],
+    ]
+    lines = header("MaterialMtlx", "SetMaterialMtlx", sphere_class() + CARD_CLASS)
+    lines += mtlx_looks("MaterialMtlx", MTLX_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for y, row in zip(CARD_ROWS, rows):
+        for x, (name, base, material, extra, scale) in zip(CARD_COLUMNS, row):
+            lines += [
+                f'        def Mesh "{name}" (',
+                '            prepend apiSchemas = ["MaterialBindingAPI"]',
+                f"            prepend inherits = </{base}>",
+                "        )",
+                "        {",
+                f"            rel material:binding = </MaterialMtlx/Looks/{material}>",
+                *extra,
+                f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                "        }",
+            ]
+            if (x, y) != (CARD_COLUMNS[-1], CARD_ROWS[-1]):
+                lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
 # Every committed file, relative to DIRECTORY: USD text or image bytes.
 FIXTURES = {
     "material-basics-v1.usda": basics,
@@ -1013,6 +1233,7 @@ FIXTURES = {
     "material-normals-v1.usda": normals,
     "material-emission-v1.usda": emission,
     "material-alpha-v1.usda": alpha,
+    "material-mtlx-v1.usda": materialx,
     **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
     "textures/glow.hdr": lambda: radiance(*GLOW),
 }

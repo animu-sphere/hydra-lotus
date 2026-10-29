@@ -122,7 +122,11 @@ in MaterialXTest. No surveyed stage uses OpenPBR.
 - **StandardShaderBall's ground texture.** The ground's
   `UsdPreviewSurface` reads an ACEScg EXR through a plain `st` reader.
   Storm shows its numbered grid; Lotus, even brightened, shows an even grey
-  and gives no warning. The cause is not established.
+  and gives no warning. The cause is not established. (Later: the ground's
+  `st` lies outside the image, where the `UsdPreviewSurface` lookup's
+  `useMetadata` wraps read black; Storm renders the MaterialX surface,
+  which repeats. See the
+  [MaterialX report](2026-10-29-materialx-standard-surface.md#the-shader-balls-ground-texture).)
 - **Renderer selection.** With `hdLotus` on `PXR_PLUGINPATH_NAME`,
   `usdrecord --renderer Storm` (or `GL`) created the Lotus renderer and
   produced byte-identical Lotus images, although the `HD_RENDERER_PLUGIN`

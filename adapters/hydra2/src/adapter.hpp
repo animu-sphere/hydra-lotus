@@ -98,6 +98,8 @@ public:
   void DestroyBprim(HdBprim* bprim) override;
   void CommitResources(HdChangeTracker* tracker) override;
   HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
+  // A material's MaterialX surface wins over its universal one.
+  TfTokenVector GetMaterialRenderContexts() const override;
   // convergedSamplesPerPixel: the radiance samples per pixel at which a
   // path-traced frame converges. lotus:sampleIndex: the sample index of an
   // accumulation's first sample, which selects its random numbers (0 by

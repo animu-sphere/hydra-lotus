@@ -866,7 +866,8 @@ The reference path tracer's images are of one fixed scene, rendered by
 
 ### Material fixtures
 
-LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures are committed USD files in
+LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures and LOTUS-MTLX-01's
+MaterialX fixture are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
 USD files and the images in `validation/materials/textures/`: 8-bit PNG
@@ -994,6 +995,24 @@ Its negative control decodes the alpha of the 8-bit sRGB images as sRGB,
 as a decoder treating alpha as colour would; it changes six objects.
 `usdchecker` reports only the unresolvable `missing.png`, not the
 threshold's connection.
+
+**`material-mtlx-v1`** covers the MaterialX Standard Surface subset at
+160×160 under the same camera, lights and backdrop, on a 5×5 grid of the
+emission fixture's spheres, with vertex normals, and cards. Every material's
+surface is an `ND_standard_surface_surfaceshader` behind
+`outputs:mtlx:surface`; images are `ND_image` nodes at the default
+coordinates, `st`, under the default periodic address modes unless stated.
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Constants | Defaults, Weighted, Metal, Ior, NoSpecular | nothing authored, so base colour 0.8 and roughness 0.2; `base` 0.5 times `base_color` (0.9, 0.3, 0.1); `metalness` 1 over (0.95, 0.64, 0.54) at `specular_roughness` 0.3; `specular_IOR` 2.5 over (0.1, 0.2, 0.6) at 0.1; `specular` 0, which translates to ior 1, over 0.6 grey at 0.1 |
+| Constants on cards | Emissive, Opacity, Clamped, Lobes, Precedence | black with `emission` 2 times `emission_color` (1, 0.6, 0.2); teal with grey `opacity` 0.5, stochastic coverage; `base` 1.5 times (1, 0.5, −0.25), `metalness` −1 and `specular_roughness` 1.5, which translate to (1, 0.75, 0), 0 and 1; teal with `coat` 1, `sheen` 0.5 and `transmission` 1, which are ignored and warn; blue (0.1, 0.2, 0.8) beside a red universal `UsdPreviewSurface`, which the MaterialX surface overrides |
+| Images | Srgb, Raw, WeightedImage, Channels, EmissionMap | the palette under `srgb_texture`; the palette without a colour space, raw; the sRGB palette under `base` 0.5, a lookup scaled by 0.5; copper with `metalness` from `ND_extract_vector3` index 2 of `rgba.png` and `specular_roughness` from `ramp.png`, both raw; black with `emission` 1 times `ND_convert_vector3_color3` of the raw palette |
+| Coordinates | Periodic, Clamp, Mirror, Constant, Named | the sRGB palette over `st` from −0.5 to 1.5 under the default periodic, `clamp`, `mirror` and `constant` address modes, the last with a transparent black border; the palette at `ND_geompropvalue_vector2` `uv1`, `st` turned a quarter |
+| Normals and graphs | NormalMap, NormalScale, Tiled, Fileless, Untranslated | `ND_normalmap_vector2` of `tilts.png` on a sphere with `st` longitude by latitude times (4, 2), scale 2 and bias −1; the same map on a card at `scale` (0.5, 0.5), x and y scale 1 and bias −0.5; `ND_tiledimage_color3` with `uvtiling` (1, 1), Srgb's lookup; an `ND_image_color3` without a file whose `default` (0.2, 0.6, 0.9) is a constant; `ND_multiply_color3FA` of the sRGB palette, which keeps the default and warns |
+
+Its negative control ignores WeightedImage's base weight, as a translator
+reading only `base_color` would; it changes one card.
 
 - **Reference.** `lotus-headless --write-material-reference <directory>`
   renders each mirror in a cleared GPU scene in deterministic mode with BSDF
@@ -1866,8 +1885,16 @@ are not supported: `GeomSubset` material bindings are ignored, the mesh's
 own binding covering every face, and the adapter warns, naming the mesh,
 whenever it reads a topology with such a binding.
 
+The delegate requests the `mtlx` render context
+(`GetMaterialRenderContexts`): a material with an `outputs:mtlx:surface`
+hands over that network, and one with only a universal `outputs:surface`
+its universal network. A material with both is translated from its
+MaterialX surface, as Storm renders it.
+
 The material translator (`adapters/hydra2/src/material_translator.*`) reads
-the network's surface terminal when it is a `UsdPreviewSurface`:
+the network's surface terminal when it is a `UsdPreviewSurface`, or
+MaterialX's `ND_UsdPreviewSurface_surfaceshader`, which it reads the same
+way:
 
 | IR field | Input | Rule |
 | --- | --- | --- |
@@ -1906,12 +1933,55 @@ texture, or a second texture-coordinate source) takes its default and is
 reported as connected; the adapter warns, naming the material and those
 inputs, whenever it translates the material.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
-returns its fallback. Any other surface shader, or a network without a
+returns its fallback. A surface shader other than these and the
+[Standard Surface](#materialx-standard-surface), or a network without a
 surface, warns and leaves the default material.
 Texture-driven `ior` and `opacityThreshold`, which the specification makes
 interface-only, are reported as untranslated connections. `opacityMode`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
+
+#### MaterialX Standard Surface
+
+An `ND_standard_surface_surfaceshader` surface starts from Standard
+Surface's defaults where the IR's differ, base colour 0.8 and roughness 0.2,
+and translates these inputs:
+
+| IR field | Input | Rule |
+| --- | --- | --- |
+| `base_color`, `base_color_texture` | `base` × `base_color` | each component clamped to [0, 1] |
+| `emission`, `emission_texture` | `emission` × `emission_color` | each component clamped to be non-negative |
+| `metallic`, `metallic_texture` | `metalness` | clamped to [0, 1] |
+| `roughness`, `roughness_texture` | `specular_roughness` | clamped to [0, 1]; both square it into the microfacet alpha |
+| `ior` | `specular_IOR`, `specular` | constant clamped to [1, largest finite float]; `specular` 0 sets 1, removing the dielectric interface |
+| `opacity` | `opacity` | the mean of a constant colour, clamped to [0, 1] |
+| `normal`, `normal_texture` | `normal` | an `ND_normalmap` of an image, or of its default |
+
+A product takes a lookup on one side only, whose scale, bias and fallback
+the other side's constant multiplies; a scalar lookup cannot weight a
+colour. Inputs are constants or graphs of these nodes:
+
+| Node | Translation |
+| --- | --- |
+| `ND_image_*`, `ND_tiledimage_*` | a lookup of `file` with the key `<resolved path>|<colour space>`: `sRGB` when the file's colour space is an `srgb_*` one, otherwise `raw`; `uaddressmode` and `vaddressmode` `periodic` (the default) repeat, and `clamp`, `mirror` and `constant` (transparent black) map to the IR's; `default` is the fallback; the coordinates are `texcoord`'s, the `st` set when it is unconnected. Without a file, the node is its `default` constant. A tiled image translates only untiled: `uvtiling` (1, 1), `uvoffset` (0, 0) and no real-world sizes |
+| `ND_texcoord_vector2` | the `st` set for index 0; other indices are not translated |
+| `ND_geompropvalue_vector2` | the `geomprop` set, with `default` as its fallback |
+| `ND_extract_*` | a constant's component, or a lookup's channel `index` |
+| `ND_convert_*` | a scalar constant spreads to every component; a lookup converts only between three- and four-component types |
+| `ND_normalmap*` | the image's unsigned tangent-space normal signed by scale 2 and bias −1, with x and y times `scale` (a float or a vector2); only in tangent space, with its default frame inputs |
+
+Other nodes, and the cases these rules exclude, leave the input's default
+and are reported as connected inputs, as above. The IR cannot represent
+`coat`, `diffuse_roughness`, `sheen`, `specular_anisotropy`, `subsurface`,
+`thin_film_thickness` or `transmission` when non-zero or driven by a graph,
+`specular` other than 0 or 1, a `specular_color` other than white where
+`specular` is not 0 (a metal's edge tint included), a coloured `opacity` or
+an authored constant `normal`, which is in world space. The translation
+ignores them, and the adapter warns, naming the material and those inputs,
+whenever it translates the material. Their dependent inputs (`coat_color`,
+`transmission_color` and so on) and `thin_walled` are not read. `constant`
+addressing is exact only where `default` is zero. Other MaterialX surfaces,
+OpenPBR's included, warn and leave the default material.
 
 A mesh without a material binding uses its constant `displayColor` as
 linear RGB base colour, with components clamped to [0, 1], and the other
@@ -1926,7 +1996,7 @@ binding a surface, removing the colour or removing the mesh releases the
 private material. CTest `lotus-renderer-hydra-material` and its `-gpu`
 variant check these transitions and the rendered radiance; the
 [material fixtures](#material-fixtures) check committed `UsdPreviewSurface`
-assets from file to image.
+and MaterialX assets from file to image.
 
 The adapter decodes each image a material names with Hio
 (`HioImage::OpenForReading` under the source colour space) when the first

@@ -1262,6 +1262,14 @@ public:
                 "does not translate: %s",
             GetId().GetText(), inputs.c_str());
       }
+      if (!translation.unrepresented_inputs.empty()) {
+        std::string inputs;
+        for (const TfToken& input : translation.unrepresented_inputs) {
+          inputs += (inputs.empty() ? "" : ", ") + input.GetString();
+        }
+        TF_WARN("Lotus ignores %s inputs its material cannot represent: %s",
+            GetId().GetText(), inputs.c_str());
+      }
       state_->SyncMaterial(GetId(), translation);
     }
     *dirty_bits = Clean;
@@ -2465,6 +2473,10 @@ void HdLotusRenderDelegate::CommitResources(HdChangeTracker* tracker) {
 HdAovDescriptor HdLotusRenderDelegate::GetDefaultAovDescriptor(
     const TfToken& name) const {
   return AovDescriptor(name);
+}
+
+TfTokenVector HdLotusRenderDelegate::GetMaterialRenderContexts() const {
+  return HdLotusMaterialRenderContexts();
 }
 
 HdRenderSettingDescriptorList
