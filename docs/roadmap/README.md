@@ -11,7 +11,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | Where v0.7.0 left off, and deferred adapter work. |
+| [current.md](current.md) | The v0.8.0 tasks, and deferred adapter work. |
 
 ## Sequences
 
@@ -53,10 +53,34 @@ completion of its parent phase.
 | Renderer Phase 5 — ReSTIR DI | ✅ exit criteria met ([exit review](../reports/2026-10-17-renderer-phase5-exit.md)): initial, temporal and spatial reservoirs, proposals and Hydra controls/AOVs ([contract](../reference/RESTIR.md)); animation/reset contract kept ([animation](../reports/2026-10-17-restir-animation.md), [reset contract](../reports/2026-10-17-restir-reset-contract.md)); no reuse bias, ghosting or localized error detected in the bounded fixtures; [reuse cost](../reports/2026-10-17-restir-reuse-cost.md) at locked clocks: NEE/MIS stays the default, initial-only reservoirs with eight candidates about 1.4× faster to equal quality only with many distant lights, temporal, spatial and combined reuse not worth using; the [stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di) applies | [v0.5.0 experimental snapshot](../releases/v0.5.0.md); closure [v0.5.1](../releases/v0.5.1.md) |
 | Renderer Phase 6 — Denoising / SVGF-class pipeline | ✅ exit criteria met ([exit review](../reports/2026-10-18-svgf-viewport.md#renderer-phase-6-exit)): temporal accumulation, moments and variance ([evidence](../reports/2026-10-18-svgf-moments-variance.md)); edge-aware filtering and reference comparison under both integrators ([evidence](../reports/2026-10-18-svgf-filter.md)); run-time switching, raw/filtered comparison, history and variance views and denoise timing in the viewport ([evidence](../reports/2026-10-18-svgf-viewport.md)); [release gate passed](../reports/2026-10-18-v0.6.0-release-gate.md) | [v0.6.0](../releases/v0.6.0.md) |
 | Renderer Phase 7 — ReSTIR GI / advanced reservoir transport | ⬜ | unscheduled |
-| Renderer Phase 8 — Production material support | ⬜ | full phase unscheduled; selected foundation subset in the practical-foundation delivery below |
+| Renderer Phase 8 — Production material support | ⬜ | full phase unscheduled; selected foundation subset in the practical-foundation delivery and selected MaterialX and asset-gap subsets in the Materials & Lighting delivery below |
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | full phase unscheduled; selected profiling subset in the practical-foundation delivery below |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
+| Materials & Lighting — cross-phase delivery | 🚧 tasks selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a MaterialX Standard Surface subset, texture transforms, per-face materials and primvar colour, and skinned meshes; no lighting task, since no asset demonstrated a lighting gap; selected subsets only | v0.8.0 ([plan](#v080--materials--lighting)) |
+
+## v0.8.0 — Materials & Lighting
+
+Expand materials and lighting where real assets need it, under the
+[strategy's entry conditions](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
+The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision)
+met the material condition: 18 third-party USD stages rendered through
+Hydra showed MaterialX-only surfaces, texture transforms, per-face
+materials and primvar colours falling back to defaults, and skinned meshes
+dropped. No stage demonstrated a lighting gap. The lighting condition is
+therefore not met, and light selection stays in Renderer Phase 9.
+
+| Task | Delivery scope | Exit evidence |
+| --- | --- | --- |
+| LOTUS-MTLX-01 (P0, Renderer Phase 8 subset) | MaterialX Standard Surface into the existing material IR; inputs it cannot represent warn | Committed fixture with mirror, references and Hydra/headless agreement; OpenChessSet and StandardShaderBall show their authored materials |
+| LOTUS-MATERIAL-02 (P1, Renderer Phase 8 subset) | `UsdTransform2d`, `GeomSubset` per-face materials, colour primvars, unbound `displayOpacity` | Committed fixtures per case; the survey's stages lose those warnings |
+| LOTUS-SKEL-01 (P1, Hydra adapter) | Skinned meshes at their posed points | Committed skinned fixture against OpenUSD's skinning; the survey's skinned meshes render |
+
+The [active queue](current.md#execution-order) owns each task's details and
+deferred remainder. Transmission, subsurface, coat, OpenPBR and lighting
+work are not exit gates. They enter only with an asset gap and, for new
+lobes, a transport contract. Reference-quality regressions remain
+disqualifying.
 
 ## v0.7.0 — Performance & Production Foundation
 
@@ -73,8 +97,7 @@ subsets, with no whole-phase exit implied. It shipped on 2026-10-28.
 | D (P1) — Light profiling | Selected Renderer Phase 9 investigation separating intersection and selection; acceleration implementation is conditional. LOTUS-LIGHT-05 [attributed the many-light cost to crossing tests](../reports/2026-10-25-light-crossing-cost.md#decisions) (go) and deferred selection; LOTUS-LIGHT-06 [adopted a crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision) (256-light frame 5.3–8.0× faster). | Same policy, D; a measured deferral is a valid investigation outcome. |
 
 Every workstream met its exit evidence and shipped in
-[v0.7.0](../releases/v0.7.0.md); the [active queue](current.md#execution-order)
-is empty until the next delivery is planned. The milestone established the
+[v0.7.0](../releases/v0.7.0.md). The milestone established the
 benchmark, selected bottleneck fixes, added representative material
 fixtures and compared memory optimizations. An unmeasured speedup,
 ReSTIR GI, complete MaterialX support and a UI redesign are not exit gates.
@@ -88,7 +111,6 @@ checklist.
 
 | Candidate | Direction | Entry condition |
 | --- | --- | --- |
-| v0.8.0 — Materials & Lighting | Prioritized OpenPBR/MaterialX subsets and measured lighting improvements. | Foundation fixtures demonstrate actual asset gaps; lighting comparisons include GPU time, quality, memory and low-light-count regressions. |
 | v0.9.0 — Interactive Quality | Disocclusion, ghosting, reset contracts and Interactive/Balanced/Reference presets of the same core. | Separate static convergence from motion; define preset behavior and invalidation by change category before implementation. |
 | v0.10.0 or later — Advanced Transport (tentative) | Bounded ReSTIR GI / path-guiding evaluation. | An experiment brief meets the [research rules](../design/POST_V060_STRATEGY.md#6-research-track-and-stop-rule); no automatic adoption or default change. |
 | Optional future modes | Neural denoising and spectral experiments. | Optional dependencies and a stable ordinary RGB path; costs and contracts established before expansion. |

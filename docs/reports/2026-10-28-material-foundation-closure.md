@@ -1,5 +1,7 @@
 # Material foundation closure: LOTUS-MATERIAL-01
 
+> Later: third-party assets demonstrated the need for `UsdTransform2d`, per-face materials and unbound `displayOpacity`, selected as LOTUS-MATERIAL-02 ([asset gap survey](2026-10-29-asset-gap-survey.md#decision)).
+
 Reviewed 2026-10-28 against `b4e2711`. This review adds no measurement and
 changes no renderer, shader, translator or harness code. It closes
 LOTUS-MATERIAL-01, the Renderer Phase 8 subset of

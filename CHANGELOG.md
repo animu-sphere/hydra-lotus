@@ -7,6 +7,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/asset_survey.py` counts a USD stage's material, geometry and
+  light features and classifies Lotus's Hydra warnings in `usdrecord` logs.
+  An [asset gap survey](docs/reports/2026-10-29-asset-gap-survey.md) of 18
+  third-party stages used it to select the v0.8.0 tasks.
+
 ## [0.7.0] - 2026-10-28
 
 The performance and production foundation release completes the v0.7.0
