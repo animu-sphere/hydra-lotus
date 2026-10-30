@@ -81,6 +81,13 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (subsurface)
     (thin_film_thickness)
     (transmission)
+    (transmission_color)
+    (transmission_depth)
+    (transmission_scatter)
+    (transmission_scatter_anisotropy)
+    (transmission_dispersion)
+    (transmission_extra_roughness)
+    (thin_walled)
     (texcoord)
     (uaddressmode)
     (vaddressmode)
@@ -630,12 +637,13 @@ public:
     Scalar(Tokens->specular_roughness, material.roughness,
         &material.roughness_texture, 0.0, 1.0);
     Scalar(Tokens->specular_IOR, material.ior, nullptr, 1.0, kLargest);
+    Transmission();
     Specular();
     Opacity();
     Normal();
     for (const TfToken& lobe : {Tokens->coat, Tokens->diffuse_roughness,
              Tokens->sheen, Tokens->specular_anisotropy, Tokens->subsurface,
-             Tokens->thin_film_thickness, Tokens->transmission}) {
+             Tokens->thin_film_thickness}) {
       const auto weight = graph_.Input(node_, lobe, ConstantValue({0.0F}));
       if (!weight || weight->lookup || weight->constant[0] != 0.0F) {
         translation_.unrepresented_inputs.push_back(lobe);
@@ -728,11 +736,71 @@ private:
     value = static_cast<float>(std::clamp<double>(result->constant[0], low, high));
   }
 
+  // A constant transmission weight and colour, and whether the surface is
+  // a thin wall (docs/design/TRANSMISSION.md section 9). A graph leaves the
+  // input's default. Under a positive transmission_depth the colour is
+  // absorption at that depth inside the medium, which is not represented:
+  // the transmitted light stays untinted. The medium's scattering,
+  // dispersion and extra roughness are ignored.
+  void Transmission() {
+    Lotus::Material& material = translation_.material;
+    const auto weight = graph_.Input(node_, Tokens->transmission, ConstantValue({0.0F}));
+    if (!weight || weight->lookup || weight->width != 1) {
+      translation_.unrepresented_inputs.push_back(Tokens->transmission);
+    } else {
+      material.transmission =
+          static_cast<float>(std::clamp<double>(weight->constant[0], 0.0, 1.0));
+    }
+    if (Connection(node_, Tokens->thin_walled) != nullptr) {
+      translation_.unrepresented_inputs.push_back(Tokens->thin_walled);
+    } else if (const VtValue* thin = Parameter(node_, Tokens->thin_walled)) {
+      if (thin->IsHolding<bool>()) {
+        material.thin_walled = thin->UncheckedGet<bool>();
+      } else if (const auto flag = ReadScalar(*thin)) {
+        material.thin_walled = *flag != 0.0;
+      }
+    }
+    if (!(material.transmission > 0.0F)) {
+      return;
+    }
+    const auto color = graph_.Input(node_, Tokens->transmission_color,
+        ConstantValue({1.0F, 1.0F, 1.0F}));
+    if (!color || color->lookup || color->width != 3) {
+      translation_.unrepresented_inputs.push_back(Tokens->transmission_color);
+    } else {
+      for (std::size_t c = 0; c < 3; ++c) {
+        material.transmission_color[c] =
+            static_cast<float>(std::clamp<double>(color->constant[c], 0.0, 1.0));
+      }
+    }
+    const auto depth = graph_.Input(node_, Tokens->transmission_depth, ConstantValue({0.0F}));
+    if (!depth || depth->lookup || depth->constant[0] != 0.0F) {
+      translation_.unrepresented_inputs.push_back(Tokens->transmission_depth);
+      material.transmission_color = {1.0F, 1.0F, 1.0F};
+    }
+    const auto scatter = graph_.Input(node_, Tokens->transmission_scatter,
+        ConstantValue({0.0F, 0.0F, 0.0F}));
+    if (!scatter || scatter->lookup || scatter->constant[0] != 0.0F ||
+        scatter->constant[1] != 0.0F || scatter->constant[2] != 0.0F) {
+      translation_.unrepresented_inputs.push_back(Tokens->transmission_scatter);
+    }
+    for (const TfToken& input : {Tokens->transmission_scatter_anisotropy,
+             Tokens->transmission_dispersion, Tokens->transmission_extra_roughness}) {
+      const auto value = graph_.Input(node_, input, ConstantValue({0.0F}));
+      if (!value || value->lookup || value->constant[0] != 0.0F) {
+        translation_.unrepresented_inputs.push_back(input);
+      }
+    }
+  }
+
   // specular 0 removes the dielectric interface; specular 1 with a white
   // specular_color is the IR's. Other weights and tints are not represented.
+  // Transmission refracts with specular_IOR whatever the specular weight,
+  // so the interface's reflection stays too.
   void Specular() {
     const auto weight = graph_.Input(node_, Tokens->specular, ConstantValue({1.0F}));
-    if (weight && !weight->lookup && weight->constant[0] == 0.0F) {
+    if (weight && !weight->lookup && weight->constant[0] == 0.0F &&
+        !(translation_.material.transmission > 0.0F)) {
       translation_.material.ior = 1.0F;
       return;
     }

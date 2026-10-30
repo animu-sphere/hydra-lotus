@@ -1416,8 +1416,7 @@ public:
   // five standard errors, estimated from the pixels' means. Each comparison
   // is added to Summary().
   std::string ExpectMean(const char* name, std::uint32_t count,
-      const Rgb& expected) {
-    Lotus::PathTracingSettings settings;
+      const Rgb& expected, const Lotus::PathTracingSettings& settings = {}) {
     Lotus::GpuFrameEvidence frame;
     if (auto failure = Render(settings, frame, count); !failure.empty())
       return failure;
@@ -5076,6 +5075,421 @@ std::string EnvironmentFailure(PathScenes& scenes,
   return {};
 }
 
+// An axis-aligned box of half extents x, y and z, wound outwards.
+Lotus::MeshGeometry Box(float x, float y, float z) {
+  Lotus::MeshGeometry box;
+  for (int i = 0; i < 8; ++i)
+    box.positions.push_back(
+        {{(i & 1) != 0 ? x : -x, (i & 2) != 0 ? y : -y, (i & 4) != 0 ? z : -z}});
+  // Each face's corners counter-clockwise seen from outside: -x, +x, -y,
+  // +y, -z, +z.
+  constexpr std::uint32_t kFaces[6][4] = {{0, 4, 6, 2}, {1, 3, 7, 5},
+      {0, 1, 5, 4}, {2, 6, 7, 3}, {0, 2, 3, 1}, {4, 5, 7, 6}};
+  for (std::uint32_t face = 0; face < 6; ++face) {
+    const auto& c = kFaces[face];
+    box.triangles.push_back({{c[0], c[1], c[2]}});
+    box.triangles.push_back({{c[0], c[2], c[3]}});
+    box.source_faces.insert(box.source_faces.end(), {face, face});
+  }
+  return box;
+}
+
+// A latitude-longitude sphere of `radius` about the origin, wound outwards.
+Lotus::MeshGeometry Sphere(float radius, std::uint32_t slices, std::uint32_t stacks) {
+  constexpr double kPi = 3.14159265358979323846;
+  Lotus::MeshGeometry sphere;
+  sphere.positions.push_back({{0, radius, 0}});
+  for (std::uint32_t i = 1; i < stacks; ++i)
+    for (std::uint32_t j = 0; j < slices; ++j) {
+      const double theta = kPi * i / stacks;
+      const double phi = 2 * kPi * j / slices;
+      sphere.positions.push_back({{static_cast<float>(radius * std::sin(theta) * std::cos(phi)),
+          static_cast<float>(radius * std::cos(theta)),
+          static_cast<float>(radius * std::sin(theta) * std::sin(phi))}});
+    }
+  const auto bottom = static_cast<std::uint32_t>(sphere.positions.size());
+  sphere.positions.push_back({{0, -radius, 0}});
+  const auto ring = [&](std::uint32_t i, std::uint32_t j) {
+    return 1 + (i - 1) * slices + j % slices;
+  };
+  for (std::uint32_t j = 0; j < slices; ++j) {
+    sphere.triangles.push_back({{0, ring(1, j + 1), ring(1, j)}});
+    for (std::uint32_t i = 1; i + 1 < stacks; ++i) {
+      sphere.triangles.push_back({{ring(i, j), ring(i, j + 1), ring(i + 1, j + 1)}});
+      sphere.triangles.push_back({{ring(i, j), ring(i + 1, j + 1), ring(i + 1, j)}});
+    }
+    sphere.triangles.push_back({{ring(stacks - 1, j), ring(stacks - 1, j + 1), bottom}});
+  }
+  for (std::uint32_t face = 0; face < sphere.triangles.size(); ++face)
+    sphere.source_faces.push_back(face);
+  return sphere;
+}
+
+// The exact unpolarized reflectance of a dielectric of relative index
+// `eta` for light arriving at cos_theta from its normal.
+double FresnelDielectric(double cos_theta, double eta) {
+  const double sin2_t = (1 - cos_theta * cos_theta) / (eta * eta);
+  if (sin2_t >= 1) return 1;
+  const double cos_t = std::sqrt(1 - sin2_t);
+  const double parallel = (eta * cos_theta - cos_t) / (eta * cos_theta + cos_t);
+  const double perpendicular = (cos_theta - eta * cos_t) / (cos_theta + eta * cos_t);
+  return (parallel * parallel + perpendicular * perpendicular) / 2;
+}
+
+// A rough thin wall's directional transmittance for view angle `cos_view`:
+// the GGX reflection lobe weighted by the wall's transmission
+// (1 - R) / (1 + R), mirrored through it. A midpoint rule over the GGX
+// distribution's inverse CDF in half-vector space, as GgxAlbedo integrates,
+// independent of the shader's visible-normal sampling.
+double ThinWallTransmittance(double roughness, double ior, double cos_view) {
+  constexpr int kSteps = 1024;
+  constexpr double kPi = 3.14159265358979323846;
+  const double alpha = std::max(roughness * roughness, 1.0e-3);
+  const double wo[3] = {std::sqrt(1.0 - cos_view * cos_view), 0.0, cos_view};
+  const auto lambda = [&](const double* w) {
+    const double tan2 = (1.0 - w[2] * w[2]) / (w[2] * w[2]);
+    return 0.5 * (std::sqrt(1.0 + alpha * alpha * tan2) - 1.0);
+  };
+  double sum = 0;
+  for (int i = 0; i < kSteps; ++i) {
+    const double xi = (i + 0.5) / kSteps;
+    const double theta = std::atan(alpha * std::sqrt(xi / (1.0 - xi)));
+    for (int j = 0; j < kSteps; ++j) {
+      const double phi = 2.0 * kPi * (j + 0.5) / kSteps;
+      const double h[3] = {std::sin(theta) * std::cos(phi),
+          std::sin(theta) * std::sin(phi), std::cos(theta)};
+      const double cos_oh = wo[0] * h[0] + wo[1] * h[1] + wo[2] * h[2];
+      const double wi[3] = {2 * cos_oh * h[0] - wo[0], 2 * cos_oh * h[1] - wo[1],
+          2 * cos_oh * h[2] - wo[2]};
+      if (cos_oh <= 0.0 || wi[2] <= 0.0)
+        continue;
+      const double r = FresnelDielectric(cos_oh, ior);
+      const double g2 = 1.0 / (1.0 + lambda(wo) + lambda(wi));
+      sum += (1 - r) / (1 + r) * g2 * cos_oh / (cos_view * h[2]);
+    }
+  }
+  return sum / (double{kSteps} * kSteps);
+}
+
+Lotus::Material Glass(float roughness, bool thin_walled,
+    const std::array<float, 3>& tint = {1, 1, 1}) {
+  Lotus::Material glass;
+  glass.base_color = {0.8F, 0.2F, 0.1F};
+  glass.roughness = roughness;
+  glass.transmission = 1;
+  glass.transmission_color = tint;
+  glass.thin_walled = thin_walled;
+  return glass;
+}
+
+// A surface that neither reflects nor transmits: black and index-matched.
+Lotus::Material Absorber(const std::array<float, 3>& emission) {
+  Lotus::Material absorber;
+  absorber.base_color = {0, 0, 0};
+  absorber.ior = 1;
+  absorber.emission = emission;
+  return absorber;
+}
+
+// The analytic transmission checks under the scenes' integrator and light
+// sampling. Orthographic views down -Z give every pixel one view angle.
+// Slabs and walls, tilted about X, stand before a large emitter of radiance
+// 1 parallel to them and behind them, under a black sky, so that only
+// transmitted light reaches it: they transmit (1 - R) / (1 + R), a slab
+// summing its internal reflections, times the tint per crossing. With the
+// emitter a black absorber and the sky white, they reflect 2R / (1 + R)
+// instead. A rough wall transmits its directional transmittance, and an
+// index-matched one its tint at any roughness. A mirroring transform keeps
+// a slab's inside. Under a white sky alone, smooth solids and a
+// thin-walled sphere render 1; rough ones at most 1.
+std::string TransmissionChecks(PathScenes& scenes, const std::string& mode) {
+  constexpr double kPi = 3.14159265358979323846;
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  constexpr std::uint32_t kSamples = 64;
+  constexpr double kIor = 1.5;
+  const std::array<float, 3> tint{0.9F, 0.6F, 0.3F};
+  const auto name = [&](const std::string& check) { return mode + ' ' + check; };
+  // Lowered so that steep slabs stay beyond the near plane; at 70 degrees
+  // the view's footprint on them is +-2.9 high.
+  const auto tilted = [](double degrees) {
+    return Lotus::Multiply(Translation(0, 0, -3), RotationX(degrees));
+  };
+  const auto slab = [&](double degrees, bool mirrored, const Lotus::Material& material) {
+    Lotus::MeshInstance placed;
+    placed.world_from_object = Lotus::Multiply(tilted(degrees),
+        mirrored ? Scaling(1, 1, -1) : Lotus::IdentityMatrix());
+    world.SetMesh("/glass", Box(4, 4, 0.025F), placed);
+    Paint(world, "/glass", material);
+  };
+  const auto wall = [&](double degrees, const Lotus::Material& material) {
+    Lotus::MeshInstance placed;
+    placed.world_from_object = Lotus::Multiply(tilted(degrees), Scaling(4, 4, 1));
+    world.SetMesh("/glass", Square(), placed);
+    Paint(world, "/glass", material);
+  };
+  const auto emitter = [&](double degrees, const std::array<float, 3>& emission) {
+    Lotus::MeshInstance far;
+    far.world_from_object = Lotus::Multiply(tilted(degrees),
+        Lotus::Multiply(Translation(0, 0, -1), Scaling(1000, 1000, 1)));
+    world.SetMesh("/emitter", Square(), far);
+    Paint(world, "/emitter", Absorber(emission));
+  };
+  const auto transmitted = [&](double degrees) {
+    const double r = FresnelDielectric(std::cos(degrees * kPi / 180), kIor);
+    return (1 - r) / (1 + r);
+  };
+
+  // Transmission into the emitter.
+  world.SetEnvironment({0, 0, 0});
+  for (const double degrees : {0.0, 45.0, 70.0}) {
+    const double t = transmitted(degrees);
+    const std::string angle = std::to_string(static_cast<int>(degrees));
+    emitter(degrees, {1, 1, 1});
+    slab(degrees, false, Glass(0, false, tint));
+    if (auto failure = scenes.ExpectMean(name("slab " + angle).c_str(), kSamples,
+            {t * tint[0] * tint[0], t * tint[1] * tint[1], t * tint[2] * tint[2]});
+        !failure.empty())
+      return "slab at " + angle + " degrees: " + failure;
+    wall(degrees, Glass(0, true, tint));
+    if (auto failure = scenes.ExpectMean(name("wall " + angle).c_str(), kSamples,
+            {t * tint[0], t * tint[1], t * tint[2]});
+        !failure.empty())
+      return "thin wall at " + angle + " degrees: " + failure;
+  }
+  {
+    // Entering the mirrored slab must refract in; taken for leaving, it
+    // would reflect everything totally.
+    const double t = transmitted(60);
+    emitter(60, {1, 1, 1});
+    slab(60, true, Glass(0, false, tint));
+    if (auto failure = scenes.ExpectMean(name("mirrored slab").c_str(), kSamples,
+            {t * tint[0] * tint[0], t * tint[1] * tint[1], t * tint[2] * tint[2]});
+        !failure.empty())
+      return "mirrored slab: " + failure;
+  }
+  for (const double degrees : {0.0, 60.0}) {
+    const double t = ThinWallTransmittance(0.5, kIor, std::cos(degrees * kPi / 180));
+    const std::string angle = std::to_string(static_cast<int>(degrees));
+    emitter(degrees, {1, 1, 1});
+    wall(degrees, Glass(0.5F, true, tint));
+    if (auto failure = scenes.ExpectMean(name("rough wall " + angle).c_str(), kSamples,
+            {t * tint[0], t * tint[1], t * tint[2]});
+        !failure.empty())
+      return "rough thin wall at " + angle + " degrees: " + failure;
+  }
+  {
+    Lotus::Material matched = Glass(0.5F, true, tint);
+    matched.ior = 1;
+    emitter(30, {1, 1, 1});
+    wall(30, matched);
+    if (auto failure = scenes.ExpectMean(name("index-matched wall").c_str(), kSamples,
+            {tint[0], tint[1], tint[2]});
+        !failure.empty())
+      return "index-matched wall: " + failure;
+  }
+
+  // Reflection: the emitter is a black absorber and the sky white.
+  world.SetEnvironment({1, 1, 1});
+  for (const bool thin_walled : {false, true}) {
+    const double r = FresnelDielectric(std::cos(kPi / 3), kIor);
+    const double reflected = 2 * r / (1 + r);
+    emitter(60, {0, 0, 0});
+    if (thin_walled)
+      wall(60, Glass(0, true));
+    else
+      slab(60, false, Glass(0, false));
+
+    const char* what = thin_walled ? "wall reflection" : "slab reflection";
+    if (auto failure = scenes.ExpectMean(name(what).c_str(), kSamples,
+            {reflected, reflected, reflected});
+        !failure.empty())
+      return std::string(what) + ": " + failure;
+  }
+
+  // White furnace: no emitter, a white sky. Light entering near a faceted
+  // sphere's rim can be trapped by total internal reflection for hundreds
+  // of bounces; the default limit of 64 would end 0.03% of it at these
+  // facets.
+  constexpr std::uint32_t kFurnaceSamples = 256;
+  Lotus::PathTracingSettings deep;
+  deep.max_bounces = Lotus::kMaxWavefrontBounces;
+  world.RemoveMesh("/emitter");
+  world.RemoveMaterial("/emitter");
+  struct Furnace {
+    const char* name;
+    Lotus::MeshGeometry geometry;
+    Lotus::Matrix4 transform;
+    bool thin_walled;
+  };
+  const Furnace furnaces[] = {
+      {"furnace sphere", Sphere(0.8F, 256, 128), Lotus::IdentityMatrix(), false},
+      {"furnace cube", Box(0.5F, 0.5F, 0.5F),
+          Lotus::Multiply(RotationX(25), RotationY(35)), false},
+      {"furnace thin sphere", Sphere(0.8F, 256, 128), Lotus::IdentityMatrix(), true}};
+  for (const Furnace& furnace : furnaces) {
+    Lotus::MeshInstance placed;
+    placed.world_from_object = furnace.transform;
+    world.SetMesh("/glass", furnace.geometry, placed);
+    Paint(world, "/glass", Glass(0, furnace.thin_walled));
+    if (auto failure = scenes.ExpectMean(name(furnace.name).c_str(), kFurnaceSamples,
+            {1, 1, 1}, deep);
+        !failure.empty())
+      return std::string(furnace.name) + ": " + failure;
+  }
+  {
+    // A rough interface loses its microfacets' multiple scattering.
+    Lotus::MeshInstance placed;
+    world.SetMesh("/glass", Sphere(0.8F, 256, 128), placed);
+    Paint(world, "/glass", Glass(0.5F, false));
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(deep, frame, kFurnaceSamples); !failure.empty())
+      return "rough furnace sphere: " + failure;
+    const std::vector<float> values = ColorValues(frame.color);
+    double sum = 0;
+    double squares = 0;
+    double pixels = 0;
+    for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
+      if (values[pixel * 4 + 3] != 1.0F)
+        continue;
+      const double value = values[pixel * 4];
+      sum += value;
+      squares += value * value;
+      pixels += 1;
+    }
+    if (pixels < 2)
+      return "rough furnace sphere: no pixel's samples all hit";
+    const double mean = sum / pixels;
+    const double tolerance =
+        5 * std::sqrt(std::max(0.0, (squares - pixels * mean * mean) / (pixels - 1)) / pixels);
+    if (mean > 1 + tolerance)
+      return "rough furnace sphere: mean " + std::to_string(mean) + " above 1";
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(4) << name("rough furnace sphere")
+         << ": mean " << mean << " (loss " << 1 - mean << ")";
+    scenes.Summarize(line.str());
+  }
+  return {};
+}
+
+// LOTUS-TRANSMISSION-01 (docs/design/TRANSMISSION.md section 10): the
+// analytic checks through both integrators and both estimators, and with
+// initial reservoirs, whose targets at a transmissive camera surface are
+// its reflection's alone (section 8). Then a glass scene lit from behind
+// and in front: light sampling and initial reservoirs must match BSDF
+// sampling's 4096-spp estimate by the DES-Q5 metric, and both integrators
+// must render the same samples bit for bit.
+std::string TransmissionFailure(PathScenes& scenes) {
+  struct Mode {
+    const char* name;
+    Lotus::Integrator integrator;
+    Lotus::LightSampling light_sampling;
+  };
+  constexpr Mode kModes[] = {
+      {"reference-bsdf", Lotus::Integrator::Reference, Lotus::LightSampling::Bsdf},
+      {"reference-mis", Lotus::Integrator::Reference, Lotus::LightSampling::Mis},
+      {"wavefront-bsdf", Lotus::Integrator::Wavefront, Lotus::LightSampling::Bsdf},
+      {"wavefront-mis", Lotus::Integrator::Wavefront, Lotus::LightSampling::Mis},
+      {"reference-restir", Lotus::Integrator::Reference, Lotus::LightSampling::RestirInitial}};
+  for (const Mode& mode : kModes) {
+    scenes.SetIntegrator(mode.integrator);
+    scenes.SetLightSampling(mode.light_sampling);
+    std::string failure = TransmissionChecks(scenes, mode.name);
+    if (auto cleared = scenes.Clear(); failure.empty())
+      failure = std::move(cleared);
+    if (!failure.empty())
+      return std::string(mode.name) + ": " + failure;
+  }
+
+  // Rough and smooth, solid and thin glass under a dim sky, between an
+  // emitter behind them and one in front, whose light rough glass reflects.
+  auto& world = scenes.World();
+  world.SetCamera(OrthographicCamera());
+  world.SetEnvironment({0.2F, 0.3F, 0.4F});
+  Lotus::MeshInstance far;
+  far.world_from_object = Lotus::Multiply(Translation(0.3F, 0.2F, -1.5F),
+      Lotus::Multiply(RotationY(20), Scaling(0.6F, 0.6F, 1)));
+  world.SetMesh("/emitter", Square(), far);
+  Paint(world, "/emitter", Absorber({4, 3, 2}));
+  Lotus::MeshInstance near;
+  near.world_from_object = Lotus::Multiply(Translation(-1.2F, 1.2F, 1.2F),
+      Lotus::Multiply(RotationY(-45), Lotus::Multiply(RotationX(-35), Scaling(0.3F, 0.3F, 1))));
+  world.SetMesh("/key", Square(), near);
+  Paint(world, "/key", Absorber({12, 12, 10}));
+  // Every camera ray hits: a grey wall closes the view.
+  Lotus::MeshInstance back;
+  back.world_from_object = Lotus::Multiply(Translation(0, 0, -3), Scaling(10, 10, 1));
+  world.SetMesh("/wall", Square(), back);
+  Lotus::Material grey;
+  grey.base_color = {0.5F, 0.5F, 0.5F};
+  Paint(world, "/wall", grey);
+  const struct {
+    const char* key;
+    Lotus::Matrix4 transform;
+    Lotus::Material material;
+  } pieces[] = {
+      {"/rough", Translation(-0.45F, 0.4F, 0), Glass(0.4F, false, {0.9F, 0.8F, 0.7F})},
+      {"/smooth", Translation(0.45F, 0.4F, 0), Glass(0, false)},
+      {"/thin", Translation(-0.45F, -0.45F, 0), Glass(0.3F, true, {0.5F, 0.9F, 0.6F})},
+      {"/clear", Translation(0.45F, -0.45F, 0), Glass(0, true)}};
+  for (const auto& piece : pieces) {
+    Lotus::MeshInstance placed;
+    placed.world_from_object = piece.transform;
+    world.SetMesh(piece.key, Sphere(0.4F, 32, 16), placed);
+    Paint(world, piece.key, piece.material);
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  LotusHeadless::Reference brute_force;
+  if (auto failure = BatchStatistics(scenes, 0, 64, 64, brute_force); !failure.empty())
+    return "glass scene, BSDF sampling: " + failure;
+  for (const auto& [estimator, label] :
+      {std::pair{Lotus::LightSampling::Mis, "light sampling"},
+          std::pair{Lotus::LightSampling::RestirInitial, "initial reservoirs"}}) {
+    scenes.SetLightSampling(estimator);
+    constexpr std::uint32_t kCompared = 256;
+    LotusHeadless::RgbImage image;
+    if (auto failure = RenderReferenceImage(scenes, kComparedSampleIndex, kCompared, image);
+        !failure.empty())
+      return std::string("glass scene, ") + label + ": " + failure;
+    const LotusHeadless::Comparison comparison =
+        LotusHeadless::Compare(image, kCompared, brute_force);
+    if (!comparison.failure.empty())
+      return std::string("glass scene, ") + label + ": " + comparison.failure;
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(2) << "glass scene " << label << ": "
+         << kCompared << " spp against BSDF sampling's 4096, image z "
+         << comparison.image_z[0] << ' ' << comparison.image_z[1] << ' '
+         << comparison.image_z[2] << ", max tile |z| " << comparison.max_tile_z;
+    scenes.Summarize(line.str());
+  }
+  scenes.SetLightSampling(Lotus::LightSampling::Mis);
+  constexpr std::uint32_t kSamples = 64;
+  std::vector<float> images[2];
+  const Lotus::Integrator integrators[] = {
+      Lotus::Integrator::Reference, Lotus::Integrator::Wavefront};
+  for (int index = 0; index < 2; ++index) {
+    scenes.SetIntegrator(integrators[index]);
+    Lotus::PathTracingSettings settings;
+    settings.sample_index = kComparedSampleIndex;
+    Lotus::GpuFrameEvidence frame;
+    if (auto failure = scenes.Render(settings, frame, kSamples); !failure.empty())
+      return "integrator agreement: " + failure;
+    images[index] = ColorValues(frame.color);
+  }
+  scenes.SetIntegrator(Lotus::Integrator::Reference);
+  scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+  std::size_t differing = 0;
+  for (std::size_t i = 0; i < images[0].size(); ++i)
+    differing += std::memcmp(&images[0][i], &images[1][i], sizeof(float)) != 0;
+  if (differing != 0)
+    return "the integrators' " + std::to_string(kSamples) + " spp of the glass scene differ in " +
+           std::to_string(differing) + " of " + std::to_string(images[0].size()) + " values";
+  scenes.Summarize("both integrators render the glass scene's " + std::to_string(kSamples) +
+                   " spp bit for bit");
+  return {};
+}
+
 std::string Status(Lotus::FrameStatus status) {
   switch (status) {
   case Lotus::FrameStatus::Pass:
@@ -5429,6 +5843,12 @@ int main(int argc, char** argv) {
         material_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
         return failure;
       });
+      run("renderer.material.transmission", [&](PathScenes& glass_scenes) {
+        std::string failure = TransmissionFailure(glass_scenes);
+        glass_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        glass_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
     } else {
       checks.push_back({"renderer.ray_query.triangle", "skip", ray_query.detail});
       checks.push_back({"renderer.ray_query.timestamp", "skip", ray_query.detail});
@@ -5445,6 +5865,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.analytic_lights", "skip", ray_query.detail});
       checks.push_back({"renderer.path.environment", "skip", ray_query.detail});
       checks.push_back({"renderer.material.fixtures", "skip", ray_query.detail});
+      checks.push_back({"renderer.material.transmission", "skip", ray_query.detail});
     }
   } else {
     checks.push_back({"renderer.ray_query.capability", Status(setup_status), setup_error});
@@ -5463,6 +5884,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.environment", Status(setup_status), setup_error});
     checks.push_back({"renderer.material.fixtures", Status(setup_status), setup_error});
+    checks.push_back({"renderer.material.transmission", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});

@@ -19,14 +19,28 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   maps, through image, tiled-image, texture-coordinate, extract, convert and
   normal-map nodes. A material's MaterialX surface wins over its
   `UsdPreviewSurface`, as in Storm. Inputs the IR cannot represent, such as
-  transmission, subsurface and coat, warn and are ignored. The committed
+  subsurface and coat, warn and are ignored. The committed
   `material-mtlx-v1` fixture checks the translation from file to image
   ([report](docs/reports/2026-10-29-materialx-standard-surface.md)).
+- Dielectric transmission, under its
+  [transport contract](docs/design/TRANSMISSION.md): `Material` gains
+  `transmission`, `transmission_color` and `thin_walled`, and both
+  integrators refract through smooth and rough interfaces of solids and thin
+  walls, with exact Fresnel, total internal reflection and radiance scaling
+  across the interface. Light found through glass is added unweighted by
+  MIS; shadow rays treat glass as opaque. Standard Surface's `transmission`,
+  `transmission_color` and `thin_walled` translate; a positive
+  `transmission_depth`, scattering and dispersion warn. The headless check
+  `renderer.material.transmission` and the committed
+  `material-transmission-v1` fixture verify it
+  ([report](docs/reports/2026-10-29-dielectric-transmission.md)).
 
 ### Fixed
 
 - MaterialX-only materials, such as OpenChessSet's, no longer render with
   the default material, and StandardShaderBall's ground shows its texture.
+- OpenChessSet's pawn tops and StandardShaderBall's glass render as tinted
+  glass instead of opaque.
 
 ## [0.7.0] - 2026-10-28
 

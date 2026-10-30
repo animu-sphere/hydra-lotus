@@ -3,6 +3,7 @@ module temporal;
 
 import common.scene;
 import sampling.sampling;
+import common.spectrum;
 
 // Mirrors TemporalConstants in vulkan_backend.cpp. Clip matrix uses Vulkan
 // convention; pixel products still have a top-left origin.
@@ -469,7 +470,12 @@ public void WriteTemporalSurface(float2 ndc, float2 pixel) {
   output.material_id = identity.material_id;
   output.flags = 1u | identity.flags;
   const SurfaceHit surface = ReconstructHit(hit, ray.Direction);
-  output.albedo = PackAlbedo(surface.base_color);
+  // Transmitted light is tinted by the transmission colour, not the base
+  // colour, so the transmitted share demodulates by that.
+  output.albedo = PackAlbedo(surface.bsdf.transmission > 0.0
+      ? lerp(surface.base_color, SpectrumToRgb(surface.bsdf.transmission_color),
+            surface.bsdf.transmission)
+      : surface.base_color);
   output.shading_normal = PackNormal(surface.shading_normal);
   if ((identity.flags & 2u) != 0) {
     const float4 previous_world = mul(identity.previous_world_from_object,

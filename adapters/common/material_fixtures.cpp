@@ -1222,7 +1222,7 @@ void SetMaterialMtlx(Lotus::RenderWorld& world) {
       {"Emissive", emissive},
       {"Opacity", opacity},
       {"Clamped", clamped},
-      // coat, sheen and transmission are not represented.
+      // coat, sheen and subsurface are not represented.
       {"Lobes", Standard(kTeal)},
       // The MaterialX surface wins over the red UsdPreviewSurface.
       {"Precedence", Standard({0.1F, 0.2F, 0.8F})},
@@ -1310,6 +1310,113 @@ void SetMaterialMtlx(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// A Standard Surface transmitting with `roughness`.
+Lotus::Material Glass(float roughness, const std::array<float, 3>& tint = {1.0F, 1.0F, 1.0F},
+    bool thin_walled = false) {
+  Lotus::Material material = Standard({0.8F, 0.8F, 0.8F}, roughness);
+  material.transmission = 1.0F;
+  material.transmission_color = tint;
+  material.thin_walled = thin_walled;
+  return material;
+}
+
+// As a translator that ignored transmission_color would read it.
+void UntintedGlass(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialTransmission/Looks/Tinted";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  material.transmission_color = {1.0F, 1.0F, 1.0F};
+  world.SetMaterial(key, material);
+}
+
+} // namespace
+
+void SetMaterialTransmission(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialTransmission";
+  SetStudio(world, root);
+
+  constexpr std::array<float, 3> kTeal{0.2F, 0.6F, 0.7F};
+  constexpr std::array<float, 3> kAmber{0.9F, 0.45F, 0.15F};
+  Lotus::Material matched = Glass(0.4F, {0.5F, 0.8F, 0.9F});
+  matched.ior = 1.0F;
+  Lotus::Material partial = Standard(kTeal, 0.15F);
+  partial.transmission = 0.5F;
+  partial.metallic = 0.25F;
+  Lotus::Material thin_matched = Glass(0.2F, {0.9F, 0.6F, 0.3F}, true);
+  thin_matched.ior = 1.0F;
+  Lotus::Material thin_dense = Glass(0.0F, {1.0F, 1.0F, 1.0F}, true);
+  thin_dense.ior = 2.42F;
+  const std::map<std::string, Lotus::Material> looks{
+      {"Smooth", Glass(0.0F)},
+      {"Rough", Glass(0.35F)},
+      {"Tinted", Glass(0.0F, kAmber)},
+      {"Matched", matched},
+      {"Partial", partial},
+      {"ThinSmooth", Glass(0.0F, {1.0F, 1.0F, 1.0F}, true)},
+      {"ThinRough", Glass(0.4F, {1.0F, 1.0F, 1.0F}, true)},
+      {"ThinTinted", Glass(0.1F, {0.3F, 0.7F, 0.9F}, true)},
+      {"ThinMatched", thin_matched},
+      {"ThinDense", thin_dense},
+      // A positive depth leaves the transmitted light untinted.
+      {"Depth", Glass(0.0F)},
+      // specular 0 keeps specular_IOR to refract with.
+      {"NoSpecular", Glass(0.2F)},
+      // The medium's scattering and dispersion are ignored.
+      {"Ignored", Glass(0.1F)},
+      // A graph-driven transmission keeps its default, 0.
+      {"Graph", Standard(kTeal, 0.3F)},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  const Polygons sphere = CoarseSphere();
+  Lotus::MeshGeometry smooth = sphere.Geometry();
+  for (const auto& corner : sphere.Corners())
+    smooth.normals.push_back(Fixed(sphere.points[corner.vertex]));
+  const Lotus::MeshGeometry plain = Card({});
+
+  struct Entry {
+    const char* name;
+    const char* material;
+    const Lotus::MeshGeometry& geometry;
+    float scale;
+    // A mirroring transform: x scaled by -scale.
+    bool mirrored = false;
+  };
+  constexpr float kSphere = 0.35F;
+  constexpr float kCard = 0.7F;
+  const std::array<Entry, 15> objects{{
+      {"Smooth", "Smooth", smooth, kSphere},
+      {"Rough", "Rough", smooth, kSphere},
+      {"Tinted", "Tinted", smooth, kSphere},
+      {"Matched", "Matched", smooth, kSphere},
+      {"Partial", "Partial", smooth, kSphere},
+      {"ThinSmooth", "ThinSmooth", plain, kCard},
+      {"ThinRough", "ThinRough", plain, kCard},
+      {"ThinTinted", "ThinTinted", plain, kCard},
+      {"ThinMatched", "ThinMatched", plain, kCard},
+      {"ThinDense", "ThinDense", plain, kCard},
+      {"Mirrored", "Smooth", smooth, kSphere, true},
+      {"Depth", "Depth", smooth, kSphere},
+      {"NoSpecular", "NoSpecular", smooth, kSphere},
+      {"Ignored", "Ignored", smooth, kSphere},
+      {"Graph", "Graph", smooth, kSphere},
+  }};
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 3> kRows{0.8F, 0.0F, -0.8F};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const Entry& object = objects[i];
+    const std::string mesh = root + "/Objects/" + object.name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = object.mirrored ? -object.scale : object.scale;
+    placed.world_from_object[5] = placed.world_from_object[10] = object.scale;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, object.geometry, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + object.material);
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -1324,6 +1431,9 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the sRGB images' alpha decoded as sRGB", SrgbAlpha},
       {"material-mtlx-v1", "/MaterialMtlx", 160, SetMaterialMtlx,
           "the weighted image's base weight ignored", UnweightedImage},
+      {"material-transmission-v1", "/MaterialTransmission", 160, SetMaterialTransmission,
+          "the tinted sphere's transmission colour ignored", UntintedGlass},
+
   };
   return kFixtures;
 }

@@ -184,7 +184,7 @@ def Xform "MaterialMtlx"
                 color3f inputs:base_color = (0.2, 0.6, 0.7)
                 float inputs:coat = 1
                 float inputs:sheen = 0.5
-                float inputs:transmission = 1
+                float inputs:subsurface = 1
                 token outputs:out
             }
         }

@@ -172,7 +172,11 @@ std::string Describe(const Lotus::Material& material) {
        << ", " << material.base_color[2] << ") roughness "
        << material.roughness << " metallic " << material.metallic
        << " emission (" << material.emission[0] << ", "
-       << material.emission[1] << ", " << material.emission[2] << ")";
+       << material.emission[1] << ", " << material.emission[2] << ") ior "
+       << material.ior << " transmission " << material.transmission << " ("
+       << material.transmission_color[0] << ", " << material.transmission_color[1]
+       << ", " << material.transmission_color[2] << ")"
+       << (material.thin_walled ? " thin-walled" : "");
   return text.str();
 }
 
@@ -295,11 +299,71 @@ void MaterialXCases() {
           {TfToken("opacity"), VtValue(GfVec3f(1.0F, 0.5F, 0.0F))},
           {TfToken("normal"), VtValue(GfVec3f(0.0F, 1.0F, 0.0F))}}));
   Check(translation.unrepresented_inputs ==
-            Tokens({"specular", "specular_color", "opacity", "normal", "coat",
-                "transmission"}),
+            Tokens({"specular", "specular_color", "opacity", "normal", "coat"}),
       "unrepresented inputs were not reported");
   Check(translation.material.opacity == 0.5F,
       "a coloured opacity did not use its mean");
+
+  // Transmission (docs/design/TRANSMISSION.md section 9): constants are
+  // represented, clamped; thin_walled is read as authored.
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("transmission"), VtValue(1.5F)},
+          {TfToken("transmission_color"), VtValue(GfVec3f(0.9F, 0.5F, -1.0F))},
+          {TfToken("thin_walled"), VtValue(true)},
+          {TfToken("specular_IOR"), VtValue(1.33F)}}));
+  expected = MakeMaterial({0.8F, 0.8F, 0.8F}, 0.2F, 0.0F, {0, 0, 0}, 1.33F);
+  expected.transmission = 1.0F;
+  expected.transmission_color = {0.9F, 0.5F, 0.0F};
+  expected.thin_walled = true;
+  Expect("standard surface transmission", translation.material, expected);
+  Check(translation.unrepresented_inputs.empty(),
+      "represented transmission inputs were reported");
+
+  // specular 0 keeps specular_IOR to refract with; a positive depth leaves
+  // the transmitted light untinted; the medium's scattering and dispersion
+  // are ignored. Each is reported.
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("transmission"), VtValue(0.5F)},
+          {TfToken("transmission_color"), VtValue(GfVec3f(0.2F, 0.4F, 0.6F))},
+          {TfToken("transmission_depth"), VtValue(2.0F)},
+          {TfToken("transmission_scatter"), VtValue(GfVec3f(0.1F, 0.0F, 0.0F))},
+          {TfToken("transmission_scatter_anisotropy"), VtValue(0.0F)},
+          {TfToken("transmission_dispersion"), VtValue(10.0F)},
+          {TfToken("transmission_extra_roughness"), VtValue(0.0F)},
+          {TfToken("specular"), VtValue(0.0F)},
+          {TfToken("specular_IOR"), VtValue(1.8F)}}));
+  Check(translation.material.transmission == 0.5F &&
+            translation.material.ior == 1.8F &&
+            translation.material.transmission_color == std::array<float, 3>{1, 1, 1},
+      "transmission with specular 0 and a depth translated as " +
+          Describe(translation.material));
+  Check(translation.unrepresented_inputs ==
+            Tokens({"transmission_depth", "transmission_scatter",
+                "transmission_dispersion", "specular"}),
+      "the medium's unrepresented inputs were not reported");
+
+  // Graphs leave transmission inputs at their defaults.
+  translation = HdLotusTranslateMaterial(StandardSurface({},
+      {{"Weight", "ND_image_float",
+          {{TfToken("file"), VtValue(SdfAssetPath("weight.png"))}}}},
+      {{"Weight", "out", "Surface", "transmission"}}));
+  Check(translation.material.transmission == 0.0F &&
+            translation.unrepresented_inputs == Tokens({"transmission"}) &&
+            translation.textures.empty(),
+      "a transmission graph was not left at 0");
+  translation = HdLotusTranslateMaterial(StandardSurface(
+      {{TfToken("transmission"), VtValue(1.0F)}},
+      {{"Tint", "ND_image_color3",
+           {{TfToken("file"), VtValue(SdfAssetPath("tint.png"))}}},
+          {"Thin", "ND_constant_boolean", {{TfToken("value"), VtValue(true)}}}},
+      {{"Tint", "out", "Surface", "transmission_color"},
+          {"Thin", "out", "Surface", "thin_walled"}}));
+  Check(translation.material.transmission == 1.0F &&
+            translation.material.transmission_color == std::array<float, 3>{1, 1, 1} &&
+            !translation.material.thin_walled &&
+            translation.unrepresented_inputs ==
+                Tokens({"thin_walled", "transmission_color"}),
+      "transmission colour and thin-wall graphs were not left at their defaults");
 
   // Graphs: an sRGB colour image weighted by base, a raw scalar image, an
   // extracted channel, a converted colour and a scaled normal map, all at

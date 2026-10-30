@@ -789,6 +789,10 @@ bool ValidMaterial(const SceneMaterial& entry) {
          std::isfinite(material.ior) && material.ior >= 1.0F &&
          std::all_of(material.specular_color.begin(), material.specular_color.end(), unit) &&
          ValidTextureInput(material.specular_color_texture, true) &&
+         unit(material.transmission) &&
+         std::all_of(material.transmission_color.begin(),
+             material.transmission_color.end(), unit) &&
+         !(material.use_specular_workflow && material.transmission > 0.0F) &&
          std::isfinite(material.texcoord_fallback[0]) &&
          std::isfinite(material.texcoord_fallback[1]);
 }
@@ -1874,6 +1878,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       record.specular_ior[3] = material.ior;
       record.opacity[0] = material.opacity;
       record.opacity[1] = material.opacity_threshold;
+      record.opacity[2] = material.thin_walled ? 1.0F : 0.0F;
+      std::copy(material.transmission_color.begin(),
+          material.transmission_color.end(), record.transmission);
+      record.transmission[3] = material.transmission;
       const auto inputs = TextureInputs(material);
       for (std::size_t input = 0; input < inputs.size(); ++input) {
         GpuTextureInputRecord& lookup = record.inputs[input];
@@ -2450,6 +2458,10 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     material.ior = record.specular_ior[3];
     material.opacity = record.opacity[0];
     material.opacity_threshold = record.opacity[1];
+    material.thin_walled = record.opacity[2] != 0.0F;
+    std::copy(record.transmission, record.transmission + 3,
+        material.transmission_color.begin());
+    material.transmission = record.transmission[3];
     std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
         &material.base_color_texture, &material.roughness_texture,
         &material.metallic_texture, &material.emission_texture,

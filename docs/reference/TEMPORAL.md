@@ -197,7 +197,7 @@ not primary surfaces, consistent with ordinary scene depth.
 | `instance_id` | Renderer-stream-local nonzero 64-bit placement identity; zero for a miss |
 | `material_id` | Renderer-stream-local nonzero identity of the binding and effective material/used texture resources; zero for a miss |
 | `flags` | Bit 0 hit; bit 1 rigid placement correspondence; bit 2 unchanged effective material |
-| `albedo` | The material's base colour at the hit, after texture lookups, clamped to [0, 1] as unorm8 R, G, B in bits 0–23 (`UnpackTemporalAlbedo`) |
+| `albedo` | The material's base colour at the hit, after texture lookups, blended towards its transmission colour by the transmitted share `(1 − metallic) · transmission` ([transmission contract](../design/TRANSMISSION.md#8-reservoirs-and-temporal-inputs)), clamped to [0, 1] as unorm8 R, G, B in bits 0–23 (`UnpackTemporalAlbedo`) |
 | `shading_normal` | The shading normal facing the camera (authored, computed or mapped), octahedral snorm16 x and y in the low and high half (`UnpackTemporalNormal`) |
 | `motion_depth.xy` | Backward motion, previous pixel minus current pixel, in pixels |
 | `motion_depth.z` | Expected positive depth of this surface in the previous camera |

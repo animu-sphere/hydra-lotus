@@ -12,39 +12,16 @@ rendered 18 third-party USD stages through Hydra. It found four material
 gaps and dropped skinned meshes, each with a visible effect; no asset
 demonstrated a lighting gap. LOTUS-MTLX-01
 [translated MaterialX Standard Surface](../reports/2026-10-29-materialx-standard-surface.md#decision),
-closing the first gap. It left transmission ignored with a warning, so
-OpenChessSet's pawn tops and the shader ball's glass render as opaque base
-colour; transmission enters first. Only the following bounded tasks are
-active, in this order. The surveyed assets are local and not
+closing the first gap, and LOTUS-TRANSMISSION-01 added
+[dielectric transmission](../reports/2026-10-29-dielectric-transmission.md#decision)
+under its [contract](../design/TRANSMISSION.md), so OpenChessSet's pawn
+tops and the shader ball's glass render as tinted glass. Only the
+following bounded tasks are active, in this order. The surveyed assets are local and not
 redistributable, so each task's committed evidence is a fixture authored
 here. The survey's stages are its acceptance check.
 
-- [ ] **LOTUS-TRANSMISSION-01 — Dielectric transmission lobe (P1).**
-  Renderer Phase 8 subset, the fifth lobe of the
-  [design policy's material order](../design/DESIGN_POLICY.md#17-material).
-  Write the transport contract first, then implement it in the material IR,
-  both integrators and the translator. The
-  [proposed contract](../design/TRANSMISSION.md) covers the BTDF
-  (smooth and rough GGX refraction with Fresnel, reciprocity and the
-  radiance scaling across the interface), the IR fields (a transmission
-  weight and colour, and thin versus solid walls), entering and leaving
-  through the IOR and the shading normal against the geometric one, and
-  what light sampling does at a transmissive surface. The last includes NEE
-  shadow rays and MIS, the light table, ReSTIR candidates and the
-  temporal/SVGF albedo and history inputs. The translator maps Standard
-  Surface `transmission`, `transmission_color` and `thin_walled`.
-  `UsdPreviewSurface` opacity stays coverage.
-  Exit evidence: the contract reviewed before code; analytic checks of a
-  smooth dielectric's reflectance and transmittance and a white-furnace
-  energy check; a committed fixture with a C++ mirror, reference images and
-  Hydra/headless agreement, the reference and wavefront integrators
-  agreeing; the other material fixtures unchanged; OpenChessSet's pawn tops
-  and the shader ball's glass rendering as tinted glass instead of their
-  opaque base colour.
-  Deferred: `transmission_depth` and `transmission_scatter` (volume
-  absorption and scattering), dispersion, nested-dielectric priorities,
-  caustics through light sampling, subsurface and coat.
-- [ ] **LOTUS-MATERIAL-02 — Texture transforms, per-face materials and primvar colour (P1).**
+- [ ] **LOTUS-MATERIAL-02
+ — Texture transforms, per-face materials and primvar colour (P1).**
   Renderer Phase 8 subset: the candidate fixes the
   [material foundation review](../reports/2026-10-28-material-foundation-closure.md#deferred-and-accepted-items)
   deferred, now justified by assets. It covers four cases. `UsdTransform2d` goes

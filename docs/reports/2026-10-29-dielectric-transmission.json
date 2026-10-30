@@ -1,0 +1,1807 @@
+{
+  "schema": "lotus-dielectric-transmission-v1",
+  "question": "Does the dielectric transmission lobe implemented under docs/design/TRANSMISSION.md reproduce a smooth dielectric's reflectance and transmittance and conserve energy through both integrators and estimators, leave every committed reference image unchanged, render a committed Standard Surface fixture that matches its reference headless and through Hydra, and render OpenChessSet's pawn tops and StandardShaderBall's glass as tinted glass?",
+  "procedure": {
+    "fixture": "python scripts/material_fixtures.py write; material-mtlx-v1's Lobes card authors subsurface 1 instead of transmission 1",
+    "reference": "lotus-headless --write-material-reference validation/reference: every fixture in a cleared GPU scene, BSDF sampling from sample index 0, 4096 spp mean and 64x64 variance; git status showed only the new fixture's two files changed",
+    "headless_check": "cmake --build build/cy2026-windows-x86_64-py313-core --target lotus-headless (vcvars64): its post-build report",
+    "hydra": "ctest -R hydra-material and ctest -R hydra -LE gpu in build/cy2026-windows-x86_64-py313-lookdev--hydra",
+    "core_ctests": "ctest -R 'temporal-gpu$|restir-gpu$|restir-benchmark-reference' and ctest -R 'evidence|assets|install-tree|test-tiers' in build/cy2026-windows-x86_64-py313-core",
+    "scripts": "python -m unittest discover -s scripts -p 'test_*.py'; python scripts/material_fixtures.py check; python scripts/check_docs.py",
+    "fault_injection": "two shader faults, each restored and rebuilt afterwards: emission found after delta or transmission events always weighed by MIS; the solid's outward normal ignoring the transform's determinant",
+    "survey_assets": "usdrecord --renderer Lotus with PXR_PLUGINPATH_NAME naming the build tree's hdLotus resources, and --renderer Storm with an empty plugin path, at 640 pixels wide; local override layers selected StandardShaderBall's mtlx_glass example under its authored camera, and added a dome light and a camera near the white pawns to OpenChessSet"
+  },
+  "environment": {
+    "source": "bd23086 plus this change",
+    "os": "Windows AMD64",
+    "compiler": "MSVC 19.51 Release",
+    "device": "NVIDIA RTX A5000",
+    "driver": "597.16",
+    "vulkan_api": "1.4.329",
+    "openusd": "openstrata-cy2026-windows-x86_64-py313-lookdev runtime (OpenUSD 26.08)",
+    "validation": "validation and synchronization validation active",
+    "clocks": "unlocked",
+    "binaries_sha256": {
+      "core/lotus-headless.exe": "96446eee9abc1abea8682fa06cf2ba7d844113443250eff9b17934be1bfa55e7",
+      "lookdev--hydra/hdLotus.dll": "8b14ff1c780b48578f0b76057904012798ea7577b854fb3c8715a70c421c507c",
+      "lookdev--hydra/lotus-hydra2-material-fixtures-test.exe": "0a02a4b6c379634989423b73668f27aac8ffd081d0ab248fb7a43cbf9ad7577d"
+    }
+  },
+  "fixture_sha256": {
+    "validation/materials/material-transmission-v1.usda": "13dc176b7e733aa8d7060098611f98232b1cda76ec10b205b3f0d8adf8a80d35",
+    "validation/materials/material-mtlx-v1.usda": "06cbc6b61be20aa9f23ee34a575543756d581628dd5533310a578d8f59bc7259"
+  },
+  "fixture_sha256_note": "the USD files as the generator writes them, with LF line endings",
+  "reference": {
+    "samples": 4096,
+    "batches": 64,
+    "size": [
+      160,
+      160
+    ],
+    "write_seconds_all_fixtures": 13.6,
+    "other_fixtures_rewritten_byte_identical": true,
+    "sha256": {
+      "validation/reference/material-transmission-v1-mean.pfm": "29f055354542c9278f317a171efb9d5e7b39ccfd4f23cfcb1c0c9f5f32f92658",
+      "validation/reference/material-transmission-v1-variance.pfm": "5f185866e9a2c310ca7bb2f1a5655ff8f0a220fbf7cc5e12e67a285a02ce6663"
+    }
+  },
+  "analytic": {
+    "size": [
+      64,
+      64
+    ],
+    "spp": 64,
+    "furnace_spp": 256,
+    "furnace_max_bounces": 1024,
+    "ior": 1.5,
+    "tint": [
+      0.9,
+      0.6,
+      0.3
+    ],
+    "tolerance": "five standard errors of the pixel means, plus 1e-6",
+    "rows": [
+      {
+        "mode": "reference-bsdf",
+        "check": "slab 0",
+        "samples": 262144,
+        "measured": [
+          0.7475,
+          0.3322,
+          0.0831
+        ],
+        "expected": [
+          0.7477,
+          0.3323,
+          0.0831
+        ],
+        "tolerance": [
+          0.0021,
+          0.0009,
+          0.0002
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "wall 0",
+        "samples": 262144,
+        "measured": [
+          0.8306,
+          0.5537,
+          0.2769
+        ],
+        "expected": [
+          0.8308,
+          0.5538,
+          0.2769
+        ],
+        "tolerance": [
+          0.0024,
+          0.0016,
+          0.0008
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "slab 45",
+        "samples": 262144,
+        "measured": [
+          0.7323,
+          0.3255,
+          0.0814
+        ],
+        "expected": [
+          0.7325,
+          0.3256,
+          0.0814
+        ],
+        "tolerance": [
+          0.0024,
+          0.001,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "wall 45",
+        "samples": 262144,
+        "measured": [
+          0.814,
+          0.5426,
+          0.2713
+        ],
+        "expected": [
+          0.8139,
+          0.5426,
+          0.2713
+        ],
+        "tolerance": [
+          0.0026,
+          0.0017,
+          0.0009
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "slab 70",
+        "samples": 262144,
+        "measured": [
+          0.574,
+          0.2551,
+          0.0638
+        ],
+        "expected": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "tolerance": [
+          0.0039,
+          0.0017,
+          0.0004
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "wall 70",
+        "samples": 262144,
+        "measured": [
+          0.6374,
+          0.4249,
+          0.2125
+        ],
+        "expected": [
+          0.6371,
+          0.4247,
+          0.2124
+        ],
+        "tolerance": [
+          0.004,
+          0.0027,
+          0.0013
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "mirrored slab",
+        "samples": 262144,
+        "measured": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "expected": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "tolerance": [
+          0.003,
+          0.0013,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "rough wall 0",
+        "samples": 262144,
+        "measured": [
+          0.7598,
+          0.5066,
+          0.2533
+        ],
+        "expected": [
+          0.7601,
+          0.5068,
+          0.2534
+        ],
+        "tolerance": [
+          0.003,
+          0.002,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "rough wall 60",
+        "samples": 262144,
+        "measured": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "expected": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "tolerance": [
+          0.0035,
+          0.0023,
+          0.0012
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "index-matched wall",
+        "samples": 262144,
+        "measured": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "expected": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "tolerance": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "slab reflection",
+        "samples": 262144,
+        "measured": [
+          0.1635,
+          0.1635,
+          0.1635
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "wall reflection",
+        "samples": 262144,
+        "measured": [
+          0.1637,
+          0.1637,
+          0.1637
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "furnace sphere",
+        "samples": 505344,
+        "measured": [
+          0.9999,
+          0.9999,
+          0.9999
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.001,
+          0.001,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "furnace cube",
+        "samples": 422656,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0042,
+          0.0042,
+          0.0042
+        ]
+      },
+      {
+        "mode": "reference-bsdf",
+        "check": "furnace thin sphere",
+        "samples": 505344,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0003,
+          0.0003,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "slab 0",
+        "samples": 262144,
+        "measured": [
+          0.7476,
+          0.3323,
+          0.0831
+        ],
+        "expected": [
+          0.7477,
+          0.3323,
+          0.0831
+        ],
+        "tolerance": [
+          0.0021,
+          0.001,
+          0.0002
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "wall 0",
+        "samples": 262144,
+        "measured": [
+          0.8304,
+          0.5536,
+          0.2768
+        ],
+        "expected": [
+          0.8308,
+          0.5538,
+          0.2769
+        ],
+        "tolerance": [
+          0.0024,
+          0.0016,
+          0.0008
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "slab 45",
+        "samples": 262144,
+        "measured": [
+          0.7322,
+          0.3254,
+          0.0814
+        ],
+        "expected": [
+          0.7325,
+          0.3256,
+          0.0814
+        ],
+        "tolerance": [
+          0.0024,
+          0.0011,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "wall 45",
+        "samples": 262144,
+        "measured": [
+          0.8138,
+          0.5426,
+          0.2713
+        ],
+        "expected": [
+          0.8139,
+          0.5426,
+          0.2713
+        ],
+        "tolerance": [
+          0.0026,
+          0.0018,
+          0.0009
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "slab 70",
+        "samples": 262144,
+        "measured": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "expected": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "tolerance": [
+          0.0039,
+          0.0017,
+          0.0004
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "wall 70",
+        "samples": 262144,
+        "measured": [
+          0.6369,
+          0.4246,
+          0.2123
+        ],
+        "expected": [
+          0.6371,
+          0.4247,
+          0.2124
+        ],
+        "tolerance": [
+          0.0041,
+          0.0027,
+          0.0014
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "mirrored slab",
+        "samples": 262144,
+        "measured": [
+          0.6775,
+          0.3011,
+          0.0753
+        ],
+        "expected": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "tolerance": [
+          0.003,
+          0.0014,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "rough wall 0",
+        "samples": 262144,
+        "measured": [
+          0.7591,
+          0.5061,
+          0.253
+        ],
+        "expected": [
+          0.7601,
+          0.5068,
+          0.2534
+        ],
+        "tolerance": [
+          0.0031,
+          0.002,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "rough wall 60",
+        "samples": 262144,
+        "measured": [
+          0.6611,
+          0.4407,
+          0.2204
+        ],
+        "expected": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "tolerance": [
+          0.0035,
+          0.0024,
+          0.0012
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "index-matched wall",
+        "samples": 262144,
+        "measured": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "expected": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "tolerance": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "slab reflection",
+        "samples": 262144,
+        "measured": [
+          0.1635,
+          0.1635,
+          0.1635
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "wall reflection",
+        "samples": 262144,
+        "measured": [
+          0.1637,
+          0.1637,
+          0.1637
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "furnace sphere",
+        "samples": 505344,
+        "measured": [
+          0.9999,
+          0.9999,
+          0.9999
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.001,
+          0.001,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "furnace cube",
+        "samples": 422656,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0042,
+          0.0042,
+          0.0042
+        ]
+      },
+      {
+        "mode": "reference-mis",
+        "check": "furnace thin sphere",
+        "samples": 505344,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0003,
+          0.0003,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "slab 0",
+        "samples": 262144,
+        "measured": [
+          0.7475,
+          0.3322,
+          0.0831
+        ],
+        "expected": [
+          0.7477,
+          0.3323,
+          0.0831
+        ],
+        "tolerance": [
+          0.0021,
+          0.0009,
+          0.0002
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "wall 0",
+        "samples": 262144,
+        "measured": [
+          0.8306,
+          0.5537,
+          0.2769
+        ],
+        "expected": [
+          0.8308,
+          0.5538,
+          0.2769
+        ],
+        "tolerance": [
+          0.0024,
+          0.0016,
+          0.0008
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "slab 45",
+        "samples": 262144,
+        "measured": [
+          0.7323,
+          0.3255,
+          0.0814
+        ],
+        "expected": [
+          0.7325,
+          0.3256,
+          0.0814
+        ],
+        "tolerance": [
+          0.0024,
+          0.001,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "wall 45",
+        "samples": 262144,
+        "measured": [
+          0.814,
+          0.5426,
+          0.2713
+        ],
+        "expected": [
+          0.8139,
+          0.5426,
+          0.2713
+        ],
+        "tolerance": [
+          0.0026,
+          0.0017,
+          0.0009
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "slab 70",
+        "samples": 262144,
+        "measured": [
+          0.574,
+          0.2551,
+          0.0638
+        ],
+        "expected": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "tolerance": [
+          0.0039,
+          0.0017,
+          0.0004
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "wall 70",
+        "samples": 262144,
+        "measured": [
+          0.6374,
+          0.4249,
+          0.2125
+        ],
+        "expected": [
+          0.6371,
+          0.4247,
+          0.2124
+        ],
+        "tolerance": [
+          0.004,
+          0.0027,
+          0.0013
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "mirrored slab",
+        "samples": 262144,
+        "measured": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "expected": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "tolerance": [
+          0.003,
+          0.0013,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "rough wall 0",
+        "samples": 262144,
+        "measured": [
+          0.7598,
+          0.5066,
+          0.2533
+        ],
+        "expected": [
+          0.7601,
+          0.5068,
+          0.2534
+        ],
+        "tolerance": [
+          0.003,
+          0.002,
+          0.001
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "rough wall 60",
+        "samples": 262144,
+        "measured": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "expected": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "tolerance": [
+          0.0035,
+          0.0023,
+          0.0012
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "index-matched wall",
+        "samples": 262144,
+        "measured": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "expected": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "tolerance": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "slab reflection",
+        "samples": 262144,
+        "measured": [
+          0.1635,
+          0.1635,
+          0.1635
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "wall reflection",
+        "samples": 262144,
+        "measured": [
+          0.1637,
+          0.1637,
+          0.1637
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "furnace sphere",
+        "samples": 505344,
+        "measured": [
+          0.9999,
+          0.9999,
+          0.9999
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.001,
+          0.001,
+          0.001
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "furnace cube",
+        "samples": 422656,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0042,
+          0.0042,
+          0.0042
+        ]
+      },
+      {
+        "mode": "wavefront-bsdf",
+        "check": "furnace thin sphere",
+        "samples": 505344,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0003,
+          0.0003,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "slab 0",
+        "samples": 262144,
+        "measured": [
+          0.7476,
+          0.3323,
+          0.0831
+        ],
+        "expected": [
+          0.7477,
+          0.3323,
+          0.0831
+        ],
+        "tolerance": [
+          0.0021,
+          0.001,
+          0.0002
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "wall 0",
+        "samples": 262144,
+        "measured": [
+          0.8304,
+          0.5536,
+          0.2768
+        ],
+        "expected": [
+          0.8308,
+          0.5538,
+          0.2769
+        ],
+        "tolerance": [
+          0.0024,
+          0.0016,
+          0.0008
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "slab 45",
+        "samples": 262144,
+        "measured": [
+          0.7322,
+          0.3254,
+          0.0814
+        ],
+        "expected": [
+          0.7325,
+          0.3256,
+          0.0814
+        ],
+        "tolerance": [
+          0.0024,
+          0.0011,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "wall 45",
+        "samples": 262144,
+        "measured": [
+          0.8138,
+          0.5426,
+          0.2713
+        ],
+        "expected": [
+          0.8139,
+          0.5426,
+          0.2713
+        ],
+        "tolerance": [
+          0.0026,
+          0.0018,
+          0.0009
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "slab 70",
+        "samples": 262144,
+        "measured": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "expected": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "tolerance": [
+          0.0039,
+          0.0017,
+          0.0004
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "wall 70",
+        "samples": 262144,
+        "measured": [
+          0.6369,
+          0.4246,
+          0.2123
+        ],
+        "expected": [
+          0.6371,
+          0.4247,
+          0.2124
+        ],
+        "tolerance": [
+          0.0041,
+          0.0027,
+          0.0014
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "mirrored slab",
+        "samples": 262144,
+        "measured": [
+          0.6775,
+          0.3011,
+          0.0753
+        ],
+        "expected": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "tolerance": [
+          0.003,
+          0.0014,
+          0.0003
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "rough wall 0",
+        "samples": 262144,
+        "measured": [
+          0.7591,
+          0.5061,
+          0.253
+        ],
+        "expected": [
+          0.7601,
+          0.5068,
+          0.2534
+        ],
+        "tolerance": [
+          0.0031,
+          0.002,
+          0.001
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "rough wall 60",
+        "samples": 262144,
+        "measured": [
+          0.6611,
+          0.4407,
+          0.2204
+        ],
+        "expected": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "tolerance": [
+          0.0035,
+          0.0024,
+          0.0012
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "index-matched wall",
+        "samples": 262144,
+        "measured": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "expected": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "tolerance": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "slab reflection",
+        "samples": 262144,
+        "measured": [
+          0.1635,
+          0.1635,
+          0.1635
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "wall reflection",
+        "samples": 262144,
+        "measured": [
+          0.1637,
+          0.1637,
+          0.1637
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "furnace sphere",
+        "samples": 505344,
+        "measured": [
+          0.9999,
+          0.9999,
+          0.9999
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.001,
+          0.001,
+          0.001
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "furnace cube",
+        "samples": 422656,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0042,
+          0.0042,
+          0.0042
+        ]
+      },
+      {
+        "mode": "wavefront-mis",
+        "check": "furnace thin sphere",
+        "samples": 505344,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0003,
+          0.0003,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "slab 0",
+        "samples": 262144,
+        "measured": [
+          0.7475,
+          0.3322,
+          0.0831
+        ],
+        "expected": [
+          0.7477,
+          0.3323,
+          0.0831
+        ],
+        "tolerance": [
+          0.0021,
+          0.0009,
+          0.0002
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "wall 0",
+        "samples": 262144,
+        "measured": [
+          0.8306,
+          0.5537,
+          0.2769
+        ],
+        "expected": [
+          0.8308,
+          0.5538,
+          0.2769
+        ],
+        "tolerance": [
+          0.0024,
+          0.0016,
+          0.0008
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "slab 45",
+        "samples": 262144,
+        "measured": [
+          0.7325,
+          0.3255,
+          0.0814
+        ],
+        "expected": [
+          0.7325,
+          0.3256,
+          0.0814
+        ],
+        "tolerance": [
+          0.0023,
+          0.001,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "wall 45",
+        "samples": 262144,
+        "measured": [
+          0.814,
+          0.5426,
+          0.2713
+        ],
+        "expected": [
+          0.8139,
+          0.5426,
+          0.2713
+        ],
+        "tolerance": [
+          0.0026,
+          0.0017,
+          0.0009
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "slab 70",
+        "samples": 262144,
+        "measured": [
+          0.5738,
+          0.255,
+          0.0638
+        ],
+        "expected": [
+          0.5734,
+          0.2548,
+          0.0637
+        ],
+        "tolerance": [
+          0.0039,
+          0.0017,
+          0.0004
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "wall 70",
+        "samples": 262144,
+        "measured": [
+          0.6374,
+          0.4249,
+          0.2125
+        ],
+        "expected": [
+          0.6371,
+          0.4247,
+          0.2124
+        ],
+        "tolerance": [
+          0.004,
+          0.0027,
+          0.0013
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "mirrored slab",
+        "samples": 262144,
+        "measured": [
+          0.6776,
+          0.3012,
+          0.0753
+        ],
+        "expected": [
+          0.6773,
+          0.301,
+          0.0753
+        ],
+        "tolerance": [
+          0.0031,
+          0.0014,
+          0.0003
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "rough wall 0",
+        "samples": 262144,
+        "measured": [
+          0.7598,
+          0.5066,
+          0.2533
+        ],
+        "expected": [
+          0.7601,
+          0.5068,
+          0.2534
+        ],
+        "tolerance": [
+          0.003,
+          0.002,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "rough wall 60",
+        "samples": 262144,
+        "measured": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "expected": [
+          0.6613,
+          0.4409,
+          0.2204
+        ],
+        "tolerance": [
+          0.0035,
+          0.0023,
+          0.0012
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "index-matched wall",
+        "samples": 262144,
+        "measured": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "expected": [
+          0.9,
+          0.6,
+          0.3
+        ],
+        "tolerance": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "slab reflection",
+        "samples": 262144,
+        "measured": [
+          0.1635,
+          0.1635,
+          0.1635
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "wall reflection",
+        "samples": 262144,
+        "measured": [
+          0.1637,
+          0.1637,
+          0.1637
+        ],
+        "expected": [
+          0.1638,
+          0.1638,
+          0.1638
+        ],
+        "tolerance": [
+          0.0036,
+          0.0036,
+          0.0036
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "furnace sphere",
+        "samples": 505344,
+        "measured": [
+          0.9999,
+          0.9999,
+          0.9999
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.001,
+          0.001,
+          0.001
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "furnace cube",
+        "samples": 422656,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0042,
+          0.0042,
+          0.0042
+        ]
+      },
+      {
+        "mode": "reference-restir",
+        "check": "furnace thin sphere",
+        "samples": 505344,
+        "measured": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "expected": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "tolerance": [
+          0.0003,
+          0.0003,
+          0.0003
+        ]
+      }
+    ],
+    "rough_furnace_sphere_mean": {
+      "reference-bsdf": 0.7876,
+      "reference-mis": 0.7876,
+      "wavefront-bsdf": 0.7876,
+      "wavefront-mis": 0.7876,
+      "reference-restir": 0.7876
+    },
+    "glass_scene_against_bsdf_4096": [
+      {
+        "estimator": "light sampling",
+        "spp": 256,
+        "image_z": [
+          -0.64,
+          -1.16,
+          -1.36
+        ],
+        "max_tile_z": 2.58
+      },
+      {
+        "estimator": "initial reservoirs",
+        "spp": 256,
+        "image_z": [
+          -0.26,
+          -0.18,
+          0.01
+        ],
+        "max_tile_z": 2.19
+      }
+    ],
+    "glass_scene_integrators_bit_for_bit_64_spp": true
+  },
+  "furnace_bounce_limit": {
+    "finding": "light entering near a faceted sphere's rim is trapped by total internal reflection; the default 64 bounces cut it",
+    "rows": [
+      {
+        "sphere": "48x24 facets",
+        "max_bounces": 64,
+        "spp": 4096,
+        "mean": 0.995274,
+        "five_se": 0.001842
+      },
+      {
+        "sphere": "48x24 facets",
+        "max_bounces": 1024,
+        "spp": 4096,
+        "mean": 1.0015,
+        "five_se": 0.0124
+      },
+      {
+        "sphere": "256x128 facets",
+        "max_bounces": 64,
+        "spp": 4096,
+        "mean": 0.99971,
+        "five_se": 0.000266
+      },
+      {
+        "sphere": "256x128 facets",
+        "max_bounces": 1024,
+        "spp": 4096,
+        "mean": 0.9998,
+        "five_se": 0.0003
+      },
+      {
+        "sphere": "cube",
+        "max_bounces": 64,
+        "spp": 4096,
+        "mean": 1.0001,
+        "five_se": 0.0009
+      },
+      {
+        "sphere": "thin-walled 48x24",
+        "max_bounces": 64,
+        "spp": 4096,
+        "mean": 1.0,
+        "five_se": 0.0001
+      }
+    ]
+  },
+  "fixture": {
+    "extraction": {
+      "materials_equal": true,
+      "warnings": [
+        "Lotus ignores /MaterialTransmission/Looks/Ignored inputs its material cannot represent: transmission_scatter, transmission_dispersion",
+        "Lotus ignores /MaterialTransmission/Looks/Depth inputs its material cannot represent: transmission_depth",
+        "Lotus ignores /MaterialTransmission/Looks/NoSpecular inputs its material cannot represent: specular",
+        "Lotus ignores /MaterialTransmission/Looks/Graph inputs its material cannot represent: transmission",
+        "Lotus ignores /MaterialMtlx/Looks/Lobes inputs its material cannot represent: coat, sheen, subsurface"
+      ]
+    },
+    "comparisons": {
+      "sample_index": 1048576,
+      "rows": [
+        {
+          "frontend": "headless",
+          "integrator": "reference",
+          "light_sampling": "bsdf",
+          "spp": 16,
+          "image_z": [
+            0.1,
+            0.39,
+            0.62
+          ],
+          "max_tile_z": 2.92,
+          "mean_tile_z2": 0.94
+        },
+        {
+          "frontend": "headless",
+          "integrator": "reference",
+          "light_sampling": "bsdf",
+          "spp": 256,
+          "image_z": [
+            0.65,
+            0.72,
+            0.84
+          ],
+          "max_tile_z": 3.65,
+          "mean_tile_z2": 1.1
+        },
+        {
+          "frontend": "headless",
+          "integrator": "reference",
+          "light_sampling": "nee_mis",
+          "spp": 16,
+          "image_z": [
+            -0.31,
+            -0.25,
+            -0.23
+          ],
+          "max_tile_z": 3.3,
+          "mean_tile_z2": 0.45
+        },
+        {
+          "frontend": "headless",
+          "integrator": "reference",
+          "light_sampling": "nee_mis",
+          "spp": 256,
+          "image_z": [
+            -0.47,
+            -0.77,
+            -0.81
+          ],
+          "max_tile_z": 2.68,
+          "mean_tile_z2": 0.49
+        },
+        {
+          "frontend": "headless",
+          "integrator": "wavefront",
+          "light_sampling": "nee_mis",
+          "spp": 16,
+          "image_z": [
+            -0.31,
+            -0.25,
+            -0.23
+          ],
+          "max_tile_z": 3.3,
+          "mean_tile_z2": 0.45
+        },
+        {
+          "frontend": "headless",
+          "integrator": "wavefront",
+          "light_sampling": "nee_mis",
+          "spp": 256,
+          "image_z": [
+            -0.47,
+            -0.77,
+            -0.81
+          ],
+          "max_tile_z": 2.68,
+          "mean_tile_z2": 0.49
+        }
+      ],
+      "negative_control": {
+        "change": "Tinted's transmission colour ignored (white)",
+        "spp": 256,
+        "max_tile_z": 533.96,
+        "rejected": true
+      },
+      "reference_reproduced_bit_for_bit": true,
+      "hydra_gpu": "lotus-renderer-hydra-material-fixtures-gpu passed: each Hydra image is the backend's image of the mirror bit for bit and matches the reference"
+    }
+  },
+  "determinism": {
+    "existing_references_bit_for_bit": [
+      "cornell-box",
+      "material-basics-v1",
+      "material-textures-v1",
+      "material-normals-v1",
+      "material-emission-v1",
+      "material-alpha-v1",
+      "material-mtlx-v1"
+    ],
+    "wavefront_and_light_sampling_same_64_spp": "bit for bit, as before"
+  },
+  "fault_injection": [
+    {
+      "fault": "found light always weighed by MIS",
+      "renderer.material.transmission": "reference-mis slab at 0 degrees: mean 0 instead of 0.7477",
+      "renderer.material.fixtures": "material-transmission-v1 reference-mis 16 spp: image mean difference -32.9 standard errors"
+    },
+    {
+      "fault": "outward normal without the determinant's sign",
+      "renderer.material.transmission": "reference-bsdf mirrored slab: mean 0 instead of 0.6773",
+      "renderer.material.fixtures": "material-transmission-v1 reference-bsdf 256 spp: tile at the Mirrored sphere 11.9 standard errors"
+    }
+  ],
+  "survey_assets": {
+    "OpenChessSet": {
+      "before": "pawn tops opaque white (base_color), 8 transmission warnings",
+      "after": "pawn tops refract as faintly yellow glass (transmission_color 1, 1, 0.828); transmission warnings gone; 8 subsurface warnings remain",
+      "storm": "the tops nearly invisible, rasterized transparency without refraction"
+    },
+    "StandardShaderBall": {
+      "variant": "example_material = mtlx_glass",
+      "before": "glass warned for transmission and rendered its base 0",
+      "after": "the shell refracts the core, bars and ground, faintly tinted; no transmission warning",
+      "storm": "a translucent shell without refraction"
+    }
+  },
+  "timing_seconds": {
+    "headless_report_build_and_run": 59,
+    "write_reference_all_fixtures": 13.6,
+    "hydra_material_cpu": 0.06,
+    "hydra_material_gpu": 9.75,
+    "hydra_material_fixtures_cpu": 0.13,
+    "hydra_material_fixtures_gpu": 92.93,
+    "core_temporal_gpu": 24.84,
+    "core_restir_gpu": 235.71,
+    "core_restir_benchmark_reference": 57.43,
+    "core_evidence_assets_install_tree_test_tiers": 110.12,
+    "usdrecord_lotus_640px": [
+      18.5,
+      19.3
+    ]
+  },
+  "not_run": [
+    "the full Hydra GPU CTest suite and the viewport, research and ci-core trees",
+    "usdview and the installed Hydra host",
+    "temporal and spatial reservoir reuse or SVGF on a transmissive scene",
+    "survey stages other than OpenChessSet and StandardShaderBall",
+    "radiance comparison with Storm"
+  ]
+}

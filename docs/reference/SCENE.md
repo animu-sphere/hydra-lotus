@@ -75,6 +75,9 @@ linear RGB, and its defaults are `UsdPreviewSurface`'s:
 | `normal` | `(0, 0, 1)` | each in [-1, 1] | tangent-space shading normal, normalized after evaluation |
 | `opacity` | `1` | [0, 1] | surface coverage, optionally replaced by `opacity_texture` |
 | `opacity_threshold` | `0` | [0, 1] | positive values select binary masking; 0 selects stochastic coverage |
+| `transmission` | `0` | [0, 1] | share of the non-metal part that is a transmitting dielectric interface instead of the coat over Lambert |
+| `transmission_color` | `(1, 1, 1)` | each in [0, 1] | tint of the light the interface transmits, applied at every crossing |
+| `thin_walled` | `false` | boolean | the transmitting surface is a thin wall enclosing no medium, rather than the boundary of a closed solid |
 
 Each input is a constant or, when its `TextureInput` is set
 (`base_color_texture`, `roughness_texture`, `metallic_texture`,
@@ -116,6 +119,19 @@ or the specification's `opacityMode = transparent` lighting response;
 `opacityMode` is not read. Thresholds are constants, not texture inputs.
 Non-finite evaluated texture opacity is treated as zero; finite results
 are clamped to [0, 1].
+
+**Transmission** is refraction through a dielectric interface, the
+[transmission contract](../design/TRANSMISSION.md) of LOTUS-TRANSMISSION-01.
+`transmission`, `transmission_color` and `thin_walled` are constants with no
+texture inputs, and the interface refracts with `roughness` and `ior`, as
+the coat reflects. The transmitted light is tinted by `transmission_color`;
+`base_color` no longer reaches the transmitted share. A solid must be closed
+and its triangles wound outwards: its inside is the side its object-space
+winding normal points away from. A thin wall has no inside. Nothing is
+absorbed or scattered inside a medium. Opacity stays coverage, tested first:
+an accepted surface has its full BSDF, transmission included. Transmission
+with `use_specular_workflow`, which has no index to refract with, throws
+`std::invalid_argument`.
 
 A `Texture` holds decoded texels, four channels each, rows from the top of
 the image, so (s, t) = (0, 0) is its bottom-left corner as in USD:
@@ -657,7 +673,11 @@ of compute kernels. Both call the same transport steps
   triangle's corners in world space; the position is interpolated from the
   barycentrics, and the geometric normal is turned to face the incoming
   ray. Surfaces are two-sided. The hit's material is the material table's
-  entry at the instance record's material slot.
+  entry at the instance record's material slot. For a transmitting
+  material, the ray enters the solid when it opposes the outward normal:
+  the world-space winding normal times the sign of the determinant of the
+  instance transform's linear part, so a mirroring transform keeps the
+  inside.
 - **Texture lookups.** When any of the material's inputs is a lookup, the
   instance's texture-coordinate set is interpolated with the barycentrics
   (or the material's fallback is used), and each lookup samples its
@@ -693,7 +713,12 @@ of compute kernels. Both call the same transport steps
   compatibility guarantees.
 - **Emission** is added at every hit, the camera's included. With light
   sampling, emission that a sampled direction finds is weighed against
-  next event estimation's density for the same point.
+  next event estimation's density for the same point, unless the direction
+  was a delta or transmitted one, which next event estimation cannot
+  sample: then the emission it finds, the analytic lights it crosses and
+  the environment image it escapes to are added unweighted. The path
+  records this in its flags; the wavefront integrator stores the flag in
+  the last density's word.
 - **Analytic lights.** A scattered ray adds the radiance of each
   [analytic light](#analytic-lights) it crosses before its hit, or before
   it escapes: a sphere's near side from outside it, a rect's or disk's
@@ -739,20 +764,47 @@ of compute kernels. Both call the same transport steps
   below-surface samples terminate without resampling. For pure metal,
   the GGX density cancels analytically in the weight for mirror precision.
   [Measured verification](../reports/2026-10-08-dielectric-specular.md).
+- **Transmission.** With metal fraction `m` and `transmission` `t`, the
+  surface is `m · metal + (1 − m) · [(1 − t) · coat + t · dielectric]`; the
+  layered lobes above share `1 − (1 − m)t`, the metal's renormalized over
+  it. The dielectric interface uses the exact unpolarized Fresnel
+  reflectance, which is 1 beyond the critical angle on leaving a solid.
+  Below the alpha floor, or at `ior = 1`, it is smooth: it reflects about
+  the shading normal and refracts by Snell's law along Dirac deltas, and at
+  `ior = 1` passes straight through, tinted, at any roughness. Otherwise it
+  is the GGX dielectric of Walter et al. (2007): reflection about a visible
+  normal, and refraction through it with radiance scaled by `1/η²`, where
+  `η` is the index ratio across the interface from the incoming side. A
+  thin wall reflects `2R / (1 + R)` and transmits the rest straight
+  through, or, when rough, as its reflection lobe mirrored through the
+  tangent plane. The scattering event draws the same three random numbers:
+  the first chooses the interface with probability `(1 − m)t` and is
+  rescaled for the layered lobes otherwise, so `t = 0` takes the layered
+  path exactly. Within the interface, reflection has the probability of
+  its reflectance. Its weights are `G2/G1`, times the tint for a
+  transmission and divided by `η²` for a solid's; the smooth ones omit
+  `G2/G1`. BSDF evaluation and its density, which next event estimation
+  and MIS read, cover reflection only: the layered lobes and the
+  interface's rough reflection. A rough interface loses its microfacets'
+  multiple scattering uncompensated.
+  [Measured verification](../reports/2026-10-29-dielectric-transmission.md).
 - **Environment.** A scattered ray that escapes adds the throughput times
   the environment radiance: the constant's plus the environment image's
   in its direction, weighed by MIS under light sampling
   ([below](#light-sampling)). Camera rays that miss do not see it.
 - **Termination.** A path ends after `PathTracingSettings::max_bounces`
   scattering events (64 by default; 0 keeps only the emission the camera
-  sees), when a sampled direction is not above the shading normal's
-  hemisphere or not above the geometric surface (a surface only reflects;
-  with authored normals the second can happen alone), or by Russian
+  sees), when a sampled direction is not on its lobe's side of both the
+  shading normal and the geometric surface: above both for a reflection,
+  below both for a transmission (with authored normals the two can
+  disagree), or by Russian
   roulette: before the fourth and every later scattering event, it
   continues with probability `min(max throughput component, 0.95)` and its
   throughput is divided by that probability.
-- **Ray origins** are offset along the normal (Wächter and Binder, *Ray
-  Tracing Gems* chapter 6), and secondary rays are unbounded.
+- **Ray origins** are offset along the geometric normal, towards the side
+  the continuation leaves into (Wächter and Binder, *Ray Tracing Gems*
+  chapter 6), and secondary rays are unbounded.
+
 - **Randomness.** A sample's PCG sequence is seeded from the pixel's index
   in the target and its sample index: an accumulation's k-th sample uses
   `PathTracingSettings::sample_index + k`. The same scene, camera, target
@@ -866,8 +918,8 @@ The reference path tracer's images are of one fixed scene, rendered by
 
 ### Material fixtures
 
-LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures and LOTUS-MTLX-01's
-MaterialX fixture are committed USD files in
+LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures and the MaterialX fixtures
+of LOTUS-MTLX-01 and LOTUS-TRANSMISSION-01 are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
 USD files and the images in `validation/materials/textures/`: 8-bit PNG
@@ -1006,15 +1058,54 @@ coordinates, `st`, under the default periodic address modes unless stated.
 | Row | Objects | Authored inputs and expected translation |
 | --- | --- | --- |
 | Constants | Defaults, Weighted, Metal, Ior, NoSpecular | nothing authored, so base colour 0.8 and roughness 0.2; `base` 0.5 times `base_color` (0.9, 0.3, 0.1); `metalness` 1 over (0.95, 0.64, 0.54) at `specular_roughness` 0.3; `specular_IOR` 2.5 over (0.1, 0.2, 0.6) at 0.1; `specular` 0, which translates to ior 1, over 0.6 grey at 0.1 |
-| Constants on cards | Emissive, Opacity, Clamped, Lobes, Precedence | black with `emission` 2 times `emission_color` (1, 0.6, 0.2); teal with grey `opacity` 0.5, stochastic coverage; `base` 1.5 times (1, 0.5, −0.25), `metalness` −1 and `specular_roughness` 1.5, which translate to (1, 0.75, 0), 0 and 1; teal with `coat` 1, `sheen` 0.5 and `transmission` 1, which are ignored and warn; blue (0.1, 0.2, 0.8) beside a red universal `UsdPreviewSurface`, which the MaterialX surface overrides |
+| Constants on cards | Emissive, Opacity, Clamped, Lobes, Precedence | black with `emission` 2 times `emission_color` (1, 0.6, 0.2); teal with grey `opacity` 0.5, stochastic coverage; `base` 1.5 times (1, 0.5, −0.25), `metalness` −1 and `specular_roughness` 1.5, which translate to (1, 0.75, 0), 0 and 1; teal with `coat` 1, `sheen` 0.5 and `subsurface` 1, which are ignored and warn; blue (0.1, 0.2, 0.8) beside a red universal `UsdPreviewSurface`, which the MaterialX surface overrides |
 | Images | Srgb, Raw, WeightedImage, Channels, EmissionMap | the palette under `srgb_texture`; the palette without a colour space, raw; the sRGB palette under `base` 0.5, a lookup scaled by 0.5; copper with `metalness` from `ND_extract_vector3` index 2 of `rgba.png` and `specular_roughness` from `ramp.png`, both raw; black with `emission` 1 times `ND_convert_vector3_color3` of the raw palette |
 | Coordinates | Periodic, Clamp, Mirror, Constant, Named | the sRGB palette over `st` from −0.5 to 1.5 under the default periodic, `clamp`, `mirror` and `constant` address modes, the last with a transparent black border; the palette at `ND_geompropvalue_vector2` `uv1`, `st` turned a quarter |
 | Normals and graphs | NormalMap, NormalScale, Tiled, Fileless, Untranslated | `ND_normalmap_vector2` of `tilts.png` on a sphere with `st` longitude by latitude times (4, 2), scale 2 and bias −1; the same map on a card at `scale` (0.5, 0.5), x and y scale 1 and bias −0.5; `ND_tiledimage_color3` with `uvtiling` (1, 1), Srgb's lookup; an `ND_image_color3` without a file whose `default` (0.2, 0.6, 0.9) is a constant; `ND_multiply_color3FA` of the sRGB palette, which keeps the default and warns |
 
 Its negative control ignores WeightedImage's base weight, as a translator
-reading only `base_color` would; it changes one card.
+reading only `base_color` would; it changes one card. Its Lobes card
+authored `transmission` 1 until transmission was translated; `subsurface`
+replaced it, so that the card and the images stay as they were.
 
+**`material-transmission-v1`** covers the
+[transmission contract](../design/TRANSMISSION.md) at 160×160 under the
+same camera, lights and backdrop, on the middle three rows of the grid:
+the MaterialX fixture's spheres, with vertex normals, and cards. Every
+material is a Standard Surface whose `transmission` is a constant 1 unless
+stated, at `specular_IOR` 1.5 and Standard Surface's default roughness 0.2
+unless stated.
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Solid spheres | Smooth, Rough, Tinted, Matched, Partial | `specular_roughness` 0; 0.35; `transmission_color` (0.9, 0.45, 0.15) at 0; (0.5, 0.8, 0.9) at `specular_IOR` 1 and roughness 0.4, which passes straight through, tinted; `transmission` 0.5 over teal at `metalness` 0.25 and roughness 0.15 |
+| Thin-walled cards | ThinSmooth, ThinRough, ThinTinted, ThinMatched, ThinDense | `thin_walled` true with roughness 0; 0.4; `transmission_color` (0.3, 0.7, 0.9) at 0.1; (0.9, 0.6, 0.3) at `specular_IOR` 1; `specular_IOR` 2.42 at 0 |
+| Spheres | Mirrored, Depth, NoSpecular, Ignored, Graph | Smooth's material under x scale −0.35, which keeps the solid's inside; amber `transmission_color` under `transmission_depth` 0.5, which translates to white and warns; `specular` 0, which keeps `specular_IOR` to refract with and warns; `transmission_scatter` (0.5, 0.2, 0.1) and `transmission_dispersion` 20, ignored with a warning; `transmission` from `ND_image_float` of `ramp.png`, which keeps 0 and warns, over teal at 0.3 |
+
+Its negative control ignores Tinted's transmission colour, as a translator
+that read only the weight would; it changes one sphere.
+
+- **Analytic transmission.** `renderer.material.transmission` checks the
+  dielectric lobe against independent double-precision oracles through
+  both integrators, BSDF sampling and NEE/MIS, and the reference
+  integrator with initial reservoirs, at 64 spp under orthographic views.
+  Smooth solid slabs and smooth thin walls at 0, 45 and 70 degrees before a
+  parallel emitter of radiance 1 behind them, under a black sky, must
+  transmit `(1 − R) / (1 + R)` times their tint per crossing; a mirrored
+  slab must keep its inside; a rough thin wall at 0 and 60 degrees must
+  transmit its directional transmittance by half-vector quadrature; an
+  index-matched rough wall must pass its tint. With the emitter a black
+  absorber and the sky white, a slab and a wall at 60 degrees must reflect
+  `2R / (1 + R)`. Under a white sky alone, a smooth solid sphere, a cube
+  that exercises total internal reflection and a thin-walled sphere must
+  render 1 at 256 spp with up to 1024 bounces, since light trapped near a
+  faceted sphere's rim would otherwise be cut; a rough sphere's loss is
+  recorded. Then, in a glass scene lit from behind and in front, NEE/MIS
+  and initial reservoirs at 256 spp must match BSDF sampling's 4096-spp
+  estimate by the DES-Q5 metric, and both integrators must render its
+  64 spp bit for bit.
 - **Reference.** `lotus-headless --write-material-reference <directory>`
+
   renders each mirror in a cleared GPU scene in deterministic mode with BSDF
   sampling from sample index 0: `<fixture>-mean.pfm` holds 4096 samples per
   pixel in one accumulation, and `<fixture>-variance.pfm` each pixel's
@@ -1202,14 +1293,23 @@ order. Changing it restarts the accumulation.
   blocks them; a partially covering surface multiplies the light they
   carry by `1 - coverage`, drawing no random numbers, whose expectation is
   what traced rays' coverage tests produce. Shadow rays towards the
-  environment image are unbounded, as towards a distant light.
+  environment image are unbounded, as towards a distant light. An accepted
+  transmitting surface blocks them too: carrying light through it would be
+  caustic transport through light sampling, which is
+  [deferred](../design/TRANSMISSION.md#7-shadow-rays-and-the-light-table).
+  At a transmitting surface a light point below the geometric surface
+  contributes nothing, and a fully delta surface (smooth, `transmission`
+  1, not metallic) still draws the four numbers and adds nothing; light
+  behind or inside glass is found by BSDF sampling alone.
 - **MIS.** A light sample is weighed by the power heuristic of its density
   against `BsdfPdf` for the same direction, and emission a sampled
   direction finds by the power heuristic of that direction's density
   against the light table's for the hit point, and so is an analytic
   light's radiance that a sampled direction crosses, against its
   selection probability times its density for the direction; the camera's
-  view of an emitter is unweighted, and so is parallel light. An escaping
+  view of an emitter is unweighted, and so is parallel light, and so is
+  light found after a delta or transmitted direction. An escaping
+
   sampled direction's environment-image radiance is weighed against the
   image's selection probability times its density for the direction. The constant environment is not sampled:
   BSDF sampling's cosine-weighted directions sample it better than uniform
@@ -1953,9 +2053,12 @@ and translates these inputs:
 | `emission`, `emission_texture` | `emission` × `emission_color` | each component clamped to be non-negative |
 | `metallic`, `metallic_texture` | `metalness` | clamped to [0, 1] |
 | `roughness`, `roughness_texture` | `specular_roughness` | clamped to [0, 1]; both square it into the microfacet alpha |
-| `ior` | `specular_IOR`, `specular` | constant clamped to [1, largest finite float]; `specular` 0 sets 1, removing the dielectric interface |
+| `ior` | `specular_IOR`, `specular` | constant clamped to [1, largest finite float]; `specular` 0 sets 1, removing the dielectric interface, unless the material transmits, which keeps `specular_IOR` to refract with |
 | `opacity` | `opacity` | the mean of a constant colour, clamped to [0, 1] |
 | `normal`, `normal_texture` | `normal` | an `ND_normalmap` of an image, or of its default |
+| `transmission` | `transmission` | a constant clamped to [0, 1] |
+| `transmission_color` | `transmission_color` | where `transmission` is positive, a constant with each component clamped to [0, 1] |
+| `thin_walled` | `thin_walled` | as authored |
 
 A product takes a lookup on one side only, whose scale, bias and fallback
 the other side's constant multiplies; a scalar lookup cannot weight a
@@ -1972,14 +2075,22 @@ colour. Inputs are constants or graphs of these nodes:
 
 Other nodes, and the cases these rules exclude, leave the input's default
 and are reported as connected inputs, as above. The IR cannot represent
-`coat`, `diffuse_roughness`, `sheen`, `specular_anisotropy`, `subsurface`,
-`thin_film_thickness` or `transmission` when non-zero or driven by a graph,
+`coat`, `diffuse_roughness`, `sheen`, `specular_anisotropy`, `subsurface`
+or `thin_film_thickness` when non-zero or driven by a graph,
 `specular` other than 0 or 1, a `specular_color` other than white where
 `specular` is not 0 (a metal's edge tint included), a coloured `opacity` or
-an authored constant `normal`, which is in world space. The translation
-ignores them, and the adapter warns, naming the material and those inputs,
-whenever it translates the material. Their dependent inputs (`coat_color`,
-`transmission_color` and so on) and `thin_walled` are not read. `constant`
+an authored constant `normal`, which is in world space. Nor can it
+represent a graph-driven `transmission`, `transmission_color` or
+`thin_walled`, which keep their defaults (0, white and false), and, where
+the material transmits, `specular` 0, whose reflection remains, a
+positive `transmission_depth`, under which the colour is absorption at that
+depth and translates to white, a non-black `transmission_scatter`, or a
+non-zero `transmission_scatter_anisotropy`, `transmission_dispersion` or
+`transmission_extra_roughness`, which are ignored. The translation ignores
+them, and the adapter warns, naming the material and those inputs,
+whenever it translates the material. Their other dependent inputs
+(`coat_color` and so on) are not read. `constant`
+
 addressing is exact only where `default` is zero. Other MaterialX surfaces,
 OpenPBR's included, warn and leave the default material.
 

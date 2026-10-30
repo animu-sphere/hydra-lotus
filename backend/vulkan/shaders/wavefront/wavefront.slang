@@ -80,17 +80,27 @@ void LoadRay(uint slot, inout PathState path) {
   path.ray.TMax = direction.w;
 }
 
+// The last density and the flags share a word: once kUnweightedLight is
+// set the density is unused, and -1 stands for the flag.
+uint PackLastPdf(PathState path) {
+  return asuint((path.flags & kUnweightedLight) != 0 ? -1.0 : path.lastPdf);
+}
+
+void UnpackLastPdf(uint word, inout PathState path) {
+  path.lastPdf = asfloat(word);
+  path.flags = path.lastPdf < 0.0 ? kUnweightedLight : 0;
+}
+
 // The state a path carries between bounces, everything but its hit.
 PathState LoadPath(uint slot, uint depth) {
   PathState path;
   LoadRay(slot, path);
   const uint4 throughput = LoadSection(kThroughputSection, slot);
   path.throughput = UnpackSpectrum(throughput);
-  path.lastPdf = asfloat(throughput.w);
+  UnpackLastPdf(throughput.w, path);
   const uint4 radiance = LoadSection(kRadianceSection, slot);
   path.radiance = UnpackSpectrum(radiance);
   path.rngState = radiance.w;
-  path.flags = 0;
   path.pixelIndex = slot;
   path.depth = depth;
   return path;
@@ -113,28 +123,28 @@ PathState LoadShadedPath(uint slot, uint depth) {
   if (depth == 0) {
     path.throughput = SpectrumConstant(1.0);
     path.lastPdf = 0.0;
+    path.flags = 0;
   } else {
     const uint4 throughput = LoadSection(kThroughputSection, slot);
     path.throughput = UnpackSpectrum(throughput);
-    path.lastPdf = asfloat(throughput.w);
+    UnpackLastPdf(throughput.w, path);
   }
   const uint4 radiance = LoadSection(kRadianceSection, slot);
   path.radiance = UnpackSpectrum(radiance);
   path.rngState = radiance.w;
-  path.flags = 0;
   path.pixelIndex = slot;
   path.depth = depth;
   return path;
 }
 
-// What a path continues with: its ray, throughput, radiance and
-// random-number state.
+// What a path continues with: its ray, throughput, last density and flags,
+// radiance and random-number state.
 void StorePath(uint slot, PathState path) {
   StoreSection(kOriginSection, slot, Pack(path.ray.Origin, path.ray.TMin));
   StoreSection(kDirectionSection, slot,
       Pack(path.ray.Direction, path.ray.TMax));
   StoreSection(kThroughputSection, slot,
-      PackSpectrum(path.throughput, asuint(path.lastPdf)));
+      PackSpectrum(path.throughput, PackLastPdf(path)));
   StoreRadiance(slot, path);
 }
 
@@ -242,8 +252,9 @@ void Intersect(uint index) {
     } else {
       const uint4 throughput = LoadSection(kThroughputSection, slot);
       path.throughput = UnpackSpectrum(throughput);
-      path.lastPdf = asfloat(throughput.w);
+      UnpackLastPdf(throughput.w, path);
       path.depth = bounce;
+
       MissPath(path);
       StoreSample(slot, path.radiance);
     }

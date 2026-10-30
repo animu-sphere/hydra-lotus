@@ -77,6 +77,17 @@ void SetMaterialAlpha(Lotus::RenderWorld& world);
 // and a node the translator does not read.
 void SetMaterialMtlx(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-transmission-v1: three
+// rows of coarse spheres and cards under material-basics-v1's camera, lights
+// and backdrop, every material a MaterialX Standard Surface that transmits
+// (docs/design/TRANSMISSION.md). Rows from the top: solid spheres, smooth,
+// rough, tinted, index-matched and partly transmitting; thin-walled cards,
+// smooth, rough, tinted, index-matched and of a high index; then a mirrored
+// solid sphere, a transmission depth that leaves the light untinted,
+// specular 0 refracting with its index, ignored scattering and dispersion,
+// and a graph-driven transmission that keeps its default.
+void SetMaterialTransmission(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;

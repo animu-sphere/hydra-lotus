@@ -108,6 +108,17 @@ void ValidateMaterial(const Material& material) {
     throw std::invalid_argument("specular colour components must be in [0, 1]");
   }
   ValidateTextureInput(material.specular_color_texture, true);
+  if (!UnitInterval(material.transmission) ||
+      !Finite(material.transmission_color) ||
+      !std::all_of(material.transmission_color.begin(),
+          material.transmission_color.end(), UnitInterval)) {
+    throw std::invalid_argument(
+        "transmission and its colour components must be in [0, 1]");
+  }
+  if (material.use_specular_workflow && material.transmission > 0.0F) {
+    throw std::invalid_argument(
+        "transmission needs the metallic workflow's ior");
+  }
   if (!std::isfinite(material.texcoord_fallback[0]) ||
       !std::isfinite(material.texcoord_fallback[1])) {
     throw std::invalid_argument("texture coordinate fallback must be finite");

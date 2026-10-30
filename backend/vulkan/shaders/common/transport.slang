@@ -36,6 +36,17 @@ public struct PathState {
   public uint flags;
 };
 
+// PathState::flags: the last direction was a delta or transmitted one,
+// which next event estimation cannot sample, so the light it finds is
+// added unweighted and lastPdf is unused.
+public static const uint kUnweightedLight = 1;
+
+// Whether the light the path's ray finds is weighed against next event
+// estimation's.
+bool WeighFoundLight(PathState path) {
+  return SampleLights() && (path.flags & kUnweightedLight) == 0;
+}
+
 // A pixel's camera path for the frame's sample index: its camera ray goes
 // through a uniformly distributed point of the pixel (the 1-pixel box
 // filter).
@@ -148,7 +159,7 @@ float EmissionWeight(PathState path, Hit hit, SurfaceHit surface) {
 public bool ScatterPath(inout PathState path, Hit hit) {
   const SurfaceHit surface = ReconstructHit(hit, path.ray.Direction);
   Spectrum emission = surface.emission;
-  if (SampleLights() && path.depth != 0 && MaxComponent(emission) > 0.0) {
+  if (WeighFoundLight(path) && path.depth != 0 && MaxComponent(emission) > 0.0) {
     emission = emission * EmissionWeight(path, hit, surface);
   }
   path.radiance = path.radiance + path.throughput * emission;
@@ -158,7 +169,7 @@ public bool ScatterPath(inout PathState path, Hit hit) {
     path.radiance = path.radiance + path.throughput *
         CrossedLights(path.ray.Origin, path.ray.Direction,
             dot(surface.position - path.ray.Origin, path.ray.Direction),
-            false, SampleLights(), path.lastPdf);
+            false, WeighFoundLight(path), path.lastPdf);
   }
   if (path.depth >= path_constants.max_bounces) {
     return false;
@@ -190,14 +201,22 @@ public bool ScatterPath(inout PathState path, Hit hit) {
     return false;
   }
   const float3 wi = normalize(basis.ToWorld(sample.wi));
-  // Above the shading normal but below the geometric surface, a direction
-  // would leave through the surface, which only reflects: the path ends.
-  if (dot(wi, surface.normal) <= 0.0) {
+  // A reflected direction above the shading normal but below the geometric
+  // surface, or a transmitted one below the shading normal but above it,
+  // would leave on the side its lobe does not reach: the path ends.
+  const float side = dot(wi, surface.normal);
+  if (sample.transmitted ? side >= 0.0 : side <= 0.0) {
     return false;
   }
   path.throughput = path.throughput * sample.weight;
   path.lastPdf = sample.pdf;
-  path.ray.Origin = OffsetRayOrigin(surface.position, surface.normal);
+  if (sample.delta || sample.transmitted) {
+    path.flags |= kUnweightedLight;
+  } else {
+    path.flags &= ~kUnweightedLight;
+  }
+  path.ray.Origin = OffsetRayOrigin(surface.position,
+      sample.transmitted ? -surface.normal : surface.normal);
   path.ray.Direction = wi;
   path.ray.TMin = 0.0;
   path.ray.TMax = kFloatMax;
@@ -212,12 +231,12 @@ public void MissPath(inout PathState path) {
   Spectrum environment = SpectrumFromRgb(path_constants.environment.xyz);
   if (path_constants.environment_map != 0) {
     environment = environment + EnvironmentRadiance(
-        path.ray.Direction, SampleLights(), path.lastPdf);
+        path.ray.Direction, WeighFoundLight(path), path.lastPdf);
   }
   path.radiance = path.radiance + path.throughput * environment;
   if (path_constants.analytic_count != 0) {
     path.radiance = path.radiance + path.throughput *
         CrossedLights(path.ray.Origin, path.ray.Direction, kFloatMax, true,
-            SampleLights(), path.lastPdf);
+            WeighFoundLight(path), path.lastPdf);
   }
 }
