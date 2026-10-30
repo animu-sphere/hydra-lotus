@@ -5884,6 +5884,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.environment", Status(setup_status), setup_error});
     checks.push_back({"renderer.material.fixtures", Status(setup_status), setup_error});
+    checks.push_back({"renderer.material.transmission", Status(setup_status), setup_error});
   }
   checks.push_back({"renderer.core.boundary", core_ok ? "pass" : "fail",
       core_ok ? "" : "commit/extraction contract mismatch"});
