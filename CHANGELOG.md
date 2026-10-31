@@ -9,6 +9,21 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- The Hydra plugin lights a scene with no dome and no scene light with
+  OpenUSD's Stinson Beach image instead of a white environment, in usdview
+  and `usdrecord`. usdview's Camera Light no longer suppresses the fallback
+  environment. Directly created delegates, `lotus-viewport` among them, stay
+  white. The image's pole stays on world +Y on Z-up stages. Licence and
+  notice are in `third_party/openusd`, listed in `THIRD_PARTY_NOTICES.md`
+  and installed beside the image in `lib/usd/hdLotus/assets`; the host
+  evidence log gains `environment_sampled`
+  ([report](docs/reports/2026-10-31-fallback-environment.md)).
+- Through Hydra, camera samples that miss show the environment image, the
+  fallback's or a textured dome's, following usdview's Dome Light Textures
+  Visible (`domeLightCameraVisibility`, on by default, as in Storm). The
+  backend's `PathTracingSettings::environment_background` is off by default,
+  and no sample changes. This also applies to `lotus-viewport` under a
+  textured dome.
 - `scripts/asset_survey.py` counts a USD stage's material, geometry and
   light features and classifies Lotus's Hydra warnings in `usdrecord` logs.
   An [asset gap survey](docs/reports/2026-10-29-asset-gap-survey.md) of 18

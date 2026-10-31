@@ -19,6 +19,9 @@ TARGET = "cy2026-windows-x86_64-py313-lookdev"
 REQUIRED = {
     "lib/usd/hdLotus/hdLotus.dll",
     "lib/usd/hdLotus/resources/plugInfo.json",
+    "lib/usd/hdLotus/assets/StinsonBeach.hdr",
+    "lib/usd/hdLotus/assets/LICENSE.txt",
+    "lib/usd/hdLotus/assets/NOTICE.txt",
     "bin/lotus-headless.exe",
     "bin/reference/cornell-box-mean.pfm",
     "bin/reference/cornell-box-variance.pfm",

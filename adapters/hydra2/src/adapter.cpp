@@ -169,6 +169,7 @@ void AppendHostEvidence(std::uint64_t frame_index,
          << " restir_bytes=" << frame.restir.reservoir_bytes
          << " emissive_triangles=" << scene.emissive_triangles
          << " analytic_lights=" << scene.analytic_lights
+         << " environment_sampled=" << (scene.environment_sampled ? 1 : 0)
          << " sample_index=" << settings.sample_index
          << " samples=" << frame.samples_per_pixel
          << " temporal=" << (frame.temporal.available ? 1 : 0)
@@ -420,7 +421,8 @@ void ApplyFraming(const HdRenderPassState& state,
       data.GetHeight()};
 }
 
-// With no authored dome, retain the white environment used by the bootstrap.
+// With no authored lighting and no fallback image, retain the white
+// environment used by the bootstrap.
 constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 
 // The scene keys of the meshes a render pass does not trace.
@@ -634,11 +636,28 @@ public:
     }
   }
 
-  // An analytic light under its path; none for a hidden or invalid one,
-  // which still replaces the fallback environment as a dome does.
-  void SyncLight(const SdfPath& id, const std::optional<Lotus::Light>& light) {
+  // The image that replaces the white fallback environment. It is decoded
+  // while it lights the scene; one that cannot be decoded warns and leaves
+  // the fallback white.
+  void SetFallbackEnvironment(const std::filesystem::path& file) {
     std::scoped_lock lock(mutex_);
-    lights_.insert(id);
+    const std::u8string name = file.generic_u8string();
+    fallback_file_.assign(name.begin(), name.end());
+    world_.RemoveTexture(FallbackTextureKey());
+    fallback_textured_ = false;
+    UpdateEnvironment();
+  }
+
+  // An analytic light under its path; none for a hidden or invalid one, which
+  // still replaces the fallback environment as a dome does. A host's light
+  // (usdview's camera light) is application state, not scene lighting, so it
+  // adds to the fallback environment.
+  void SyncLight(const SdfPath& id, const std::optional<Lotus::Light>& light,
+      bool host_light) {
+    std::scoped_lock lock(mutex_);
+    if (!host_light) {
+      lights_.insert(id);
+    }
     if (light) {
       world_.SetLight(id.GetString(), *light);
     } else {
@@ -649,10 +668,9 @@ public:
 
   void RemoveLight(const SdfPath& id) {
     std::scoped_lock lock(mutex_);
-    if (lights_.erase(id) != 0) {
-      world_.RemoveLight(id.GetString());
-      UpdateEnvironment();
-    }
+    lights_.erase(id);
+    world_.RemoveLight(id.GetString());
+    UpdateEnvironment();
   }
 
   // A mesh's faces become one scene mesh per material: those no GeomSubset
@@ -1093,6 +1111,10 @@ private:
     return id.AppendProperty(TfToken("lotus:domeTexture")).GetString();
   }
 
+  static std::string FallbackTextureKey() {
+    return DomeTextureKey(SdfPath("/__lotusFallbackDome"));
+  }
+
   struct Dome {
     std::array<float, 3> radiance{};
     std::string file;
@@ -1115,14 +1137,44 @@ private:
   std::map<SdfPath, Dome> domes_;
   // Textured domes that emit but were left out, each warned about once.
   std::set<SdfPath> ignored_domes_;
-  // The synced analytic lights, hidden and invalid ones included.
+  // The synced analytic lights, hidden and invalid ones included, but not a
+  // host's.
   std::set<SdfPath> lights_;
+  // The image replacing the white fallback environment; empty for none.
+  std::string fallback_file_;
+  // Whether `fallback_file_` decoded into the scene's texture under
+  // FallbackTextureKey, which holds it only while it lights the scene.
+  bool fallback_textured_ = false;
 
   // The untextured domes' radiance is summed into the constant environment.
   // The first textured dome in path order that emits is the environment
   // image, its radiance scaling the image; the scene holds one image, so
-  // any further textured dome that emits is left out with a warning.
+  // any further textured dome that emits is left out with a warning. With
+  // no dome and no scene light, the fallback image or white lights the scene.
   void UpdateEnvironment() {
+    const bool fallback = domes_.empty() && lights_.empty();
+    if (fallback && !fallback_textured_ && !fallback_file_.empty()) {
+      std::string error;
+      if (auto texture = LoadTexture(
+              {FallbackTextureKey(), fallback_file_, TfToken()}, error)) {
+        world_.SetTexture(FallbackTextureKey(), std::move(*texture));
+        fallback_textured_ = true;
+      } else {
+        TF_WARN("Lotus cannot read its fallback environment %s, so it lights "
+                "uniformly: %s",
+            fallback_file_.c_str(), error.c_str());
+        fallback_file_.clear();
+      }
+    } else if (!fallback && fallback_textured_) {
+      world_.RemoveTexture(FallbackTextureKey());
+      fallback_textured_ = false;
+    }
+    if (fallback_textured_) {
+      world_.SetEnvironment({0.0F, 0.0F, 0.0F});
+      world_.SetEnvironmentMap(Lotus::EnvironmentMap{FallbackTextureKey(),
+          {1.0F, 1.0F, 1.0F}, Lotus::IdentityMatrix()});
+      return;
+    }
     std::array<double, 3> sum{};
     std::optional<Lotus::EnvironmentMap> map;
     for (const auto& [id, dome] : domes_) {
@@ -1146,9 +1198,7 @@ private:
       radiance[c] = static_cast<float>(std::min(sum[c],
           static_cast<double>(std::numeric_limits<float>::max())));
     }
-    world_.SetEnvironment(domes_.empty() && lights_.empty()
-                              ? kFallbackEnvironment
-                              : radiance);
+    world_.SetEnvironment(fallback ? kFallbackEnvironment : radiance);
     world_.SetEnvironmentMap(map);
   }
   // The texture keys each material names, and how many materials name each
@@ -1474,7 +1524,10 @@ public:
                   "on %s", GetId().GetText());
         }
       }
-      state_->SyncLight(GetId(), light);
+      // HdxTaskController hands its lights over with their GlfSimpleLight
+      // under `params`, which no UsdLux light has.
+      state_->SyncLight(GetId(), light,
+          !delegate->GetLightParamValue(GetId(), HdLightTokens->params).IsEmpty());
     }
     *dirty_bits = Clean;
   }
@@ -2276,6 +2329,9 @@ private:
         delegate.GetRenderSetting<bool>(kLightSamplingSetting, true)
             ? Lotus::LightSampling::Mis
             : Lotus::LightSampling::Bsdf;
+    // usdview's Dome Light Textures Visible; absent means visible, as in Storm.
+    settings.environment_background = delegate.GetRenderSetting<bool>(
+        HdRenderSettingsTokens->domeLightCameraVisibility, true);
     if (delegate.GetRenderSetting<bool>(kRestirSetting, false)) {
       settings.light_sampling = Lotus::LightSampling::RestirInitial;
       settings.restir_temporal = delegate.GetRenderSetting<bool>(kRestirTemporalSetting, false);
@@ -2837,6 +2893,15 @@ Lotus::FrameSnapshot HdLotusRenderDelegate::GetSelectedSnapshot() {
 
 Lotus::GpuFrameEvidence HdLotusRenderDelegate::GetFrameEvidence() {
   return impl_->state->GetFrameEvidence();
+}
+
+std::filesystem::path HdLotusRenderDelegate::PackagedFallbackEnvironment() {
+  return PluginDirectory() / "assets" / "StinsonBeach.hdr";
+}
+
+void HdLotusRenderDelegate::SetFallbackEnvironment(
+    const std::filesystem::path& file) {
+  impl_->state->SetFallbackEnvironment(file);
 }
 
 void HdLotusRenderDelegate::SetPresentation(

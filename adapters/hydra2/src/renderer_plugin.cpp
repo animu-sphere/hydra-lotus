@@ -35,12 +35,15 @@ public:
   }
 
   HdRenderDelegate* CreateRenderDelegate() override {
-    return new HdLotusRenderDelegate;
+    return CreateRenderDelegate(HdRenderSettingsMap());
   }
 
   HdRenderDelegate* CreateRenderDelegate(
       const HdRenderSettingsMap& settings) override {
-    return new HdLotusRenderDelegate(settings);
+    auto* delegate = new HdLotusRenderDelegate(settings);
+    delegate->SetFallbackEnvironment(
+        HdLotusRenderDelegate::PackagedFallbackEnvironment());
+    return delegate;
   }
 
   void DeleteRenderDelegate(HdRenderDelegate* delegate) override {

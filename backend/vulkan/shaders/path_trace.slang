@@ -97,10 +97,12 @@ FragmentOutput CameraPass(VertexOutput input) {
 }
 
 // The radiance pass: adds one sample to the pixel's accumulation and writes
-// the mean of its samples, a missed sample counting as the background. A
-// pixel no sample has hit keeps the colour attachment. Depth is the camera
-// pass's; this pipeline neither tests nor writes it. The resolve pass adds
-// the sample the wavefront kernels left instead of tracing one.
+// the mean of its samples, a missed sample counting as the background: the
+// environment image along the pixel's centre when it shows, or the clear
+// colour. Without the image, a pixel no sample has hit keeps the colour
+// attachment. Depth is the camera pass's; this pipeline neither tests nor
+// writes it. The resolve pass adds the sample the wavefront kernels left
+// instead of tracing one.
 FragmentOutput RadiancePass(VertexOutput input) {
   const uint2 pixel = uint2(input.position.xy);
   float4 sum = path_constants.accumulated != 0 ? accumulation[pixel]
@@ -117,12 +119,18 @@ FragmentOutput RadiancePass(VertexOutput input) {
     }
     accumulation[pixel] = sum;
   }
-  if (sum.w == 0.0) {
-    discard;
-  }
   const float count =
       float(path_constants.accumulated + path_constants.add_sample);
-  const float4 background = path_constants.background;
+  const bool environment_shows = path_constants.environment_background != 0 &&
+      path_constants.environment_map != 0;
+  if (sum.w == 0.0 && (!environment_shows || count == 0.0)) {
+    discard;
+  }
+  float4 background = path_constants.background;
+  if (environment_shows && sum.w < count) {
+    background = float4(SpectrumToRgb(EnvironmentRadiance(
+        CameraRay(input.ndc).Direction, false, 0.0)), 1.0);
+  }
   FragmentOutput output;
   output.color = float4(sum.xyz + (count - sum.w) * background.xyz,
                      sum.w + (count - sum.w) * background.w) / count;

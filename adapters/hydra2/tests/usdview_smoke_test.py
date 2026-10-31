@@ -95,6 +95,11 @@ def testUsdviewInputFunction(appController):
     if checks["renderer.ray_query.capability"]["status"] == "pass":
         assert first["ray_query"] == 1, "Hydra did not use the available ray-query path"
         assert first["samples"] == 64, "the first frame did not accumulate 64 samples"
+        # A stage without lighting, beside usdview's camera light, samples
+        # the plugin's installed fallback image.
+        assert first["analytic_lights"] == 1, "usdview's camera light is missing"
+        assert first["environment_sampled"] == 1, \
+            "the plugin did not light the stage with its fallback environment"
     appController._dataModel.stage.GetPrimAtPath(
         "/World/Triangle").GetAttribute("points").Set(
             Vt.Vec3fArray([

@@ -2,10 +2,11 @@
 // Textured dome lights through UsdImaging. CPU mode checks the environment
 // image a dome becomes: OpenUSD's Stinson Beach image decoded by Hio as the
 // headless checks decode it, its scale, its frame (DomeLight_1's pole axis
-// included), edits that keep the decoded image, and the domes and formats
-// that light uniformly instead. GPU mode reflects the regions of a
-// synthetic image that the OpenEXR latitude-longitude layout puts in each
-// direction off a mirror.
+// included), edits that keep the decoded image, the domes and formats that
+// light uniformly instead, and the fallback image: the packaged Stinson Beach
+// under a scene with no lighting, beside a host's light. GPU mode reflects
+// the regions of a synthetic image that the OpenEXR latitude-longitude layout
+// puts in each direction off a mirror.
 #include "adapter.hpp"
 #include "common/reference.hpp"
 
@@ -17,6 +18,7 @@
 #include <pxr/imaging/hd/renderPass.h>
 #include <pxr/imaging/hd/renderPassState.h>
 #include <pxr/imaging/hd/rprimCollection.h>
+#include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/task.h>
 #include <pxr/imaging/hd/tokens.h>
 #include <pxr/usd/sdf/assetPath.h>
@@ -135,6 +137,17 @@ public:
 private:
   HdRenderPassSharedPtr pass_;
   HdRenderPassStateSharedPtr state_;
+};
+
+// Hands a light over as HdxTaskController does, with a value under `params`.
+class HostLights final : public HdSceneDelegate {
+public:
+  using HdSceneDelegate::HdSceneDelegate;
+  VtValue Get(const SdfPath&, const TfToken& key) override {
+    return key == HdLightTokens->params ? VtValue(1) : VtValue();
+  }
+  bool GetVisible(const SdfPath&) override { return true; }
+  GfMatrix4d GetTransform(const SdfPath&) override { return GfMatrix4d(1.0); }
 };
 
 void Set(const UsdPrim& prim, const char* name, const VtValue& value) {
@@ -323,6 +336,79 @@ int Run(bool gpu, const std::filesystem::path& assets,
     Check(!snapshot.scene->environment_map &&
               snapshot.scene->environment == Rgb{1, 1, 1},
         "removing the last dome did not restore the fallback environment");
+
+    // The packaged image is the committed validation image, and it replaces
+    // the white fallback environment, unturned and unscaled.
+    const std::filesystem::path packaged =
+        HdLotusRenderDelegate::PackagedFallbackEnvironment();
+    Lotus::Texture packaged_texels;
+    const std::string packaged_read =
+        LotusHeadless::ReadRadianceHdr(packaged, packaged_texels);
+    Check(packaged_read.empty(), packaged_read);
+    Check(packaged_texels.texels == beach.texels,
+        "the packaged fallback environment is not Stinson Beach");
+    delegate.SetFallbackEnvironment(packaged);
+    snapshot = delegate.GetFrameSnapshot();
+    Check(snapshot.scene->environment == Rgb{0, 0, 0} &&
+              snapshot.scene->environment_map.has_value(),
+        "the fallback image did not replace the white environment");
+    const Lotus::EnvironmentMap fallback = *snapshot.scene->environment_map;
+    Check(fallback.scale == Rgb{1, 1, 1} &&
+              fallback.world_from_environment == Lotus::IdentityMatrix() &&
+              snapshot.scene->textures.at(fallback.texture)->texels == beach.texels,
+        "the fallback image is scaled, turned or differently decoded");
+
+    // An authored dome replaces it, and its image leaves the scene.
+    const UsdPrim f = stage->DefinePrim(SdfPath("/Lights/F"), TfToken("DomeLight"));
+    tick();
+    snapshot = delegate.GetFrameSnapshot();
+    Check(!snapshot.scene->environment_map &&
+              snapshot.scene->environment == Rgb{1, 1, 1} &&
+              !snapshot.scene->textures.contains(fallback.texture),
+        "an untextured dome did not replace the fallback image");
+    stage->RemovePrim(f.GetPath());
+    tick();
+    Check(delegate.GetFrameSnapshot().scene->environment_map.has_value(),
+        "removing the dome did not restore the fallback image");
+
+    // So does an authored analytic light, even a hidden one.
+    const UsdPrim g = stage->DefinePrim(SdfPath("/Lights/G"), TfToken("SphereLight"));
+    Set(g, "visibility", VtValue(TfToken("invisible")));
+    tick();
+    snapshot = delegate.GetFrameSnapshot();
+    Check(!snapshot.scene->environment_map &&
+              snapshot.scene->environment == Rgb{0, 0, 0} &&
+              !snapshot.scene->textures.contains(fallback.texture),
+        "a scene light did not replace the fallback image");
+    stage->RemovePrim(g.GetPath());
+    tick();
+    Check(delegate.GetFrameSnapshot().scene->environment_map.has_value(),
+        "removing the scene light did not restore the fallback image");
+
+    // A host's light adds to the image.
+    HostLights host(index.get(), SdfPath("/Host"));
+    const SdfPath host_light("/Host/CameraLight");
+    index->InsertSprim(HdPrimTypeTokens->distantLight, &host, host_light);
+    tick();
+    snapshot = delegate.GetFrameSnapshot();
+    Check(snapshot.scene->lights.size() == 1,
+        "the host's light did not become a light");
+    Check(snapshot.scene->environment_map &&
+              snapshot.scene->environment_map->texture == fallback.texture,
+        "the host's light replaced the fallback image");
+    index->RemoveSprim(HdPrimTypeTokens->distantLight, host_light);
+    tick();
+    snapshot = delegate.GetFrameSnapshot();
+    Check(snapshot.scene->lights.empty() && snapshot.scene->environment_map,
+        "removing the host's light left it or lost the fallback image");
+
+    // An image that cannot be read leaves the fallback white.
+    delegate.SetFallbackEnvironment(scratch / "missing.hdr");
+    snapshot = delegate.GetFrameSnapshot();
+    Check(!snapshot.scene->environment_map &&
+              snapshot.scene->environment == Rgb{1, 1, 1} &&
+              snapshot.scene->textures.empty(),
+        "an unreadable fallback image did not leave the fallback white");
     std::cout << "Hydra dome texture CPU checks passed\n";
     return 0;
   }
@@ -389,6 +475,34 @@ int Run(bool gpu, const std::filesystem::path& assets,
       "dome edits uploaded geometry or rebuilt acceleration structures");
   Check(final_stats.environment_writes > stats.environment_writes,
       "dome images never reached the GPU scene");
+
+  // Camera rays that miss see the image in the direction they leave along,
+  // -Z here, through both integrators; hiding it from the camera shows the
+  // clear colour without restarting the accumulation, as does a uniform
+  // environment, which the camera never sees.
+  const auto verify_cleared = [&](const std::string& step) {
+    const auto* pixels = static_cast<const float*>(color.Map());
+    Check(pixels != nullptr &&
+              std::all_of(pixels, pixels + kSize * kSize * 4,
+                  [](float value) { return value == 0.0F; }),
+        step + ": the pixels are not the clear colour");
+    color.Unmap();
+  };
+  Set(stage->GetPrimAtPath(SdfPath("/Panel")), "visibility",
+      VtValue(TfToken("invisible")));
+  for (int sample = 1; sample <= kSamples; ++sample) tick();
+  verify_cleared("a uniform environment");
+  Dome(stage, "E", "DomeLight", regions);
+  verify("background", kTowardMinusZ);
+  delegate.SetRenderSetting(TfToken("lotus:wavefront"), VtValue(true));
+  verify("wavefront background", kTowardMinusZ);
+  delegate.SetRenderSetting(TfToken("lotus:wavefront"), VtValue(false));
+  verify("background again", kTowardMinusZ);
+  delegate.SetRenderSetting(
+      HdRenderSettingsTokens->domeLightCameraVisibility, VtValue(false));
+  tick();
+  Check(pass->IsConverged(), "hiding the background restarted the accumulation");
+  verify_cleared("a hidden background");
   std::cout << "Hydra dome texture GPU checks passed\n";
   return 0;
 }
