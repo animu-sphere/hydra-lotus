@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-31
+
+The Materials & Lighting release completes the v0.8.0 milestone. An
+[asset gap survey](docs/reports/2026-10-29-asset-gap-survey.md) of 18
+third-party USD stages chose its tasks: a MaterialX Standard Surface
+subset, dielectric transmission, texture transforms, per-face materials,
+colour primvars and skinned meshes each close a gap visible in those stages.
+No stage showed a lighting gap, so lighting work stayed out. Through the
+Hydra plugin, unlit scenes now show OpenUSD's Stinson Beach image. See the
+[release record](docs/releases/v0.8.0.md).
+
 ### Added
 
 - The Hydra plugin lights a scene with no dome and no scene light with

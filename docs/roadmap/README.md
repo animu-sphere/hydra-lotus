@@ -11,7 +11,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started · ⛔ blocked · ⚠️
 
 | Document | Contents |
 | --- | --- |
-| [current.md](current.md) | The v0.8.0 tasks, and deferred adapter work. |
+| [current.md](current.md) | Active tasks, and deferred adapter work. |
 
 ## Sequences
 
@@ -57,7 +57,7 @@ completion of its parent phase.
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | full phase unscheduled; selected profiling subset in the practical-foundation delivery below |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
-| Materials & Lighting — cross-phase delivery | 🚧 tasks selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a MaterialX Standard Surface subset ([done](../reports/2026-10-29-materialx-standard-surface.md#decision)), a dielectric transmission lobe ([done](../reports/2026-10-29-dielectric-transmission.md#decision)), texture transforms, per-face materials and primvar colour ([done](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision)), and skinned meshes ([done](../reports/2026-10-31-skinned-meshes.md#decision)); no lighting task, since no asset demonstrated a lighting gap; selected subsets only | v0.8.0 ([plan](#v080--materials--lighting)) |
+| Materials & Lighting — cross-phase delivery | ✅ every task closed, each selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a [MaterialX Standard Surface subset](../reports/2026-10-29-materialx-standard-surface.md#decision), a [dielectric transmission lobe](../reports/2026-10-29-dielectric-transmission.md#decision), [texture transforms, per-face materials and primvar colour](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision), and [skinned meshes](../reports/2026-10-31-skinned-meshes.md#decision); no lighting task, since no asset demonstrated a lighting gap; [release gate passed](../reports/2026-10-31-v0.8.0-release-gate.md); selected subsets only | [v0.8.0](../releases/v0.8.0.md) ([plan](#v080--materials--lighting)) |
 
 ## v0.8.0 — Materials & Lighting
 
@@ -83,6 +83,9 @@ and StandardShaderBall use it, and its task starts with a transport
 contract. Subsurface, coat, OpenPBR and lighting work are not exit gates.
 They enter only with an asset gap and, for new lobes, a transport contract. Reference-quality regressions remain
 disqualifying.
+
+Every task met its exit evidence and shipped in
+[v0.8.0](../releases/v0.8.0.md) on 2026-10-31.
 
 ## v0.7.0 — Performance & Production Foundation
 

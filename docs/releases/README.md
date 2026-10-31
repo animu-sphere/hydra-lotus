@@ -11,6 +11,7 @@ dry runs, asset naming and publication.
 
 | Version | Record | Theme |
 | --- | --- | --- |
+| [v0.8.0](v0.8.0.md) | [Materials and lighting release](v0.8.0.md) | MaterialX Standard Surface subset, dielectric transmission, texture transforms, per-face materials, colour primvars and skinned meshes, chosen by a survey of third-party USD stages, and a fallback environment image through the Hydra plugin. |
 | [v0.7.0](v0.7.0.md) | [Performance and production foundation release](v0.7.0.md) | Shared headless/viewport performance baseline with its three leading costs fixed (cached readback, light crossing hierarchy, changed-section staging), a residency inventory with lazy readback mirrors and split reservoir history, and committed `UsdPreviewSurface` fixtures with reference images and Hydra/headless agreement. |
 | [v0.6.0](v0.6.0.md) | [Interactive rendering release](v0.6.0.md) | SVGF-class denoising under both integrators (moments, variance, edge-aware à-trous filtering, reference comparison), switched and inspected at run time in the standalone viewport and through Hydra; test tiers. |
 | [v0.5.2](v0.5.2.md) | [Viewport foundation release](v0.5.2.md) | Standalone viewport presenting progressive path tracing without readback, USD stages through Hydra, usdview navigation, run-time renderer controls, GPU debug views and a timing HUD. |

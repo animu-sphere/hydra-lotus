@@ -6,25 +6,14 @@ by the [development strategy](../design/POST_V060_STRATEGY.md).
 
 ## Execution order
 
-Work on the [Materials & Lighting milestone](README.md#v080--materials--lighting).
-The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision)
-rendered 18 third-party USD stages through Hydra. It found four material
-gaps and dropped skinned meshes, each with a visible effect; no asset
-demonstrated a lighting gap. LOTUS-MTLX-01
-[translated MaterialX Standard Surface](../reports/2026-10-29-materialx-standard-surface.md#decision),
-closing the first gap, and LOTUS-TRANSMISSION-01 added
-[dielectric transmission](../reports/2026-10-29-dielectric-transmission.md#decision)
-under its [contract](../design/TRANSMISSION.md), so OpenChessSet's pawn
-tops and the shader ball's glass render as tinted glass. LOTUS-MATERIAL-02
-[translated texture transforms, per-face materials, colour primvars and
-display coverage](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision),
-and LOTUS-SKEL-01 [rendered skinned meshes at their posed
-points](../reports/2026-10-31-skinned-meshes.md#decision). Every selected task is done and no
-task is active; the milestone's release gate is next.
+No task is active. The [Materials & Lighting milestone](README.md#v080--materials--lighting)
+shipped in [v0.8.0](../releases/v0.8.0.md), and the next delivery has not
+been selected. It follows the
+[strategy's entry conditions](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
 
-The survey also found that `usdrecord --renderer Storm` creates the Lotus
+The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus
 renderer when `hdLotus` is on the plugin path. Its cause is unexplained and
-outside these tasks; investigate it before any Hydra host relies on renderer
+unassigned; investigate it before any Hydra host relies on renderer
 selection.
 
 ## Deferred adapter work
@@ -44,7 +33,8 @@ Phase 9, until an asset or measurement demonstrates the need
 ## Previous delivery evidence
 
 Completed work is tracked by the [release records](../releases/README.md),
-including the [practical foundation](../releases/v0.7.0.md),
+including [materials and lighting](../releases/v0.8.0.md),
+the [practical foundation](../releases/v0.7.0.md),
 [ReSTIR DI exit review](../reports/2026-10-17-renderer-phase5-exit.md),
 [viewport foundation](../releases/v0.5.2.md),
 [SVGF exit review](../reports/2026-10-18-svgf-viewport.md#renderer-phase-6-exit)
