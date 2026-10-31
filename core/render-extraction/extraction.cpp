@@ -90,8 +90,16 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
                 std::distance(geometry->texcoords.begin(), set));
           }
         }
+        std::uint32_t colors = kNoColors;
+        if (!bound.base_color_texture) {
+          const auto set = geometry->colors.find(bound.base_color_primvar);
+          if (set != geometry->colors.end()) {
+            colors = static_cast<std::uint32_t>(
+                std::distance(geometry->colors.begin(), set));
+          }
+        }
         for (const Matrix4& placement : PlacementTransforms(mesh.instance)) {
-          instances.push_back({geometry, placement, material, texcoords});
+          instances.push_back({geometry, placement, material, texcoords, colors});
         }
       }
     }

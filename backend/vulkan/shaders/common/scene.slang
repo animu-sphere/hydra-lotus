@@ -31,6 +31,11 @@ public struct InstanceRecord {
   // the material's lookups read, or 0 without them.
   public uint64_t texcoords;
   public uint texcoord_set;
+  public uint color_set;
+  // The address of the colour set the base colour reads, or 0 without one:
+  // three float3 per triangle, or one float3 when `colors_constant` is set.
+  public uint64_t colors;
+  public uint colors_constant;
   public uint reserved;
 };
 
@@ -44,6 +49,9 @@ public struct TextureInputRecord {
   public float4 scale;
   public float4 bias;
   public float4 fallback;
+  // The lookup's coordinates: s' = dot(st_s.xyz, (s, t, 1)), and t' likewise.
+  public float4 st_s;
+  public float4 st_t;
 };
 static const uint kConstantInput = 0;
 static const uint kTextureLookup = 1;
@@ -264,10 +272,11 @@ float4 Lookup(TextureInputRecord input, float2 st) {
   if (input.mode == kFallbackLookup) {
     return input.fallback;
   }
+  const float3 from = float3(st, 1.0);
   const float4 texel =
       textures[NonUniformResourceIndex(input.texture)].SampleLevel(
           samplers[NonUniformResourceIndex(input.sampler_index)],
-          float2(st.x, 1.0 - st.y), 0.0);
+          float2(dot(input.st_s.xyz, from), 1.0 - dot(input.st_t.xyz, from)), 0.0);
   return texel * input.scale + input.bias;
 }
 
@@ -283,6 +292,18 @@ float2 HitTexcoords(InstanceRecord instance, MaterialRecord material,
   const float2 t1 = ((float2*)instance.texcoords)[corner + 1];
   const float2 t2 = ((float2*)instance.texcoords)[corner + 2];
   return t0 + hit.barycentrics.x * (t1 - t0) + hit.barycentrics.y * (t2 - t0);
+}
+
+// The colour at a hit, from the instance's colour set.
+float3 HitColor(InstanceRecord instance, Hit hit) {
+  if (instance.colors_constant != 0) {
+    return ((float3*)instance.colors)[0];
+  }
+  const uint corner = hit.primitive * 3;
+  const float3 c0 = ((float3*)instance.colors)[corner];
+  const float3 c1 = ((float3*)instance.colors)[corner + 1];
+  const float3 c2 = ((float3*)instance.colors)[corner + 2];
+  return c0 + hit.barycentrics.x * (c1 - c0) + hit.barycentrics.y * (c2 - c0);
 }
 
 // Alpha is surface coverage. Rejected candidates leave the ray's interval
@@ -389,8 +410,10 @@ float3 ShadingNormal(float3x3 n, float2 barycentrics,
 // UV differentials in world space, orthonormalized about the interpolated
 // shading normal. Preserve the handedness of mirrored UVs and transforms.
 // Missing, degenerate or ill-conditioned UVs use a stable normal-only frame.
-ShadingFrame TangentFrame(InstanceRecord instance, Hit hit, float3 edge1,
-    float3 edge2, float3 normal) {
+// A normal map's lookup transforms the differentials as it does its
+// coordinates; a constant normal has no lookup.
+ShadingFrame TangentFrame(InstanceRecord instance, TextureInputRecord input,
+    Hit hit, float3 edge1, float3 edge2, float3 normal) {
   ShadingFrame basis = MakeShadingFrame(normal);
   if (instance.texcoords == 0) {
     return basis;
@@ -399,6 +422,10 @@ ShadingFrame TangentFrame(InstanceRecord instance, Hit hit, float3 edge1,
   const float2 st0 = ((float2*)instance.texcoords)[corner];
   float2 uv1 = ((float2*)instance.texcoords)[corner + 1] - st0;
   float2 uv2 = ((float2*)instance.texcoords)[corner + 2] - st0;
+  if (input.mode != kConstantInput) {
+    uv1 = float2(dot(input.st_s.xy, uv1), dot(input.st_t.xy, uv1));
+    uv2 = float2(dot(input.st_s.xy, uv2), dot(input.st_t.xy, uv2));
+  }
   const float uv_scale = max(max(abs(uv1.x), abs(uv1.y)),
       max(abs(uv2.x), abs(uv2.y)));
   const float edge_scale = max(max(max(abs(edge1.x), abs(edge1.y)), abs(edge1.z)),
@@ -1069,7 +1096,9 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   }
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
-  surface.base_color = material.base_color_roughness.xyz;
+  surface.base_color = instance.colors != 0
+                           ? saturate(HitColor(instance, hit))
+                           : material.base_color_roughness.xyz;
   surface.roughness = material.base_color_roughness.w;
   surface.metallic = material.emission_metallic.w;
   float3 emission = material.emission_metallic.xyz;
@@ -1111,7 +1140,8 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   // interpolated normal's rounding, when the input is the identity.
   if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
     surface.shading_normal = MappedNormal(tangent_normal,
-        TangentFrame(instance, hit, p1 - p0, p2 - p0, surface.shading_normal),
+        TangentFrame(instance, material.inputs[kNormalInput], hit, p1 - p0,
+            p2 - p0, surface.shading_normal),
         surface.normal, direction);
   }
   // The solid's outward normal is the winding normal of its object-space

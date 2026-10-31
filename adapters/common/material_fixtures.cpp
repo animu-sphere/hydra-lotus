@@ -269,6 +269,26 @@ Lotus::TextureInput Channel(Lotus::TextureInput lookup, std::uint32_t channel) {
   return lookup;
 }
 
+// A UsdTransform2d's matrix, in double precision as the adapter composes it:
+// in * scale * rotate + translation, counter-clockwise.
+using St = std::array<double, 6>;
+
+St Transform2d(double scale_s, double scale_t, double degrees, double translate_s,
+    double translate_t, const St& inner = {1, 0, 0, 0, 1, 0}) {
+  const double c = std::cos(degrees * (kPi / 180.0)), s = std::sin(degrees * (kPi / 180.0));
+  const St local{c * scale_s, -s * scale_t, translate_s, s * scale_s, c * scale_t, translate_t};
+  return {local[0] * inner[0] + local[1] * inner[3], local[0] * inner[1] + local[1] * inner[4],
+      local[0] * inner[2] + local[1] * inner[5] + local[2],
+      local[3] * inner[0] + local[4] * inner[3], local[3] * inner[1] + local[4] * inner[4],
+      local[3] * inner[2] + local[4] * inner[5] + local[5]};
+}
+
+std::array<float, 6> Float(const St& transform) {
+  std::array<float, 6> result{};
+  for (std::size_t i = 0; i < result.size(); ++i) result[i] = static_cast<float>(transform[i]);
+  return result;
+}
+
 // A material whose base colour is `lookup`, at the set `texcoords`.
 Lotus::Material Textured(Lotus::TextureInput lookup, std::string texcoords = "st") {
   Lotus::Material material;
@@ -307,6 +327,53 @@ void DarkerMetal(Lotus::RenderWorld& world) {
   Lotus::Material metal = world.Commit().scene->materials.at(key);
   for (float& channel : metal.base_color) channel *= 0.9F;
   world.SetMaterial(key, metal);
+}
+
+// scripts/material_fixtures.py's two quads, left and right.
+Lotus::MeshGeometry TwoQuads() {
+  Lotus::MeshGeometry mesh;
+  mesh.positions = {{-0.5F, -0.5F, 0.0F}, {0.0F, -0.5F, 0.0F}, {0.5F, -0.5F, 0.0F},
+      {0.5F, 0.5F, 0.0F}, {0.0F, 0.5F, 0.0F}, {-0.5F, 0.5F, 0.0F}};
+  mesh.triangles = {{0, 1, 4}, {0, 4, 5}, {1, 2, 3}, {1, 3, 4}};
+  mesh.source_faces = {0, 0, 1, 1};
+  return mesh;
+}
+
+// The part of `whole` a material binds: the triangles of `faces`, in order,
+// the points they use, in order, and their corners' values.
+Lotus::MeshGeometry FacesOf(const Lotus::MeshGeometry& whole,
+    const std::vector<std::uint32_t>& faces) {
+  Lotus::MeshGeometry part;
+  std::map<std::uint32_t, std::uint32_t> points;
+  std::vector<std::size_t> kept;
+  for (std::size_t t = 0; t < whole.triangles.size(); ++t) {
+    if (std::find(faces.begin(), faces.end(), whole.source_faces[t]) == faces.end()) continue;
+    kept.push_back(t);
+    for (const std::uint32_t vertex : whole.triangles[t]) points[vertex] = 0;
+  }
+  for (auto& [vertex, index] : points) {
+    index = static_cast<std::uint32_t>(part.positions.size());
+    part.positions.push_back(whole.positions[vertex]);
+  }
+  for (const std::size_t t : kept) {
+    const auto& triangle = whole.triangles[t];
+    part.triangles.push_back(
+        {points.at(triangle[0]), points.at(triangle[1]), points.at(triangle[2])});
+    part.source_faces.push_back(whole.source_faces[t]);
+    if (!whole.normals.empty())
+      part.normals.insert(part.normals.end(), whole.normals.begin() + std::ptrdiff_t(3 * t),
+          whole.normals.begin() + std::ptrdiff_t(3 * t + 3));
+    for (const auto& [name, set] : whole.texcoords)
+      part.texcoords[name].insert(part.texcoords[name].end(), set.begin() + std::ptrdiff_t(3 * t),
+          set.begin() + std::ptrdiff_t(3 * t + 3));
+    for (const auto& [name, set] : whole.colors)
+      if (set.size() != 1)
+        part.colors[name].insert(part.colors[name].end(), set.begin() + std::ptrdiff_t(3 * t),
+            set.begin() + std::ptrdiff_t(3 * t + 3));
+  }
+  for (const auto& [name, set] : whole.colors)
+    if (set.size() == 1) part.colors[name] = set;
+  return part;
 }
 
 // As a texel-centre convention error would place the coordinates.
@@ -368,10 +435,11 @@ void SetMaterialTextures(Lotus::RenderWorld& world) {
   constant.texcoord_fallback = {0.6F, 0.3F};
   Lotus::Material absent = Textured(palette(), "absent");
   absent.texcoord_fallback = {0.1F, 0.9F};
-  // Untranslated connections leave their inputs' defaults: a UsdTransform2d
-  // between the reader and the texture, the ramp's metallic at a second
-  // texture-coordinate source, a colour output on roughness and a scalar
-  // output on the base colour.
+  Lotus::TextureInput transformed = palette();
+  transformed.st_transform = Float(Transform2d(2, 2, 30, 0.25, 0));
+  // Untranslated connections leave their inputs' defaults: the ramp's
+  // metallic at a second texture-coordinate source, a colour output on
+  // roughness and a scalar output on the base colour.
   Lotus::Material colour_on_scalar;
   colour_on_scalar.base_color = {0.3F, 0.5F, 0.7F};
 
@@ -407,7 +475,7 @@ void SetMaterialTextures(Lotus::RenderWorld& world) {
       {"Named", Textured(palette(), "uv1"), two},
       {"Constant", constant, unit},
       {"Absent", absent, unit},
-      {"Transform2d", Lotus::Material{}, unit},
+      {"Transform2d", Textured(transformed), unit},
       {"SecondSource", Textured(palette()), two},
       {"ColourOnScalar", colour_on_scalar, unit},
       {"ScalarOnColour", Lotus::Material{}, unit},
@@ -878,13 +946,8 @@ void SetMaterialEmission(Lotus::RenderWorld& world) {
   // Wound clockwise seen from the camera: (0, 3, 2), (0, 2, 1).
   Lotus::MeshGeometry back = plain;
   back.triangles = {{0, 3, 2}, {0, 2, 1}};
-  // Two quads; the GeomSubset that binds the right one is not read, so the
-  // whole card takes the mesh's binding.
-  Lotus::MeshGeometry split;
-  split.positions = {{-0.5F, -0.5F, 0.0F}, {0.0F, -0.5F, 0.0F}, {0.5F, -0.5F, 0.0F},
-      {0.5F, 0.5F, 0.0F}, {0.0F, 0.5F, 0.0F}, {-0.5F, 0.5F, 0.0F}};
-  split.triangles = {{0, 1, 4}, {0, 4, 5}, {1, 2, 3}, {1, 3, 4}};
-  split.source_faces = {0, 0, 1, 1};
+  // Two quads, of which a GeomSubset binds the right one.
+  const Lotus::MeshGeometry split = TwoQuads();
 
   struct Entry {
     const char* name;
@@ -934,7 +997,13 @@ void SetMaterialEmission(Lotus::RenderWorld& world) {
     Lotus::MeshInstance placed;
     placed.world_from_object =
         ToFloat(Multiply(translation, Multiply(RotationX(object.rotate_x), scale)));
-    world.SetMesh(mesh, object.geometry, placed);
+    if (&object.geometry == &split) {
+      world.SetMesh(mesh, FacesOf(split, {0}), placed);
+      world.SetMesh(mesh + ".lotus:subset:Panel", FacesOf(split, {1}), placed);
+      world.BindMaterial(mesh + ".lotus:subset:Panel", root + "/Looks/Warm");
+    } else {
+      world.SetMesh(mesh, object.geometry, placed);
+    }
     world.BindMaterial(mesh, root + "/Looks/" + object.material);
   }
 }
@@ -1105,7 +1174,7 @@ void SetMaterialAlpha(Lotus::RenderWorld& world) {
       {"SphereCutout", "SphereCutout", masked_sphere, kSphere},
       {"GlowingMask", "GlowingMask", mapped, kCard},
       {"GlowingHalf", "GlowingHalf", plain, kCard},
-      // displayOpacity 0.3 is not read.
+      // displayOpacity 0.3 is its coverage.
       {"DisplayOpacity", nullptr, plain, kCard},
   }};
   constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
@@ -1123,7 +1192,9 @@ void SetMaterialAlpha(Lotus::RenderWorld& world) {
       world.BindMaterial(mesh, root + "/Looks/" + object.material);
     } else {
       const std::string display = mesh + ".lotus:displayColor";
-      world.SetMaterial(display, Dielectric({0.2F, 0.6F, 0.7F}));
+      Lotus::Material covered = Dielectric({0.2F, 0.6F, 0.7F});
+      covered.opacity = 0.3F;
+      world.SetMaterial(display, covered);
       world.BindMaterial(mesh, display);
     }
   }
@@ -1417,6 +1488,365 @@ void SetMaterialTransmission(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// As a sign error would turn the coordinates.
+void ReversedRotation(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialTransforms/Looks/Rotate";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  material.base_color_texture->st_transform = Float(Transform2d(1, 1, -30, 0, 0));
+  world.SetMaterial(key, material);
+}
+
+// Every material whose lookups share one transform with it applied to the
+// coordinates instead: the same lookups, tangent frames and fallbacks.
+void BakedTransforms(Lotus::RenderWorld& world) {
+  const auto scene = world.Commit().scene;
+  constexpr std::array<float, 6> kIdentity{1, 0, 0, 0, 1, 0};
+  std::map<std::string, std::array<float, 6>> baked;
+  for (const auto& [key, source] : scene->materials) {
+    Lotus::Material material = source;
+    std::vector<std::optional<Lotus::TextureInput>*> lookups;
+    for (auto* input : {&material.base_color_texture, &material.roughness_texture,
+             &material.metallic_texture, &material.emission_texture,
+             &material.normal_texture, &material.opacity_texture,
+             &material.specular_color_texture})
+      if (input->has_value()) lookups.push_back(input);
+    if (lookups.empty() || std::any_of(lookups.begin(), lookups.end(), [&](const auto* input) {
+          return (*input)->st_transform != (*lookups.front())->st_transform;
+        }))
+      continue;
+    const std::array<float, 6> m = (*lookups.front())->st_transform;
+    baked[key] = m;
+    for (auto* input : lookups) (*input)->st_transform = kIdentity;
+    const auto [s, t] = material.texcoord_fallback;
+    material.texcoord_fallback = {m[0] * s + m[1] * t + m[2], m[3] * s + m[4] * t + m[5]};
+    world.SetMaterial(key, material);
+  }
+  for (const auto& [key, mesh] : scene->meshes) {
+    const auto found = baked.find(mesh.material);
+    if (found == baked.end()) continue;
+    const std::array<float, 6>& m = found->second;
+    Lotus::MeshGeometry geometry = *mesh.geometry;
+    for (auto& [name, set] : geometry.texcoords)
+      for (auto& st : set)
+        st = {m[0] * st[0] + m[1] * st[1] + m[2], m[3] * st[0] + m[4] * st[1] + m[5]};
+    world.SetMesh(key, std::move(geometry), mesh.instance);
+  }
+}
+
+// As a host that reads only the mesh's own binding would shade the card.
+void IgnoredSubset(Lotus::RenderWorld& world) {
+  world.BindMaterial("/MaterialSubsets/Objects/Partial.lotus:subset:Right",
+      "/MaterialSubsets/Looks/Grey");
+}
+
+// As a host that loads the primvar in the wrong order would read it.
+void SwappedColors(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialPrimvars/Objects/Vertex";
+  const Lotus::SceneMesh mesh = world.Commit().scene->meshes.at(key);
+  Lotus::MeshGeometry geometry = *mesh.geometry;
+  for (auto& color : geometry.colors.at("tint")) std::swap(color[0], color[2]);
+  world.SetMesh(key, std::move(geometry), mesh.instance);
+}
+
+// Places `mesh` on the middle three rows' grid cell `i` at `scale`.
+Lotus::MeshInstance GridCell(std::size_t i, float scale_x, float scale) {
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 3> kRows{0.8F, 0.0F, -0.8F};
+  Lotus::MeshInstance placed;
+  placed.world_from_object[0] = scale_x;
+  placed.world_from_object[5] = placed.world_from_object[10] = scale;
+  placed.world_from_object[12] = kColumns[i % 5];
+  placed.world_from_object[13] = kRows[i / 5];
+  return placed;
+}
+
+} // namespace
+
+void SetMaterialTransforms(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialTransforms";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+  world.SetTexture("textures/ramp.png|raw", Image(4, kUnorm, Ramp));
+  world.SetTexture("textures/cutout.png|sRGB", Image(8, kSrgb, Cutout));
+
+  using Lotus::TextureWrap;
+  const auto placed = [](const std::string& file, const std::string& space, const St& transform,
+                          TextureWrap wrap = TextureWrap::Repeat) {
+    Lotus::TextureInput lookup = Lookup(file, space, wrap, wrap);
+    lookup.st_transform = Float(transform);
+    return lookup;
+  };
+  const auto palette = [&](const St& transform) {
+    return Textured(placed("palette.png", "sRGB", transform));
+  };
+  const auto tilts = [&](const St& transform) {
+    Lotus::TextureInput lookup = placed("tilts.png", "raw", transform);
+    lookup.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+    lookup.bias = {-1.0F, -1.0F, -1.0F, 0.0F};
+    Lotus::Material material = Dielectric({0.7F, 0.7F, 0.7F}, 0.4F);
+    material.normal_texture = lookup;
+    material.texcoords = "st";
+    return material;
+  };
+  Lotus::Material per_input = Textured(Lookup("palette.png", "sRGB", TextureWrap::Repeat, TextureWrap::Repeat));
+  per_input.roughness_texture = Channel(placed("ramp.png", "raw", Transform2d(4, 4, 0, 0, 0)), 0);
+  Lotus::Material emission;
+  emission.base_color = {0.0F, 0.0F, 0.0F};
+  emission.emission_texture = placed("palette.png", "sRGB", Transform2d(1, 1, 60, 0, 0));
+  emission.texcoords = "st";
+  // in (0.5, 0.25), no mesh set.
+  Lotus::Material constant =
+      Textured(placed("palette.png", "sRGB", Transform2d(1, 1, 0, 0.125, 0.5), TextureWrap::Clamp), "");
+  constant.texcoord_fallback = {0.5F, 0.25F};
+  Lotus::Material absent =
+      Textured(placed("palette.png", "sRGB", Transform2d(2, 2, 0, 0, 0), TextureWrap::Clamp), "absent");
+  absent.texcoord_fallback = {0.125F, 0.25F};
+  Lotus::Material coverage = Dielectric({0.2F, 0.6F, 0.7F});
+  coverage.opacity_texture = Channel(placed("cutout.png", "sRGB", Transform2d(1, 1, 45, 0, 0)), 3);
+  coverage.opacity_threshold = 0.5F;
+  coverage.texcoords = "st";
+
+  const std::array<std::pair<const char*, Lotus::Material>, 15> cards{{
+      {"Scale", palette(Transform2d(2, 2, 0, 0, 0))},
+      {"Rotate", palette(Transform2d(1, 1, 30, 0, 0))},
+      {"Translate", palette(Transform2d(1, 1, 0, 0.25, 0.5))},
+      {"Combined", palette(Transform2d(2, 1, 30, 0.25, 0))},
+      {"Flip", palette(Transform2d(-1, 1, 0, 0, 0))},
+      {"NormalTurned", tilts(Transform2d(1, 1, 90, 0, 0))},
+      {"NormalTiled", tilts(Transform2d(3, 3, 0, 0, 0))},
+      {"PerInput", per_input},
+      {"Chain", palette(Transform2d(1, 1, 45, 0, 0, Transform2d(2, 2, 0, 0, 0)))},
+      {"Emission", emission},
+      {"ConstantIn", constant},
+      {"Absent", absent},
+      {"Coverage", coverage},
+      {"Identity", palette(Transform2d(1, 1, 0, 0, 0))},
+      // A connected rotation leaves the lookup untranslated.
+      {"Connected", Lotus::Material{}},
+  }};
+  for (std::size_t i = 0; i < cards.size(); ++i) {
+    const std::string name = cards[i].first;
+    const std::string mesh = root + "/Objects/" + name;
+    const std::string material = root + "/Looks/" + name;
+    world.SetMesh(mesh,
+        name == "ConstantIn" ? Card({}) : Card({{"st", Corners(kUnit)}}),
+        GridCell(i, 0.7F, 0.7F));
+    world.SetMaterial(material, cards[i].second);
+    world.BindMaterial(mesh, material);
+  }
+}
+
+void SetMaterialSubsets(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialSubsets";
+  SetStudio(world, root);
+
+  world.SetTexture("textures/palette.png|sRGB", Image(4, Lotus::TextureFormat::Rgba8Srgb, Palette));
+  const std::array<float, 3> red{0.8F, 0.1F, 0.05F}, blue{0.1F, 0.2F, 0.8F}, grey{0.6F, 0.6F, 0.6F};
+  Lotus::Material half = Dielectric(red);
+  half.opacity = 0.5F;
+  Lotus::Material glow;
+  glow.emission = {2.0F, 1.0F, 0.5F};
+  Lotus::Material tint = Dielectric({0.0F, 0.0F, 0.0F}, 0.4F);
+  tint.base_color_primvar = "tint";
+  const std::map<std::string, Lotus::Material> looks{
+      {"Grey", Dielectric(grey, 0.3F)},
+      {"Red", Dielectric(red, 0.3F)},
+      {"Blue", Dielectric(blue, 0.3F)},
+      {"Glow", glow},
+      {"Half", half},
+      {"Palette", Textured(Lookup("palette.png", "sRGB"))},
+      {"Turned", Textured(Lookup("palette.png", "sRGB"), "uv1")},
+      {"Tint", tint},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  // scripts/material_fixtures.py's SPLIT_ST per triangle corner, and uv1 with
+  // s and t exchanged.
+  const Face left{{{0, 0}, {0.5F, 0}, {0.5F, 1}, {0, 1}}};
+  const Face right{{{0.5F, 0}, {1, 0}, {1, 1}, {0.5F, 1}}};
+  const auto two_faces = [](const Face& a, const Face& b) {
+    Texcoords corners = Corners(a);
+    const Texcoords more = Corners(b);
+    corners.insert(corners.end(), more.begin(), more.end());
+    return corners;
+  };
+  const auto exchanged = [](Face face) {
+    for (auto& st : face) std::swap(st[0], st[1]);
+    return face;
+  };
+  Lotus::MeshGeometry with_sets = TwoQuads();
+  with_sets.texcoords["st"] = two_faces(left, right);
+  with_sets.texcoords["uv1"] = two_faces(exchanged(left), exchanged(right));
+  Lotus::MeshGeometry teal = TwoQuads();
+  teal.colors["displayColor"] = {{0.2F, 0.6F, 0.7F}};
+  Lotus::MeshGeometry tinted = TwoQuads();
+  const std::array<std::array<float, 3>, 6> tints{{{1, 0, 0}, {1, 0.5F, 0}, {1, 1, 0}, {0, 1, 0},
+      {0, 1, 1}, {0, 0, 1}}};
+  for (const auto& triangle : tinted.triangles)
+    for (const std::uint32_t vertex : triangle) tinted.colors["tint"].push_back(tints[vertex]);
+  const Polygons polygons = CoarseSphere();
+  Lotus::MeshGeometry ball = polygons.Geometry();
+  for (const auto& corner : polygons.Corners())
+    ball.normals.push_back(Fixed(polygons.points[corner.vertex]));
+  std::vector<std::uint32_t> top(32);
+  for (std::uint32_t face = 0; face < top.size(); ++face) top[face] = face;
+  std::vector<std::uint32_t> bottom;
+  for (std::uint32_t face = 32; face < polygons.faces.size(); ++face) bottom.push_back(face);
+
+  struct Part {
+    // Empty for the faces no subset binds, under the mesh's own key.
+    const char* subset;
+    Lotus::MeshGeometry geometry;
+    // Empty for the mesh's unbound rest, lit by teal.
+    const char* material;
+  };
+  const auto split = [](const char* subset) { return FacesOf(TwoQuads(), {subset[0] == 'L' ? 0U : 1U}); };
+  const Lotus::MeshGeometry whole = TwoQuads();
+  const auto partial = [&](const char* mesh_look, const char* subset_look) {
+    return std::vector<Part>{{"", FacesOf(whole, {0}), mesh_look},
+        {"Right", FacesOf(whole, {1}), subset_look}};
+  };
+  struct Object {
+    const char* name;
+    std::vector<Part> parts;
+    float scale_x = 0.7F;
+    float scale = 0.7F;
+  };
+  const std::array<Object, 15> objects{{
+      {"Partial", partial("Grey", "Red")},
+      {"Full", {{"Left", split("Left"), "Red"}, {"Right", split("Right"), "Blue"}}},
+      {"Unbound", {{"", FacesOf(teal, {0}), ""}, {"Right", FacesOf(teal, {1}), "Red"}}},
+      // Without a binding the subset's faces stay with the mesh.
+      {"NoBinding", {{"", whole, "Blue"}}},
+      // UsdImaging hands over the binding of any family, and Storm shows it.
+      {"OtherFamily", partial("Blue", "Red")},
+      {"Sets", {{"", FacesOf(with_sets, {0}), "Turned"}, {"Right", FacesOf(with_sets, {1}), "Palette"}}},
+      {"Emitter", partial("Grey", "Glow")},
+      {"Covered", partial("Grey", "Half")},
+      {"Overlap", {{"First", whole, "Red"}}},
+      {"OutOfRange", partial("Grey", "Red")},
+      {"Sphere", {{"", FacesOf(ball, bottom), "Grey"}, {"Top", FacesOf(ball, top), "Red"}},
+          0.35F, 0.35F},
+      {"Hole", {{"Right", split("Right"), "Red"}}},
+      {"Shared", {{"Left", split("Left"), "Red"}, {"Right", split("Right"), "Red"}}},
+      {"Colored", {{"", FacesOf(tinted, {0}), "Grey"}, {"Right", FacesOf(tinted, {1}), "Tint"}}},
+      {"Mirrored", partial("Grey", "Red"), -0.7F},
+  }};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const std::string mesh = root + "/Objects/" + objects[i].name;
+    const Lotus::MeshInstance placed = GridCell(i, objects[i].scale_x, objects[i].scale);
+    for (const Part& part : objects[i].parts) {
+      const std::string subset = part.subset;
+      const std::string key = subset.empty() ? mesh : mesh + ".lotus:subset:" + subset;
+      world.SetMesh(key, part.geometry, placed);
+      if (std::string(part.material).empty()) {
+        const std::string display = mesh + ".lotus:displayColor";
+        world.SetMaterial(display, Dielectric({0.2F, 0.6F, 0.7F}));
+        world.BindMaterial(key, display);
+      } else {
+        world.BindMaterial(key, root + "/Looks/" + part.material);
+      }
+    }
+  }
+}
+
+void SetMaterialPrimvars(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialPrimvars";
+  SetStudio(world, root);
+
+  const auto reader = [](const char* name, std::array<float, 3> fallback = {0.0F, 0.0F, 0.0F}) {
+    Lotus::Material material = Dielectric(fallback, 0.4F);
+    material.base_color_primvar = name;
+    return material;
+  };
+  // Its emission's connection is not translated.
+  Lotus::Material glowing = Dielectric({0.5F, 0.5F, 0.5F});
+  const std::map<std::string, Lotus::Material> looks{
+      {"Tint", reader("tint")},
+      {"Display", reader("displayColor")},
+      // Authored fallback (1.5, 0.25, -0.5), clamped.
+      {"Absent", reader("absent", {1.0F, 0.25F, 0.0F})},
+      {"Unnamed", reader("tint", {0.25F, 0.5F, 0.75F})},
+      {"Glowing", glowing},
+  };
+  for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
+
+  using Color = std::array<float, 3>;
+  constexpr std::array<Color, 4> kCorners{{{1, 0, 0}, {1, 1, 0}, {0, 1, 1}, {0, 0, 1}}};
+  const auto colored = [&](const char* name, const std::array<std::uint32_t, 4>& at) {
+    Lotus::MeshGeometry mesh = Card({});
+    for (const std::uint32_t corner : {0, 1, 2, 0, 2, 3})
+      mesh.colors[name].push_back(kCorners[at[corner]]);
+    return mesh;
+  };
+  const auto constant = [](const char* name, const Color& color) {
+    Lotus::MeshGeometry mesh = Card({});
+    mesh.colors[name] = {color};
+    return mesh;
+  };
+  const auto uniform = [](const char* name) {
+    Lotus::MeshGeometry mesh = TwoQuads();
+    for (const std::uint32_t face : mesh.source_faces)
+      mesh.colors[name].insert(mesh.colors[name].end(), 3,
+          face == 0 ? Color{1, 0.5F, 0} : Color{0, 0.5F, 1});
+    return mesh;
+  };
+  const std::array<std::uint32_t, 4> straight{0, 1, 2, 3}, reversed{3, 2, 1, 0};
+  const Lotus::MeshGeometry plain = Card({});
+  const Lotus::Material teal = Dielectric({0.2F, 0.6F, 0.7F});
+  Lotus::Material varying;
+  varying.base_color_primvar = "displayColor";
+  Lotus::Material opacity_color = teal;
+  opacity_color.opacity = 0.25F;
+  Lotus::Material opacity_only;
+  opacity_only.opacity = 0.5F;
+
+  struct Object {
+    const char* name;
+    Lotus::MeshGeometry geometry;
+    // Bound to this look, or, when null, to `display`, its private material.
+    const char* material;
+    Lotus::Material display;
+  };
+  const std::array<Object, 15> objects{{
+      {"Vertex", colored("tint", straight), "Tint", {}},
+      {"Varying", colored("tint", straight), "Tint", {}},
+      {"FaceVarying", colored("tint", reversed), "Tint", {}},
+      {"Uniform", uniform("tint"), "Tint", {}},
+      {"Constant", constant("tint", {0.25F, 0.75F, 0.5F}), "Tint", {}},
+      {"ReadDisplay", constant("displayColor", {0.2F, 0.6F, 0.7F}), "Display", {}},
+      {"Absent", plain, "Absent", {}},
+      // Stored as authored; the shader clamps. rest is a point3f: no colour.
+      {"Clamped", constant("tint", {1.5F, -0.5F, 0.5F}), "Unnamed", {}},
+      {"Glowing", colored("tint", straight), "Glowing", {}},
+      {"DisplayVertex", colored("displayColor", straight), nullptr, varying},
+      {"DisplayUniform", uniform("displayColor"), nullptr, varying},
+      {"DisplayIndexed", colored("displayColor", reversed), nullptr, varying},
+      {"OpacityColor", plain, nullptr, opacity_color},
+      {"OpacityOnly", plain, nullptr, opacity_only},
+      // Only constant coverage is read.
+      {"OpacityVertex", plain, nullptr, teal},
+  }};
+  for (std::size_t i = 0; i < objects.size(); ++i) {
+    const Object& object = objects[i];
+    const std::string mesh = root + "/Objects/" + object.name;
+    world.SetMesh(mesh, object.geometry, GridCell(i, 0.7F, 0.7F));
+    if (object.material != nullptr) {
+      world.BindMaterial(mesh, root + "/Looks/" + object.material);
+    } else {
+      const std::string display = mesh + ".lotus:displayColor";
+      world.SetMaterial(display, object.display);
+      world.BindMaterial(mesh, display);
+    }
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -1433,7 +1863,13 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the weighted image's base weight ignored", UnweightedImage},
       {"material-transmission-v1", "/MaterialTransmission", 160, SetMaterialTransmission,
           "the tinted sphere's transmission colour ignored", UntintedGlass},
-
+      {"material-transforms-v1", "/MaterialTransforms", 160, SetMaterialTransforms,
+          "the rotated card's rotation reversed", ReversedRotation,
+          "the transforms baked into the texture coordinates", BakedTransforms},
+      {"material-subsets-v1", "/MaterialSubsets", 160, SetMaterialSubsets,
+          "the partial card's subset binding ignored", IgnoredSubset},
+      {"material-primvars-v1", "/MaterialPrimvars", 160, SetMaterialPrimvars,
+          "the vertex colours' red and blue swapped", SwappedColors},
   };
   return kFixtures;
 }

@@ -291,6 +291,7 @@ INPUT_TYPES = {
                      "scale": "float4", "sourceColorSpace": "token", "st": "float2",
                      "wrapS": "token", "wrapT": "token"},
     "UsdPrimvarReader_float2": {"fallback": "float2", "varname": "string"},
+    "UsdPrimvarReader_float3": {"fallback": "float3", "varname": "string"},
     "UsdTransform2d": {"in": "float2", "rotation": "float", "scale": "float2",
                        "translation": "float2"},
 }
@@ -507,8 +508,8 @@ def looks(root, materials):
         for node in sorted(material["nodes"]):
             kind, inputs = material["nodes"][node]
             lines += [""] + shader(path, node, kind, inputs)
-            lines += [f"                {OUTPUT_TYPES[o]} outputs:{o}"
-                      for o in sorted(used.get(node, ()))]
+            lines += [f"                {'float3' if kind == 'UsdPrimvarReader_float3' else OUTPUT_TYPES[o]}"
+                      f" outputs:{o}" for o in sorted(used.get(node, ()))]
             lines.append("            }")
         lines.append("        }")
         if index + 1 < len(materials):
@@ -1312,6 +1313,272 @@ def transmission():
     return "\n".join(lines)
 
 
+def transform(**inputs):
+    """A UsdTransform2d of the reader's st unless `in` says otherwise."""
+    return ("UsdTransform2d", {"in": output("Reader", "result"), **inputs})
+
+
+TRANSFORMED = output("Transform", "result")
+
+
+def placed_palette(**inputs):
+    """A base colour from the repeating palette under one transform."""
+    return card({"diffuseColor": RGB},
+                Texture=texture("palette.png", "sRGB", st=TRANSFORMED, wrap="repeat"),
+                Transform=transform(**inputs), Reader=reader())
+
+
+def placed_tilts(**inputs):
+    """A normal map under one transform: its tangent frame must follow it."""
+    return card({"diffuseColor": (0.7, 0.7, 0.7), "roughness": 0.4, "normal": RGB},
+                Texture=texture("tilts.png", "raw", st=TRANSFORMED, wrap="repeat",
+                                scale=(2, 2, 2, 1), bias=(-1, -1, -1, 0)),
+                Transform=transform(**inputs), Reader=reader())
+
+
+# material-transforms-v1's materials, whose names are their cards', on the
+# grid's middle three rows. Rows from the top: a base colour under each part
+# of the transform; normal maps, lookups with different transforms, a chain
+# and an emission map; then coordinates that do not come from a mesh set,
+# coverage, the identity and a connected parameter.
+TRANSFORM_ROWS = [
+    [("Scale", placed_palette(scale=(2, 2))),
+     ("Rotate", placed_palette(rotation=30)),
+     ("Translate", placed_palette(translation=(0.25, 0.5))),
+     ("Combined", placed_palette(rotation=30, scale=(2, 1), translation=(0.25, 0))),
+     ("Flip", placed_palette(scale=(-1, 1)))],
+    [("NormalTurned", placed_tilts(rotation=90)),
+     ("NormalTiled", placed_tilts(scale=(3, 3))),
+     ("PerInput", card({"diffuseColor": RGB, "roughness": output("Ramp", "r")},
+                       Texture=texture("palette.png", "sRGB", wrap="repeat"),
+                       Ramp=texture("ramp.png", "raw", st=TRANSFORMED, wrap="repeat"),
+                       Transform=transform(scale=(4, 4)), Reader=reader())),
+     ("Chain", card({"diffuseColor": RGB},
+                    Texture=texture("palette.png", "sRGB", st=TRANSFORMED, wrap="repeat"),
+                    Transform=transform(**{"in": output("Inner", "result")}, rotation=45),
+                    Inner=transform(scale=(2, 2)), Reader=reader())),
+     ("Emission", card({"diffuseColor": (0, 0, 0), "emissiveColor": RGB},
+                       Texture=texture("palette.png", "sRGB", st=TRANSFORMED, wrap="repeat"),
+                       Transform=transform(rotation=60), Reader=reader()))],
+    [("ConstantIn", card({"diffuseColor": RGB},
+                         Texture=texture("palette.png", "sRGB", st=TRANSFORMED),
+                         Transform=("UsdTransform2d", {"in": (0.5, 0.25),
+                                                       "translation": (0.125, 0.5)}))),
+     ("Absent", card({"diffuseColor": RGB},
+                     Texture=texture("palette.png", "sRGB", st=TRANSFORMED),
+                     Transform=transform(scale=(2, 2)),
+                     Reader=reader("absent", fallback=(0.125, 0.25)))),
+     ("Coverage", card({"diffuseColor": TEAL, "opacity": ALPHA, "opacityThreshold": 0.5},
+                       Texture=texture("cutout.png", "sRGB", st=TRANSFORMED, wrap="repeat"),
+                       Transform=transform(rotation=45), Reader=reader())),
+     ("Identity", placed_palette()),
+     # The parameter's connection leaves the lookup untranslated: it warns.
+     ("Connected", card({"diffuseColor": RGB},
+                        Texture=texture("palette.png", "sRGB", st=TRANSFORMED),
+                        Transform=transform(rotation=output("Ramp", "r")),
+                        Ramp=texture("ramp.png", "raw"), Reader=reader()))],
+]
+
+
+def objects(root, rows, ys):
+    """The Objects scope: each entry is the mesh's name, the class it
+    inherits, its material (None for unbound), the lines it adds, its scale
+    and the lines it adds after its transform."""
+    lines = ['    def Scope "Objects"', "    {"]
+    for y, row in zip(ys, rows):
+        for x, (name, base, material, extra, scale, after) in zip(CARD_COLUMNS, row):
+            schemas = [] if material is None else ['            prepend apiSchemas = ["MaterialBindingAPI"]']
+            binding = [] if material is None else [f"            rel material:binding = </{root}/Looks/{material}>"]
+            lines += [
+                f'        def Mesh "{name}" (',
+                *schemas,
+                f"            prepend inherits = </{base}>",
+                "        )",
+                "        {",
+                *binding,
+                *extra,
+                f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+                f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+                '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+                *after,
+                "        }",
+            ]
+            if (x, y) != (CARD_COLUMNS[-1], ys[-1]):
+                lines.append("")
+    return lines + ["    }"]
+
+
+CARD_SCALE = (0.7, 0.7, 0.7)
+SPHERE_SCALE = (0.35, 0.35, 0.35)
+MIDDLE_ROWS = CARD_ROWS[1:4]
+
+
+def transforms():
+    unit_st = primvar("st", UNIT)
+    rows = [[(name, "_Card", name, [] if name == "ConstantIn" else unit_st, CARD_SCALE, [])
+             for name, _ in row] for row in TRANSFORM_ROWS]
+    lines = header("MaterialTransforms", "SetMaterialTransforms", CARD_CLASS)
+    lines += looks("MaterialTransforms", [look for row in TRANSFORM_ROWS for look in row])
+    lines += [""] + objects("MaterialTransforms", rows, MIDDLE_ROWS)
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
+# Two quads side by side: face 0 on the left, face 1 on the right. Their
+# points run left to right along the bottom, then right to left along the top.
+SPLIT_CLASS = [
+    "# A card of two quads, left and right.",
+    'class Mesh "_Split"',
+    "{",
+    "    int[] faceVertexCounts = [4, 4]",
+    "    int[] faceVertexIndices = [0, 1, 4, 5, 1, 2, 3, 4]",
+    "    point3f[] points = [(-0.5, -0.5, 0), (0, -0.5, 0), (0.5, -0.5, 0), "
+    "(0.5, 0.5, 0), (0, 0.5, 0), (-0.5, 0.5, 0)]",
+    '    uniform token subdivisionScheme = "none"',
+    "}",
+]
+# st over the split card's faces, and uv1 with s and t exchanged.
+SPLIT_ST = ((0, 0), (0.5, 0), (0.5, 1), (0, 1), (0.5, 0), (1, 0), (1, 1), (0.5, 1))
+SPLIT_UV1 = tuple((t, s) for s, t in SPLIT_ST)
+RED, BLUE, GREY = (0.8, 0.1, 0.05), (0.1, 0.2, 0.8), (0.6, 0.6, 0.6)
+
+
+def color_primvar(name, values, interpolation="constant", indices=None, kind="color3f"):
+    lines = [f"            {kind}[] primvars:{name} = [{vectors(values)}] (",
+             f'                interpolation = "{interpolation}"', "            )"]
+    if indices is not None:
+        lines.append(f"            int[] primvars:{name}:indices = [{integers(indices)}]")
+    return lines
+
+
+def color_reader(varname, **inputs):
+    """A material whose diffuseColor reads a colour primvar."""
+    return card({"diffuseColor": output("Colors", "result"), "roughness": 0.4},
+                Colors=("UsdPrimvarReader_float3", {"varname": varname, **inputs}))
+
+
+SUBSET_LOOKS = [
+    ("Grey", card({"diffuseColor": GREY, "roughness": 0.3})),
+    ("Red", card({"diffuseColor": RED, "roughness": 0.3})),
+    ("Blue", card({"diffuseColor": BLUE, "roughness": 0.3})),
+    ("Glow", card({"emissiveColor": (2, 1, 0.5)})),
+    ("Half", card({"diffuseColor": RED, "opacity": 0.5})),
+    ("Palette", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                     Reader=reader())),
+    ("Turned", card({"diffuseColor": RGB}, Texture=texture("palette.png", "sRGB"),
+                    Reader=reader("uv1"))),
+    ("Tint", color_reader("tint")),
+]
+
+
+def subset(root, name, indices, material=None, family="materialBind"):
+    """A GeomSubset of faces, bound to `material` when one is given."""
+    schemas = "" if material is None else ' (\n                prepend apiSchemas = ["MaterialBindingAPI"]\n            )'
+    lines = ["", f'            def GeomSubset "{name}"{schemas}', "            {",
+             '                uniform token elementType = "face"',
+             f'                uniform token familyName = "{family}"',
+             f"                int[] indices = [{integers(indices)}]"]
+    if material is not None:
+        lines.append(f"                rel material:binding = </{root}/Looks/{material}>")
+    return lines + ["            }"]
+
+
+def subsets():
+    root = "MaterialSubsets"
+    teal = [f"            color3f[] primvars:displayColor = [({', '.join(number(c) for c in TEAL)})]"]
+    points = sphere(COARSE_SEGMENTS, COARSE_RINGS)[0]
+    smooth = normal_attribute("normals", points)
+    # The sphere's top two rings of faces: 16 triangles and 16 quads.
+    top = list(range(32))
+    tint = color_primvar("tint", ((1, 0, 0), (1, 0.5, 0), (1, 1, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1)),
+                         "vertex")
+    rows = [
+        [("Partial", "_Split", "Grey", [], CARD_SCALE, subset(root, "Right", [1], "Red")),
+         ("Full", "_Split", "Grey", [], CARD_SCALE,
+          subset(root, "Left", [0], "Red") + subset(root, "Right", [1], "Blue")),
+         ("Unbound", "_Split", None, teal, CARD_SCALE, subset(root, "Right", [1], "Red")),
+         ("NoBinding", "_Split", "Blue", [], CARD_SCALE, subset(root, "Right", [1])),
+         ("OtherFamily", "_Split", "Blue", [], CARD_SCALE,
+          subset(root, "Right", [1], "Red", "other"))],
+        [("Sets", "_Split", "Turned", primvar("st", SPLIT_ST) + primvar("uv1", SPLIT_UV1),
+          CARD_SCALE, subset(root, "Right", [1], "Palette")),
+         ("Emitter", "_Split", "Grey", [], CARD_SCALE, subset(root, "Right", [1], "Glow")),
+         ("Covered", "_Split", "Grey", [], CARD_SCALE, subset(root, "Right", [1], "Half")),
+         # The first subset keeps the shared face, which leaves Second empty.
+         ("Overlap", "_Split", "Grey", [], CARD_SCALE,
+          subset(root, "First", [0, 1], "Red") + subset(root, "Second", [1], "Blue")),
+         ("OutOfRange", "_Split", "Grey", [], CARD_SCALE, subset(root, "Right", [1, 7], "Red"))],
+        [("Sphere", "_Sphere", "Grey", smooth, SPHERE_SCALE, subset(root, "Top", top, "Red")),
+         ("Hole", "_Split", "Grey", ["            int[] holeIndices = [0]"], CARD_SCALE,
+          subset(root, "Right", [1], "Red")),
+         ("Shared", "_Split", "Grey", [], CARD_SCALE,
+          subset(root, "Left", [0], "Red") + subset(root, "Right", [1], "Red")),
+         ("Colored", "_Split", "Grey", tint, CARD_SCALE, subset(root, "Right", [1], "Tint")),
+         ("Mirrored", "_Split", "Grey", [], (-0.7, 0.7, 0.7), subset(root, "Right", [1], "Red"))],
+    ]
+    lines = header(root, "SetMaterialSubsets", sphere_class() + SPLIT_CLASS)
+    lines += looks(root, SUBSET_LOOKS)
+    lines += [""] + objects(root, rows, MIDDLE_ROWS)
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
+PRIMVAR_LOOKS = [
+    ("Tint", color_reader("tint")),
+    ("Display", color_reader("displayColor")),
+    ("Absent", color_reader("absent", fallback=(1.5, 0.25, -0.5))),
+    ("Unnamed", color_reader("tint", fallback=(0.25, 0.5, 0.75))),
+    # Only the base colour reads a set: emission's connection warns.
+    ("Glowing", card({"diffuseColor": (0.5, 0.5, 0.5),
+                      "emissiveColor": output("Colors", "result")},
+                     Colors=("UsdPrimvarReader_float3", {"varname": "tint"}))),
+]
+# A colour per point of the card: red, yellow, cyan, blue counter-clockwise
+# from the bottom left, in eighths so that they parse exactly.
+CARD_COLORS = ((1, 0, 0), (1, 1, 0), (0, 1, 1), (0, 0, 1))
+
+
+def primvars():
+    root = "MaterialPrimvars"
+    vertex = color_primvar("tint", CARD_COLORS, "vertex")
+    indexed = color_primvar("tint", CARD_COLORS, "faceVarying", (3, 2, 1, 0))
+    uniform = ((1, 0.5, 0), (0, 0.5, 1))
+    teal = [f"            color3f[] primvars:displayColor = [({', '.join(number(c) for c in TEAL)})]"]
+    rows = [
+        [("Vertex", "_Card", "Tint", vertex, CARD_SCALE, []),
+         ("Varying", "_Card", "Tint", color_primvar("tint", CARD_COLORS, "varying"), CARD_SCALE, []),
+         ("FaceVarying", "_Card", "Tint", indexed, CARD_SCALE, []),
+         ("Uniform", "_Split", "Tint", color_primvar("tint", uniform, "uniform"), CARD_SCALE, []),
+         ("Constant", "_Card", "Tint", color_primvar("tint", ((0.25, 0.75, 0.5),)), CARD_SCALE, [])],
+        [("ReadDisplay", "_Card", "Display", teal, CARD_SCALE, []),
+         ("Absent", "_Card", "Absent", [], CARD_SCALE, []),
+         # Out of range: the shader clamps. A float3 set; a point3f is no colour.
+         ("Clamped", "_Card", "Unnamed",
+          color_primvar("tint", ((1.5, -0.5, 0.5),), "constant", None, "float3") +
+          color_primvar("rest", CARD_COLORS, "vertex", None, "point3f"), CARD_SCALE, []),
+         ("Glowing", "_Card", "Glowing", vertex, CARD_SCALE, []),
+         ("DisplayVertex", "_Card", None, color_primvar("displayColor", CARD_COLORS, "vertex"),
+          CARD_SCALE, [])],
+        [("DisplayUniform", "_Split", None, color_primvar("displayColor", uniform, "uniform"),
+          CARD_SCALE, []),
+         ("DisplayIndexed", "_Card", None,
+          color_primvar("displayColor", CARD_COLORS, "faceVarying", (3, 2, 1, 0)), CARD_SCALE, []),
+         ("OpacityColor", "_Card", None, teal + ["            float[] primvars:displayOpacity = [0.25]"],
+          CARD_SCALE, []),
+         ("OpacityOnly", "_Card", None, ["            float[] primvars:displayOpacity = [0.5]"],
+          CARD_SCALE, []),
+         # Only constant coverage is read: it warns and stays opaque.
+         ("OpacityVertex", "_Card", None,
+          teal + ["            float[] primvars:displayOpacity = [0.25, 0.5, 0.75, 1] (",
+                  '                interpolation = "vertex"', "            )"], CARD_SCALE, [])],
+    ]
+    lines = header(root, "SetMaterialPrimvars", CARD_CLASS + [""] + SPLIT_CLASS)
+    lines += looks(root, PRIMVAR_LOOKS)
+    lines += [""] + objects(root, rows, MIDDLE_ROWS)
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
 # Every committed file, relative to DIRECTORY: USD text or image bytes.
 FIXTURES = {
     "material-basics-v1.usda": basics,
@@ -1321,6 +1588,9 @@ FIXTURES = {
     "material-alpha-v1.usda": alpha,
     "material-mtlx-v1.usda": materialx,
     "material-transmission-v1.usda": transmission,
+    "material-transforms-v1.usda": transforms,
+    "material-subsets-v1.usda": subsets,
+    "material-primvars-v1.usda": primvars,
 
     **{f"textures/{name}": (lambda image=image: png(*image)) for name, image in IMAGES.items()},
     "textures/glow.hdr": lambda: radiance(*GLOW),

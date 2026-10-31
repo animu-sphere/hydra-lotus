@@ -392,6 +392,52 @@ int main() try {
       "the identity normal kept reading a UV frame without lookups");
 
   // An opacity-only lookup selects UVs and resolves its sixth texture slot.
+  // A colour set is selected as a texture-coordinate set is, unless a texture
+  // input drives the base colour; only the base colour names one.
+  {
+    Lotus::RenderWorld colour_world;
+    Lotus::SceneExtraction colour_extraction;
+    colour_world.SetTexture("/t/checker", checker);
+    auto colored = mapped;
+    colored.colors["other"] = {{0.5F, 0.5F, 0.5F}};
+    colored.colors["tint"] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    colour_world.SetMesh("/a", colored, instance);
+    Lotus::Material tinted;
+    tinted.base_color_primvar = "tint";
+    colour_world.SetMaterial("/m/tinted", tinted);
+    colour_world.BindMaterial("/a", "/m/tinted");
+    auto colour_update = colour_extraction.Update(colour_world.Commit());
+    Check(colour_update.instances.size() == 1 && colour_update.instances[0].colors == 1 &&
+              colour_update.instances[0].texcoords == Lotus::kNoTexcoords,
+        "the base colour's primvar did not select its colour set");
+    tinted.base_color_primvar = "absent";
+    colour_world.SetMaterial("/m/tinted", tinted);
+    colour_update = colour_extraction.Update(colour_world.Commit());
+    Check(colour_update.instances.size() == 1 &&
+              colour_update.instances[0].colors == Lotus::kNoColors,
+        "a primvar the geometry lacks selected a colour set");
+    tinted.base_color_primvar = "tint";
+    colour_world.SetMaterial("/m/tinted", tinted);
+    (void)colour_extraction.Update(colour_world.Commit());
+    tinted.base_color_texture = Lotus::TextureInput{"/t/checker"};
+    colour_world.SetMaterial("/m/tinted", tinted);
+    colour_update = colour_extraction.Update(colour_world.Commit());
+    Check(colour_update.instances.size() == 1 &&
+              colour_update.instances[0].colors == Lotus::kNoColors,
+        "a base colour texture did not win over the primvar");
+    for (const std::size_t count : {std::size_t{0}, std::size_t{2}}) {
+      auto malformed = colored;
+      malformed.colors["tint"].resize(count);
+      bool rejected = false;
+      try {
+        colour_world.SetMesh("/malformed", malformed, instance);
+      } catch (const std::invalid_argument&) {
+        rejected = true;
+      }
+      Check(rejected, "a colour set of the wrong size was accepted");
+    }
+  }
+
   // Changing coverage without changing the lookup touches only the table.
   painted.opacity_texture = Lotus::TextureInput{"/t/unused", 3};
   world.SetMaterial("/m/painted", painted);

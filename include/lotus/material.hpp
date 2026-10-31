@@ -64,6 +64,10 @@ struct TextureInput {
   std::array<float, 4> scale{1.0F, 1.0F, 1.0F, 1.0F};
   std::array<float, 4> bias{0.0F, 0.0F, 0.0F, 0.0F};
   std::array<float, 4> fallback{0.0F, 0.0F, 0.0F, 1.0F};
+  // Where this lookup reads, from the material's texture coordinates (s, t):
+  // (m[0] s + m[1] t + m[2], m[3] s + m[4] t + m[5]). A normal map's tangent
+  // frame follows the transformed coordinates.
+  std::array<float, 6> st_transform{1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F};
 
   bool operator==(const TextureInput&) const = default;
 };
@@ -127,6 +131,10 @@ struct Material {
   // without one. Empty names no set.
   std::string texcoords;
   std::array<float, 2> texcoord_fallback{0.0F, 0.0F};
+  // The base colour's source on a mesh with the colour set of this name
+  // (MeshGeometry::colors), clamped into [0, 1]; `base_color` applies on a
+  // mesh without one. Empty names no set. A base colour texture input wins.
+  std::string base_color_primvar;
 
   bool operator==(const Material&) const = default;
 };

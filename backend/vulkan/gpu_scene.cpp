@@ -53,6 +53,7 @@ struct GeometryLayout {
   VkDeviceSize index_offset = 0;
   VkDeviceSize normal_offset = 0;
   std::vector<VkDeviceSize> texcoord_offsets;
+  std::vector<VkDeviceSize> color_offsets;
   VkDeviceSize size = 0;
 
   bool operator==(const GeometryLayout&) const = default;
@@ -78,6 +79,11 @@ GeometryLayout LayOut(const MeshGeometry& geometry, VkDeviceSize alignment) {
     (void)name;
     layout.texcoord_offsets.push_back(AlignUp(layout.size, alignment));
     layout.size = layout.texcoord_offsets.back() + texcoords.size() * kVec2Bytes;
+  }
+  for (const auto& [name, colors] : geometry.colors) {
+    (void)name;
+    layout.color_offsets.push_back(AlignUp(layout.size, alignment));
+    layout.size = layout.color_offsets.back() + colors.size() * kVec3Bytes;
   }
   return layout;
 }
@@ -105,6 +111,17 @@ std::vector<GeometrySection> ChangedSections(const MeshGeometry& previous,
           texcoords.size() * kVec2Bytes});
     }
     ++was;
+    ++set;
+  }
+  auto colors_were = previous.colors.begin();
+  set = 0;
+  for (const auto& [name, colors] : next.colors) {
+    (void)name;
+    if (colors_were->second != colors) {
+      sections.push_back({layout.color_offsets[set], colors.data(),
+          colors.size() * kVec3Bytes});
+    }
+    ++colors_were;
     ++set;
   }
   return sections;
@@ -767,7 +784,9 @@ bool ValidTextureInput(const std::optional<TextureInput>& input,
          static_cast<std::uint32_t>(input->wrap_s) < 4 &&
          static_cast<std::uint32_t>(input->wrap_t) < 4 &&
          finite(input->scale) && finite(input->bias) &&
-         finite(input->fallback);
+         finite(input->fallback) &&
+         std::all_of(input->st_transform.begin(), input->st_transform.end(),
+             [](float value) { return std::isfinite(value); });
 }
 
 bool ValidMaterial(const SceneMaterial& entry) {
@@ -1076,6 +1095,15 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
                "one per triangle corner";
       return false;
     }
+    if (!std::all_of(geometry->colors.begin(), geometry->colors.end(),
+            [&](const auto& set) {
+              return set.second.size() == 1 ||
+                     set.second.size() == 3 * geometry->triangles.size();
+            })) {
+      detail = "the scene update uploads colours that are neither one per "
+               "triangle corner nor one for the mesh";
+      return false;
+    }
     if (acceleration_ && geometry->triangles.size() > max_primitives_) {
       std::ostringstream message;
       message << "the scene update uploads geometry with "
@@ -1196,6 +1224,11 @@ bool GpuScene::Validate(const SceneUpdate& update, std::string& detail) const {
         instance.texcoords >= instance.geometry->texcoords.size()) {
       detail = "a scene instance reads a texture-coordinate set its geometry "
                "does not have";
+      return false;
+    }
+    if (instance.colors != kNoColors &&
+        instance.colors >= instance.geometry->colors.size()) {
+      detail = "a scene instance reads a colour set its geometry does not have";
       return false;
     }
   }
@@ -1693,6 +1726,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
     geometry.index_offset = layout.index_offset;
     geometry.normal_offset = layout.normal_offset;
     geometry.texcoord_offsets = layout.texcoord_offsets;
+    geometry.color_offsets = layout.color_offsets;
+    geometry.color_counts.clear();
+    for (const auto& [name, colors] : source->colors) {
+      (void)name;
+      geometry.color_counts.push_back(static_cast<std::uint32_t>(colors.size()));
+    }
     const VkDeviceSize size = layout.size;
     stats_.geometry_bytes -= geometry.buffer.size;
     if (geometry.buffer.size < size) {
@@ -1724,6 +1763,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         (void)name;
         std::memcpy(staging + offset + geometry.texcoord_offsets[set++],
             texcoords.data(), texcoords.size() * kVec2Bytes);
+      }
+      set = 0;
+      for (const auto& [name, colors] : source->colors) {
+        (void)name;
+        std::memcpy(staging + offset + geometry.color_offsets[set++],
+            colors.data(), colors.size() * kVec3Bytes);
       }
       copies.push_back({geometry.buffer.buffer, VkBufferCopy{offset, 0, size}});
       offset += size;
@@ -1825,9 +1870,15 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
           record.texcoords = geometry.buffer.address +
                              geometry.texcoord_offsets[instance.texcoords];
         }
+        if (instance.colors != kNoColors) {
+          record.colors = geometry.buffer.address +
+                          geometry.color_offsets[instance.colors];
+          record.colors_constant = geometry.color_counts[instance.colors] == 1;
+        }
       }
       record.material_slot = instance.material;
       record.texcoord_set = instance.texcoords;
+      record.color_set = instance.colors;
       std::memcpy(staging + offset + index * kInstanceBytes, &record,
           kInstanceBytes);
     }
@@ -1896,6 +1947,10 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         std::copy(source.bias.begin(), source.bias.end(), lookup.bias);
         std::copy(source.fallback.begin(), source.fallback.end(),
             lookup.fallback);
+        std::copy(source.st_transform.begin(), source.st_transform.begin() + 3,
+            lookup.st_s);
+        std::copy(source.st_transform.begin() + 3, source.st_transform.end(),
+            lookup.st_t);
         if (entry.textures[input] == nullptr) {
           lookup.mode = kFallbackLookup;
         } else {
@@ -2422,6 +2477,11 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
       std::memcpy(set.data(), bytes + offset + texcoord_offset,
           set.size() * kVec2Bytes);
     }
+    for (std::size_t set = 0; set < geometry.color_offsets.size(); ++set) {
+      auto& colors = copy.colors.emplace_back(geometry.color_counts[set]);
+      std::memcpy(colors.data(), bytes + offset + geometry.color_offsets[set],
+          colors.size() * kVec3Bytes);
+    }
     contents.geometries.push_back(std::move(copy));
     offset += geometry.buffer.size;
   }
@@ -2435,6 +2495,7 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
     instance.geometry_slot = record.geometry_slot;
     instance.material_slot = record.material_slot;
     instance.texcoords = record.texcoord_set;
+    instance.colors = record.color_set;
     contents.instances.push_back(instance);
   }
   offset += instance_bytes;
@@ -2479,6 +2540,8 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
       std::copy(lookup.scale, lookup.scale + 4, decoded.scale.begin());
       std::copy(lookup.bias, lookup.bias + 4, decoded.bias.begin());
       std::copy(lookup.fallback, lookup.fallback + 4, decoded.fallback.begin());
+      std::copy(lookup.st_s, lookup.st_s + 3, decoded.st_transform.begin());
+      std::copy(lookup.st_t, lookup.st_t + 3, decoded.st_transform.begin() + 3);
       if (lookup.mode == kTextureLookup) {
         entry.texture_slots[input] = lookup.texture;
       }

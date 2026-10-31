@@ -15,27 +15,13 @@ demonstrated a lighting gap. LOTUS-MTLX-01
 closing the first gap, and LOTUS-TRANSMISSION-01 added
 [dielectric transmission](../reports/2026-10-29-dielectric-transmission.md#decision)
 under its [contract](../design/TRANSMISSION.md), so OpenChessSet's pawn
-tops and the shader ball's glass render as tinted glass. Only the
-following bounded tasks are active, in this order. The surveyed assets are local and not
-redistributable, so each task's committed evidence is a fixture authored
+tops and the shader ball's glass render as tinted glass. LOTUS-MATERIAL-02
+[translated texture transforms, per-face materials, colour primvars and
+display coverage](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision). Only the
+following bounded task is active. The surveyed assets are local and not
+redistributable, so its committed evidence is a fixture authored
 here. The survey's stages are its acceptance check.
 
-- [ ] **LOTUS-MATERIAL-02
- — Texture transforms, per-face materials and primvar colour (P1).**
-  Renderer Phase 8 subset: the candidate fixes the
-  [material foundation review](../reports/2026-10-28-material-foundation-closure.md#deferred-and-accepted-items)
-  deferred, now justified by assets. It covers four cases. `UsdTransform2d` goes
-  between a primvar reader and a texture. `GeomSubset` material bindings
-  give per-face materials. Colour primvars drive colour inputs, through
-  `UsdPrimvarReader_float3` and as non-constant `displayColor` on unbound
-  meshes. Constant `displayOpacity` below 1 on unbound meshes becomes
-  coverage.
-  Exit evidence: committed fixtures with reference images and Hydra/headless
-  agreement for each case; TextureTransformTest, PrimvarInterpolation,
-  Teapot, CarbonFrameBike and AutodeskTelescope render without those
-  warnings and show the features Storm shows.
-  Deferred: the constant tangent normal's `st` and path classification,
-  which stay in Renderer Phase 8.
 - [ ] **LOTUS-SKEL-01 — Skinned meshes (P1).**
   Hydra adapter geometry: Lotus rejects every mesh bound to a `UsdSkel`
   skeleton ("face vertex index is out of range"), so ElephantWithMonochord
@@ -58,9 +44,9 @@ These retain their parent-phase assignments. The
 [cross-phase rule](../design/ROADMAP_POLICY.md#cross-phase-delivery) permits
 only foundation subsets; broader parent-phase work stays outside this queue.
 
-LOTUS-MATERIAL-02 takes the material candidate fixes the survey justified.
-The constant tangent normal's `st` and path classification wait in Renderer
-Phase 8, and light selection and the light-table estimates in Renderer
+LOTUS-MATERIAL-02 took the material candidate fixes the survey justified.
+The constant tangent normal's `st`, path classification and
+`ND_tiledimage` tiling wait in Renderer Phase 8, and light selection and the light-table estimates in Renderer
 Phase 9, until an asset or measurement demonstrates the need
 ([material review](../reports/2026-10-28-material-foundation-closure.md#deferred-and-accepted-items),
 [practical foundation review](../reports/2026-10-28-practical-foundation-closure.md#deferred-and-accepted-items),

@@ -1,5 +1,7 @@
 # Asset gap survey: LOTUS-ASSET-01
 
+> Later: LOTUS-MATERIAL-02 closed the texture transform, per-face material, primvar colour and `displayOpacity` gaps ([report](2026-10-31-texture-transforms-subsets-primvars.md#decision)).
+
 ## Evaluation brief
 
 The [entry condition](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work)

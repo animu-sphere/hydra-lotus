@@ -529,6 +529,8 @@ struct GpuGeometryContents {
   std::vector<std::array<float, 3>> normals;
   // Each texture-coordinate set, in MeshGeometry::texcoords key order.
   std::vector<std::vector<std::array<float, 2>>> texcoords;
+  // Each colour set, in MeshGeometry::colors key order.
+  std::vector<std::vector<std::array<float, 3>>> colors;
 };
 
 struct GpuInstanceContents {
@@ -538,6 +540,8 @@ struct GpuInstanceContents {
   std::uint32_t material_slot = 0;
   // The texture-coordinate set its lookups read, as SceneInstance::texcoords.
   std::uint32_t texcoords = kNoTexcoords;
+  // The colour set its base colour reads, as SceneInstance::colors.
+  std::uint32_t colors = kNoColors;
 };
 
 // A texture as the device holds it. A slot is its index in the GPU scene's

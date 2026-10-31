@@ -263,12 +263,20 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
           set = static_cast<std::uint32_t>(texcoords.size());
         texcoords.push_back(values);
       }
+      std::vector<std::vector<std::array<float, 3>>> colors;
+      std::uint32_t color_set = Lotus::kNoColors;
+      for (const auto& [name, values] : mesh.geometry->colors) {
+        if (name == material.base_color_primvar && !material.base_color_texture)
+          color_set = static_cast<std::uint32_t>(colors.size());
+        colors.push_back(values);
+      }
       if (geometry == contents.geometries.end() ||
           geometry->positions != mesh.geometry->positions ||
           geometry->triangles != mesh.geometry->triangles ||
           geometry->normals != mesh.geometry->normals ||
-          geometry->texcoords != texcoords ||
+          geometry->texcoords != texcoords || geometry->colors != colors ||
           gpu.world_from_object != placement || gpu.texcoords != set ||
+          gpu.colors != color_set ||
           gpu.material_slot >= contents.materials.size() ||
           !MaterialMatches(contents.materials[gpu.material_slot], material,
               scene, contents)) {
@@ -3549,6 +3557,28 @@ std::string MaterialFixtureFailure(PathScenes& scenes,
   line << std::fixed << std::setprecision(2) << stem << ": " << control
        << " rejected at max |z| " << rejected.max_tile_z;
   scenes.Summarize(line.str());
+
+  // The reference comes from this shader, so an independent authoring of the
+  // same image must match it.
+  if (fixture.apply_equivalent != nullptr) {
+    const std::string equivalent(fixture.equivalent);
+    if (auto failure = SetMaterialFixtureScene(scenes, fixture); !failure.empty())
+      return failure;
+    fixture.apply_equivalent(scenes.World());
+    LotusHeadless::RgbImage image;
+    if (auto failure = RenderReferenceImage(scenes, kComparedSampleIndex,
+            kMaterialLevels.back(), image);
+        !failure.empty())
+      return equivalent + ": " + failure;
+    const LotusHeadless::Comparison accepted =
+        LotusHeadless::Compare(image, kMaterialLevels.back(), reference);
+    if (!accepted.failure.empty())
+      return equivalent + " differs: " + accepted.failure;
+    std::ostringstream accepted_line;
+    accepted_line << std::fixed << std::setprecision(2) << stem << ": " << equivalent
+                  << " accepted at max |z| " << accepted.max_tile_z;
+    scenes.Summarize(accepted_line.str());
+  }
 
   // On the device and build that wrote the reference, deterministic mode
   // reproduces it bit for bit; elsewhere it need not.

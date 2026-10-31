@@ -1,0 +1,163 @@
+{
+ "schema": "lotus-material-02-v1",
+ "question": "Do UsdTransform2d, GeomSubset material bindings, colour primvars and unbound constant displayOpacity translate, matching committed fixtures headless and through Hydra, leaving unrelated references unchanged, and do the surveyed stages lose those warnings?",
+ "procedure": {
+  "fixtures": "python scripts/material_fixtures.py write",
+  "reference": "lotus-headless --write-material-reference validation/reference (4096 spp, BSDF sampling)",
+  "headless_check": "ost build --profile lookdev --intent hydra (post-build renderer report, renderer.material.fixtures)",
+  "hydra": "ctest -R hydra-material-fixtures, -R hydra-material, -R hydra-render-pass, and -LE gpu",
+  "survey": "usdrecord --renderer Lotus|Storm --imageWidth 640 <stage> <png>"
+ },
+ "environment": {
+  "source": "e23ac9e plus this change",
+  "os": "Windows 11 x86_64",
+  "device": {
+   "backend": "vulkan",
+   "name": "NVIDIA RTX A5000",
+   "api_version": "1.4.329",
+   "driver_version": "2504261632",
+   "vendor_id": 4318,
+   "device_id": 8753
+  },
+  "openusd": "26.08 lookdev runtime, Python 3.13"
+ },
+ "fixture_sha256": {
+  "validation/materials/material-transforms-v1.usda": "c15246f71010b4a9df13d4715b541d3853ab371968f67188df3b6f4e0ac6648a",
+  "validation/materials/material-subsets-v1.usda": "9f93a7919c897ee2ca3285dd81586b9192f593b5c2b9d3dd40f72f82d3aa80b6",
+  "validation/materials/material-primvars-v1.usda": "c6e3d204a3104b8ed8b5209f8bb4a99f0aabab0afa0414bf7aa6188ed42a8ce0"
+ },
+ "reference_sha256": {
+  "validation/reference/material-transforms-v1-mean.pfm": "bdb395e7da1bc6bda174880c63789006efb3ffa6bc03d2ebe53ec49bd7188904",
+  "validation/reference/material-transforms-v1-variance.pfm": "06f2e9aef4a837d0d4dbd705858e2a23862818e18499da640f89a0a891d2b64c",
+  "validation/reference/material-subsets-v1-mean.pfm": "0e7170afec82fca54a7355a584af650f6820cb77a1c656f6ae4e6f977c92904e",
+  "validation/reference/material-subsets-v1-variance.pfm": "1b969acfc200f845aaad7c7910f2436b1270cec64059d0563d93c33711f4cfe2",
+  "validation/reference/material-primvars-v1-mean.pfm": "a3d0f8de01acaa7e2b72e3388cb9768ed4265d0f29b3d7dd32a3b357b4eee0fc",
+  "validation/reference/material-primvars-v1-variance.pfm": "095fae616b088d528e374ad6dbb469923a916757584d9af6c00bf839df4a025e",
+  "validation/reference/material-textures-v1-mean.pfm": "3a0c1f3e0be50e236cfab8f601b5c75d784e1ec555ef12c0d51be849ea5ff850",
+  "validation/reference/material-textures-v1-variance.pfm": "307a5aa13b77900ad6b72d26e7b997fe2b3138d64b53c0a6855a1bd33f48eae8",
+  "validation/reference/material-emission-v1-mean.pfm": "57c1e7c961a33ab25e90cb0c12767c7d8026687dbe42424563cde232d9a04a28",
+  "validation/reference/material-emission-v1-variance.pfm": "8553d408610541d957a04a1cd65836c3bc05bf19139be33455d7b99f634c9804",
+  "validation/reference/material-alpha-v1-mean.pfm": "cf250a6086ccf228b66491c42cd57e8cda04e48a30c6ba2b3dd68a6c70784c06",
+  "validation/reference/material-alpha-v1-variance.pfm": "ae35cb0b7606c2648000fe61df3e75e2de08a10ca531bf8a04fc36669990b852"
+ },
+ "references_rewritten_byte_identical": [
+  "material-basics-v1",
+  "material-normals-v1",
+  "material-mtlx-v1",
+  "material-transmission-v1"
+ ],
+ "references_rewritten_changed": {
+  "material-textures-v1": "Transform2d card",
+  "material-emission-v1": "Subset card",
+  "material-alpha-v1": "DisplayOpacity card"
+ },
+ "headless_summaries": {
+  "material-transforms-v1": [
+   "material-transforms-v1 reference-bsdf 16 spp: image z 1.91 1.96 2.05, 8px tiles max |z| 3.28 mean z^2 1.01",
+   "material-transforms-v1 reference-bsdf 256 spp: image z 0.49 0.27 0.34, 8px tiles max |z| 3.34 mean z^2 1.06",
+   "material-transforms-v1 reference-mis 16 spp: image z 0.36 0.31 0.32, 8px tiles max |z| 1.85 mean z^2 0.08",
+   "material-transforms-v1 reference-mis 256 spp: image z 0.39 0.41 0.45, 8px tiles max |z| 1.75 mean z^2 0.13",
+   "material-transforms-v1 wavefront-mis 16 spp: image z 0.36 0.31 0.32, 8px tiles max |z| 1.85 mean z^2 0.08",
+   "material-transforms-v1 wavefront-mis 256 spp: image z 0.39 0.41 0.45, 8px tiles max |z| 1.75 mean z^2 0.13",
+   "material-transforms-v1: the rotated card's rotation reversed rejected at max |z| 273.98",
+   "material-transforms-v1: the transforms baked into the texture coordinates accepted at max |z| 1.75",
+   "material-transforms-v1: the reference's samples reproduce it bit for bit"
+  ],
+  "material-subsets-v1": [
+   "material-subsets-v1 reference-bsdf 16 spp: image z 1.26 1.07 0.44, 8px tiles max |z| 3.25 mean z^2 0.98",
+   "material-subsets-v1 reference-bsdf 256 spp: image z -0.01 0.08 -0.24, 8px tiles max |z| 3.06 mean z^2 1.06",
+   "material-subsets-v1 reference-mis 16 spp: image z 0.27 0.19 0.10, 8px tiles max |z| 1.59 mean z^2 0.08",
+   "material-subsets-v1 reference-mis 256 spp: image z 0.20 -0.09 -0.19, 8px tiles max |z| 1.34 mean z^2 0.12",
+   "material-subsets-v1 wavefront-mis 16 spp: image z 0.27 0.19 0.10, 8px tiles max |z| 1.59 mean z^2 0.08",
+   "material-subsets-v1 wavefront-mis 256 spp: image z 0.20 -0.09 -0.19, 8px tiles max |z| 1.34 mean z^2 0.12",
+   "material-subsets-v1: the partial card's subset binding ignored rejected at max |z| 604.98",
+   "material-subsets-v1: the reference's samples reproduce it bit for bit"
+  ],
+  "material-primvars-v1": [
+   "material-primvars-v1 reference-bsdf 16 spp: image z 0.57 0.57 0.20, 8px tiles max |z| 3.04 mean z^2 1.01",
+   "material-primvars-v1 reference-bsdf 256 spp: image z 0.83 -0.39 -0.42, 8px tiles max |z| 3.27 mean z^2 1.05",
+   "material-primvars-v1 reference-mis 16 spp: image z 0.09 0.02 -0.00, 8px tiles max |z| 1.27 mean z^2 0.06",
+   "material-primvars-v1 reference-mis 256 spp: image z -0.13 -0.04 0.12, 8px tiles max |z| 1.53 mean z^2 0.11",
+   "material-primvars-v1 wavefront-mis 16 spp: image z 0.09 0.02 -0.00, 8px tiles max |z| 1.27 mean z^2 0.06",
+   "material-primvars-v1 wavefront-mis 256 spp: image z -0.13 -0.04 0.12, 8px tiles max |z| 1.53 mean z^2 0.11",
+   "material-primvars-v1: the vertex colours' red and blue swapped rejected at max |z| 327.21",
+   "material-primvars-v1: the reference's samples reproduce it bit for bit"
+  ],
+  "material-textures-v1": [
+   "material-textures-v1 reference-bsdf 16 spp: image z 0.72 0.84 0.30, 8px tiles max |z| 3.58 mean z^2 1.04",
+   "material-textures-v1 reference-bsdf 256 spp: image z -0.81 -0.41 -0.30, 8px tiles max |z| 3.55 mean z^2 1.14",
+   "material-textures-v1 reference-mis 16 spp: image z 0.32 0.39 0.31, 8px tiles max |z| 1.83 mean z^2 0.07",
+   "material-textures-v1 reference-mis 256 spp: image z 0.20 0.33 0.28, 8px tiles max |z| 1.45 mean z^2 0.13",
+   "material-textures-v1 wavefront-mis 16 spp: image z 0.32 0.39 0.31, 8px tiles max |z| 1.83 mean z^2 0.07",
+   "material-textures-v1 wavefront-mis 256 spp: image z 0.20 0.33 0.28, 8px tiles max |z| 1.45 mean z^2 0.13",
+   "material-textures-v1: the repeating card half a texel off rejected at max |z| 17.45",
+   "material-textures-v1: the reference's samples reproduce it bit for bit"
+  ],
+  "material-emission-v1": [
+   "material-emission-v1 reference-bsdf 16 spp: image z 0.39 0.59 0.68, 8px tiles max |z| 3.66 mean z^2 0.92",
+   "material-emission-v1 reference-bsdf 256 spp: image z 0.65 0.59 0.70, 8px tiles max |z| 3.95 mean z^2 1.02",
+   "material-emission-v1 reference-mis 16 spp: image z -0.55 -1.09 -0.72, 8px tiles max |z| 2.94 mean z^2 0.31",
+   "material-emission-v1 reference-mis 256 spp: image z -0.66 0.04 -0.09, 8px tiles max |z| 2.58 mean z^2 0.39",
+   "material-emission-v1 wavefront-mis 16 spp: image z -0.55 -1.09 -0.72, 8px tiles max |z| 2.94 mean z^2 0.31",
+   "material-emission-v1 wavefront-mis 256 spp: image z -0.66 0.04 -0.09, 8px tiles max |z| 2.58 mean z^2 0.39",
+   "material-emission-v1: the sRGB emission map decoded as raw rejected at max |z| 4005.20",
+   "material-emission-v1: the reference's samples reproduce it bit for bit"
+  ],
+  "material-alpha-v1": [
+   "material-alpha-v1 reference-bsdf 16 spp: image z 1.13 0.61 0.20, 8px tiles max |z| 2.87 mean z^2 0.95",
+   "material-alpha-v1 reference-bsdf 256 spp: image z -0.91 -0.19 -0.58, 8px tiles max |z| 3.31 mean z^2 1.06",
+   "material-alpha-v1 reference-mis 16 spp: image z 0.55 0.28 0.23, 8px tiles max |z| 1.28 mean z^2 0.07",
+   "material-alpha-v1 reference-mis 256 spp: image z 0.32 0.31 0.18, 8px tiles max |z| 1.40 mean z^2 0.12",
+   "material-alpha-v1 wavefront-mis 16 spp: image z 0.55 0.28 0.23, 8px tiles max |z| 1.28 mean z^2 0.07",
+   "material-alpha-v1 wavefront-mis 256 spp: image z 0.32 0.31 0.18, 8px tiles max |z| 1.40 mean z^2 0.12",
+   "material-alpha-v1: the sRGB images' alpha decoded as sRGB rejected at max |z| 62.74",
+   "material-alpha-v1: the reference's samples reproduce it bit for bit"
+  ]
+ },
+ "fault_injection": [
+  {
+   "fault": "tangent frame ignores the lookup transform",
+   "caught_by": "renderer.material.fixtures",
+   "detail": "material-transforms-v1: reference-bsdf: 16 spp: the tile at 16,64, channel 0: mean difference -0.101865 is -5.31594 standard errors"
+  },
+  {
+   "fault": "colour set interpolated with two corners exchanged",
+   "caught_by": "renderer.material.fixtures",
+   "detail": "material-subsets-v1: reference-bsdf: 16 spp: the tile at 120,96, channel 0: mean difference 0.0792152 is 11.3845 standard errors"
+  },
+  {
+   "fault": "translator composes the rotation clockwise",
+   "caught_by": "lotus-renderer-hydra-material-fixtures",
+   "detail": "material /MaterialTextures/Looks/Transform2d differs from the mirror's"
+  },
+  {
+   "fault": "a subset's part ignores render-pass selection",
+   "caught_by": "lotus-renderer-hydra-render-pass",
+   "detail": "geometry tag: traced /World/Excluded/Inside.lotus:subset:Part /World/Geometry, expected /World/Geometry"
+  },
+  {
+   "fault": "display opacity is not applied",
+   "caught_by": "lotus-renderer-hydra-material-fixtures",
+   "detail": "material /MaterialAlpha/Objects/DisplayOpacity.lotus:displayColor differs from the mirror's"
+  }
+ ],
+ "survey_warnings_after": {
+  "TextureTransformTest": 0,
+  "PrimvarInterpolation": 0,
+  "Teapot": 0,
+  "Kitchen_set": 0,
+  "CarbonFrameBike": {
+   "rejected mesh: face vertex index is out of range": 4
+  },
+  "AutodeskTelescope": {
+   "the material has no surface terminal": 1
+  }
+ },
+ "not_run": [
+  "full core and Hydra GPU suites",
+  "viewport trees",
+  "research tree",
+  "ci-core tree",
+  "renderer.material.fixtures equivalence with a fault written into the references"
+ ]
+}

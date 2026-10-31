@@ -29,7 +29,8 @@ void SetMaterialBasics(Lotus::RenderWorld& world);
 // backdrop. Rows from the top: wrap modes; colour spaces and channel counts;
 // scalar channels, scale and bias, and lookups without an image;
 // texture-coordinate sources; then connections the translator does not
-// read, which take their defaults, and a minified checker. Texture keys name
+// read, which take their defaults, and a minified checker; its UsdTransform2d
+// card is translated. Texture keys name
 // files relative to validation/materials/, where the translator names their
 // resolved paths; an unresolved file keeps its authored path.
 void SetMaterialTextures(Lotus::RenderWorld& world);
@@ -51,7 +52,7 @@ void SetMaterialNormals(Lotus::RenderWorld& world);
 // stretched transforms and a sphere; 8-bit emission maps; a missing image's
 // fallback, an inverted lookup and an HDR image under three colour spaces;
 // then a tilted card, a textured sphere, a map shared with the base colour,
-// an unlit material and a GeomSubset binding the adapter does not read.
+// an unlit material and a card whose GeomSubset binds its right face.
 void SetMaterialEmission(Lotus::RenderWorld& world);
 
 // Replaces the world's camera and scene with material-alpha-v1: a 5x5 grid of
@@ -62,7 +63,7 @@ void SetMaterialEmission(Lotus::RenderWorld& world);
 // grey-alpha, one-channel and alpha-less images; stochastic, inverted,
 // black-bordered, missing and minified masks; then stacked layers, a masked
 // sphere, masked and half-covered emitters and an unbound card whose
-// displayOpacity is not read.
+// displayOpacity is its coverage.
 void SetMaterialAlpha(Lotus::RenderWorld& world);
 
 // Replaces the world's camera and scene with material-mtlx-v1: a 5x5 grid of
@@ -88,6 +89,37 @@ void SetMaterialMtlx(Lotus::RenderWorld& world);
 // and a graph-driven transmission that keeps its default.
 void SetMaterialTransmission(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-transforms-v1: three
+// rows of cards under material-basics-v1's camera, lights and backdrop, every
+// lookup behind a UsdTransform2d. Rows from the top: scale, rotation,
+// translation, all three and a negative scale; normal maps turned and tiled,
+// two inputs under different transforms, a chain and an emission map; then
+// constant coordinates, a reader's fallback, coverage, the identity and a
+// connected parameter, which is not translated.
+void SetMaterialTransforms(Lotus::RenderWorld& world);
+
+// Replaces the world's camera and scene with material-subsets-v1: three rows
+// of two-quad cards and a coarse sphere under material-basics-v1's camera,
+// lights and backdrop, whose GeomSubsets bind faces to materials. Each bound
+// subset is a scene mesh of its own, keyed by the mesh's path and the
+// subset's name. Rows from the top: part and all of a card, an unbound rest
+// lit by its displayColor, a subset without a binding, which stays with the
+// mesh, and one of another family, which UsdImaging binds; subsets with their own texture-coordinate set, emission and
+// coverage, overlapping ones and an index out of range; then a split sphere
+// keeping its normals, a hole, two subsets sharing a material, a colour set
+// and a mirrored transform.
+void SetMaterialSubsets(Lotus::RenderWorld& world);
+
+// Replaces the world's camera and scene with material-primvars-v1: three rows
+// of cards under material-basics-v1's camera, lights and backdrop. Rows from
+// the top: a UsdPrimvarReader_float3 on diffuseColor over each interpolation;
+// a reader of constant displayColor, a reader's fallback, clamped values, a
+// reader on emission, which is not translated, and an unbound card's vertex
+// displayColor; then unbound cards with uniform and indexed displayColor,
+// constant displayOpacity with and without a colour, and a vertex
+// displayOpacity, which is not read.
+void SetMaterialPrimvars(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;
@@ -100,6 +132,10 @@ struct MaterialFixture {
   // must reject at 256 spp, and its edit of the mirror.
   std::string_view control;
   void (*apply_control)(Lotus::RenderWorld&);
+  // Optionally, an independent way to author the same image, as the same edit
+  // of the mirror: the metric must accept it.
+  std::string_view equivalent = {};
+  void (*apply_equivalent)(Lotus::RenderWorld&) = nullptr;
 };
 
 // Every committed fixture, in the audit order.

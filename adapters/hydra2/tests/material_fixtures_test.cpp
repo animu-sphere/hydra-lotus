@@ -279,9 +279,12 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
         "material " + key + " differs from the mirror's: " +
             Lookups(MirrorKeys(found->second)) + " against " + Lookups(material));
   }
+  std::string meshes;
+  for (const auto& [key, mesh] : got.meshes)
+    if (!want.meshes.contains(key)) meshes += " " + key + " bound to " + mesh.material + ";";
   Check(got.meshes.size() == want.meshes.size(),
       "the stage has " + std::to_string(got.meshes.size()) +
-          " meshes, the mirror " + std::to_string(want.meshes.size()));
+          " meshes, the mirror " + std::to_string(want.meshes.size()) + "; extra:" + meshes);
   for (const auto& [key, mesh] : want.meshes) {
     const auto found = got.meshes.find(key);
     Check(found != got.meshes.end(), "the stage has no mesh " + key);
@@ -298,6 +301,7 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
         "mesh " + key + "'s triangles differ from the mirror's");
     Check(a.texcoords == b.texcoords,
         "mesh " + key + "'s texture coordinates differ from the mirror's");
+    Check(a.colors == b.colors, "mesh " + key + "'s colour sets differ from the mirror's");
     rounded(a.positions, b.positions, "mesh " + key + "'s positions");
     rounded(a.normals, b.normals, "mesh " + key + "'s normals");
   }
