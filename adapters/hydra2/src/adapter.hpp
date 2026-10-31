@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -133,6 +134,12 @@ public:
   // The latest render pass's frame evidence, without the colour and depth
   // products; empty before the first pass that rendered.
   [[nodiscard]] Lotus::GpuFrameEvidence GetFrameEvidence();
+  // The image beside the hdLotus module.
+  [[nodiscard]] static std::filesystem::path PackagedFallbackEnvironment();
+  // A scene with no dome and no scene light is lit by this latitude-longitude
+  // image, unturned, instead of a white environment. The Hydra plugin sets
+  // PackagedFallbackEnvironment(), as Storm's hosts default to the same image.
+  void SetFallbackEnvironment(const std::filesystem::path& file);
   // For a host that owns a window (lotus-viewport): the renderer is created
   // for this surface, and a render pass whose one AOV binding is colour
   // without a render buffer presents its frame there, at the render pass

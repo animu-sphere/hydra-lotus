@@ -66,17 +66,25 @@ set_target_properties(
   lotus-hydra2-runtime
   PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Plugin resources: plugInfo.json and the backend's shaders beside the module.
+# Plugin resources: plugInfo.json, the fallback environment with its licence
+# and the backend's shaders beside the module.
 set(LOTUS_HYDRA_LIBRARY_NAME
     "hdLotus${CMAKE_SHARED_MODULE_SUFFIX}")
 configure_file(resources/plugInfo.json.in
   "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json" @ONLY)
+set(LOTUS_HYDRA_ASSETS
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/StinsonBeach.hdr"
+  "${PROJECT_SOURCE_DIR}/third_party/openusd/LICENSE.txt"
+  "${PROJECT_SOURCE_DIR}/third_party/openusd/NOTICE.txt")
 add_custom_command(TARGET hdLotus POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:hdLotus>/resources"
+    "$<TARGET_FILE_DIR:hdLotus>/assets"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
     "$<TARGET_FILE_DIR:hdLotus>/resources/plugInfo.json"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${LOTUS_HYDRA_ASSETS}
+    "$<TARGET_FILE_DIR:hdLotus>/assets"
   VERBATIM)
 lotus_stage_shaders(TARGET hdLotus)
 
@@ -88,6 +96,8 @@ install(TARGETS hdLotus
   LIBRARY DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/resources/plugInfo.json"
   DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/resources")
+install(FILES ${LOTUS_HYDRA_ASSETS}
+  DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/assets")
 lotus_install_shaders(DESTINATION "${LOTUS_HYDRA_INSTALL_DIR}/shaders")
 # The stage the installed-tree usdview smoke opens.
 install(FILES tests/usdview-smoke.usda

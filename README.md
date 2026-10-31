@@ -91,4 +91,6 @@ adapter, the viewport and plain CMake are in [BUILDING.md](docs/guides/BUILDING.
 is OpenUSD's, under the Tomorrow Open Source Technology License 1.0
 ([licence](validation/assets/LICENSE.OpenUSD.txt),
 [manifest](validation/assets/manifest.json)); packages install it with
-both beside `lotus-headless`.
+both beside `lotus-headless`. The Hydra plugin's fallback environment is
+the same image; [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md) has its source
+and licence.

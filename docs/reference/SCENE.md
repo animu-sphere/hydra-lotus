@@ -1822,7 +1822,8 @@ lights the analytic lights as
 `ray_query=1` or `0`, with each pass's `integrator` (`reference` or
 `wavefront`), `wavefront_rounds` (0 unless the pass added a wavefront
 sample), `light_sampling` (`mis` or `bsdf`), `emissive_triangles`,
-`analytic_lights`, `sample_index`, `samples` and `converged`.
+`analytic_lights`, `environment_sampled`, `sample_index`, `samples` and
+`converged`.
 `HdLotusRenderDelegate::GetGpuSceneStats` returns the GPU scene after the
 latest pass, and `GetFrameEvidence` that pass's `GpuFrameEvidence` without
 its colour and depth products.
@@ -1876,10 +1877,15 @@ specular multipliers, `treatAsPoint` and light and shadow linking are not
 read, and cylinder, portal, geometry and mesh lights are not supported.
 
 With no synced domes and no synced analytic lights, the adapter uses its
-white fallback environment. An authored light that is invisible, black or
+fallback environment: through the Hydra plugin, as in usdview and
+`usdrecord`, OpenUSD's Stinson Beach image installed in
+`lib/usd/hdLotus/assets`, unscaled and with its pole on world +Y whatever
+the stage's up axis; for a delegate created directly, or when that image
+cannot be read, white. An authored light that is invisible, black or
 invalid still suppresses that fallback, so a stage lit only by a sphere or
-the sun has a black sky; destroying the last one restores it. Fallback
-sprims never contribute. The scene snapshot changes only when the
+the sun has a black sky; destroying the last one restores it. A light from
+`HdxTaskController`, usdview's Camera Light, adds to the fallback, and its
+Dome Light replaces it as any dome does. Fallback sprims never contribute. The scene snapshot changes only when the
 aggregate environment or a light changes, so equivalent lighting edits
 preserve the accumulation. A lighting-only change neither uploads geometry
 nor rebuilds acceleration structures. Environment radiance continues to
@@ -1908,7 +1914,9 @@ requires Hio's texels to equal the headless checks' decoding of the
 committed image bit for bit, the dome's radiance as the image's scale, its
 transform and DomeLight_1's `poleAxis` as its frame, edits that keep the
 decoded image, a hidden dome, the first of two textured domes beside an
-untextured one, and unreadable formats and files lighting uniformly; its
+untextured one, unreadable formats and files lighting uniformly, and the
+fallback image giving way to domes and scene lights but not to a host's
+light ([evidence](../reports/2026-10-31-fallback-environment.md)); its
 GPU-gated `-gpu` variant reflects a synthetic image's regions off a
 mirror under turned domes and DomeLight_1 pole axes, exactly, without
 geometry or acceleration-structure work
