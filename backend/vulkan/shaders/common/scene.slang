@@ -161,7 +161,7 @@ public static const uint kParallelLight = 4;
 public struct PathConstants {
   public float4 environment;
   // What a camera sample that misses the scene contributes to its pixel:
-  // the target's clear colour.
+  // the target's clear colour, unless environment_background shows the image.
   public float4 background;
   // Framebuffer pixel coordinates to normalized device coordinates:
   // ndc = pixel * xy + zw, from the display window.
@@ -208,6 +208,9 @@ public struct PathConstants {
   public uint64_t light_nodes;
   public uint light_node_count;
   public uint distant_count;
+  // Whether a camera sample that misses shows the environment image instead
+  // of `background`.
+  public uint environment_background;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;

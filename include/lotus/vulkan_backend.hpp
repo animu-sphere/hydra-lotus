@@ -710,6 +710,11 @@ struct PathTracingSettings {
   std::uint32_t restir_spatial_radius = 1;
   // Changing the proposal resets progressive and temporal history.
   RestirProposal restir_proposal = RestirProposal::Power;
+  // Camera samples that miss the scene show the environment image along the
+  // pixel's centre, opaquely, instead of the target's clear colour. Without
+  // an image they show the clear colour. It changes no sample, so changing it
+  // does not restart the accumulation.
+  bool environment_background = false;
 };
 
 // This is a capability probe, not a renderer implementation. Generated source

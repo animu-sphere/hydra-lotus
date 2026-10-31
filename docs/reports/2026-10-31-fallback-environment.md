@@ -25,6 +25,19 @@ they carry under `params`, which UsdLux lights have no value for.
 The image is decoded only while it lights the scene, so a stage with a dome
 holds no copy of it during rendering.
 
+## Background
+
+A camera sample that misses shows the image along the pixel's centre, as
+Storm's skydome draws it, following usdview's Dome Light Textures Visible
+through `domeLightCameraVisibility`, on unless set off. It applies to any
+environment image, so to textured domes as well as the fallback, and
+through directly created delegates too. The radiance pass composes it from
+the misses it already counted, so the accumulation is untouched: partial
+coverage blends with it, the backend's default leaves headless images alone,
+and toggling it needs no restart. Uniform environments stay invisible to the
+camera, and a scene with no geometry records no radiance pass, so it keeps
+the clear colour.
+
 ## Packaging
 
 `adapters/hydra2/resources/StinsonBeach.hdr` and
@@ -43,6 +56,7 @@ The host evidence log gained `environment_sampled`.
 | `lotus-renderer-hydra-dome-texture`: the packaged image's texels | Equal to the validation image's headless decoding |
 | The same test: dome, hidden sphere light and host light, added and removed | The environment follows the table; a stand-in host delegate supplies the host light |
 | The same test: unreadable image | White, and no texture left in the scene |
+| `lotus-renderer-hydra-dome-texture-gpu`: a hidden panel | Exactly the image's -Z region, alpha 1, through both integrators; the clear colour with the setting off, without a restart, and under a uniform environment |
 | `usdrecord --renderer Lotus`: RenderMan Walking Teapot (Y-up), AutodeskTelescope and Kitchen_set (Z-up), none with lights | 64 samples each with the image sampled; reviewed by eye, not committed |
 
 ## Limitation

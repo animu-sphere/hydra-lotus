@@ -1888,9 +1888,15 @@ the sun has a black sky; destroying the last one restores it. A light from
 Dome Light replaces it as any dome does. Fallback sprims never contribute. The scene snapshot changes only when the
 aggregate environment or a light changes, so equivalent lighting edits
 preserve the accumulation. A lighting-only change neither uploads geometry
-nor rebuilds acceleration structures. Environment radiance continues to
-light secondary misses only; camera misses keep their AOV clear
-background, and camera rays do not see analytic lights.
+nor rebuilds acceleration structures. A camera sample that misses shows the
+environment image along the pixel's centre, opaquely, as Storm's skydome
+does: `PathTracingSettings::environment_background`, which the adapter takes
+from `domeLightCameraVisibility` (usdview's Dome Light Textures Visible, on
+unless set off). It changes no sample, so toggling it does not restart the
+accumulation, and its depth stays clear. With the setting off, without an
+image or in a scene with no geometry, camera misses keep their AOV clear
+background; a uniform environment lights secondary misses only, and camera
+rays do not see analytic lights.
 
 Colour temperature, diffuse/specular contribution controls,
 `texture:format` other than latitude-longitude, light/shadow linking,

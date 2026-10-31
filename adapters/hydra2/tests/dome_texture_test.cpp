@@ -475,6 +475,34 @@ int Run(bool gpu, const std::filesystem::path& assets,
       "dome edits uploaded geometry or rebuilt acceleration structures");
   Check(final_stats.environment_writes > stats.environment_writes,
       "dome images never reached the GPU scene");
+
+  // Camera rays that miss see the image in the direction they leave along,
+  // -Z here, through both integrators; hiding it from the camera shows the
+  // clear colour without restarting the accumulation, as does a uniform
+  // environment, which the camera never sees.
+  const auto verify_cleared = [&](const std::string& step) {
+    const auto* pixels = static_cast<const float*>(color.Map());
+    Check(pixels != nullptr &&
+              std::all_of(pixels, pixels + kSize * kSize * 4,
+                  [](float value) { return value == 0.0F; }),
+        step + ": the pixels are not the clear colour");
+    color.Unmap();
+  };
+  Set(stage->GetPrimAtPath(SdfPath("/Panel")), "visibility",
+      VtValue(TfToken("invisible")));
+  for (int sample = 1; sample <= kSamples; ++sample) tick();
+  verify_cleared("a uniform environment");
+  Dome(stage, "E", "DomeLight", regions);
+  verify("background", kTowardMinusZ);
+  delegate.SetRenderSetting(TfToken("lotus:wavefront"), VtValue(true));
+  verify("wavefront background", kTowardMinusZ);
+  delegate.SetRenderSetting(TfToken("lotus:wavefront"), VtValue(false));
+  verify("background again", kTowardMinusZ);
+  delegate.SetRenderSetting(
+      HdRenderSettingsTokens->domeLightCameraVisibility, VtValue(false));
+  tick();
+  Check(pass->IsConverged(), "hiding the background restarted the accumulation");
+  verify_cleared("a hidden background");
   std::cout << "Hydra dome texture GPU checks passed\n";
   return 0;
 }

@@ -176,8 +176,10 @@ struct PathConstants {
   std::uint64_t light_nodes;
   std::uint32_t light_node_count;
   std::uint32_t distant_count;
+  // PathTracingSettings::environment_background.
+  std::uint32_t environment_background;
 };
-static_assert(sizeof(PathConstants) == 200 &&
+static_assert(sizeof(PathConstants) == 208 &&
               offsetof(PathConstants, restir_proposal) == 180 &&
               offsetof(PathConstants, light_nodes) == 184 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
@@ -250,6 +252,7 @@ struct TemporalTransportKey {
   std::uint32_t max_samples;
   std::uint32_t max_history_samples;
   std::array<float, 4> background;
+  bool environment_background;
   bool operator==(const TemporalTransportKey&) const = default;
 };
 
@@ -1704,7 +1707,8 @@ public:
         settings.restir_candidates, settings.restir_temporal, settings.restir_max_history_candidates,
         settings.restir_spatial, settings.restir_spatial_radius,
         accumulate, settings.sample_index, settings.max_bounces, settings.max_samples,
-        requested.max_history_samples, target.clear_color};
+        requested.max_history_samples, target.clear_color,
+        settings.environment_background};
     if (fresh_batch && frame.previous) {
       if (!temporal_transport_key_ || *temporal_transport_key_ != radiance_key) {
         frame.previous.reset();
@@ -2285,6 +2289,7 @@ public:
     constants.distant_count = hierarchy ? scene_.DistantLightCount() : 0;
     constants.environment_map = scene_.EnvironmentAddress();
     constants.environment_selection = scene_.EnvironmentSelection();
+    constants.environment_background = settings.environment_background ? 1U : 0U;
     constants.sample_index = settings.sample_index + accumulated_samples_;
     constants.accumulated = accumulated_samples_;
     constants.add_sample = add_sample ? 1U : 0U;

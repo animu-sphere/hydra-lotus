@@ -2329,6 +2329,9 @@ private:
         delegate.GetRenderSetting<bool>(kLightSamplingSetting, true)
             ? Lotus::LightSampling::Mis
             : Lotus::LightSampling::Bsdf;
+    // usdview's Dome Light Textures Visible; absent means visible, as in Storm.
+    settings.environment_background = delegate.GetRenderSetting<bool>(
+        HdRenderSettingsTokens->domeLightCameraVisibility, true);
     if (delegate.GetRenderSetting<bool>(kRestirSetting, false)) {
       settings.light_sampling = Lotus::LightSampling::RestirInitial;
       settings.restir_temporal = delegate.GetRenderSetting<bool>(kRestirTemporalSetting, false);
