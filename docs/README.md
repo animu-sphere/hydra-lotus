@@ -31,6 +31,7 @@ and the document is a bug. When a summary disagrees with
 | Renderer Phase 0–10: application, scope, exit criteria; milestones; testing strategy | [design/ROADMAP_POLICY.md](design/ROADMAP_POLICY.md) |
 | Test tiers, where each runs, admitting and retiring tests | [design/TEST_POLICY.md](design/TEST_POLICY.md) |
 | The dielectric transmission lobe's transport contract | [design/TRANSMISSION.md](design/TRANSMISSION.md) |
+| Interactive, Balanced and Reference presets, and what each change invalidates | [design/INTERACTIVE_QUALITY.md](design/INTERACTIVE_QUALITY.md) |
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/README.md) |

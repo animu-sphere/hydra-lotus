@@ -58,6 +58,26 @@ completion of its parent phase.
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
 | Materials & Lighting — cross-phase delivery | ✅ every task closed, each selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a [MaterialX Standard Surface subset](../reports/2026-10-29-materialx-standard-surface.md#decision), a [dielectric transmission lobe](../reports/2026-10-29-dielectric-transmission.md#decision), [texture transforms, per-face materials and primvar colour](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision), and [skinned meshes](../reports/2026-10-31-skinned-meshes.md#decision); no lighting task, since no asset demonstrated a lighting gap; [release gate passed](../reports/2026-10-31-v0.8.0-release-gate.md); selected subsets only | [v0.8.0](../releases/v0.8.0.md) ([plan](#v080--materials--lighting)) |
+| Interactive Quality — cross-phase delivery | 🚧 [contract](../design/INTERACTIVE_QUALITY.md) proposed, awaiting review; no implementation yet | v0.9.0 ([plan](#v090--interactive-quality)) |
+
+## v0.9.0 — Interactive Quality
+
+Separate still-image convergence from moving-view behaviour, define what each
+change invalidates, and offer Interactive, Balanced and Reference as presets of
+the same core, under the
+[strategy's entry conditions](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
+
+| Task | Delivery scope | Exit evidence |
+| --- | --- | --- |
+| LOTUS-INTERACTIVE-01 (P0) | The [presets and invalidation contract](../design/INTERACTIVE_QUALITY.md) | Reviewed contract |
+| LOTUS-INTERACTIVE-02 (P0) | A fixed fixture set and a baseline of today's behaviour | Report separating still and moving metrics; no renderer change |
+| LOTUS-INTERACTIVE-03 (P0) | Interactive and Reference presets in Hydra and the viewport, and the invalidation table's changes | One test per table row under both integrators; Reference byte-identical to committed references |
+| LOTUS-INTERACTIVE-04 (P1) | Balanced settling | Converged image passes the statistical comparison with Reference; every pixel converges; no transition frame above the moving view's frame-delta MSE |
+| LOTUS-INTERACTIVE-05 (P1) | Measured ghosting candidates | A report adopting a candidate on the contract's rule, or a measured negative |
+
+The [active queue](current.md#execution-order) owns the order. Changing a
+default, ReSTIR GI and a new denoiser are not exit gates. Reference-quality
+regressions remain disqualifying.
 
 ## v0.8.0 — Materials & Lighting
 
@@ -116,7 +136,6 @@ checklist.
 
 | Candidate | Direction | Entry condition |
 | --- | --- | --- |
-| v0.9.0 — Interactive Quality | Disocclusion, ghosting, reset contracts and Interactive/Balanced/Reference presets of the same core. | Separate static convergence from motion; define preset behavior and invalidation by change category before implementation. |
 | v0.10.0 or later — Advanced Transport (tentative) | Bounded ReSTIR GI / path-guiding evaluation. | An experiment brief meets the [research rules](../design/POST_V060_STRATEGY.md#6-research-track-and-stop-rule); no automatic adoption or default change. |
 | Optional future modes | Neural denoising and spectral experiments. | Optional dependencies and a stable ordinary RGB path; costs and contracts established before expansion. |
 

@@ -12,3 +12,4 @@ in [reference](../reference/README.md); phase and release status belongs in the
 | [INTEGRATION_SCOPE_POLICY.md](INTEGRATION_SCOPE_POLICY.md) | Repository ownership and consumption of external contracts. |
 | [TEST_POLICY.md](TEST_POLICY.md) | Test tiers, where each runs, budgets, and admitting and retiring tests. |
 | [TRANSMISSION.md](TRANSMISSION.md) | The dielectric transmission lobe's transport contract: IR fields, interface sides, BTDF, sampling, light sampling and translation. |
+| [INTERACTIVE_QUALITY.md](INTERACTIVE_QUALITY.md) | The presets and invalidation contract: Interactive, Balanced and Reference, settling, change categories, and measuring still and moving behaviour separately. |
