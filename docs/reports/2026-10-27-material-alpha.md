@@ -1,5 +1,7 @@
 # Material alpha fixture
 
+> Later: constant `displayOpacity` on an unbound mesh is its coverage, which changes the DisplayOpacity card and this fixture's references ([report](2026-10-31-texture-transforms-subsets-primvars.md#existing-fixtures)).
+
 ## Evaluation brief
 
 LOTUS-MATERIAL-01, fifth slice. The

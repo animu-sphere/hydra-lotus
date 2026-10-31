@@ -49,6 +49,10 @@ struct MeshGeometry {
   // Named texture-coordinate sets, one (s, t) per triangle corner, laid out
   // as `normals`. A material's texture inputs read the set it names.
   std::map<std::string, std::vector<std::array<float, 2>>> texcoords;
+  // Named linear RGB sets, finite but not clamped, for the materials that
+  // read them: one per triangle corner, laid out as `normals`, or a single
+  // value for the whole mesh.
+  std::map<std::string, std::vector<std::array<float, 3>>> colors;
 
   bool operator==(const MeshGeometry&) const = default;
 };

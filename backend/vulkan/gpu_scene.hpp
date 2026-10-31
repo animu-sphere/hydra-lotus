@@ -43,9 +43,16 @@ struct GpuInstanceRecord {
   std::uint64_t texcoords;
   // That set's index in the geometry's sets, or kNoTexcoords.
   std::uint32_t texcoord_set;
+  // That colour set's index in the geometry's sets, or kNoColors.
+  std::uint32_t color_set;
+  // Device address of the colour set the base colour reads, or zero when
+  // there is none or without acceleration structures.
+  std::uint64_t colors;
+  // Whether that set holds one value for the mesh, not one per corner.
+  std::uint32_t colors_constant;
   std::uint32_t reserved;
 };
-static_assert(sizeof(GpuInstanceRecord) == 112);
+static_assert(sizeof(GpuInstanceRecord) == 128);
 
 // GpuTextureInputRecord::mode.
 inline constexpr std::uint32_t kConstantInput = 0;
@@ -66,8 +73,11 @@ struct GpuTextureInputRecord {
   float scale[4];
   float bias[4];
   float fallback[4];
+  // The lookup's coordinates: s' = dot(st_s.xyz, (s, t, 1)), and t' likewise.
+  float st_s[4];
+  float st_t[4];
 };
-static_assert(sizeof(GpuTextureInputRecord) == 64);
+static_assert(sizeof(GpuTextureInputRecord) == 96);
 
 // One material table element: the material IR as the scene pass evaluates
 // it. Its mirror is `MaterialRecord` in shaders/path_trace.slang. The inputs
@@ -86,7 +96,7 @@ struct GpuMaterialRecord {
   float transmission[4];
   GpuTextureInputRecord inputs[kMaterialTextureInputs];
 };
-static_assert(sizeof(GpuMaterialRecord) == 560);
+static_assert(sizeof(GpuMaterialRecord) == 784);
 
 // One light table element: an emissive triangle, chosen by the alias
 // method. Its mirror is `LightRecord` in shaders/common/scene.slang. The
@@ -337,6 +347,9 @@ private:
     // Zero without normals: the positions start the buffer.
     VkDeviceSize normal_offset = 0;
     std::vector<VkDeviceSize> texcoord_offsets;
+    std::vector<VkDeviceSize> color_offsets;
+    // Each colour set's values: 1 or three per triangle.
+    std::vector<std::uint32_t> color_counts;
     std::uint32_t vertex_count = 0;
     std::uint32_t triangle_count = 0;
     AccelerationStructure blas;

@@ -1,5 +1,7 @@
 # Material emission fixture
 
+> Later: `GeomSubset` bindings are read, which changes the Subset card and this fixture's references ([report](2026-10-31-texture-transforms-subsets-primvars.md#existing-fixtures)).
+
 ## Evaluation brief
 
 LOTUS-MATERIAL-01, fourth slice. The

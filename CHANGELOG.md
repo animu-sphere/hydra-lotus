@@ -34,6 +34,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   `renderer.material.transmission` and the committed
   `material-transmission-v1` fixture verify it
   ([report](docs/reports/2026-10-29-dielectric-transmission.md)).
+- Texture lookups gain `TextureInput::st_transform`, and `UsdTransform2d`
+  between a primvar reader and a texture translates to it, chains included.
+  `GeomSubset` material bindings give per-face materials: each bound subset
+  becomes a scene mesh of its own. `MeshGeometry::colors` and
+  `Material::base_color_primvar` carry colour primvars, read through
+  `UsdPrimvarReader_float3` on `diffuseColor` and as non-constant
+  `displayColor` on unbound meshes, and constant `displayOpacity` below 1 on
+  an unbound mesh becomes its coverage. The committed
+  `material-transforms-v1`, `material-subsets-v1` and `material-primvars-v1`
+  fixtures verify them ([report](docs/reports/2026-10-31-texture-transforms-subsets-primvars.md)).
 
 ### Fixed
 

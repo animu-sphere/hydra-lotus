@@ -64,9 +64,11 @@ void ValidateTextureInput(const std::optional<TextureInput>& input,
     throw std::invalid_argument("a texture input has an unknown wrap mode");
   }
   if (!Finite(input->scale) || !Finite(input->bias) ||
-      !Finite(input->fallback)) {
+      !Finite(input->fallback) ||
+      !std::all_of(input->st_transform.begin(), input->st_transform.end(),
+          [](float value) { return std::isfinite(value); })) {
     throw std::invalid_argument(
-        "texture input scale, bias and fallback must be finite");
+        "texture input scale, bias, fallback and transform must be finite");
   }
 }
 
@@ -193,6 +195,19 @@ void ValidateGeometry(const MeshGeometry& geometry) {
               return std::isfinite(st[0]) && std::isfinite(st[1]);
             })) {
       throw std::invalid_argument("mesh texture coordinates must be finite");
+    }
+  }
+  for (const auto& [name, colors] : geometry.colors) {
+    if (name.empty()) {
+      throw std::invalid_argument("mesh colours need a non-empty name");
+    }
+    if (colors.size() != 1 && colors.size() != 3 * geometry.triangles.size()) {
+      throw std::invalid_argument(
+          "mesh colours need one per triangle corner or one for the mesh");
+    }
+    if (!std::all_of(colors.begin(), colors.end(),
+            [](const std::array<float, 3>& color) { return Finite(color); })) {
+      throw std::invalid_argument("mesh colours must be finite");
     }
   }
 }

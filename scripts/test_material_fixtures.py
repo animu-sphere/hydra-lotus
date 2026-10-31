@@ -119,6 +119,31 @@ class MaterialFixturesTest(unittest.TestCase):
         self.assertIn("float inputs:opacity = -inf", text)
         self.assertIn("float inputs:opacityThreshold.connect = ", text)
 
+    def test_transforms_fixture_binds_its_looks(self):
+        text = fixtures.transforms()
+        self.assertEqual(text.count('        def Mesh "'), 15)
+        for row in fixtures.TRANSFORM_ROWS:
+            for name, _ in row:
+                self.assertIn(f"</MaterialTransforms/Looks/{name}>", text)
+        self.assertIn("float inputs:rotation.connect = ", text)
+
+    def test_subsets_fixture_authors_each_arrangement(self):
+        text = fixtures.subsets()
+        self.assertEqual(text.count('        def Mesh "'), 15)
+        self.assertEqual(text.count('familyName = "materialBind"'), 17)
+        self.assertEqual(text.count('familyName = "other"'), 1)
+        # Only the Unbound mesh and its subset's material are not on the mesh.
+        for name, _ in fixtures.SUBSET_LOOKS:
+            self.assertIn(f"</MaterialSubsets/Looks/{name}>", text)
+
+    def test_primvars_fixture_authors_each_interpolation(self):
+        text = fixtures.primvars()
+        self.assertEqual(text.count('        def Mesh "'), 15)
+        for interpolation in ("vertex", "varying", "faceVarying", "uniform", "constant"):
+            self.assertIn(f'interpolation = "{interpolation}"', text)
+        self.assertIn("float3 outputs:result", text)
+        self.assertIn("point3f[] primvars:rest", text)
+
     def test_cutout_alpha_is_a_disc_and_a_ring(self):
         levels = [fixtures.cutout_alpha(x, y) for y in range(8) for x in range(8)]
         self.assertEqual((levels.count(255), levels.count(96), levels.count(0)), (24, 20, 20))

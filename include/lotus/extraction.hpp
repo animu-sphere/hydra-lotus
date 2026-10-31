@@ -29,6 +29,10 @@ struct DrawSummary {
 // texture-coordinate set of its geometry.
 inline constexpr std::uint32_t kNoTexcoords =
     std::numeric_limits<std::uint32_t>::max();
+// SceneInstance::colors when the instance's base colour reads no colour set
+// of its geometry.
+inline constexpr std::uint32_t kNoColors =
+    std::numeric_limits<std::uint32_t>::max();
 
 // One placement of a resident geometry buffer.
 struct SceneInstance {
@@ -41,6 +45,10 @@ struct SceneInstance {
   // geometry->texcoords in key order, or kNoTexcoords when the material has
   // no texture input or the geometry no set of the name it reads.
   std::uint32_t texcoords = kNoTexcoords;
+  // The colour set its material's base colour reads: an index into
+  // geometry->colors in key order, or kNoColors when a texture input drives
+  // the base colour, or the material or the geometry names no such set.
+  std::uint32_t colors = kNoColors;
 
   bool operator==(const SceneInstance&) const = default;
 };

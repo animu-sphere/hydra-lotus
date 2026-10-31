@@ -22,6 +22,7 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/relationship.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdGeom/imageable.h>
 #include <pxr/usdImaging/usdImaging/sceneIndices.h>
 #include <pxr/usdImaging/usdImaging/stageSceneIndex.h>
 
@@ -832,9 +833,9 @@ int main(int argc, char** argv) try {
     Check(found != snapshot.scene->materials.end(),
         std::string(step) + ": displayColor has no material");
     Expect(step, found->second, MakeMaterial(expected, 0.5F, 0, {0, 0, 0}));
-    Check(snapshot.scene->meshes.at("/Unbound").geometry ==
-              first.scene->meshes.at("/Unbound").geometry,
-        std::string(step) + ": a colour edit replaced the geometry");
+    Check(*snapshot.scene->meshes.at("/Unbound").geometry ==
+              *first.scene->meshes.at("/Unbound").geometry,
+        std::string(step) + ": a constant colour reached the unbound geometry");
     if (gpu)
       ExpectRadiance(step, color, 1, expected, true);
     return snapshot;
@@ -889,6 +890,36 @@ int main(int argc, char** argv) try {
       TfToken("primvars:displayColor"), SdfValueTypeNames->Color3fArray);
   replacement_color.Set(VtVec3fArray{GfVec3f(0.25F, 0.5F, 0.75F)});
   expect_color("reauthored displayColor", {0.25F, 0.5F, 0.75F});
+
+  // Constant displayOpacity is the private material's coverage; 1 and above
+  // ask for nothing, and an unusable value keeps the surface opaque.
+  const auto expect_opacity = [&](const char* step, float expected) {
+    const Lotus::FrameSnapshot snapshot = sync();
+    const auto found = snapshot.scene->materials.find(binding(snapshot, "/Unbound"));
+    Check(found != snapshot.scene->materials.end(),
+        std::string(step) + ": displayOpacity has no material");
+    auto covered = MakeMaterial({0.25F, 0.5F, 0.75F}, 0.5F, 0, {0, 0, 0});
+    covered.opacity = expected;
+    Expect(step, found->second, covered);
+  };
+  const auto display_opacity = unbound.CreateAttribute(
+      TfToken("primvars:displayOpacity"), SdfValueTypeNames->FloatArray);
+  display_opacity.SetMetadata(TfToken("interpolation"), VtValue(TfToken("constant")));
+  display_opacity.Set(VtFloatArray{0.25F});
+  expect_opacity("constant displayOpacity", 0.25F);
+  display_opacity.Set(VtFloatArray{0.75F});
+  expect_opacity("displayOpacity edit", 0.75F);
+  display_opacity.Set(VtFloatArray{-0.5F});
+  expect_opacity("clamped displayOpacity", 0.0F);
+  display_opacity.Set(VtFloatArray{1.5F});
+  expect_opacity("opaque displayOpacity", 1.0F);
+  display_opacity.Set(VtFloatArray{std::numeric_limits<float>::quiet_NaN()});
+  expect_opacity("non-finite displayOpacity", 1.0F);
+  display_opacity.Set(VtFloatArray{0.25F, 0.5F});
+  expect_opacity("invalid displayOpacity count", 1.0F);
+  unbound.RemoveProperty(TfToken("primvars:displayOpacity"));
+  expect_opacity("removed displayOpacity", 1.0F);
+
   stage->RemovePrim(SdfPath("/Unbound"));
   const auto removed_mesh = sync();
   Check(!removed_mesh.scene->meshes.contains("/Unbound") &&
@@ -921,6 +952,84 @@ int main(int argc, char** argv) try {
   Expect("specular colour edit", coated.scene->materials.at("/Looks/Glow"), coat);
   if (gpu)
     ExpectRadiance("specular colour edit", color, 6, coat.base_color, true, coat);
+
+  // GeomSubset bindings: each bound subset is a scene mesh that follows edits.
+  const std::string subset_key = "/Split.lotus:subset:Right";
+  UsdPrim split = stage->DefinePrim(SdfPath("/Split"), TfToken("Mesh"));
+  split.CreateAttribute(TfToken("faceVertexCounts"), SdfValueTypeNames->IntArray)
+      .Set(VtIntArray{4, 4});
+  split.CreateAttribute(TfToken("faceVertexIndices"), SdfValueTypeNames->IntArray)
+      .Set(VtIntArray{0, 1, 4, 5, 1, 2, 3, 4});
+  split.CreateAttribute(TfToken("points"), SdfValueTypeNames->Point3fArray)
+      .Set(VtVec3fArray{GfVec3f(-1, -1, 0), GfVec3f(0, -1, 0), GfVec3f(1, -1, 0),
+          GfVec3f(1, 1, 0), GfVec3f(0, 1, 0), GfVec3f(-1, 1, 0)});
+  split.CreateAttribute(TfToken("subdivisionScheme"), SdfValueTypeNames->Token)
+      .Set(TfToken("none"));
+  UsdPrim right = stage->DefinePrim(SdfPath("/Split/Right"), TfToken("GeomSubset"));
+  right.CreateAttribute(TfToken("elementType"), SdfValueTypeNames->Token).Set(TfToken("face"));
+  right.CreateAttribute(TfToken("familyName"), SdfValueTypeNames->Token)
+      .Set(TfToken("materialBind"));
+  const auto right_faces = right.CreateAttribute(TfToken("indices"), SdfValueTypeNames->IntArray);
+  right_faces.Set(VtIntArray{1});
+  right.AddAppliedSchema(TfToken("MaterialBindingAPI"));
+  const auto right_binding = right.CreateRelationship(TfToken("material:binding"));
+  right_binding.SetTargets({SdfPath("/Looks/Glow")});
+  const auto triangles = [](const Lotus::FrameSnapshot& snapshot, const std::string& key) {
+    const auto found = snapshot.scene->meshes.find(key);
+    return found == snapshot.scene->meshes.end() ? std::size_t{0}
+                                                 : found->second.geometry->triangles.size();
+  };
+  const auto parts = [](const Lotus::FrameSnapshot& snapshot) {
+    std::string text;
+    for (const auto& [key, mesh] : snapshot.scene->meshes) {
+      if (key.starts_with("/Split")) {
+        text += " " + key + " (" + std::to_string(mesh.geometry->triangles.size()) +
+                " triangles, " + mesh.material + ")";
+      }
+    }
+    return text.empty() ? std::string(" none") : text;
+  };
+  auto parted = sync();
+  Check(triangles(parted, "/Split") == 2 && triangles(parted, subset_key) == 2 &&
+            parted.scene->meshes.at("/Split").geometry->positions.size() == 4 &&
+            binding(parted, subset_key.c_str()) == "/Looks/Glow" &&
+            binding(parted, "/Split").empty(),
+      "a bound GeomSubset is not a scene mesh of its own:" + parts(parted));
+  right_binding.SetTargets({SdfPath("/Looks/Specular")});
+  parted = sync();
+  Check(parted.scene->meshes.contains(subset_key) &&
+            binding(parted, subset_key.c_str()) == "/Looks/Specular",
+      "a subset's new binding was not synced:" + parts(parted));
+  right_faces.Set(VtIntArray{0, 1});
+  parted = sync();
+  Check(triangles(parted, subset_key) == 4 && triangles(parted, "/Split") == 0,
+      "a subset that took every face left the mesh's own part:" + parts(parted));
+  right_faces.Set(VtIntArray{1});
+  parted = sync();
+  Check(triangles(parted, subset_key) == 2 && triangles(parted, "/Split") == 2,
+      "a subset that gave a face back did not restore the mesh's own part:" + parts(parted));
+  // Hydra hands an invisible mesh's topology over without its subsets, so the
+  // parts merge while nothing shows them.
+  UsdGeomImageable(split).MakeInvisible();
+  parted = sync();
+  for (const auto& [key, mesh] : parted.scene->meshes) {
+    Check(!key.starts_with("/Split") || !mesh.instance.visible,
+        "an invisible mesh left a visible part:" + parts(parted));
+  }
+  UsdGeomImageable(split).MakeVisible();
+  parted = sync();
+  Check(triangles(parted, "/Split") == 2 && triangles(parted, subset_key) == 2 &&
+            parted.scene->meshes.at("/Split").instance.visible &&
+            parted.scene->meshes.at(subset_key).instance.visible &&
+            binding(parted, subset_key.c_str()) == "/Looks/Specular",
+      "showing the mesh did not restore its parts:" + parts(parted));
+  stage->RemovePrim(SdfPath("/Split/Right"));
+  parted = sync();
+  Check(triangles(parted, "/Split") == 4 && !parted.scene->meshes.contains(subset_key),
+      "removing a subset left its part");
+  stage->RemovePrim(SdfPath("/Split"));
+  parted = sync();
+  Check(!parted.scene->meshes.contains("/Split"), "removing the mesh left its part");
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

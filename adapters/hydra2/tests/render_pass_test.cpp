@@ -33,9 +33,10 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 
-// One triangle per mesh: Geometry has the default purpose, Proxy and Guide
-// their own, Inside is under the collection's exclude path and Outside under
-// none of its root paths.
+// One triangle per scene mesh: Geometry has the default purpose, Proxy and
+// Guide their own, Inside is under the collection's exclude path and Outside
+// under none of its root paths. A GeomSubset binds Inside's second triangle,
+// which makes it a scene mesh of its own that must follow its rprim.
 constexpr const char* kStage = R"usda(#usda 1.0
 def Xform "World"
 {
@@ -66,11 +67,26 @@ def Xform "World"
     {
         def Mesh "Inside"
         {
-            int[] faceVertexCounts = [3]
-            int[] faceVertexIndices = [0, 1, 2]
-            point3f[] points = [(-0.5, -0.5, -3), (0.5, -0.5, -3), (0, 0.5, -3)]
+            int[] faceVertexCounts = [3, 3]
+            int[] faceVertexIndices = [0, 1, 2, 3, 4, 5]
+            point3f[] points = [(-0.5, -0.5, -3), (0.5, -0.5, -3), (0, 0.5, -3),
+                (-0.5, -0.5, -3.5), (0.5, -0.5, -3.5), (0, 0.5, -3.5)]
+
+            def GeomSubset "Part" (
+                prepend apiSchemas = ["MaterialBindingAPI"]
+            )
+            {
+                uniform token elementType = "face"
+                uniform token familyName = "materialBind"
+                int[] indices = [1]
+                rel material:binding = </Look>
+            }
         }
     }
+}
+
+def Material "Look"
+{
 }
 
 def Mesh "Outside"
@@ -238,20 +254,21 @@ int main(int argc, char** argv) try {
 
   pass->SetRprimCollection(HdRprimCollection(HdTokens->geometry,
       HdReprSelector(HdReprTokens->smoothHull)));
+  const std::string part = "/World/Excluded/Inside.lotus:subset:Part";
   render("whole-stage collection",
-      {"/World/Proxy", "/World/Excluded/Inside", "/Outside"});
+      {"/World/Proxy", "/World/Excluded/Inside", part, "/Outside"});
 
   // Hydra syncs only meshes whose render tag a task requests, so the guide
   // mesh is synced here, then deselected, then traced again without tags.
   task->tags = {HdRenderTagTokens->geometry, HdRenderTagTokens->guide};
   render("guide tag",
-      {"/World/Proxy", "/World/Guide", "/World/Excluded/Inside", "/Outside"});
+      {"/World/Proxy", "/World/Guide", "/World/Excluded/Inside", part, "/Outside"});
   task->tags = {HdRenderTagTokens->geometry};
   render("guide tag removed",
-      {"/World/Proxy", "/World/Excluded/Inside", "/Outside"});
+      {"/World/Proxy", "/World/Excluded/Inside", part, "/Outside"});
   task->tags.clear();
   render("no render tags",
-      {"/World/Proxy", "/World/Guide", "/World/Excluded/Inside", "/Outside"});
+      {"/World/Proxy", "/World/Guide", "/World/Excluded/Inside", part, "/Outside"});
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

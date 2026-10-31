@@ -424,6 +424,26 @@ constexpr std::array<float, 3> kFallbackEnvironment{1.0F, 1.0F, 1.0F};
 // The scene keys of the meshes a render pass does not trace.
 using MeshExclusion = std::unordered_set<std::string>;
 
+// Between a mesh rprim's path and a bound GeomSubset's name, in the key of
+// the scene mesh holding that subset's faces.
+constexpr char kSubsetMeshSeparator[] = ".lotus:subset:";
+
+// What an unbound mesh's private material takes from its display primvars.
+struct DisplayPrimvars {
+  std::optional<std::array<float, 3>> color;
+  // The mesh has a non-constant displayColor as a colour set.
+  bool varying_color = false;
+  std::optional<float> opacity;
+};
+
+// The faces of a mesh rprim that share a material binding. A bound
+// GeomSubset's name and its material; both empty for the faces no subset binds.
+struct MeshPart {
+  std::string subset;
+  Lotus::MeshGeometry geometry;
+  SdfPath material;
+};
+
 // Decodes an image with Hio into four channels, as Storm samples them: one
 // channel becomes (r, r, r, 1), two (r, r, r, g) and three (r, g, b, 1).
 // 8-bit images keep 8 bits, sRGB-encoded when Hio decides from the source
@@ -633,22 +653,60 @@ public:
     }
   }
 
-  // A mesh's material binding is the bound material's SdfPath string, or
-  // a private material for its constant displayColor when it is unbound.
-  void SyncMesh(const SdfPath& id, Lotus::MeshGeometry geometry,
+  // A mesh's faces become one scene mesh per material: those no GeomSubset
+  // binds under the rprim's path, with its binding, or a private material for
+  // its display primvars when it is unbound, and each bound subset's under a
+  // property of that path. Parts it no longer has are removed.
+  void SyncMesh(const SdfPath& id, std::vector<MeshPart> parts,
       const Lotus::MeshInstance& instance, const SdfPath& material,
-      const std::optional<std::array<float, 3>>& display_color) {
+      const DisplayPrimvars& display) {
     std::scoped_lock lock(mutex_);
-    world_.SetMesh(id.GetString(), std::move(geometry), instance);
-    BindMeshMaterial(id, material, display_color);
+    ScenePlacement& placement = mesh_placements_[id];
+    std::set<std::string> subsets;
+    bool whole = false;
+    for (MeshPart& part : parts) {
+      const std::string key = part.subset.empty()
+                                  ? id.GetString()
+                                  : SubsetMeshKey(id, part.subset);
+      if (part.subset.empty()) {
+        whole = true;
+      } else {
+        subsets.insert(key);
+        placement.subsets.insert(key);
+      }
+      world_.SetMesh(key, std::move(part.geometry), instance);
+      if (part.subset.empty()) {
+        BindMeshMaterial(id, material, display);
+      } else {
+        world_.BindMaterial(key, part.material.GetString());
+      }
+    }
+    for (auto key = placement.subsets.begin(); key != placement.subsets.end();) {
+      if (subsets.contains(*key)) {
+        ++key;
+      } else {
+        world_.RemoveMesh(*key);
+        key = placement.subsets.erase(key);
+      }
+    }
+    placement.whole = whole;
+    if (!whole) {
+      world_.RemoveMesh(id.GetString());
+      world_.RemoveMaterial(DisplayColorMaterialKey(id));
+    }
   }
 
   void SyncInstance(const SdfPath& id, const Lotus::MeshInstance& instance,
-      const SdfPath& material,
-      const std::optional<std::array<float, 3>>& display_color) {
+      const SdfPath& material, const DisplayPrimvars& display) {
     std::scoped_lock lock(mutex_);
-    world_.SetMeshInstance(id.GetString(), instance);
-    BindMeshMaterial(id, material, display_color);
+    const ScenePlacement& placement = mesh_placements_[id];
+    if (placement.whole) {
+      world_.SetMeshInstance(id.GetString(), instance);
+      BindMeshMaterial(id, material, display);
+    }
+    for (const std::string& key : placement.subsets) {
+      world_.SetMeshInstance(key, instance);
+    }
   }
 
   // Stores the material IR under the material's path, with the textures its
@@ -688,6 +746,13 @@ public:
     std::scoped_lock lock(mutex_);
     world_.RemoveMesh(id.GetString());
     world_.RemoveMaterial(DisplayColorMaterialKey(id));
+    const auto placement = mesh_placements_.find(id);
+    if (placement != mesh_placements_.end()) {
+      for (const std::string& key : placement->second.subsets) {
+        world_.RemoveMesh(key);
+      }
+      mesh_placements_.erase(placement);
+    }
   }
 
   Lotus::FrameSnapshot GetFrameSnapshot() {
@@ -943,14 +1008,27 @@ private:
     return id.AppendProperty(TfToken("lotus:displayColor")).GetString();
   }
 
+  // A property path cannot collide with an authored mesh prim path.
+  static std::string SubsetMeshKey(const SdfPath& id, const std::string& subset) {
+    return id.GetString() + kSubsetMeshSeparator + subset;
+  }
+
   // Called with mutex_ held. Authored bindings always win, including ones
   // whose material is missing or unsupported and uses the default surface.
   void BindMeshMaterial(const SdfPath& id, const SdfPath& material,
-      const std::optional<std::array<float, 3>>& display_color) {
+      const DisplayPrimvars& display) {
     const std::string key = DisplayColorMaterialKey(id);
-    if (material.IsEmpty() && display_color) {
+    if (material.IsEmpty() && (display.color || display.varying_color || display.opacity)) {
       Lotus::Material fallback;
-      fallback.base_color = *display_color;
+      if (display.color) {
+        fallback.base_color = *display.color;
+      }
+      if (display.varying_color) {
+        fallback.base_color_primvar = HdTokens->displayColor.GetString();
+      }
+      if (display.opacity) {
+        fallback.opacity = *display.opacity;
+      }
       world_.SetMaterial(key, fallback);
       world_.BindMaterial(id.GetString(), key);
     } else {
@@ -988,7 +1066,9 @@ private:
       hidden_triangles_ = 0;
       std::shared_ptr<Lotus::LotusScene> scene;
       for (const auto& [id, mesh] : snapshot.scene->meshes) {
-        if (!mesh.instance.visible || !exclusion->contains(id)) {
+        // A subset's part follows its rprim.
+        if (!mesh.instance.visible ||
+            !exclusion->contains(id.substr(0, id.find(kSubsetMeshSeparator)))) {
           continue;
         }
         if (!scene) {
@@ -1022,6 +1102,14 @@ private:
   std::mutex mutex_;
   Lotus::RenderWorld world_;
   // Path order makes the sum independent of Hydra's parallel sync order.
+  // Which scene meshes hold a mesh rprim's faces.
+  struct ScenePlacement {
+    // Those no bound GeomSubset names, under the rprim's own path.
+    bool whole = false;
+    // Each bound subset's, by key.
+    std::set<std::string> subsets;
+  };
+  std::map<SdfPath, ScenePlacement> mesh_placements_;
   std::map<SdfPath, Dome> domes_;
   // Textured domes that emit but were left out, each warned about once.
   std::set<SdfPath> ignored_domes_;
@@ -1474,20 +1562,18 @@ public:
         !initialized_ ||
         HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->normals) ||
         (bits & HdChangeTracker::DirtyPrimvar);
-    const bool geometry_dirty = !initialized_ ||
-                                (bits & HdChangeTracker::DirtyTopology) ||
-                                HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points) ||
-                                primvars_dirty;
+    bool geometry_dirty = !initialized_ ||
+                          (bits & HdChangeTracker::DirtyTopology) ||
+                          HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points) ||
+                          primvars_dirty;
     if (!initialized_ || (bits & HdChangeTracker::DirtyTopology)) {
       topology_ = GetMeshTopology(delegate);
-      // Per-face materials are not supported: the mesh's own binding covers
-      // every face.
-      if (std::any_of(topology_.GetGeomSubsets().begin(), topology_.GetGeomSubsets().end(),
-              [](const HdGeomSubset& subset) { return !subset.materialId.IsEmpty(); })) {
-        TF_WARN("Lotus ignores the GeomSubset material bindings of %s: the "
-                "mesh's own binding covers every face",
-            GetId().GetText());
-      }
+    }
+    if (!initialized_ || (bits & HdChangeTracker::DirtyMaterialId)) {
+      // Whether the mesh has a binding decides which colour sets it keeps.
+      const bool was_unbound = GetMaterialId().IsEmpty();
+      SetMaterialId(delegate->GetMaterialId(GetId()));
+      geometry_dirty = geometry_dirty || was_unbound != GetMaterialId().IsEmpty();
     }
     if (!initialized_ ||
         HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points)) {
@@ -1509,15 +1595,18 @@ public:
         HdChangeTracker::IsInstanceIndexDirty(bits, GetId())) {
       instance_.instancer_transforms = InstancerTransforms(delegate, bits);
     }
-    if (!initialized_ || (bits & HdChangeTracker::DirtyMaterialId)) {
-      SetMaterialId(delegate->GetMaterialId(GetId()));
-    }
     try {
       if (geometry_dirty) {
-        state_->SyncMesh(GetId(), ExtractGeometry(), instance_, GetMaterialId(),
-            display_color_);
+        Lotus::MeshGeometry geometry = ExtractGeometry();
+        const auto color = colors_.find(HdTokens->displayColor.GetString());
+        display_.varying_color =
+            color != colors_.end() &&
+            color->second.interpolation != HdInterpolationConstant &&
+            geometry.colors.contains(color->first);
+        state_->SyncMesh(GetId(), SplitBySubsets(std::move(geometry)), instance_,
+            GetMaterialId(), display_);
       } else {
-        state_->SyncInstance(GetId(), instance_, GetMaterialId(), display_color_);
+        state_->SyncInstance(GetId(), instance_, GetMaterialId(), display_);
       }
       initialized_ = true;
     } catch (const std::invalid_argument& error) {
@@ -1572,15 +1661,17 @@ private:
     HdInterpolation interpolation = HdInterpolationConstant;
   };
 
-  // Reads constant displayColor, the authored `normals` primvar and every
-  // other primvar of float pairs, the texture-coordinate sets, by name.
-  // An index out of range
-  // leaves the values unflattened, which CornerValues then rejects by their
-  // count.
+  // Reads displayColor, displayOpacity, the authored `normals` primvar, every
+  // other primvar of float pairs, the texture-coordinate sets, and of float
+  // triples with a colour role or none, the colour sets, by name. An index
+  // out of range leaves the values unflattened, which CornerValues then
+  // rejects by their count.
   void ReadPrimvars(HdSceneDelegate* delegate) {
     normals_ = PrimvarValues{};
     texcoords_.clear();
-    display_color_.reset();
+    colors_.clear();
+    display_.color.reset();
+    display_.opacity.reset();
     for (const HdInterpolation interpolation :
         {HdInterpolationConstant, HdInterpolationUniform, HdInterpolationVarying,
             HdInterpolationVertex, HdInterpolationFaceVarying}) {
@@ -1588,10 +1679,12 @@ private:
           GetPrimvarDescriptors(delegate, interpolation)) {
         if (primvar.name == HdTokens->displayColor) {
           ReadDisplayColor(delegate, primvar, interpolation);
+        }
+        if (primvar.name == HdTokens->displayOpacity) {
+          ReadDisplayOpacity(delegate, primvar, interpolation);
           continue;
         }
         if (primvar.name == HdTokens->points ||
-            primvar.name == HdTokens->displayOpacity ||
             primvar.name == HdTokens->widths) {
           continue;
         }
@@ -1602,12 +1695,18 @@ private:
                    values.value.IsHolding<VtVec2dArray>() ||
                    values.value.IsHolding<VtVec2hArray>()) {
           texcoords_[primvar.name.GetString()] = std::move(values);
+        } else if (values.value.IsHolding<VtVec3fArray>() &&
+                   (primvar.role == HdPrimvarRoleTokens->color ||
+                       primvar.role.IsEmpty() ||
+                       primvar.role == HdPrimvarRoleTokens->none)) {
+          colors_[primvar.name.GetString()] = std::move(values);
         }
       }
     }
   }
 
-  // Only one constant linear RGB colour is supported. Validate indices
+  // A constant displayColor: one linear RGB colour, the private material's
+  // constant. Other interpolations become a colour set. Validate indices
   // before selecting a value, so a malformed indexed constant cannot use
   // an unindexed value by accident.
   void ReadDisplayColor(HdSceneDelegate* delegate,
@@ -1616,7 +1715,6 @@ private:
       TF_WARN("Lotus ignores the displayColor of %s: %s", GetId().GetText(), reason);
     };
     if (interpolation != HdInterpolationConstant) {
-      unusable("only constant interpolation is supported");
       return;
     }
     VtIntArray indices;
@@ -1651,7 +1749,53 @@ private:
       }
       color[c] = std::clamp(colors[index][c], 0.0F, 1.0F);
     }
-    display_color_ = color;
+    display_.color = color;
+  }
+
+  // Coverage on an unbound mesh: one constant value, clamped; 1 and above ask
+  // for no material. A bound mesh's material decides its coverage.
+  void ReadDisplayOpacity(HdSceneDelegate* delegate,
+      const HdPrimvarDescriptor& primvar, HdInterpolation interpolation) {
+    const auto unusable = [&](const char* reason) {
+      if (GetMaterialId().IsEmpty()) {
+        TF_WARN("Lotus ignores the displayOpacity of %s: %s", GetId().GetText(), reason);
+      }
+    };
+    if (interpolation != HdInterpolationConstant) {
+      unusable("only constant interpolation is supported");
+      return;
+    }
+    VtIntArray indices;
+    const VtValue value = primvar.indexed
+                              ? GetIndexedPrimvar(delegate, primvar.name, &indices)
+                              : GetPrimvar(delegate, primvar.name);
+    if (value.IsEmpty()) {
+      return;
+    }
+    if (!value.IsHolding<VtFloatArray>()) {
+      unusable("expected floats");
+      return;
+    }
+    const auto& opacities = value.UncheckedGet<VtFloatArray>();
+    std::size_t index = 0;
+    if (!indices.empty()) {
+      if (indices.size() != 1 || indices[0] < 0 ||
+          static_cast<std::size_t>(indices[0]) >= opacities.size()) {
+        unusable("expected one valid constant index");
+        return;
+      }
+      index = static_cast<std::size_t>(indices[0]);
+    } else if (opacities.size() != 1) {
+      if (!opacities.empty()) unusable("expected one constant value");
+      return;
+    }
+    if (!std::isfinite(opacities[index])) {
+      unusable("a value is not finite");
+      return;
+    }
+    if (opacities[index] < 1.0F) {
+      display_.opacity = std::max(opacities[index], 0.0F);
+    }
   }
 
   // The primvar's value, with an indexed primvar's indices applied.
@@ -1888,7 +2032,130 @@ private:
         geometry.texcoords[name] = std::move(texcoord_corners);
       }
     }
+    // Materials of the mesh or its subsets may read any colour set. Without
+    // any binding only the private material reads one, and it holds a
+    // constant displayColor itself.
+    const bool bound = !GetMaterialId().IsEmpty() ||
+                       std::any_of(topology_.GetGeomSubsets().begin(),
+                           topology_.GetGeomSubsets().end(), [](const HdGeomSubset& subset) {
+                             return !subset.materialId.IsEmpty();
+                           });
+    for (const auto& [name, values] : colors_) {
+      if (values.interpolation != HdInterpolationConstant) {
+        auto corners = CornerValues<3>(values, name, triangles, primitive_params);
+        if (!corners.empty()) {
+          geometry.colors[name] = std::move(corners);
+        }
+      } else if (bound) {
+        const auto& constant = values.value.UncheckedGet<VtVec3fArray>();
+        if (constant.size() == 1 && std::isfinite(constant[0][0]) &&
+            std::isfinite(constant[0][1]) && std::isfinite(constant[0][2])) {
+          geometry.colors[name] = {{constant[0][0], constant[0][1], constant[0][2]}};
+        } else if (!constant.empty()) {
+          TF_WARN("Lotus ignores the %s of %s: expected one finite constant value",
+              name.c_str(), GetId().GetText());
+        }
+      }
+    }
     return geometry;
+  }
+
+  // `geometry` as one part per material, in the order the subsets are
+  // authored after the faces no subset binds, whose part is left out when it
+  // would be empty. A face belongs to the first subset naming it. Each part
+  // keeps the triangles' order and only the points they use, in their order.
+  std::vector<MeshPart> SplitBySubsets(Lotus::MeshGeometry geometry) const {
+    // UsdImaging hands a subset without a binding of its own the mesh's, and
+    // those faces need no part of their own.
+    std::vector<const HdGeomSubset*> subsets;
+    for (const HdGeomSubset& subset : topology_.GetGeomSubsets()) {
+      if (!subset.materialId.IsEmpty() && subset.materialId != GetMaterialId()) {
+        subsets.push_back(&subset);
+      }
+    }
+    std::vector<MeshPart> parts;
+    if (subsets.empty()) {
+      parts.push_back({{}, std::move(geometry), {}});
+      return parts;
+    }
+    const std::size_t faces = topology_.GetFaceVertexCounts().size();
+    constexpr std::size_t kNoSubset = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> part_of_face(faces, kNoSubset);
+    for (std::size_t s = 0; s < subsets.size(); ++s) {
+      bool out_of_range = false, overlapping = false;
+      for (const int face : subsets[s]->indices) {
+        if (face < 0 || static_cast<std::size_t>(face) >= faces) {
+          out_of_range = true;
+        } else if (part_of_face[static_cast<std::size_t>(face)] == kNoSubset) {
+          part_of_face[static_cast<std::size_t>(face)] = s;
+        } else {
+          overlapping = overlapping || part_of_face[static_cast<std::size_t>(face)] != s;
+        }
+      }
+      if (out_of_range) {
+        TF_WARN("Lotus ignores face indices out of range in GeomSubset %s",
+            subsets[s]->id.GetText());
+      }
+      if (overlapping) {
+        TF_WARN("GeomSubset %s of %s overlaps an earlier subset, which keeps "
+                "the shared faces",
+            subsets[s]->id.GetText(), GetId().GetText());
+      }
+    }
+    std::vector<std::vector<std::uint32_t>> triangles_of_part(subsets.size() + 1);
+    for (std::size_t t = 0; t < geometry.triangles.size(); ++t) {
+      const std::size_t part = part_of_face[geometry.source_faces[t]];
+      triangles_of_part[part == kNoSubset ? 0 : part + 1].push_back(
+          static_cast<std::uint32_t>(t));
+    }
+    const auto corners = [](const auto& values, const std::vector<std::uint32_t>& triangles) {
+      std::remove_cvref_t<decltype(values)> kept;
+      kept.reserve(3 * triangles.size());
+      for (const std::uint32_t t : triangles) {
+        kept.insert(kept.end(), values.begin() + 3 * std::ptrdiff_t{t},
+            values.begin() + 3 * std::ptrdiff_t{t} + 3);
+      }
+      return kept;
+    };
+    constexpr std::uint32_t kUnused = std::numeric_limits<std::uint32_t>::max();
+    for (std::size_t p = 0; p < triangles_of_part.size(); ++p) {
+      const std::vector<std::uint32_t>& triangles = triangles_of_part[p];
+      if (triangles.empty() && (p != 0 || !geometry.triangles.empty())) {
+        continue;
+      }
+      Lotus::MeshGeometry part;
+      std::vector<std::uint32_t> remap(geometry.positions.size(), kUnused);
+      for (const std::uint32_t t : triangles) {
+        for (const std::uint32_t vertex : geometry.triangles[t]) {
+          remap[vertex] = 0;
+        }
+      }
+      for (std::size_t v = 0; v < remap.size(); ++v) {
+        if (remap[v] != kUnused) {
+          remap[v] = static_cast<std::uint32_t>(part.positions.size());
+          part.positions.push_back(geometry.positions[v]);
+        }
+      }
+      for (const std::uint32_t t : triangles) {
+        const auto& triangle = geometry.triangles[t];
+        part.triangles.push_back(
+            {remap[triangle[0]], remap[triangle[1]], remap[triangle[2]]});
+        part.source_faces.push_back(geometry.source_faces[t]);
+      }
+      if (!geometry.normals.empty()) {
+        part.normals = corners(geometry.normals, triangles);
+      }
+      for (const auto& [name, values] : geometry.texcoords) {
+        part.texcoords[name] = corners(values, triangles);
+      }
+      for (const auto& [name, values] : geometry.colors) {
+        part.colors[name] = values.size() == 1 ? values : corners(values, triangles);
+      }
+      parts.push_back(p == 0 ? MeshPart{{}, std::move(part), {}}
+                             : MeshPart{subsets[p - 1]->id.GetName(), std::move(part),
+                                   subsets[p - 1]->materialId});
+    }
+    return parts;
   }
 
   std::shared_ptr<AdapterState> state_;
@@ -1897,7 +2164,9 @@ private:
   PrimvarValues normals_;
   // The float-pair primvars by name.
   std::map<std::string, PrimvarValues> texcoords_;
-  std::optional<std::array<float, 3>> display_color_;
+  // The float-triple primvars with a colour role or none, by name.
+  std::map<std::string, PrimvarValues> colors_;
+  DisplayPrimvars display_;
   Lotus::MeshInstance instance_;
   bool initialized_ = false;
 };

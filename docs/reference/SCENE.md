@@ -19,7 +19,10 @@ a `SceneMesh` record. Keys iterate in deterministic order.
   unit length; empty means the surface shades with its geometric normal.
   Its `texcoords` are named texture-coordinate sets, each one (s, t) per
   triangle corner in the same layout; a material's texture inputs read the
-  set it names.
+  set it names. Its `colors` are named linear RGB sets, finite but not
+  clamped, each one value per triangle corner in the same layout or a single
+  value for the whole mesh; a material's `base_color_primvar` reads the set
+  it names.
 - `MeshInstance` contains visibility and `world_from_object`, using the
   core's column-major matrix convention for column vectors.
 - Without `MeshInstance::instancer_transforms` a mesh has one ordinary
@@ -100,6 +103,14 @@ Each input is a constant or, when its `TextureInput` is set
   interpolated at the hit. A mesh without that set, or an empty name, uses
   `texcoord_fallback` (default (0, 0)). A material has one
   texture-coordinate source for all its lookups.
+- Each lookup then reads at its own `st_transform`, the row-major 2×3 matrix
+  `(m0 s + m1 t + m2, m3 s + m4 t + m5)`, the identity by default. A normal
+  map's tangent frame follows the transformed coordinates.
+
+`base_color_primvar` names a colour set as the base colour's source: the
+set's value at the hit, clamped into [0, 1], replaces `base_color`, which
+stays the value on a mesh without that set. A base colour texture input wins
+over it. No other input reads a colour set.
 
 The normal input is already signed tangent-space data. Lotus applies only
 the lookup's authored scale and bias, with no implicit decoding to [-1, 1].
@@ -296,23 +307,25 @@ empty plan records no GPU work.
   shader-read layout, with a slot in the GPU scene's texture table. Slots
   are reused lowest first, as geometry slots are. The table holds at most
   1,024 textures, the size of the scene passes' sampled-image array.
-- One device-local instance buffer holds a 112-byte record per instance:
+- One device-local instance buffer holds a 128-byte record per instance:
   the column-major `world_from_object`, the device addresses of its
   geometry's positions and triangles (zero without acceleration
   structures), the geometry slot, the material slot, the address of
   its corner normals (zero without normals), and the address and index of
   the texture-coordinate set its material reads (zero and `kNoTexcoords`
-  without one). It grows when
+  without one), and the address and index of the colour set its base colour
+  reads (zero and `kNoColors` without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 544-byte record per material:
+- One device-local material table holds a 784-byte record per material:
   base colour and roughness, emission and metallic, the texture-coordinate
   fallback, the constant tangent normal (with the workflow flag in its fourth
-  component), opacity and threshold, specular colour and ior, then one 64-byte lookup per
+  component), opacity and threshold, specular colour and ior, transmission
+  colour and weight, then one 96-byte lookup per
   texture input, in the order base colour, roughness, metallic, emission,
   normal, opacity and specular colour: its texture slot, its sampler
   (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
   a lookup whose key names no texture, which returns the fallback), scale,
-  bias and fallback. It reaches the
+  bias, fallback and the two rows of its coordinate transform. It reaches the
   device with the first instances and is rewritten whole whenever the plan
   changes it. A plan is rejected when an instance's slot lies outside the
   table, including a table that shrinks below the slots of instances it
@@ -971,7 +984,7 @@ one-channel `ramp.png` (15 + 15(x + 4y)), the two-channel `grey-alpha.png`
 | Colour spaces and channels | Srgb, Raw, Auto, Grey, GreyAlpha | the palette under `sRGB`, `raw` and unauthored (`auto`, which is sRGB for an 8-bit three-channel image); `ramp.png` and `grey-alpha.png` under `auto`, which stay linear as (r, r, r, 1) and (r, r, r, g), the latter's `a` driving roughness |
 | Channels and images | Alpha, Orm, ScaleBias, Missing, NoFile | `rgba.png` under `sRGB` with roughness from its linear `a`; under `raw`, roughness from `g` and metallic from `b` over a constant copper; the raw palette with scale (2, 2, 2, 1) and bias (−0.5, −0.5, −0.5, 0); an unresolvable `./textures/missing.png`, keyed by that path, with scale 0.5 and fallback (0.9, 0.2, 0.6, 1); no file, keyed `\|auto`, with fallback (0.2, 0.6, 0.9, 1) |
 | Texture-coordinate sources | Vertex, Indexed, Named, Constant, Absent | `st` per vertex; per face vertex indexed by (1, 0, 2, 3), mirroring s; the reader of `uv1`, `st` turned a quarter; an unconnected `st` of (0.6, 0.3); the reader of a missing `absent` set with fallback (0.1, 0.9) |
-| Untranslated connections and minification | Transform2d, SecondSource, ColourOnScalar, ScalarOnColour, Minified | a `UsdTransform2d` between reader and texture; metallic from `ramp.png` through a second reader of `uv1`; roughness from an `rgb` output; `diffuseColor` from an `r` output; each such input takes its default and warns. `checker.png` under `raw` with `repeat`, about 2.4 texels per pixel |
+| Connections and minification | Transform2d, SecondSource, ColourOnScalar, ScalarOnColour, Minified | a `UsdTransform2d` between reader and texture, rotation 30, scale (2, 2) and translation (0.25, 0), which is translated; metallic from `ramp.png` through a second reader of `uv1`; roughness from an `rgb` output; `diffuseColor` from an `r` output; each of these three takes its default and warns. `checker.png` under `raw` with `repeat`, about 2.4 texels per pixel |
 
 Its negative control is the Repeat card's coordinates half a texel off in
 s, as a texel-centre convention error would place them.
@@ -1019,7 +1032,7 @@ the top row to 3.75 on the bottom one. The rows, from the top:
 | Emitters' surfaces and transforms | Metal, Back, Mirrored, Stretched, Sphere | (0.6, 0.2, 0.1) over a copper metal of roughness 0.25 on a sphere with vertex normals; Warm on a card wound clockwise, seen from behind; under scale (−0.7, 0.7, 0.7); under scale (0.7, 0.35, 0.7); (0.4, 0.8, 1) on a sphere without normals |
 | 8-bit emission maps | Srgb, Raw, Auto, Grey, ScaleBias | the palette under `sRGB`, `raw` and unauthored (`auto`, sRGB); `ramp.png` under `auto`, linear (r, r, r); the raw palette with scale (3, 3, 3, 1) and bias (0.2, 0.1, 0, 0) |
 | Fallbacks and HDR maps | Missing, Inverted, Hdr, HdrAuto, HdrSrgb | an unresolvable `./textures/missing.png` with fallback (2, 1, 0.5, 1); the raw palette with scale (−1, −1, −1, 1) and bias (1, 1, 1, 0); `glow.hdr` under `raw` and unauthored, both linear `Rgba32Float`, and under `sRGB`, which the adapter decodes on the CPU |
-| Arrangements in assets | Tilted, TexturedSphere, Shared, Unlit, Subset | Warm on a card turned 60° about X; the sRGB palette under `repeat` on a sphere with `st` longitude by latitude times (4, 2); one sRGB palette lookup driving both `diffuseColor` and `emissiveColor`; the same emission over `diffuseColor` (0, 0, 0) and `ior` 1, which removes the specular interface, as an unlit asset would be authored; a card of two quads bound to a 0.6 grey of roughness 0.3 whose right face a `GeomSubset` binds to Warm, which the adapter ignores with a warning |
+| Arrangements in assets | Tilted, TexturedSphere, Shared, Unlit, Subset | Warm on a card turned 60° about X; the sRGB palette under `repeat` on a sphere with `st` longitude by latitude times (4, 2); one sRGB palette lookup driving both `diffuseColor` and `emissiveColor`; the same emission over `diffuseColor` (0, 0, 0) and `ior` 1, which removes the specular interface, as an unlit asset would be authored; a card of two quads bound to a 0.6 grey of roughness 0.3 whose right face a `GeomSubset` binds to Warm |
 
 Its negative control is the sRGB palette decoded as raw, as a colour-space
 error would read an emission map; it changes four objects. `usdchecker`
@@ -1041,7 +1054,7 @@ The rows, from the top:
 | Constant thresholds | Below, Equal, Above, NonFinite, ThresholdMap | opacity 0.4, 0.5 and 0.6 under threshold 0.5: rejected, accepted at equality, accepted; opacity −inf and threshold inf, which keep the defaults 1 and 0; opacity 0.5 under a threshold connected to `ramp.png`'s `r`, which takes the default 0 and warns |
 | Masks by image | Alpha, Cutout, GreyAlpha, Ramp, NoAlpha | `rgba.png` under `sRGB`, whose linear alpha rises with x; `cutout.png` under `sRGB`; `grey-alpha.png` unauthored, linear, its `a` the image's second channel; teal with `opacity` from `ramp.png`'s `r` under `raw`; the RGB palette under `sRGB`, whose `a` is 1 |
 | Lookups | Fractional, Inverted, BlackBorder, Missing, Minified | `cutout.png` without a threshold, stochastic; teal with `cutout.png`'s alpha under scale (1, 1, 1, −1) and bias (0, 0, 0, 1), a hole; the palette under `black` with `st` from −0.5 to 1.5, whose border is transparent black; an unresolvable `./textures/missing.png` with fallback (0.9, 0.2, 0.6, 0.3) without a threshold, coverage 0.3; teal with `opacity` from `checker.png`'s `r` under `raw` and `repeat`, about 2.4 texels per pixel |
-| Arrangements in assets | Stacked, SphereCutout, GlowingMask, GlowingHalf, DisplayOpacity | two quads bound to Half, the unit card and a 0.6 one 0.4 in front of its upper right; `cutout.png` under `repeat` on a sphere with vertex normals and `st` longitude by latitude times (4, 2), whose far side shows through; `emissiveColor` (1, 0.6, 0.2) masked by `cutout.png`'s alpha; the same emission at `opacity` 0.5; an unbound card with `displayColor` teal and `displayOpacity` 0.3, which is not read |
+| Arrangements in assets | Stacked, SphereCutout, GlowingMask, GlowingHalf, DisplayOpacity | two quads bound to Half, the unit card and a 0.6 one 0.4 in front of its upper right; `cutout.png` under `repeat` on a sphere with vertex normals and `st` longitude by latitude times (4, 2), whose far side shows through; `emissiveColor` (1, 0.6, 0.2) masked by `cutout.png`'s alpha; the same emission at `opacity` 0.5; an unbound card with `displayColor` teal and `displayOpacity` 0.3, its coverage |
 
 Its negative control decodes the alpha of the 8-bit sRGB images as sRGB,
 as a decoder treating alpha as colour would; it changes six objects.
@@ -1084,6 +1097,47 @@ unless stated.
 
 Its negative control ignores Tinted's transmission colour, as a translator
 that read only the weight would; it changes one sphere.
+
+**`material-transforms-v1`** covers `UsdTransform2d` at 160×160 under the
+same camera, lights and backdrop, on cards on the middle three rows. Lookups
+repeat and are of `palette.png` under sRGB at `st` unless stated.
+
+| Row | Cards | Authored transform and expected translation |
+| --- | --- | --- |
+| The transform's parts | Scale, Rotate, Translate, Combined, Flip | scale (2, 2); rotation 30; translation (0.25, 0.5); rotation 30, scale (2, 1) and translation (0.25, 0); scale (−1, 1) |
+| Other inputs and chains | NormalTurned, NormalTiled, PerInput, Chain, Emission | `tilts.png` as a normal map under rotation 90, whose tangent frame must turn with it; under scale (3, 3); an untransformed base colour with roughness from `ramp.png` under scale (4, 4); scale (2, 2) feeding rotation 45, which compose; the palette as emission over black under rotation 60 |
+| Other coordinates and limits | ConstantIn, Absent, Coverage, Identity, Connected | a constant `in` (0.5, 0.25) and translation (0.125, 0.5); a reader of an absent set, whose fallback (0.125, 0.25) the scale (2, 2) still applies to, both clamped; `cutout.png`'s alpha as a mask under rotation 45; a transform with no authored parameter; a connected rotation, which is not translated, so `diffuseColor` takes its default and warns |
+
+Its negative control reverses Rotate's rotation. The references come from the
+shader they check, so the headless check also bakes each material's shared
+transform into its mesh's coordinates and fallback and requires that image to
+match the same reference: the lookup and the tangent frame must agree with
+transforming the coordinates directly.
+
+**`material-subsets-v1`** covers `GeomSubset` bindings at 160×160 under the
+same camera, lights and backdrop, on the middle three rows: cards of two
+quads, left (face 0) and right (face 1), and a coarse sphere with vertex
+normals. Looks are a 0.6 grey, a red and a blue of roughness 0.3 unless stated.
+
+| Row | Objects | Authored subsets and expected parts |
+| --- | --- | --- |
+| Bindings | Partial, Full, Unbound, NoBinding, OtherFamily | Red on the right over the mesh's grey; red and blue on both faces, leaving no part for the mesh's own binding; red on the right of an unbound card with teal `displayColor`, whose left takes the private material; a subset without a binding, which UsdImaging gives the mesh's blue, so that no part splits off; a subset of family `other` binding red, which UsdImaging hands over and Storm shows |
+| Part contents | Sets, Emitter, Covered, Overlap, OutOfRange | a sRGB palette at `st` on the right and at `uv1` on the left, each part reading its own set; emission (2, 1, 0.5) on the right, which enters the light table; `opacity` 0.5 on the right; two subsets naming the right face, where the first keeps it and the second, left empty, makes no part, with a warning; an index out of range, which warns and is dropped |
+| Geometry | Sphere, Hole, Shared, Colored, Mirrored | red on the top 32 faces, both parts keeping the mesh's normals; face 0 a hole, leaving only the subset's part; two subsets sharing red; a reader of `tint` vertex colours on the right, each part keeping its corners; red on the right under x scale −0.7 |
+
+Its negative control ignores Partial's subset binding, as a host reading only
+the mesh's binding would.
+
+**`material-primvars-v1`** covers colour primvars and display coverage at
+160×160 under the same camera, lights and backdrop, on the middle three rows.
+
+| Row | Objects | Authored primvars and expected translation |
+| --- | --- | --- |
+| `UsdPrimvarReader_float3` on `diffuseColor` | Vertex, Varying, FaceVarying, Uniform, Constant | `tint` per point; per point as `varying`; indexed per face vertex; per face of two quads; one value, stored once for the mesh |
+| Readers' edges and an unbound mesh | ReadDisplay, Absent, Clamped, Glowing, DisplayVertex | a reader of a bound mesh's constant `displayColor`; a reader of an absent set, whose fallback (1.5, 0.25, −0.5) clamps; a `float3` `tint` (1.5, −0.5, 0.5) the shader clamps, beside a `point3f` `rest`, which is no colour set; a reader on `emissiveColor`, which keeps black and warns; an unbound card's vertex `displayColor` |
+| Unbound meshes | DisplayUniform, DisplayIndexed, OpacityColor, OpacityOnly, OpacityVertex | per-face `displayColor`; indexed per-face-vertex; constant teal with `displayOpacity` 0.25; `displayOpacity` 0.5 alone, over the default grey; a vertex `displayOpacity`, which warns and stays opaque |
+
+Its negative control swaps Vertex's red and blue.
 
 - **Analytic transmission.** `renderer.material.transmission` checks the
   dielectric lobe against independent double-precision oracles through
@@ -1700,9 +1754,28 @@ compares the generated corners with an independent double-precision oracle
 Every other primvar whose values are float pairs (`float2`, `double2` or
 `half2`, such as `texCoord2f[] primvars:st`) becomes a texture-coordinate
 set of its name, expanded to corners in the same way, indexed ones
-flattened; one that cannot be used warns and is left out. `points`,
-`displayOpacity` and `widths` are not read. Texture-coordinate sets and
-constant `displayColor` are read with the normals.
+flattened; one that cannot be used warns and is left out. Every primvar of
+float triples with a colour role or none (`color3f`, `float3`, not `point3f`,
+`vector3f` or `normal3f`) becomes a colour set of its name in the same way,
+except that a constant one is stored once for the mesh, and that a mesh with
+no binding on itself or on a subset keeps no constant set: nothing would
+read it, and a constant `displayColor` is then its private material's.
+`points` and `widths` are not read. Texture-coordinate sets, colour sets,
+`displayColor` and `displayOpacity` are read with the normals.
+
+`GeomSubset`s the mesh's topology hands over with a material of their own
+split it into one scene mesh per subset, named by the mesh's path and
+`.lotus:subset:<name>`, bound to that material. Faces no such subset names
+stay under the mesh's own path and binding, which disappears when no face
+remains. A subset resolved to the mesh's own material, as UsdImaging resolves
+one without a binding, makes no part. A face belongs to the first subset naming
+it. Each part keeps the triangle order and only the points it uses, in their
+order, and the mesh's normals and sets at its corners; normals are computed
+before the split, so they stay smooth across parts. Parts share their mesh's
+transform, visibility, instancers and render-pass selection. A subset's
+overlap with an earlier one and an index out of range warn. Hydra hands over
+an invisible mesh's topology without its subsets, so the parts merge until it
+is shown again. Faces that an invisible subset hides are not read.
 
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
@@ -1980,10 +2053,8 @@ parameters or resource are dirty and stores the result under its `SdfPath`
 string; destroying the sprim removes it. A mesh binds to its
 `GetMaterialId` path, read when its material id is dirty, so a material's
 value edit rewrites only the material table and a binding change only the
-instances. The fallback material sprim is never stored. Per-face materials
-are not supported: `GeomSubset` material bindings are ignored, the mesh's
-own binding covering every face, and the adapter warns, naming the mesh,
-whenever it reads a topology with such a binding.
+instances. The fallback material sprim is never stored. A bound `GeomSubset`
+is [a scene mesh of its own](#hydra-extraction), following the same rules.
 
 The delegate requests the `mtlx` render context
 (`GetMaterialRenderContexts`): a material with an `outputs:mtlx:surface`
@@ -2028,10 +2099,18 @@ A material has one texture-coordinate source, its first lookup's; a
 material without lookups names none, so a constant normal there always
 takes the normal-only tangent frame, even on a mesh with `st`. An input
 driven by anything else (another node type, a colour output on a scalar or
-a scalar output on a colour, a `UsdTransform2d` between the reader and the
-texture, or a second texture-coordinate source) takes its default and is
-reported as connected; the adapter warns, naming the material and those
-inputs, whenever it translates the material.
+a scalar output on a colour, a connected `UsdTransform2d` parameter, or a
+second texture-coordinate source) takes its default and is reported as
+connected; the adapter warns, naming the material and those inputs, whenever
+it translates the material.
+A `UsdTransform2d` between the reader and the texture becomes the lookup's
+`st_transform`: `in * scale * rotate + translation`, with the rotation
+counter-clockwise in degrees, composed along a chain and from a constant `in`
+as well as a reader's output. A non-finite parameter keeps its default. Storm
+does not follow a chain.
+A `UsdPrimvarReader_float3` on `diffuseColor` names the base colour's colour
+set, and its fallback, clamped, is the constant on a mesh without that set.
+On other inputs it is a connection like any other.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
 returns its fallback. A surface shader other than these and the
 [Standard Surface](#materialx-standard-surface), or a network without a
@@ -2095,13 +2174,16 @@ addressing is exact only where `default` is zero. Other MaterialX surfaces,
 OpenPBR's included, warn and leave the default material.
 
 A mesh without a material binding uses its constant `displayColor` as
-linear RGB base colour, with components clamped to [0, 1], and the other
-material defaults; its `displayOpacity` is not read, so the mesh is
-opaque. The adapter stores this private material under the
+linear RGB base colour, with components clamped to [0, 1], a non-constant
+one as the base colour's colour set, and the other material defaults. A
+constant `displayOpacity` below 1 becomes its coverage, clamped to 0 below;
+a non-constant, malformed or non-finite one warns and leaves the surface
+opaque, as a value of 1 or more does without asking for a material. A bound
+material decides its own coverage. The adapter stores this private material
+under the
 mesh's `lotus:displayColor` property path, which cannot collide with a
 material prim path. Indexed constants are supported; absent, empty,
-malformed or non-finite colours use the default grey. Other interpolation
-modes are not supported and warn. Authored bindings always win, including
+malformed or non-finite colours use the default grey. Authored bindings always win, including
 missing or unsupported materials. Primvar edits update the colour, and
 binding a surface, removing the colour or removing the mesh releases the
 private material. CTest `lotus-renderer-hydra-material` and its `-gpu`

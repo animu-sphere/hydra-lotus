@@ -42,7 +42,13 @@ set(_reference_files
   "${PROJECT_SOURCE_DIR}/validation/reference/material-mtlx-v1-mean.pfm"
   "${PROJECT_SOURCE_DIR}/validation/reference/material-mtlx-v1-variance.pfm"
   "${PROJECT_SOURCE_DIR}/validation/reference/material-transmission-v1-mean.pfm"
-  "${PROJECT_SOURCE_DIR}/validation/reference/material-transmission-v1-variance.pfm")
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-transmission-v1-variance.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-transforms-v1-mean.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-transforms-v1-variance.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-subsets-v1-mean.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-subsets-v1-variance.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-primvars-v1-mean.pfm"
+  "${PROJECT_SOURCE_DIR}/validation/reference/material-primvars-v1-variance.pfm")
 add_custom_command(TARGET lotus-headless POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E make_directory
     "$<TARGET_FILE_DIR:lotus-headless>/reference"

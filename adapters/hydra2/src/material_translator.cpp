@@ -28,6 +28,11 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (UsdPreviewSurface)
     (UsdUVTexture)
     (UsdPrimvarReader_float2)
+    (UsdPrimvarReader_float3)
+    (UsdTransform2d)
+    (rotation)
+    (translation)
+    (result)
     (diffuseColor)
     (emissiveColor)
     (metallic)
@@ -881,6 +886,34 @@ public:
 
   // Each component clamped into [low, high]; a non-finite component keeps
   // the whole of `value`.
+  // A UsdPrimvarReader_float3 on `input` names the colour set, and its
+  // fallback, clamped, is the constant on a mesh without that set. Whether
+  // the connection was one.
+  bool ColorPrimvar(const TfToken& input, std::array<float, 3>& value,
+      std::string& primvar) {
+    const HdMaterialConnection2* connection = Connection(node_, input);
+    if (connection == nullptr || connection->upstreamOutputName != Tokens->result) {
+      return false;
+    }
+    const auto reader = network_.nodes.find(connection->upstreamNode);
+    if (reader == network_.nodes.end() ||
+        reader->second.nodeTypeId != Tokens->UsdPrimvarReader_float3) {
+      return false;
+    }
+    primvar = ReadToken(Parameter(reader->second, Tokens->varname)).GetString();
+    value = {0.0F, 0.0F, 0.0F};
+    if (const VtValue* fallback = Parameter(reader->second, Tokens->fallback)) {
+      const auto read = ReadColor(*fallback);
+      if (read && std::all_of(read->begin(), read->end(),
+                      [](double component) { return std::isfinite(component); })) {
+        for (std::size_t c = 0; c < 3; ++c) {
+          value[c] = static_cast<float>(std::clamp((*read)[c], 0.0, 1.0));
+        }
+      }
+    }
+    return true;
+  }
+
   void Color(const TfToken& input, std::array<float, 3>& value,
       std::optional<Lotus::TextureInput>& lookup, double low, double high) {
     if (const VtValue* constant = Constant(input, &lookup, true)) {
@@ -909,10 +942,77 @@ private:
     return Parameter(node_, input);
   }
 
+  // Where a lookup reads: a material's texture-coordinate source, and the
+  // lookup's transform from it.
+  struct Coordinates {
+    std::string texcoords;
+    std::array<float, 2> fallback{0.0F, 0.0F};
+    std::array<double, 6> transform{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+  };
+
+  // A chain this long is cyclic or beyond any authored network.
+  static constexpr int kMaxTransforms = 64;
+
+  // The coordinates of a UsdPrimvarReader_float2's output, or of a
+  // UsdTransform2d's: in * scale * rotate + translation, with the rotation
+  // counter-clockwise in degrees. Nothing for another node or a connected
+  // transform parameter. As for other parameters, a non-finite one keeps its
+  // default.
+  std::optional<Coordinates> ReadCoordinates(
+      const HdMaterialConnection2& connection, int depth = 0) const {
+    const auto upstream = network_.nodes.find(connection.upstreamNode);
+    if (upstream == network_.nodes.end() || depth > kMaxTransforms) {
+      return std::nullopt;
+    }
+    const HdMaterialNode2& node = upstream->second;
+    Coordinates coordinates;
+    if (node.nodeTypeId == Tokens->UsdPrimvarReader_float2) {
+      coordinates.texcoords = ReadToken(Parameter(node, Tokens->varname)).GetString();
+      coordinates.fallback = ReadVector<2, GfVec2f, GfVec2d>(Parameter(node, Tokens->fallback))
+                                 .value_or(coordinates.fallback);
+      return coordinates;
+    }
+    if (node.nodeTypeId != Tokens->UsdTransform2d || Connection(node, Tokens->rotation) ||
+        Connection(node, Tokens->scale) || Connection(node, Tokens->translation)) {
+      return std::nullopt;
+    }
+    if (const HdMaterialConnection2* in = Connection(node, Tokens->in)) {
+      const auto read = ReadCoordinates(*in, depth + 1);
+      if (!read) {
+        return std::nullopt;
+      }
+      coordinates = *read;
+    } else {
+      coordinates.fallback = ReadVector<2, GfVec2f, GfVec2d>(Parameter(node, Tokens->in))
+                                 .value_or(coordinates.fallback);
+    }
+    constexpr double kDegrees = 3.14159265358979323846 / 180.0;
+    const VtValue* authored_rotation = Parameter(node, Tokens->rotation);
+    const double read_rotation =
+        authored_rotation != nullptr ? ReadScalar(*authored_rotation).value_or(0.0) : 0.0;
+    const double radians = std::isfinite(read_rotation) ? read_rotation * kDegrees : 0.0;
+    const double c = std::cos(radians), s = std::sin(radians);
+    const auto scale = ReadVector<2, GfVec2f, GfVec2d>(Parameter(node, Tokens->scale))
+                           .value_or(std::array<float, 2>{1.0F, 1.0F});
+    const auto translation = ReadVector<2, GfVec2f, GfVec2d>(Parameter(node, Tokens->translation))
+                                 .value_or(std::array<float, 2>{0.0F, 0.0F});
+    const std::array<double, 6> local{c * scale[0], -s * scale[1], translation[0],
+        s * scale[0], c * scale[1], translation[1]};
+    const std::array<double, 6>& inner = coordinates.transform;
+    coordinates.transform = {local[0] * inner[0] + local[1] * inner[3],
+        local[0] * inner[1] + local[1] * inner[4],
+        local[0] * inner[2] + local[1] * inner[5] + local[2],
+        local[3] * inner[0] + local[4] * inner[3],
+        local[3] * inner[1] + local[4] * inner[4],
+        local[3] * inner[2] + local[4] * inner[5] + local[5]};
+    return coordinates;
+  }
+
   // A UsdUVTexture output, read as a colour (rgb) or a scalar (r, g, b or
-  // a), whose st is constant or a UsdPrimvarReader_float2's. A material has
-  // one texture-coordinate source, its first lookup's; a lookup with
-  // another is not translated.
+  // a), whose st is constant, a UsdPrimvarReader_float2's or a UsdTransform2d
+  // chain's from either. A material has one texture-coordinate source, its
+  // first lookup's; a lookup with another is not translated. Each lookup has
+  // its own transform.
   bool Lookup(const HdMaterialConnection2& connection, bool colour,
       std::optional<Lotus::TextureInput>& lookup) {
     const auto upstream = network_.nodes.find(connection.upstreamNode);
@@ -939,26 +1039,27 @@ private:
       return false;
     }
 
-    std::string texcoords;
-    std::array<float, 2> texcoord_fallback{0.0F, 0.0F};
+    Coordinates coordinates;
     if (const HdMaterialConnection2* st = Connection(texture, Tokens->st)) {
-      const auto reader = network_.nodes.find(st->upstreamNode);
-      if (reader == network_.nodes.end() ||
-          reader->second.nodeTypeId != Tokens->UsdPrimvarReader_float2) {
+      const auto read = ReadCoordinates(*st);
+      if (!read) {
         return false;
       }
-      texcoords = ReadToken(Parameter(reader->second, Tokens->varname)).GetString();
-      texcoord_fallback =
-          ReadVector<2, GfVec2f, GfVec2d>(Parameter(reader->second, Tokens->fallback))
-              .value_or(texcoord_fallback);
+      coordinates = *read;
     } else {
-      texcoord_fallback =
+      coordinates.fallback =
           ReadVector<2, GfVec2f, GfVec2d>(Parameter(texture, Tokens->st))
-              .value_or(texcoord_fallback);
+              .value_or(coordinates.fallback);
     }
     Lotus::Material& material = translation_.material;
-    if (!SameTexcoords(material, texcoords, texcoord_fallback)) {
+    if (!SameTexcoords(material, coordinates.texcoords, coordinates.fallback)) {
       return false;
+    }
+    for (std::size_t i = 0; i < coordinates.transform.size(); ++i) {
+      result.st_transform[i] = static_cast<float>(coordinates.transform[i]);
+      if (!std::isfinite(result.st_transform[i])) {
+        return false;
+      }
     }
 
     result.wrap_s = ReadWrap(Parameter(texture, Tokens->wrapS));
@@ -972,8 +1073,8 @@ private:
             .value_or(result.fallback);
     result.texture =
         RequestTexture(translation_, ReadFile(texture), ReadColorSpace(texture));
-    material.texcoords = texcoords;
-    material.texcoord_fallback = texcoord_fallback;
+    material.texcoords = std::move(coordinates.texcoords);
+    material.texcoord_fallback = coordinates.fallback;
     lookup = std::move(result);
     return true;
   }
@@ -1026,8 +1127,11 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
   SurfaceReader surface(converted, node->second, translation);
   Lotus::Material& material = translation.material;
   constexpr double kLargest = 3.4e38;
-  surface.Color(Tokens->diffuseColor, material.base_color,
-      material.base_color_texture, 0.0, 1.0);
+  if (!surface.ColorPrimvar(Tokens->diffuseColor, material.base_color,
+          material.base_color_primvar)) {
+    surface.Color(Tokens->diffuseColor, material.base_color,
+        material.base_color_texture, 0.0, 1.0);
+  }
   surface.Color(Tokens->emissiveColor, material.emission,
       material.emission_texture, 0.0, kLargest);
   surface.Scalar(Tokens->roughness, material.roughness,
