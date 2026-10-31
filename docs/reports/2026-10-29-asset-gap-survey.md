@@ -1,6 +1,6 @@
 # Asset gap survey: LOTUS-ASSET-01
 
-> Later: LOTUS-MATERIAL-02 closed the texture transform, per-face material, primvar colour and `displayOpacity` gaps ([report](2026-10-31-texture-transforms-subsets-primvars.md#decision)).
+> Later: LOTUS-MATERIAL-02 closed the texture transform, per-face material, primvar colour and `displayOpacity` gaps ([report](2026-10-31-texture-transforms-subsets-primvars.md#decision)). LOTUS-SKEL-01 closed the skinned mesh gap ([report](2026-10-31-skinned-meshes.md#decision)); the elephant's automatic camera also sits inside the meshes, in Storm as well ([survey assets](2026-10-31-skinned-meshes.md#survey-assets)).
 
 ## Evaluation brief
 

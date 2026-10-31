@@ -44,6 +44,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   an unbound mesh becomes its coverage. The committed
   `material-transforms-v1`, `material-subsets-v1` and `material-primvars-v1`
   fixtures verify them ([report](docs/reports/2026-10-31-texture-transforms-subsets-primvars.md)).
+- The Hydra delegate supports `extComputation` sprims and runs the ones that
+  output a mesh's points and normals on the CPU during sync, which renders
+  `UsdSkel` skinned meshes at their posed points. The committed
+  `skinned-v1` fixture compares them with UsdSkel through scene indices and
+  `UsdImagingDelegate` ([report](docs/reports/2026-10-31-skinned-meshes.md)).
 
 ### Fixed
 
@@ -51,6 +56,9 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   the default material, and StandardShaderBall's ground shows its texture.
 - OpenChessSet's pawn tops and StandardShaderBall's glass render as tinted
   glass instead of opaque.
+- Skinned meshes are no longer rejected with "face vertex index is out of
+  range" under scene indices, and the viewport no longer draws them at their
+  rest points.
 
 ## [0.7.0] - 2026-10-28
 

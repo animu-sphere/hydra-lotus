@@ -39,6 +39,10 @@ lotus_add_hydra_test(NAME normals SOURCES normals_test.cpp
   LIBRARIES ${_runtime} usdGeom ${_stage})
 lotus_add_hydra_test(NAME texture SOURCES texture_test.cpp
   LIBRARIES ${_runtime} Lotus::Vulkan ${_stage} hio)
+lotus_add_hydra_test(NAME skel SOURCES skel_test.cpp
+  LIBRARIES ${_runtime} Lotus::Vulkan usdSkel usdGeom ${_stage})
+target_compile_definitions(lotus-hydra2-skel-test PRIVATE
+  LOTUS_SKEL_FIXTURE="${PROJECT_SOURCE_DIR}/validation/skel/skinned-v1.usda")
 lotus_add_hydra_test(NAME light SOURCES light_test.cpp
   LIBRARIES ${_runtime} Lotus::Vulkan ${_stage})
 lotus_add_hydra_test(NAME deterministic SOURCES deterministic_test.cpp
@@ -134,6 +138,11 @@ add_test(NAME lotus-renderer-hydra-texture
   COMMAND lotus-hydra2-texture-test)
 add_test(NAME lotus-renderer-hydra-texture-gpu
   COMMAND lotus-hydra2-texture-test --gpu)
+add_test(NAME lotus-renderer-hydra-skel COMMAND lotus-hydra2-skel-test)
+add_test(NAME lotus-renderer-hydra-skel-computed-normals
+  COMMAND lotus-hydra2-skel-test --computed-normals)
+add_test(NAME lotus-renderer-hydra-skel-gpu
+  COMMAND lotus-hydra2-skel-test --gpu)
 set(_lotus_hydra_gpu_tests
   lotus-renderer-hydra-aov
   lotus-renderer-hydra-render-pass-gpu
@@ -147,6 +156,7 @@ set(_lotus_hydra_gpu_tests
   lotus-renderer-hydra-dome-texture-gpu
   lotus-renderer-hydra-material-gpu
   lotus-renderer-hydra-material-fixtures-gpu
+  lotus-renderer-hydra-skel-gpu
   lotus-renderer-hydra-texture-gpu)
 set_tests_properties(${_lotus_hydra_gpu_tests} PROPERTIES SKIP_RETURN_CODE 77)
 # Every test above loads the OpenUSD runtime's DLLs; the rest need no device.
@@ -154,6 +164,8 @@ get_directory_property(_lotus_hydra_tests TESTS)
 set_tests_properties(${_lotus_hydra_tests} PROPERTIES LABELS hydra
   ENVIRONMENT_MODIFICATION
   "PATH=path_list_prepend:${LOTUS_PXR_ROOT}/bin;PATH=path_list_prepend:${LOTUS_PXR_ROOT}/lib")
+set_tests_properties(lotus-renderer-hydra-skel-computed-normals PROPERTIES
+  ENVIRONMENT "USDSKELIMAGING_ENABLE_NORMAL_COMPUTATIONS=1")
 set(_lotus_hydra_fast_tests ${_lotus_hydra_tests})
 list(REMOVE_ITEM _lotus_hydra_fast_tests ${_lotus_hydra_gpu_tests})
 lotus_test_tier(gpu ${_lotus_hydra_gpu_tests})
