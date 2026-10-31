@@ -24,6 +24,8 @@
 #include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/changeTracker.h>
+#include <pxr/imaging/hd/extComputation.h>
+#include <pxr/imaging/hd/extComputationUtils.h>
 #include <pxr/imaging/hd/geomSubset.h>
 #include <pxr/imaging/hd/instancer.h>
 #include <pxr/imaging/hd/light.h>
@@ -1575,8 +1577,10 @@ public:
       SetMaterialId(delegate->GetMaterialId(GetId()));
       geometry_dirty = geometry_dirty || was_unbound != GetMaterialId().IsEmpty();
     }
-    if (!initialized_ ||
-        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points)) {
+    const bool points_dirty =
+        !initialized_ ||
+        HdChangeTracker::IsPrimvarDirty(bits, GetId(), HdTokens->points);
+    if (points_dirty) {
       const VtValue value = GetPoints(delegate);
       points_ = value.IsHolding<VtVec3fArray>()
                     ? value.UncheckedGet<VtVec3fArray>()
@@ -1584,6 +1588,9 @@ public:
     }
     if (primvars_dirty) {
       ReadPrimvars(delegate);
+    }
+    if (points_dirty || primvars_dirty) {
+      ReadComputedPrimvars(delegate);
     }
     if (!initialized_ || HdChangeTracker::IsTransformDirty(bits, GetId())) {
       instance_.world_from_object = ToLotusMatrix(delegate->GetTransform(GetId()));
@@ -1702,6 +1709,41 @@ private:
           colors_[primvar.name.GetString()] = std::move(values);
         }
       }
+    }
+  }
+
+  // Points and normals that an ext computation outputs, which replace the
+  // primvars of those names: UsdSkelImaging hands over a skinned mesh's posed
+  // points this way, and its normals when asked to compute them. It removes
+  // the points primvar under scene indices, but UsdImagingDelegate still
+  // answers it with the rest points. Runs the computations here, on the CPU.
+  void ReadComputedPrimvars(HdSceneDelegate* delegate) {
+    HdExtComputationPrimvarDescriptorVector computed;
+    HdInterpolation normals_interpolation = HdInterpolationVertex;
+    for (const HdInterpolation interpolation :
+        {HdInterpolationConstant, HdInterpolationUniform, HdInterpolationVarying,
+            HdInterpolationVertex, HdInterpolationFaceVarying}) {
+      for (const HdExtComputationPrimvarDescriptor& primvar :
+          delegate->GetExtComputationPrimvarDescriptors(GetId(), interpolation)) {
+        if (primvar.name == HdTokens->normals) {
+          normals_interpolation = interpolation;
+        } else if (primvar.name != HdTokens->points) {
+          continue;
+        }
+        computed.push_back(primvar);
+      }
+    }
+    if (computed.empty()) {
+      return;
+    }
+    auto values = HdExtComputationUtils::GetComputedPrimvarValues(computed, delegate);
+    if (const auto points = values.find(HdTokens->points); points != values.end()) {
+      points_ = points->second.IsHolding<VtVec3fArray>()
+                    ? points->second.UncheckedGet<VtVec3fArray>()
+                    : VtVec3fArray{};
+    }
+    if (const auto normals = values.find(HdTokens->normals); normals != values.end()) {
+      normals_ = PrimvarValues{std::move(normals->second), normals_interpolation};
     }
   }
 
@@ -2632,7 +2674,8 @@ const TfTokenVector& HdLotusRenderDelegate::GetSupportedSprimTypes() const {
   static const TfTokenVector types{HdPrimTypeTokens->camera,
       HdPrimTypeTokens->material, HdPrimTypeTokens->domeLight,
       HdPrimTypeTokens->sphereLight, HdPrimTypeTokens->rectLight,
-      HdPrimTypeTokens->diskLight, HdPrimTypeTokens->distantLight};
+      HdPrimTypeTokens->diskLight, HdPrimTypeTokens->distantLight,
+      HdPrimTypeTokens->extComputation};
   return types;
 }
 
@@ -2683,6 +2726,9 @@ HdSprim* HdLotusRenderDelegate::CreateSprim(const TfToken& type_id,
   if (type_id == HdPrimTypeTokens->domeLight) {
     return new HdLotusDomeLight(sprim_id, impl_->state);
   }
+  if (type_id == HdPrimTypeTokens->extComputation) {
+    return new HdExtComputation(sprim_id);
+  }
   for (const auto& [type, shape] : LightPrimTypes()) {
     if (type_id == type) {
       return new HdLotusLight(sprim_id, shape, impl_->state);
@@ -2701,6 +2747,9 @@ HdSprim* HdLotusRenderDelegate::CreateFallbackSprim(
   }
   if (type_id == HdPrimTypeTokens->domeLight) {
     return new HdLotusDomeLight(SdfPath("/__lotusFallbackDome"), nullptr);
+  }
+  if (type_id == HdPrimTypeTokens->extComputation) {
+    return new HdExtComputation(SdfPath("/__lotusFallbackExtComputation"));
   }
   for (const auto& [type, shape] : LightPrimTypes()) {
     if (type_id == type) {

@@ -1,5 +1,7 @@
 # Texture transforms, per-face materials and colour primvars
 
+> Later: LOTUS-SKEL-01 renders the bike's four `UsdSkel` meshes ([report](2026-10-31-skinned-meshes.md#survey-assets)).
+
 ## Evaluation brief
 
 LOTUS-MATERIAL-02, the third task of the

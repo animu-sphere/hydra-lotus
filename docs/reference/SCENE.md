@@ -1777,6 +1777,24 @@ overlap with an earlier one and an index out of range warn. Hydra hands over
 an invisible mesh's topology without its subsets, so the parts merge until it
 is shown again. Faces that an invisible subset hides are not read.
 
+A mesh bound to a `UsdSkel` skeleton has its points computed: UsdImaging hands
+them over as the output of a Hydra ext computation. Under scene indices the
+`points` primvar is gone, and `UsdImagingDelegate` still answers it with the
+rest points, so a computed `points` wins over the primvar. The delegate supports
+`extComputation` sprims, and when a mesh's points or primvars are dirty it runs
+the computations that output `points` and `normals` on the CPU, during sync.
+That covers OpenUSD's linear and dual-quaternion skinning, rigid bindings and
+blend shapes. Posed points then follow the path of any deforming mesh: a time
+change replaces the geometry, the GPU scene refits its BLAS and the accumulation
+restarts. UsdImaging withholds a skinned mesh's authored normals, which would not
+fit the pose. As in Storm, such a mesh therefore shades faceted under the `none`
+and `bilinear` schemes and with smooth normals from the posed points under the
+others. With `USDSKELIMAGING_ENABLE_NORMAL_COMPUTATIONS` set, the computed
+normals become its corner normals. GPU skinning is not implemented: OpenUSD's
+GLSL kernels are not used. Influences that do not match the points warn in
+OpenUSD, which passes the points on unskinned, as if in skeleton space
+([evidence](../reports/2026-10-31-skinned-meshes.md)).
+
 Malformed mesh input is warned about and removes any earlier geometry for
 that mesh. A later valid sync recovers it. Mesh destruction removes its scene
 record. `HdLotusRenderDelegate::GetFrameSnapshot` exposes the same CPU snapshot

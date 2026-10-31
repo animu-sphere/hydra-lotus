@@ -1,0 +1,268 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    endTimeCode = 3
+    metersPerUnit = 1
+    startTimeCode = 1
+    timeCodesPerSecond = 24
+    upAxis = "Y"
+)
+
+# Skinned meshes for lotus-renderer-hydra-skel. A strip of four quads follows
+# three joints. Every mesh below inherits it and tries one way of binding it;
+# the test compares each with OpenUSD's skinning. The rig, the skeleton and
+# each mesh have transforms of their own, so a point in the wrong space misses.
+
+class Mesh "_Strip" (
+    prepend apiSchemas = ["SkelBindingAPI"]
+)
+{
+    int[] faceVertexCounts = [4, 4, 4, 4]
+    int[] faceVertexIndices = [0, 1, 3, 2, 2, 3, 5, 4, 4, 5, 7, 6, 6, 7, 9, 8]
+    normal3f[] normals = [(0, -0.2, 1), (0, 0.2, 1), (0.2, 0, 1), (-0.2, 0, 1), (0, 0.2, 1), (0, -0.2, 1), (-0.2, 0, 1), (0.2, 0, 1), (0, -0.2, 1), (0, 0.2, 1)] (
+        interpolation = "vertex"
+    )
+    point3f[] points = [(-0.5, 0, 0), (0.5, 0, 0.1), (-0.5, 1, 0.2), (0.5, 1, 0), (-0.5, 2, 0.1), (0.5, 2, 0.2), (-0.5, 3, 0), (0.5, 3, 0.1), (-0.5, 4, 0.2), (0.5, 4, 0)]
+    int[] primvars:skel:jointIndices = [0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 2, 1, 2, 2, 1, 2, 1] (
+        elementSize = 2
+        interpolation = "vertex"
+    )
+    float[] primvars:skel:jointWeights = [1, 0, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 0, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 0, 1, 0] (
+        elementSize = 2
+        interpolation = "vertex"
+    )
+    rel skel:skeleton = </World/Rig/Skel>
+    uniform token subdivisionScheme = "none"
+}
+
+def Xform "World"
+{
+    def Camera "Camera"
+    {
+        float focalLength = 25
+        float horizontalAperture = 20.955
+        float verticalAperture = 20.955
+        double3 xformOp:translate = (2, 3, 24)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Red"
+        {
+            token outputs:surface.connect = </World/Looks/Red/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }
+        }
+
+        def Material "Blue"
+        {
+            token outputs:surface.connect = </World/Looks/Blue/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.1, 0.1, 0.8)
+                token outputs:surface
+            }
+        }
+    }
+
+    def SkelRoot "Rig"
+    {
+        double3 xformOp:translate.timeSamples = {
+            1: (-1, 0, 0),
+            3: (-1, 0.5, 0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Skeleton "Skel" (
+            prepend apiSchemas = ["SkelBindingAPI"]
+        )
+        {
+            uniform matrix4d[] bindTransforms = [((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 4, 0, 1))]
+            uniform token[] joints = ["Root", "Root/Mid", "Root/Mid/Tip"]
+            uniform matrix4d[] restTransforms = [((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1))]
+            rel skel:animationSource = </World/Rig/Skel/Walk>
+            double3 xformOp:translate = (0, 0, 2)
+            float xformOp:rotateY = 20
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateY"]
+
+            def SkelAnimation "Walk"
+            {
+                uniform token[] blendShapes = ["Bulge"]
+                float[] blendShapeWeights.timeSamples = {
+                    1: [0],
+                    2: [1],
+                    3: [0.5],
+                }
+                uniform token[] joints = ["Root", "Root/Mid", "Root/Mid/Tip"]
+                quatf[] rotations.timeSamples = {
+                    1: [(1, 0, 0, 0), (1, 0, 0, 0), (1, 0, 0, 0)],
+                    2: [(1, 0, 0, 0), (0.92388, 0, 0, 0.38268), (0.92388, 0.38268, 0, 0)],
+                    3: [(0.96593, 0, 0.25882, 0), (0.70711, 0, 0, 0.70711), (0.70711, 0, 0.70711, 0)],
+                }
+                half3[] scales.timeSamples = {
+                    1: [(1, 1, 1), (1, 1, 1), (1, 1, 1)],
+                    3: [(1, 1, 1), (1, 1, 1), (2, 0.5, 1)],
+                }
+                float3[] translations.timeSamples = {
+                    1: [(0, 0, 0), (0, 2, 0), (0, 2, 0)],
+                    3: [(0, 0, 0.5), (0, 2, 0), (0, 2, 0)],
+                }
+            }
+        }
+
+        # Weighted influences, authored vertex normals and a bind transform.
+        def Mesh "Linear" (
+            inherits = </_Strip>
+        )
+        {
+            matrix4d primvars:skel:geomBindTransform = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0.25, 0, 0, 1))
+            double3 xformOp:translate = (5, 1, 0)
+            float xformOp:rotateX = 30
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
+        }
+
+        def Mesh "Dual" (
+            inherits = </_Strip>
+        )
+        {
+            uniform token primvars:skel:skinningMethod = "dualQuaternion"
+        }
+
+        # One joint for the whole mesh.
+        def Mesh "Rigid" (
+            inherits = </_Strip>
+        )
+        {
+            int[] primvars:skel:jointIndices = [1] (
+                elementSize = 1
+                interpolation = "constant"
+            )
+            float[] primvars:skel:jointWeights = [1] (
+                elementSize = 1
+                interpolation = "constant"
+            )
+        }
+
+        # No authored normals: the adapter computes them from the posed points.
+        def Mesh "Smooth" (
+            inherits = </_Strip>
+        )
+        {
+            uniform token subdivisionScheme = "catmullClark"
+            normal3f[] normals = None
+        }
+
+        def Mesh "FaceVarying" (
+            inherits = </_Strip>
+        )
+        {
+            normal3f[] normals = None
+            normal3f[] primvars:normals = [(0, 0, 1), (0.2, 0, 1), (0, 0.2, 1), (-0.2, 0, 1), (0, 0, 1), (0.2, 0, 1), (0, 0.2, 1), (-0.2, 0, 1), (0, 0, 1), (0.2, 0, 1), (0, 0.2, 1), (-0.2, 0, 1), (0, 0, 1), (0.2, 0, 1), (0, 0.2, 1), (-0.2, 0, 1)] (
+                interpolation = "faceVarying"
+            )
+        }
+
+        def Mesh "Blend" (
+            inherits = </_Strip>
+        )
+        {
+            uniform token[] skel:blendShapes = ["Bulge"]
+            rel skel:blendShapeTargets = </World/Rig/Blend/Bulge>
+
+            def BlendShape "Bulge"
+            {
+                uniform vector3f[] offsets = [(0, 0, 0.5), (0, 0, 0.5), (0, 0, 1)]
+                uniform int[] pointIndices = [4, 5, 8]
+            }
+        }
+
+        # Each quad pair has a material of its own: one scene mesh per subset.
+        def Mesh "Parts" (
+            inherits = </_Strip>
+        )
+        {
+            def GeomSubset "Lower" (
+                prepend apiSchemas = ["MaterialBindingAPI"]
+            )
+            {
+                uniform token elementType = "face"
+                uniform token familyName = "materialBind"
+                int[] indices = [0, 1]
+                rel material:binding = </World/Looks/Red>
+            }
+
+            def GeomSubset "Upper" (
+                prepend apiSchemas = ["MaterialBindingAPI"]
+            )
+            {
+                uniform token elementType = "face"
+                uniform token familyName = "materialBind"
+                int[] indices = [2, 3]
+                rel material:binding = </World/Looks/Blue>
+            }
+        }
+
+        # A skeleton without an animation holds its rest pose, not its bind
+        # pose.
+        def Skeleton "Still" (
+            prepend apiSchemas = ["SkelBindingAPI"]
+        )
+        {
+            uniform matrix4d[] bindTransforms = [((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 4, 0, 1))]
+            uniform token[] joints = ["Root", "Root/Mid", "Root/Mid/Tip"]
+            uniform matrix4d[] restTransforms = [((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), ((0, 1, 0, 0), (-1, 0, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1)), ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 2, 0, 1))]
+        }
+
+        def Mesh "Rest" (
+            inherits = </_Strip>
+        )
+        {
+            rel skel:skeleton = </World/Rig/Still>
+        }
+
+        # The influences do not match the points: nothing skins it, and
+        # UsdSkelImaging warns and passes the points on.
+        def Mesh "Malformed" (
+            inherits = </_Strip>
+        )
+        {
+            int[] primvars:skel:jointIndices = [0, 1, 2] (
+                elementSize = 1
+                interpolation = "vertex"
+            )
+            float[] primvars:skel:jointWeights = [1, 1, 1] (
+                elementSize = 1
+                interpolation = "vertex"
+            )
+        }
+    }
+
+    # The existing deformation path: time-sampled points and no skeleton.
+    def Mesh "Plain"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points.timeSamples = {
+            1: [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            3: [(0, 0, 2), (1, 0, 2), (0, 1, 2)],
+        }
+        uniform token subdivisionScheme = "none"
+    }
+
+    # Nothing here varies, so a time change keeps its geometry.
+    def Mesh "Fixed"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 5), (1, 0, 5), (0, 1, 5)]
+        uniform token subdivisionScheme = "none"
+    }
+}

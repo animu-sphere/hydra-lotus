@@ -17,21 +17,10 @@ closing the first gap, and LOTUS-TRANSMISSION-01 added
 under its [contract](../design/TRANSMISSION.md), so OpenChessSet's pawn
 tops and the shader ball's glass render as tinted glass. LOTUS-MATERIAL-02
 [translated texture transforms, per-face materials, colour primvars and
-display coverage](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision). Only the
-following bounded task is active. The surveyed assets are local and not
-redistributable, so its committed evidence is a fixture authored
-here. The survey's stages are its acceptance check.
-
-- [ ] **LOTUS-SKEL-01 — Skinned meshes (P1).**
-  Hydra adapter geometry: Lotus rejects every mesh bound to a `UsdSkel`
-  skeleton ("face vertex index is out of range"), so ElephantWithMonochord
-  renders empty and CarbonFrameBike loses four tubes. Establish the cause
-  first; Lotus supports no Hydra ext computation, which is how skinned
-  points usually arrive. Then render skinned meshes at their posed points.
-  Exit evidence: a committed skinned fixture whose extracted points match
-  OpenUSD's skinning, a time change updating them through the existing
-  deformation path, and the two survey assets rendering their skinned
-  meshes. Deferred: GPU skinning.
+display coverage](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision),
+and LOTUS-SKEL-01 [rendered skinned meshes at their posed
+points](../reports/2026-10-31-skinned-meshes.md#decision). Every selected task is done and no
+task is active; the milestone's release gate is next.
 
 The survey also found that `usdrecord --renderer Storm` creates the Lotus
 renderer when `hdLotus` is on the plugin path. Its cause is unexplained and
