@@ -1,0 +1,1097 @@
+{
+ "schema": "lotus-interactive-ghosting-summary-v1",
+ "source_reports": {
+  "none": "build/interactive-ghosting/none-reference.json",
+  "clamp": "build/interactive-ghosting/clamp-reference.json",
+  "anti-lag": "build/interactive-ghosting/anti-lag-reference.json",
+  "reflection": "build/interactive-ghosting/reflection-reference.json"
+ },
+ "procedure": {
+  "integrator": "reference",
+  "reference_integrator": "reference",
+  "light_sampling": "nee-mis",
+  "workloads": [
+   "svgf-room",
+   "moving-occluder-still-receiver",
+   "camera-over-low-roughness-surface",
+   "deforming-mesh"
+  ],
+  "width": 128,
+  "height": 128,
+  "frames": 32,
+  "sequences": 8,
+  "fresh_samples_per_frame": 1,
+  "history_cap": 32,
+  "filter_iterations": 5,
+  "settling_hold_frames": 64,
+  "max_bounces": 4,
+  "sample_index": 17,
+  "sequence_stride": 65537,
+  "reference_seed": 16777216,
+  "reference_samples_per_half": 1024,
+  "reference_halves": 2
+ },
+ "device": {
+  "name": "NVIDIA RTX A5000",
+  "api": "1.4.329",
+  "driver": "2504261632",
+  "validation_available": false
+ },
+ "scenes": {
+  "svgf-room-static-v1": {
+   "none": {
+    "temporal": {
+     "mse": 0.0460149409,
+     "frame_delta_mse": 0.0109387209,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832114,
+      "4-7": 0.0696017353,
+      "8+": 0.0211601948
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "filtered": {
+     "mse": 0.0305399139,
+     "frame_delta_mse": 0.000842512441,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.0578765521,
+      "4-7": 0.0425022516,
+      "8+": 0.024131484
+     },
+     "last_frame_mse": 0.0180660927
+    },
+    "progressive": {
+     "mse": 0.0460149418,
+     "frame_delta_mse": 0.0109387224,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832118,
+      "4-7": 0.0696017374,
+      "8+": 0.0211601954
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": null,
+     "moving_frame_delta_mse": null,
+     "max_hold_frame_delta_mse": 0.000435720352
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.122624,
+     "reprojection": 0.039936,
+     "accumulation": 0.029696,
+     "variance": 0.019456,
+     "filter": 0.331776
+    }
+   },
+   "clamp": {
+    "temporal": {
+     "mse": 0.0659527628,
+     "frame_delta_mse": 0.025617882,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.101495535,
+      "4-7": 0.0546954249,
+      "8+": 0.0530125428
+     },
+     "last_frame_mse": 0.0615648658
+    },
+    "filtered": {
+     "mse": 0.0793615431,
+     "frame_delta_mse": 0.00153262263,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.0779406118,
+      "4-7": 0.0730760965,
+      "8+": 0.0801262294
+     },
+     "last_frame_mse": 0.0884201727
+    },
+    "progressive": {
+     "mse": 0.0460149418,
+     "frame_delta_mse": 0.0109387224,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832118,
+      "4-7": 0.0696017374,
+      "8+": 0.0211601954
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": null,
+     "moving_frame_delta_mse": null,
+     "max_hold_frame_delta_mse": 0.000435720352
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03408,
+     "reprojection": 0.006144,
+     "accumulation": 0.01024,
+     "variance": 0.00512,
+     "filter": 0.077824
+    }
+   },
+   "anti-lag": {
+    "temporal": {
+     "mse": 0.0591409339,
+     "frame_delta_mse": 0.0454045681,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.125578459,
+      "2-3": 0.121241997,
+      "4-7": 0.0447422985,
+      "8+": 0.0180038722
+     },
+     "last_frame_mse": 0.0354460725
+    },
+    "filtered": {
+     "mse": 0.0431803118,
+     "frame_delta_mse": 0.00250278254,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.108085968,
+      "2-3": 0.0706820489,
+      "4-7": 0.0425015949,
+      "8+": 0.0235950652
+     },
+     "last_frame_mse": 0.0361560648
+    },
+    "progressive": {
+     "mse": 0.0460149418,
+     "frame_delta_mse": 0.0109387224,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832118,
+      "4-7": 0.0696017374,
+      "8+": 0.0211601954
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": null,
+     "moving_frame_delta_mse": null,
+     "max_hold_frame_delta_mse": 0.000435720352
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.035264,
+     "reprojection": 0.006144,
+     "accumulation": 0.029696,
+     "variance": 0.029696,
+     "filter": 0.077824
+    }
+   },
+   "reflection": {
+    "temporal": {
+     "mse": 0.0460149409,
+     "frame_delta_mse": 0.0109387209,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832114,
+      "4-7": 0.0696017353,
+      "8+": 0.0211601948
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "filtered": {
+     "mse": 0.0305399139,
+     "frame_delta_mse": 0.000842512441,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.0578765521,
+      "4-7": 0.0425022516,
+      "8+": 0.024131484
+     },
+     "last_frame_mse": 0.0180660927
+    },
+    "progressive": {
+     "mse": 0.0460149418,
+     "frame_delta_mse": 0.0109387224,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.150832118,
+      "4-7": 0.0696017374,
+      "8+": 0.0211601954
+     },
+     "last_frame_mse": 0.0113266578
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": null,
+     "moving_frame_delta_mse": null,
+     "max_hold_frame_delta_mse": 0.000435720352
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.035712,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.00512,
+     "filter": 0.077824
+    }
+   }
+  },
+  "svgf-room-moving-camera-block-v1": {
+   "none": {
+    "temporal": {
+     "mse": 0.0798195112,
+     "frame_delta_mse": 0.126022279,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.350057571,
+      "2-3": 0.156809442,
+      "4-7": 0.0672084292,
+      "8+": 0.031664371
+     },
+     "last_frame_mse": 0.0389988753
+    },
+    "filtered": {
+     "mse": 0.0390942522,
+     "frame_delta_mse": 0.0470739798,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.129332371,
+      "2-3": 0.0653189761,
+      "4-7": 0.0354996035,
+      "8+": 0.0250365517
+     },
+     "last_frame_mse": 0.0294864181
+    },
+    "progressive": {
+     "mse": 0.34808461,
+     "frame_delta_mse": 0.213081418,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.347590499,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.344079842
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.0470739798,
+     "max_hold_frame_delta_mse": 0.000414685684
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033728,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.027648,
+     "filter": 0.077824
+    }
+   },
+   "clamp": {
+    "temporal": {
+     "mse": 0.0854009659,
+     "frame_delta_mse": 0.104558405,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.350057571,
+      "2-3": 0.102149512,
+      "4-7": 0.0443421964,
+      "8+": 0.0577355493
+     },
+     "last_frame_mse": 0.07413477
+    },
+    "filtered": {
+     "mse": 0.0831972803,
+     "frame_delta_mse": 0.0525983323,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.134761132,
+      "2-3": 0.0818426575,
+      "4-7": 0.0584433993,
+      "8+": 0.0860092508
+     },
+     "last_frame_mse": 0.0937801391
+    },
+    "progressive": {
+     "mse": 0.34808461,
+     "frame_delta_mse": 0.213081418,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.347590499,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.344079842
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.0525983323,
+     "max_hold_frame_delta_mse": 0.000483780037
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033472,
+     "reprojection": 0.006144,
+     "accumulation": 0.01024,
+     "variance": 0.027648,
+     "filter": 0.077824
+    }
+   },
+   "anti-lag": {
+    "temporal": {
+     "mse": 0.0822286476,
+     "frame_delta_mse": 0.137101005,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.216389404,
+      "2-3": 0.117997966,
+      "4-7": 0.0449704544,
+      "8+": 0.0244834303
+     },
+     "last_frame_mse": 0.052568694
+    },
+    "filtered": {
+     "mse": 0.0487003612,
+     "frame_delta_mse": 0.051013657,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.102679274,
+      "2-3": 0.0607360895,
+      "4-7": 0.035997216,
+      "8+": 0.0315390598
+     },
+     "last_frame_mse": 0.0452551387
+    },
+    "progressive": {
+     "mse": 0.34808461,
+     "frame_delta_mse": 0.213081418,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.347590499,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.344079842
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.051013657,
+     "max_hold_frame_delta_mse": 0.000431593097
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03456,
+     "reprojection": 0.006144,
+     "accumulation": 0.029696,
+     "variance": 0.03072,
+     "filter": 0.077824
+    }
+   },
+   "reflection": {
+    "temporal": {
+     "mse": 0.079816076,
+     "frame_delta_mse": 0.126019793,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.350057571,
+      "2-3": 0.156809442,
+      "4-7": 0.0672084292,
+      "8+": 0.031658824
+     },
+     "last_frame_mse": 0.0390008711
+    },
+    "filtered": {
+     "mse": 0.03909264,
+     "frame_delta_mse": 0.0470737247,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.129331519,
+      "2-3": 0.0653185807,
+      "4-7": 0.0354994435,
+      "8+": 0.0250341419
+     },
+     "last_frame_mse": 0.0294891522
+    },
+    "progressive": {
+     "mse": 0.34808461,
+     "frame_delta_mse": 0.213081418,
+     "lag_region_mse": null,
+     "history_buckets": {
+      "1": 0.347590499,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.344079842
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.0470737247,
+     "max_hold_frame_delta_mse": 0.000414688092
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033664,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.027648,
+     "filter": 0.078848
+    }
+   }
+  },
+  "occluder-shadow-sweep-v1": {
+   "none": {
+    "temporal": {
+     "mse": 0.000179752243,
+     "frame_delta_mse": 3.36833032e-05,
+     "lag_region_mse": 0.00127333146,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.000137607515,
+      "4-7": 0.000149929283,
+      "8+": 0.000185020787
+     },
+     "last_frame_mse": 0.000176695735
+    },
+    "filtered": {
+     "mse": 0.000149840527,
+     "frame_delta_mse": 2.69371457e-05,
+     "lag_region_mse": 0.00120105266,
+     "history_buckets": {
+      "1": null,
+      "2-3": 3.83169525e-05,
+      "4-7": 0.00010598865,
+      "8+": 0.000171355357
+     },
+     "last_frame_mse": 0.000166949176
+    },
+    "progressive": {
+     "mse": 0.000244880154,
+     "frame_delta_mse": 7.29086562e-05,
+     "lag_region_mse": 0.000676491404,
+     "history_buckets": {
+      "1": 0.000244662742,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.000248989084
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 2.69371457e-05,
+     "max_hold_frame_delta_mse": 4.17268047e-07
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03376,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.004096,
+     "filter": 0.078848
+    }
+   },
+   "clamp": {
+    "temporal": {
+     "mse": 4.5932668e-05,
+     "frame_delta_mse": 3.55533393e-05,
+     "lag_region_mse": 0.000240419843,
+     "history_buckets": {
+      "1": null,
+      "2-3": 7.63621272e-05,
+      "4-7": 4.26791471e-05,
+      "8+": 3.57913843e-05
+     },
+     "last_frame_mse": 4.85685123e-05
+    },
+    "filtered": {
+     "mse": 2.77713051e-05,
+     "frame_delta_mse": 2.07895696e-05,
+     "lag_region_mse": 0.000206256192,
+     "history_buckets": {
+      "1": null,
+      "2-3": 1.49502011e-05,
+      "4-7": 2.31302934e-05,
+      "8+": 3.02334303e-05
+     },
+     "last_frame_mse": 4.4545282e-05
+    },
+    "progressive": {
+     "mse": 0.000244880154,
+     "frame_delta_mse": 7.29086562e-05,
+     "lag_region_mse": 0.000676491404,
+     "history_buckets": {
+      "1": 0.000244662742,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.000248989084
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 2.07895696e-05,
+     "max_hold_frame_delta_mse": 3.03059213e-07
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.035136,
+     "reprojection": 0.006144,
+     "accumulation": 0.01024,
+     "variance": 0.00512,
+     "filter": 0.078848
+    }
+   },
+   "anti-lag": {
+    "temporal": {
+     "mse": 5.82681128e-05,
+     "frame_delta_mse": 5.72446509e-05,
+     "lag_region_mse": 0.000283735291,
+     "history_buckets": {
+      "1": 0.000699234704,
+      "2-3": 0.000127750993,
+      "4-7": 5.59717943e-05,
+      "8+": 1.47435431e-05
+     },
+     "last_frame_mse": 5.38819736e-05
+    },
+    "filtered": {
+     "mse": 9.61446347e-06,
+     "frame_delta_mse": 6.99790413e-06,
+     "lag_region_mse": 5.99597198e-05,
+     "history_buckets": {
+      "1": 6.03042175e-05,
+      "2-3": 1.9879576e-05,
+      "4-7": 1.54575671e-05,
+      "8+": 4.49556989e-06
+     },
+     "last_frame_mse": 1.09758388e-05
+    },
+    "progressive": {
+     "mse": 0.000244880154,
+     "frame_delta_mse": 7.29086562e-05,
+     "lag_region_mse": 0.000676491404,
+     "history_buckets": {
+      "1": 0.000244662742,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.000248989084
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 6.99790413e-06,
+     "max_hold_frame_delta_mse": 2.69911076e-07
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03376,
+     "reprojection": 0.006144,
+     "accumulation": 0.029696,
+     "variance": 0.028672,
+     "filter": 0.078848
+    }
+   },
+   "reflection": {
+    "temporal": {
+     "mse": 0.000179752243,
+     "frame_delta_mse": 3.36833032e-05,
+     "lag_region_mse": 0.00127333146,
+     "history_buckets": {
+      "1": null,
+      "2-3": 0.000137607515,
+      "4-7": 0.000149929283,
+      "8+": 0.000185020787
+     },
+     "last_frame_mse": 0.000176695735
+    },
+    "filtered": {
+     "mse": 0.000149840527,
+     "frame_delta_mse": 2.69371457e-05,
+     "lag_region_mse": 0.00120105266,
+     "history_buckets": {
+      "1": null,
+      "2-3": 3.83169525e-05,
+      "4-7": 0.00010598865,
+      "8+": 0.000171355357
+     },
+     "last_frame_mse": 0.000166949176
+    },
+    "progressive": {
+     "mse": 0.000244880154,
+     "frame_delta_mse": 7.29086562e-05,
+     "lag_region_mse": 0.000676491404,
+     "history_buckets": {
+      "1": 0.000244662742,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.000248989084
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 2.69371457e-05,
+     "max_hold_frame_delta_mse": 4.17268047e-07
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033792,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.00512,
+     "filter": 0.079872
+    }
+   }
+  },
+  "glossy-floor-camera-pan-v1": {
+   "none": {
+    "temporal": {
+     "mse": 1.03499695,
+     "frame_delta_mse": 0.447067503,
+     "lag_region_mse": 3.03054075,
+     "history_buckets": {
+      "1": 0.485557957,
+      "2-3": 0.402272282,
+      "4-7": 0.53876879,
+      "8+": 1.36607241
+     },
+     "last_frame_mse": 0.780795082
+    },
+    "filtered": {
+     "mse": 0.872051103,
+     "frame_delta_mse": 0.154921024,
+     "lag_region_mse": 2.8352382,
+     "history_buckets": {
+      "1": 0.0906666357,
+      "2-3": 0.129760543,
+      "4-7": 0.400779343,
+      "8+": 1.28738402
+     },
+     "last_frame_mse": 0.708804435
+    },
+    "progressive": {
+     "mse": 1.24569506,
+     "frame_delta_mse": 0.579595786,
+     "lag_region_mse": 1.94949221,
+     "history_buckets": {
+      "1": 1.24703256,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 1.21683882
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.154921024,
+     "max_hold_frame_delta_mse": 0.00196993205
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033152,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.027648,
+     "filter": 0.077824
+    }
+   },
+   "clamp": {
+    "temporal": {
+     "mse": 0.307942362,
+     "frame_delta_mse": 0.34186128,
+     "lag_region_mse": 0.61615882,
+     "history_buckets": {
+      "1": 0.485557957,
+      "2-3": 0.235444254,
+      "4-7": 0.197848952,
+      "8+": 0.290349215
+     },
+     "last_frame_mse": 0.367797198
+    },
+    "filtered": {
+     "mse": 0.23225335,
+     "frame_delta_mse": 0.157519798,
+     "lag_region_mse": 0.557676141,
+     "history_buckets": {
+      "1": 0.0964372334,
+      "2-3": 0.104617558,
+      "4-7": 0.16554555,
+      "8+": 0.294535947
+     },
+     "last_frame_mse": 0.339680941
+    },
+    "progressive": {
+     "mse": 1.24569506,
+     "frame_delta_mse": 0.579595786,
+     "lag_region_mse": 1.94949221,
+     "history_buckets": {
+      "1": 1.24703256,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 1.21683882
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.157519798,
+     "max_hold_frame_delta_mse": 0.00161607368
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03296,
+     "reprojection": 0.006144,
+     "accumulation": 0.01024,
+     "variance": 0.027648,
+     "filter": 0.077824
+    }
+   },
+   "anti-lag": {
+    "temporal": {
+     "mse": 0.355084138,
+     "frame_delta_mse": 0.614259065,
+     "lag_region_mse": 0.680444916,
+     "history_buckets": {
+      "1": 0.474805804,
+      "2-3": 0.356918517,
+      "4-7": 0.253739299,
+      "8+": 0.199484359
+     },
+     "last_frame_mse": 0.348506105
+    },
+    "filtered": {
+     "mse": 0.120664482,
+     "frame_delta_mse": 0.114799183,
+     "lag_region_mse": 0.231655853,
+     "history_buckets": {
+      "1": 0.104856485,
+      "2-3": 0.114277857,
+      "4-7": 0.12425642,
+      "8+": 0.129003775
+     },
+     "last_frame_mse": 0.135920912
+    },
+    "progressive": {
+     "mse": 1.24569506,
+     "frame_delta_mse": 0.579595786,
+     "lag_region_mse": 1.94949221,
+     "history_buckets": {
+      "1": 1.24703256,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 1.21683882
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.114799183,
+     "max_hold_frame_delta_mse": 0.00142661266
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.03456,
+     "reprojection": 0.006144,
+     "accumulation": 0.029696,
+     "variance": 0.032768,
+     "filter": 0.077824
+    }
+   },
+   "reflection": {
+    "temporal": {
+     "mse": 0.640413109,
+     "frame_delta_mse": 1.17665127,
+     "lag_region_mse": 1.67559666,
+     "history_buckets": {
+      "1": 1.79157127,
+      "2-3": 0.409375877,
+      "4-7": 0.149997772,
+      "8+": 0.0878453729
+     },
+     "last_frame_mse": 0.663100025
+    },
+    "filtered": {
+     "mse": 0.106881204,
+     "frame_delta_mse": 0.0974572011,
+     "lag_region_mse": 0.207754955,
+     "history_buckets": {
+      "1": 0.224538905,
+      "2-3": 0.0787532415,
+      "4-7": 0.0500624426,
+      "8+": 0.0506027855
+     },
+     "last_frame_mse": 0.1080202
+    },
+    "progressive": {
+     "mse": 1.24569506,
+     "frame_delta_mse": 0.579595786,
+     "lag_region_mse": 1.94949221,
+     "history_buckets": {
+      "1": 1.24703256,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 1.21683882
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.0974572011,
+     "max_hold_frame_delta_mse": 0.00139192654
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.034624,
+     "reprojection": 0.006144,
+     "accumulation": 0.006144,
+     "variance": 0.031744,
+     "filter": 0.078848
+    }
+   }
+  },
+  "deforming-sheet-v1": {
+   "none": {
+    "temporal": {
+     "mse": 0.0512757546,
+     "frame_delta_mse": 0.0229471291,
+     "lag_region_mse": 0.0740829975,
+     "history_buckets": {
+      "1": 0.0746075944,
+      "2-3": 0.160359237,
+      "4-7": 0.0741473892,
+      "8+": 0.0226950656
+     },
+     "last_frame_mse": 0.0158484335
+    },
+    "filtered": {
+     "mse": 0.0313568635,
+     "frame_delta_mse": 0.00178504208,
+     "lag_region_mse": 0.00428206445,
+     "history_buckets": {
+      "1": 0.00430452676,
+      "2-3": 0.0622527306,
+      "4-7": 0.046477375,
+      "8+": 0.0268737977
+     },
+     "last_frame_mse": 0.0190038183
+    },
+    "progressive": {
+     "mse": 0.362838283,
+     "frame_delta_mse": 0.0102620203,
+     "lag_region_mse": 0.0593647181,
+     "history_buckets": {
+      "1": 0.362886766,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.362727505
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.00178504208,
+     "max_hold_frame_delta_mse": 0.000393340571
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.032736,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.026624,
+     "filter": 0.077824
+    }
+   },
+   "clamp": {
+    "temporal": {
+     "mse": 0.0716920382,
+     "frame_delta_mse": 0.0374859205,
+     "lag_region_mse": 0.0740829975,
+     "history_buckets": {
+      "1": 0.0746075944,
+      "2-3": 0.107933992,
+      "4-7": 0.0586342465,
+      "8+": 0.0579217304
+     },
+     "last_frame_mse": 0.0662202132
+    },
+    "filtered": {
+     "mse": 0.0794969195,
+     "frame_delta_mse": 0.00247621837,
+     "lag_region_mse": 0.00428206445,
+     "history_buckets": {
+      "1": 0.00431549829,
+      "2-3": 0.0832137066,
+      "4-7": 0.0787992167,
+      "8+": 0.0871106902
+     },
+     "last_frame_mse": 0.0883229345
+    },
+    "progressive": {
+     "mse": 0.362838283,
+     "frame_delta_mse": 0.0102620203,
+     "lag_region_mse": 0.0593647181,
+     "history_buckets": {
+      "1": 0.362886766,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.362727505
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.00247621837,
+     "max_hold_frame_delta_mse": 0.000463846074
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.034144,
+     "reprojection": 0.006144,
+     "accumulation": 0.01024,
+     "variance": 0.026624,
+     "filter": 0.078848
+    }
+   },
+   "anti-lag": {
+    "temporal": {
+     "mse": 0.0625073845,
+     "frame_delta_mse": 0.0539658993,
+     "lag_region_mse": 0.0740829975,
+     "history_buckets": {
+      "1": 0.113055336,
+      "2-3": 0.149949863,
+      "4-7": 0.0518825995,
+      "8+": 0.0169717037
+     },
+     "last_frame_mse": 0.0383057805
+    },
+    "filtered": {
+     "mse": 0.0437639215,
+     "frame_delta_mse": 0.00341083439,
+     "lag_region_mse": 0.00428206445,
+     "history_buckets": {
+      "1": 0.056074321,
+      "2-3": 0.0974007348,
+      "4-7": 0.0524606492,
+      "8+": 0.0216417476
+     },
+     "last_frame_mse": 0.0371251864
+    },
+    "progressive": {
+     "mse": 0.362838283,
+     "frame_delta_mse": 0.0102620203,
+     "lag_region_mse": 0.0593647181,
+     "history_buckets": {
+      "1": 0.362886766,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.362727505
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.00341083439,
+     "max_hold_frame_delta_mse": 0.000407520301
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033696,
+     "reprojection": 0.006144,
+     "accumulation": 0.029696,
+     "variance": 0.029696,
+     "filter": 0.078848
+    }
+   },
+   "reflection": {
+    "temporal": {
+     "mse": 0.0512757546,
+     "frame_delta_mse": 0.0229471291,
+     "lag_region_mse": 0.0740829975,
+     "history_buckets": {
+      "1": 0.0746075944,
+      "2-3": 0.160359237,
+      "4-7": 0.0741473892,
+      "8+": 0.0226950656
+     },
+     "last_frame_mse": 0.0158484335
+    },
+    "filtered": {
+     "mse": 0.0313568635,
+     "frame_delta_mse": 0.00178504208,
+     "lag_region_mse": 0.00428206445,
+     "history_buckets": {
+      "1": 0.00430452676,
+      "2-3": 0.0622527306,
+      "4-7": 0.046477375,
+      "8+": 0.0268737977
+     },
+     "last_frame_mse": 0.0190038183
+    },
+    "progressive": {
+     "mse": 0.362838283,
+     "frame_delta_mse": 0.0102620203,
+     "lag_region_mse": 0.0593647181,
+     "history_buckets": {
+      "1": 0.362886766,
+      "2-3": null,
+      "4-7": null,
+      "8+": null
+     },
+     "last_frame_mse": 0.362727505
+    },
+    "settling": {
+     "converged_equals_reference": true,
+     "no_pop": true,
+     "moving_frame_delta_mse": 0.00178504208,
+     "max_hold_frame_delta_mse": 0.000393340571
+    },
+    "deterministic": true,
+    "gpu_ms_median": {
+     "primary_surface": 0.033344,
+     "reprojection": 0.006144,
+     "accumulation": 0.00512,
+     "variance": 0.026624,
+     "filter": 0.077824
+    }
+   }
+  }
+ },
+ "label": "main e76dac4 plus LOTUS-INTERACTIVE-05; Release; 2026-11-09; dynamic clocks; validation layers disabled",
+ "wavefront_identical": {
+  "none": true,
+  "reflection": true
+ }
+}

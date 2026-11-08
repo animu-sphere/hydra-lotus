@@ -37,6 +37,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   change. `--benchmark-svgf` gains a `settling` series per workload
   (`--svgf-hold`, schema `lotus-svgf-benchmark-v3`)
   ([report](docs/reports/2026-11-08-balanced-settling.md)).
+- An experimental `TemporalFrameSettings::history_rectification` with three
+  ghosting candidates: a neighbourhood clamp, anti-lag and roughness-aware
+  reflection weighting. The default `None` leaves the accumulation
+  unchanged. `--benchmark-svgf --svgf-rectification` measures them. Each
+  lowered the lag metric and raised another of the contract's rows, so none
+  is adopted and no preset selects one
+  ([report](docs/reports/2026-11-09-ghosting-candidates.md)).
 
 ### Changed
 
