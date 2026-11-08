@@ -36,6 +36,9 @@ struct Options {
   std::string label;
   unsigned size = 128, frames = 32, sequences = 4, batch = 1;
   unsigned reference_samples = 1024, cap = 32, iterations = kTemporalFilterIterations;
+  // Frames the settling measurement holds the last pose for; its sample
+  // target is reached on the last of them.
+  unsigned hold = 64;
   unsigned seed = kSeed, reference_seed = kReferenceSeed, bounces = 4;
   Integrator integrator = Integrator::Reference;
 };
@@ -95,7 +98,8 @@ Options Parse(int argc, char** argv) {
                                 "[--svgf-sequences <2..64>] [--svgf-batch <1..64>] "
                                 "[--svgf-seed <0..8388607>] [--svgf-reference-seed <16777216..1073741823>] "
                                 "[--svgf-reference-samples <16..8192>] [--svgf-bounces <1..64>] "
-                                "[--svgf-history-cap <1..65536>] [--svgf-iterations <1..8>]");
+                                "[--svgf-history-cap <1..65536>] [--svgf-iterations <1..8>] "
+                                "[--svgf-hold <4..1024>]");
   Options options;
   options.report = argv[2];
   for (int i = 3; i < argc; ++i) {
@@ -132,11 +136,13 @@ Options Parse(int argc, char** argv) {
       options.cap = Number(value, 1, 65536);
     else if (option == "--svgf-iterations")
       options.iterations = Number(value, 1, kTemporalFilterMaxIterations);
+    else if (option == "--svgf-hold")
+      options.hold = Number(value, 4, 1024);
     else
       throw std::invalid_argument("unknown benchmark option: " + std::string(option));
   }
   // Each sequence's batches stay inside its stride, below the references.
-  if (options.frames * options.batch > kSequenceStride ||
+  if (options.frames * options.batch > kSequenceStride || options.hold * options.batch > kSequenceStride ||
       options.seed + std::uint64_t{options.sequences} * kSequenceStride > (1U << 23))
     throw std::invalid_argument("measured sample ranges overlap");
   return options;
@@ -752,6 +758,69 @@ void Progressive(OffscreenRenderer& renderer, SceneExtraction& extraction, const
   }
 }
 
+// The settling transition (docs/design/INTERACTIVE_QUALITY.md section 4):
+// the workload's frames from a cut, then its last pose held for
+// options.hold frames, under a sample target the hold reaches on its last
+// frame. Per frame, summed over sequences: MSE against the pose's reference
+// and frame-delta MSE of the colour the host shows.
+enum class Shown { Balanced, Interactive, Reference };
+
+struct Transition {
+  std::vector<double> mse, delta;
+  unsigned settling_frames = 0;
+  // Every sequence's last Balanced frame is its Reference frame bit for bit.
+  bool equals_reference = true;
+  explicit Transition(std::size_t frames) : mse(frames), delta(frames) {}
+};
+
+std::vector<float> Transit(OffscreenRenderer& renderer, SceneExtraction& extraction, const Workload& work,
+    const Baseline& baseline, const Options& options, unsigned sequence, std::uint64_t& frame_index,
+    Shown shown, Transition& out) {
+  OffscreenTarget target;
+  target.width = target.height = options.size;
+  const std::size_t pixels = std::size_t{options.size} * options.size;
+  PathTracingSettings settings;
+  settings.integrator = options.integrator;
+  settings.max_bounces = options.bounces;
+  settings.sample_index = options.seed + sequence * kSequenceStride;
+  settings.max_samples = options.hold * options.batch;
+  TemporalFrameSettings temporal;
+  ApplyQualityPreset(shown == Shown::Balanced ? QualityPreset::Balanced : QualityPreset::Interactive, temporal);
+  temporal.max_history_samples = options.cap;
+  temporal.filter_iterations = options.iterations;
+  std::vector<double> previous;
+  std::vector<float> value;
+  for (unsigned f = 0; f < options.frames + options.hold; ++f) {
+    const unsigned pose = std::min(f, options.frames - 1);
+    const auto& snapshot = work.snapshots[pose];
+    Upload(renderer, extraction, snapshot);
+    GpuFrameEvidence frame;
+    if (shown == Shown::Reference) {
+      frame = renderer.RenderScene(ExtractDrawSummary(snapshot), target, options.batch, settings);
+    } else {
+      temporal.frame_index = frame_index++;
+      temporal.camera_cut = f == 0;
+      frame = renderer.RenderTemporalScene(snapshot, target, options.batch, temporal, settings);
+      out.settling_frames += frame.temporal.settling ? 1 : 0;
+    }
+    RequireFrame(frame, options.size);
+    value = Rgb(reinterpret_cast<const float*>(frame.color.payload.data()), pixels);
+    const auto& reference = baseline.images[work.moving ? pose : 0];
+    std::vector<double> error(value.size());
+    double squared = 0, delta = 0;
+    for (std::size_t k = 0; k < error.size(); ++k) {
+      error[k] = double(value[k]) - reference[k];
+      squared += error[k] * error[k];
+      if (f != 0)
+        delta += std::pow(error[k] - previous[k], 2);
+    }
+    out.mse[f] += squared / error.size();
+    out.delta[f] += delta / error.size();
+    previous = std::move(error);
+  }
+  return value;
+}
+
 // A fresh renderer per workload; its sequences share one extraction.
 std::string Measure(const Workload& work, const Baseline& baseline, const Options& options,
     const std::filesystem::path& executable, const std::filesystem::path& images) {
@@ -773,6 +842,16 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Option
   // After every temporal frame, so no progressive render sits between two.
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence)
     Progressive(*renderer, extraction, work, baseline, options, sequence, run, images, sequence == 0);
+  const std::size_t transit_frames = options.frames + options.hold;
+  std::array<Transition, 3> transitions{
+      Transition(transit_frames), Transition(transit_frames), Transition(transit_frames)};
+  for (unsigned sequence = 0; sequence < options.sequences; ++sequence) {
+    std::array<std::vector<float>, 3> last;
+    for (std::size_t m = 0; m < transitions.size(); ++m)
+      last[m] = Transit(*renderer, extraction, work, baseline, options, sequence, frame_index,
+          static_cast<Shown>(m), transitions[m]);
+    transitions[0].equals_reference = transitions[0].equals_reference && last[0] == last[2];
+  }
   constexpr std::array<const char*, 3> kRegions{"none", "albedo", "swept"};
 
   const double sequences = options.sequences;
@@ -859,7 +938,43 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Option
         << ",\"reference_noise_mse\":" << last_reference_noise
         << ",\"excess_mse\":" << mean_squared - noise - last_reference_noise << "}}";
   }
-  out << "},\"gpu_ms_median\":";
+  // The settling transition. The moving view's mean is Balanced's own
+  // frame-delta MSE before the hold; a still workload has none.
+  const auto Scaled = [&](const std::vector<double>& values, std::size_t begin, std::size_t end) {
+    std::vector<double> result;
+    for (std::size_t f = begin; f < end; ++f)
+      result.push_back(values[f] / sequences);
+    return result;
+  };
+  const auto& balanced = transitions[0];
+  const auto moving_delta = Scaled(balanced.delta, 1, options.frames);
+  const auto hold_delta = Scaled(balanced.delta, options.frames, transit_frames);
+  const double moving_mean =
+      std::accumulate(moving_delta.begin(), moving_delta.end(), 0.0) / moving_delta.size();
+  const double hold_max = *std::max_element(hold_delta.begin(), hold_delta.end());
+  out << "},\"settling\":{\"hold_frames\":" << options.hold << ",\"sample_target\":" << options.hold * options.batch
+      << ",\"settling_frames_per_sequence\":" << balanced.settling_frames / sequences
+      << ",\"converged_equals_reference\":" << (balanced.equals_reference ? "true" : "false")
+      << ",\"moving_frame_delta_mse\":";
+  if (work.moving)
+    out << moving_mean;
+  else
+    out << "null";
+  out << ",\"max_hold_frame_delta_mse\":" << hold_max << ",\"no_pop\":";
+  if (work.moving)
+    out << (hold_max <= moving_mean ? "true" : "false");
+  else
+    out << "null";
+  out << ",\"outputs\":{";
+  constexpr std::array<const char*, 3> kShown{"balanced", "interactive", "reference"};
+  for (std::size_t m = 0; m < transitions.size(); ++m) {
+    out << (m ? "," : "") << Quote(kShown[m]) << ":{\"mse_by_frame\":";
+    Array(out, Scaled(transitions[m].mse, 0, transit_frames));
+    out << ",\"frame_delta_mse_by_frame\":";
+    Array(out, Scaled(transitions[m].delta, 0, transit_frames));
+    out << '}';
+  }
+  out << "}},\"gpu_ms_median\":";
   if (run.filter_ms.empty())
     out << "null";
   else
@@ -912,7 +1027,7 @@ int SvgfBenchmarkMain(int argc, char** argv) {
       detail = error.what();
     }
     std::ostringstream out;
-    out << "{\"schema\":\"lotus-svgf-benchmark-v2\",\"status\":"
+    out << "{\"schema\":\"lotus-svgf-benchmark-v3\",\"status\":"
         << Quote(status == FrameStatus::Pass ? "pass" : status == FrameStatus::Skip ? "skip"
                                                                                     : "fail")
         << ",\"detail\":" << Quote(detail) << ",\"started_unix\":" << started
@@ -925,6 +1040,7 @@ int SvgfBenchmarkMain(int argc, char** argv) {
         << ",\"width\":" << options.size << ",\"height\":" << options.size << ",\"frames\":" << options.frames
         << ",\"sequences\":" << options.sequences << ",\"fresh_samples_per_frame\":" << options.batch
         << ",\"history_cap\":" << options.cap << ",\"filter_iterations\":" << options.iterations
+        << ",\"settling_hold_frames\":" << options.hold
         << ",\"max_bounces\":" << options.bounces << ",\"sample_index\":" << options.seed
         << ",\"sequence_stride\":" << kSequenceStride << ",\"reference_seed\":" << options.reference_seed
         << ",\"reference_samples_per_half\":" << options.reference_samples << ",\"reference_halves\":2}"
@@ -939,7 +1055,8 @@ int SvgfBenchmarkMain(int argc, char** argv) {
            "\"lag_region\":\"Where the fixture's lag shows: albedo is every pixel whose primary surface has the fixture's lagging material, per frame; swept is every pixel whose reference luminance ranges over more than a tenth of its brightest pose and six times the mean reference noise; none has no region. mean_pixels averages its size over frames.\","
            "\"lag_region_mse\":\"RGB squared error against the pose's reference in the lag region, frames after the cut pooled; by frame, null where the region is empty.\","
            "\"deterministic\":\"The first sequence rendered again from a new cut reproduced every raw, temporal and filtered value bit for bit; progressive is not repeated.\","
-           "\"gpu_ms_median\":\"Per frame, with whatever validation layers are active; filter covers every iteration and the composite.\"},\"scenes\":[";
+           "\"gpu_ms_median\":\"Per frame, with whatever validation layers are active; filter covers every iteration and the composite.\","
+           "\"settling\":\"The workload's frames from a cut, then its last pose held for hold_frames frames under a sample target the hold reaches on its last frame, shown as Balanced, Interactive and Reference (progressive, restarted on every change) would show it. By frame, over frames then hold, summed over sequences and divided by them: MSE against the pose's reference and frame-delta MSE. moving_frame_delta_mse is Balanced's mean before the hold, null for a still workload; no_pop holds when no hold frame's frame-delta MSE exceeds it. converged_equals_reference: every sequence's last Balanced frame equals its Reference frame bit for bit.\"},\"scenes\":[";
     for (std::size_t i = 0; i < scenes.size(); ++i)
       out << (i ? "," : "") << scenes[i];
     out << "]}\n";

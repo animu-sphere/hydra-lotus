@@ -17,6 +17,7 @@ struct TemporalConstants {
   float4 validation;
   uint4 history; // x: preceding frame available; y/z: full target extent.
   uint4 radiance; // enabled, fresh samples, bounded history samples, filter iterations
+  uint4 settle; // x: settling frame; y: still samples; z: sample target, 0 for none
 };
 [[vk::binding(8, 0)]] ConstantBuffer<TemporalConstants> temporal_frame;
 
@@ -375,6 +376,24 @@ public float4 CompositeTemporalRadiance(float2 pixel, uint iteration) {
   if (r.sample_count == 0)
     return r.color;
   return float4(Remodulate(FilterIteration(p, iteration).xyz, temporal_surface[index].albedo), r.color.w);
+}
+
+// Mirrors SettleTemporalRadiance. On a settling frame the batch buffer's
+// first half holds the still accumulation's mean and its second half the
+// last changing frame's colour, which counts as the history cap where the
+// retained history, read in place since nothing moved, has samples.
+public float4 SettleTemporalRadiance(float2 pixel) {
+  const uint index = uint(pixel.y) * temporal_frame.history.y + uint(pixel.x);
+  const uint pixels = temporal_frame.history.y * temporal_frame.history.z;
+  const float4 still = temporal_batch[index];
+  const float4 prior = temporal_batch[pixels + index];
+  uint span = temporal_old_radiance[index].sample_count != 0 ? temporal_frame.radiance.z : 0u;
+  if (temporal_frame.settle.z != 0)
+    span = min(span, temporal_frame.settle.z);
+  const uint samples = temporal_frame.settle.y;
+  if (samples >= span || !all(isfinite(prior)))
+    return still;
+  return prior + (still - prior) * (float(samples) / float(span));
 }
 
 // TemporalRejection's stable numeric codes. This contract contains no

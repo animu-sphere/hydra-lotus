@@ -545,9 +545,10 @@ int RunFrameLoop(const Options& options, ViewportWindow& viewport,
                 << result.present.detail << '\n';
       return 1;
     }
-    // The scene, through Hydra too, must filter as the controls ask.
+    // The scene, through Hydra too, must filter as the controls ask; a
+    // settling frame filters nothing.
     if (result.frame.temporal.filter_iterations !=
-        plan.temporal.filter_iterations) {
+        (result.frame.temporal.settling ? 0U : plan.temporal.filter_iterations)) {
       std::cerr << "lotus-viewport: frame " << totals.frames + 1 << " ran "
                 << result.frame.temporal.filter_iterations
                 << " filter iterations, the controls asked for "

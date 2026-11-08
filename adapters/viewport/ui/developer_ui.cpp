@@ -71,9 +71,15 @@ constexpr const char* kRejections[] = {"accepted", "miss", "invalid data",
     "correspondence missing", "reprojection outside"};
 
 const char* Label(QualityPreset preset) {
-  return preset == QualityPreset::Interactive
-             ? "Interactive (stable while moving)"
-             : "Reference (converges, unbiased)";
+  switch (preset) {
+  case QualityPreset::Interactive:
+    return "Interactive (stable while moving)";
+  case QualityPreset::Balanced:
+    return "Balanced (stable, then settles)";
+  case QualityPreset::Reference:
+    break;
+  }
+  return "Reference (converges, unbiased)";
 }
 
 const char* Label(RestirMode mode) {
@@ -447,6 +453,9 @@ private:
     ImGui::BeginDisabled(!reuse);
     SliderUnsigned("History samples", controls.history_samples, 1, 1024,
         ImGuiSliderFlags_Logarithmic);
+    ImGui::Checkbox("Settle when still", &controls.settle);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(to the sample limit)");
     ImGui::EndDisabled();
 
     ImGui::SeparatorText("Denoise (SVGF)");

@@ -102,8 +102,10 @@ struct TemporalConstants {
   std::array<float, 4> validation;
   std::array<std::uint32_t, 4> history;
   std::array<std::uint32_t, 4> radiance;
+  // Settling frame, still samples, sample target (0 for none).
+  std::array<std::uint32_t, 4> settle;
 };
-static_assert(sizeof(TemporalConstants) == 272);
+static_assert(sizeof(TemporalConstants) == 288);
 static_assert(sizeof(TemporalRadiancePixel) == 32 &&
               offsetof(TemporalRadiancePixel, sample_count) == 16 &&
               offsetof(TemporalRadiancePixel, moments) == 20 &&
@@ -211,6 +213,8 @@ constexpr std::uint32_t kTemporalVariancePass = 10;
 // instance is the iteration.
 constexpr std::uint32_t kTemporalFilterPass = 11;
 constexpr std::uint32_t kTemporalCompositePass = 12;
+// A settling frame's crossfade (SettleTemporalRadiance).
+constexpr std::uint32_t kTemporalSettlePass = 13;
 // Surface, validity, accumulation, variance and filter timestamp pairs.
 constexpr std::uint32_t kTemporalTimestampQueries = 10;
 
@@ -735,6 +739,7 @@ public:
       vkDestroyPipeline(device_, temporal_variance_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_filter_pipeline_, nullptr);
       vkDestroyPipeline(device_, temporal_composite_pipeline_, nullptr);
+      vkDestroyPipeline(device_, temporal_settle_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_temporal_pipeline_, nullptr);
       vkDestroyPipeline(device_, restir_spatial_pipeline_, nullptr);
@@ -864,7 +869,10 @@ public:
               temporal_filter_pipeline_, detail) ||
           !CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kTemporalCompositePass, true, false},
-              temporal_composite_pipeline_, detail))
+              temporal_composite_pipeline_, detail) ||
+          !CreatePipeline(vertex_words, fragment_words, ray_layout_,
+              {scene_render_pass_, kTemporalSettlePass, true, false},
+              temporal_settle_pipeline_, detail))
         return false;
       if (!CreatePipeline(vertex_words, fragment_words, ray_layout_,
               {scene_render_pass_, kRestirInitialPass, false, false},
@@ -1399,6 +1407,7 @@ public:
     DestroyTemporalBuffer(temporal_constants_);
     DestroyTemporalBuffer(temporal_instances_);
     temporal_width_ = temporal_height_ = 0;
+    temporal_prior_valid_ = false;
   }
 
   bool EnsureTemporalBuffer(TemporalBuffer& buffer, VkDeviceSize bytes,
@@ -1725,6 +1734,8 @@ public:
     if (filter_iterations > kTemporalFilterMaxIterations || (filter_iterations != 0 && !accumulate))
       return Evidence(FrameStatus::Fail,
           "temporal filtering requires radiance accumulation and at most 8 iterations");
+    if (requested.settle && !accumulate)
+      return Evidence(FrameStatus::Fail, "settling requires radiance accumulation");
     auto next_history = temporal_history_;
     auto next_identities = temporal_identities_;
     auto frame_settings = requested;
@@ -1760,6 +1771,12 @@ public:
         frame.reset_reason = TemporalResetReason::SceneChanged;
       }
     }
+    // Settling: nothing this frame depends on differs from the preceding
+    // frame, which left its colour as the prior. Reservoir reuse traces a
+    // fresh batch every frame, so it never settles.
+    const bool settling = requested.settle && !reservoirs && temporal_prior_valid_ &&
+        frame.previous.has_value() && frame.reset_reason == TemporalResetReason::None &&
+        snapshot.scene == frame.previous->scene && snapshot.camera == frame.previous->camera;
     const auto instances = next_identities.Build(frame);
     if (instances.size() != scene_.Stats().instance_count)
       return Evidence(FrameStatus::Fail, "temporal instance order/scene mismatch");
@@ -1770,7 +1787,10 @@ public:
       return Evidence(FrameStatus::Fail, "temporal metadata exceeds the device's storage buffer range");
     auto batch_settings = settings;
     const auto sample_offset = frame.previous ? temporal_sample_offset_ : 0u;
-    if (fresh_batch) {
+    // A settling frame continues the still frames' progressive
+    // accumulation, from the host's sample index as RenderScene's would.
+    const std::uint32_t settled_before = settling ? accumulated_samples_ : 0u;
+    if (fresh_batch && !settling) {
       // A fresh estimator batch: never feed a cumulative progressive mean
       // back into history. Advance the RNG even on a moving view.
       accumulated_samples_ = 0;
@@ -1783,6 +1803,7 @@ public:
     if (temporal_width_ != target.width || temporal_height_ != target.height) {
       DestroyTemporalBuffers();
       temporal_write_ = 0;
+      temporal_radiance_write_ = 0;
       temporal_width_ = target.width;
       temporal_height_ = target.height;
     }
@@ -1812,7 +1833,9 @@ public:
             (mirrors && !EnsureTemporalBuffer(temporal_radiance_readback_,
                             radiance_bytes * 2 + radiance_bytes / 2,
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, detail)) ||
-            !EnsureTemporalBuffer(temporal_batch_, radiance_bytes / 2, surface_usage, false, detail))) {
+            // A second half holds the settling prior.
+            !EnsureTemporalBuffer(temporal_batch_, requested.settle ? radiance_bytes : radiance_bytes / 2,
+                surface_usage, false, detail))) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
@@ -1842,6 +1865,7 @@ public:
     constants.history = {frame.previous ? 1u : 0u, target.width, target.height, 0u};
     constants.radiance = {accumulate ? 1u : 0u, frame_count,
         requested.max_history_samples, filter_iterations};
+    constants.settle = {settling ? 1u : 0u, 0u, settings.max_samples, 0u};
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail) ||
         (!instances.empty() && !WriteTemporalBuffer(temporal_instances_, instances.data(),
                                    instances.size() * sizeof(instances[0]), detail))) {
@@ -1868,8 +1892,8 @@ public:
     if (accumulate) {
       const VkDescriptorBufferInfo radiance_buffers[3] = {
           {temporal_batch_.buffer, 0, VK_WHOLE_SIZE},
-          {temporal_radiance_[temporal_write_].buffer, 0, radiance_bytes},
-          {temporal_radiance_[1 - temporal_write_].buffer, 0, radiance_bytes}};
+          {temporal_radiance_[temporal_radiance_write_].buffer, 0, radiance_bytes},
+          {temporal_radiance_[1 - temporal_radiance_write_].buffer, 0, radiance_bytes}};
       VkWriteDescriptorSet radiance_writes[3]{};
       for (std::uint32_t i = 0; i < 3; ++i) {
         radiance_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1908,11 +1932,13 @@ public:
     }
 
     constants.radiance[1] = evidence.samples_per_pixel;
+    constants.settle[1] = settling ? evidence.samples_per_pixel : 0u;
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
     }
-    if (!RecordTemporal(target, frame.previous.has_value(), accumulate, filter_iterations,
+    if (!RecordTemporal(target, frame.previous.has_value(), accumulate,
+            settling ? 0u : filter_iterations, settling, requested.settle && !settling,
             target.read_back, bytes, detail)) {
       failure_ = detail;
       return Evidence(FrameStatus::Fail, detail);
@@ -1967,7 +1993,7 @@ public:
       if (target.read_back) {
         products.radiance.resize(pixels);
         std::memcpy(products.radiance.data(), temporal_radiance_readback_.mapped, radiance_bytes);
-        if (frame.previous) {
+        if (frame.previous && !settling) {
           products.previous_radiance.resize(pixels);
           std::memcpy(products.previous_radiance.data(),
               static_cast<const std::uint8_t*>(temporal_radiance_readback_.mapped) + radiance_bytes,
@@ -1981,17 +2007,21 @@ public:
             evidence.color.payload.size());
       }
       products.radiance_bytes = radiance_bytes * 2 + temporal_radiance_readback_.bytes + temporal_batch_.bytes;
-      products.batch_samples = evidence.samples_per_pixel;
-      products.batch_sample_index = batch_settings.sample_index;
-      products.filter_iterations = filter_iterations;
+      products.batch_samples = evidence.samples_per_pixel -
+                               std::min(evidence.samples_per_pixel, settled_before);
+      products.batch_sample_index = batch_settings.sample_index + settled_before;
+      products.filter_iterations = settling ? 0u : filter_iterations;
+      products.settling = settling;
+      products.settled_samples = settling ? evidence.samples_per_pixel : 0u;
       products.filter_bytes = temporal_filter_.bytes;
     }
     if (temporal_timestamps_ != VK_NULL_HANDLE) {
       std::uint64_t ticks[kTemporalTimestampQueries]{};
       // Only the passes recorded this frame wrote their queries.
-      const std::uint32_t queries = filter_iterations != 0 ? kTemporalTimestampQueries
-                                    : accumulate           ? 8u
-                                                           : 4u;
+      const std::uint32_t queries = settling                ? 6u
+                                    : filter_iterations != 0 ? kTemporalTimestampQueries
+                                    : accumulate             ? 8u
+                                                             : 4u;
       if (!VulkanOk(vkGetQueryPoolResults(device_, temporal_timestamps_, 0, queries,
                         sizeof(ticks), ticks, sizeof(ticks[0]),
                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
@@ -2006,13 +2036,16 @@ public:
                                         device_properties_.limits.timestampPeriod / 1'000'000.0;
       products.reprojection_gpu_ms = static_cast<double>((ticks[3] - ticks[2]) & mask) *
                                      device_properties_.limits.timestampPeriod / 1'000'000.0;
-      if (accumulate) {
+      if (settling)
+        products.settle_gpu_ms = static_cast<double>((ticks[5] - ticks[4]) & mask) *
+                                 device_properties_.limits.timestampPeriod / 1'000'000.0;
+      else if (accumulate) {
         products.accumulation_gpu_ms = static_cast<double>((ticks[5] - ticks[4]) & mask) *
                                        device_properties_.limits.timestampPeriod / 1'000'000.0;
         products.variance_gpu_ms = static_cast<double>((ticks[7] - ticks[6]) & mask) *
                                    device_properties_.limits.timestampPeriod / 1'000'000.0;
       }
-      if (filter_iterations != 0)
+      if (filter_iterations != 0 && !settling)
         products.filter_gpu_ms = static_cast<double>((ticks[9] - ticks[8]) & mask) *
                                  device_properties_.limits.timestampPeriod / 1'000'000.0;
     }
@@ -2022,12 +2055,20 @@ public:
     temporal_history_ = std::move(next_history);
     temporal_identities_ = std::move(next_identities);
     temporal_transport_key_ = fresh_batch ? std::optional{radiance_key} : std::nullopt;
-    temporal_sample_offset_ = fresh_batch ? sample_offset + evidence.samples_per_pixel : 0u;
-    // A fresh batch is not a progressive mean: the next progressive frame
-    // starts its accumulation again rather than adding to this sample.
-    if (fresh_batch)
+    // A settling frame traces no fresh batch: the next change continues the
+    // stream's samples.
+    if (!settling)
+      temporal_sample_offset_ = fresh_batch ? sample_offset + evidence.samples_per_pixel : 0u;
+    // A fresh batch is not a progressive mean: the next progressive or first
+    // settling frame starts its accumulation again rather than adding to it.
+    if (fresh_batch && !settling) {
       accumulation_key_.reset();
+      accumulated_samples_ = 0;
+    }
     temporal_write_ = 1 - temporal_write_;
+    if (!settling)
+      temporal_radiance_write_ = 1 - temporal_radiance_write_;
+    temporal_prior_valid_ = requested.settle;
     evidence.validation_message_count = validation_.message_count;
     evidence.validation_detail = validation_.first_message.empty()
                                      ? instance_state_.validation_detail
@@ -2106,9 +2147,12 @@ public:
 
   // Without `read_back` the products stay on the GPU: the surfaces,
   // validity and radiance are not copied to their host mirrors.
+  // A settling frame replaces accumulation, variance and filter with the
+  // crossfade; `capture_prior` keeps a changing frame's colour for it.
   bool RecordTemporal(const OffscreenTarget& target, bool previous,
-      bool accumulate, std::uint32_t filter_iterations, bool read_back,
-      VkDeviceSize bytes, std::string& detail) {
+      bool accumulate, std::uint32_t filter_iterations, bool settling,
+      bool capture_prior, bool read_back, VkDeviceSize bytes,
+      std::string& detail) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     if (!VulkanOk(vkBeginCommandBuffer(command_, &begin),
             "vkBeginCommandBuffer(temporal)", detail))
@@ -2143,7 +2187,25 @@ public:
     }
     const VkViewport full_viewport{0, 0, static_cast<float>(target.width), static_cast<float>(target.height), 0, 1};
     const VkRect2D full_scissor{{0, 0}, {target.width, target.height}};
-    if (accumulate) {
+    if (settling) {
+      barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+      if (temporal_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, temporal_timestamps_, 4);
+      vkCmdBeginRenderPass(command_, &render, VK_SUBPASS_CONTENTS_INLINE);
+      vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_GRAPHICS, temporal_settle_pipeline_);
+      vkCmdSetViewport(command_, 0, 1, &full_viewport);
+      vkCmdSetScissor(command_, 0, 1, &full_scissor);
+      vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+          ray_layout_, 0, 1, &ray_descriptor_, 0, nullptr);
+      vkCmdPushConstants(command_, ray_layout_, kRayStages, 0, sizeof(RayConstants), &ray_constants_);
+      vkCmdDraw(command_, 3, 1, 0, 0);
+      vkCmdEndRenderPass(command_);
+      if (temporal_timestamps_ != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 5);
+    } else if (accumulate) {
       barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
       barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
       vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -2204,6 +2266,21 @@ public:
       if (temporal_timestamps_ != VK_NULL_HANDLE)
         vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, temporal_timestamps_, 9);
     }
+    if (capture_prior) {
+      // The colour this frame shows: the prior of a following settling
+      // frame, in the batch buffer's second half.
+      barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+      vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+      VkBufferImageCopy prior{};
+      prior.bufferOffset = VkDeviceSize{target.width} * target.height * sizeof(std::array<float, 4>);
+      prior.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      prior.imageExtent = {target.width, target.height, 1};
+      vkCmdCopyImageToBuffer(command_, scene_targets_.color_image,
+          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, temporal_batch_.buffer, 1, &prior);
+    }
     if (!read_back)
       return VulkanOk(vkEndCommandBuffer(command_), "vkEndCommandBuffer(temporal)", detail);
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -2224,11 +2301,13 @@ public:
     if (accumulate) {
       const VkDeviceSize radiance_bytes = VkDeviceSize{target.width} * target.height * sizeof(TemporalRadiancePixel);
       copy = {0, 0, radiance_bytes};
-      vkCmdCopyBuffer(command_, temporal_radiance_[temporal_write_].buffer,
+      // A settling frame reads back the retained history it did not write.
+      vkCmdCopyBuffer(command_,
+          temporal_radiance_[settling ? 1 - temporal_radiance_write_ : temporal_radiance_write_].buffer,
           temporal_radiance_readback_.buffer, 1, &copy);
-      if (previous) {
+      if (previous && !settling) {
         copy.dstOffset = radiance_bytes;
-        vkCmdCopyBuffer(command_, temporal_radiance_[1 - temporal_write_].buffer,
+        vkCmdCopyBuffer(command_, temporal_radiance_[1 - temporal_radiance_write_].buffer,
             temporal_radiance_readback_.buffer, 1, &copy);
       }
       copy = {0, radiance_bytes * 2, radiance_bytes / 2};
@@ -2583,7 +2662,7 @@ public:
           source.product = temporal_batch_.buffer;
           source.stride = sizeof(std::array<float, 4>) / 16;
         } else {
-          source.product = temporal_radiance_[1 - temporal_write_].buffer;
+          source.product = temporal_radiance_[1 - temporal_radiance_write_].buffer;
           source.stride = sizeof(TemporalRadiancePixel) / 16;
         }
         break;
@@ -3782,6 +3861,7 @@ private:
   VkPipeline temporal_variance_pipeline_ = VK_NULL_HANDLE;
   VkPipeline temporal_filter_pipeline_ = VK_NULL_HANDLE;
   VkPipeline temporal_composite_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline temporal_settle_pipeline_ = VK_NULL_HANDLE;
   VkQueryPool temporal_timestamps_ = VK_NULL_HANDLE;
   VkPipeline restir_pipeline_ = VK_NULL_HANDLE;
   VkPipeline restir_temporal_pipeline_ = VK_NULL_HANDLE;
@@ -3817,6 +3897,13 @@ private:
   std::uint32_t temporal_width_ = 0;
   std::uint32_t temporal_height_ = 0;
   std::uint32_t temporal_write_ = 0;
+  // The radiance history's write index. It flips with temporal_write_
+  // except on a settling frame, which keeps the last changing frame's
+  // history.
+  std::uint32_t temporal_radiance_write_ = 0;
+  // The batch buffer's second half holds the last changing frame's colour,
+  // captured by a frame with TemporalFrameSettings::settle.
+  bool temporal_prior_valid_ = false;
   bool rendering_temporal_ = false;
   // One per WavefrontKernel; null without the wavefront shader.
   std::array<VkPipeline, kWavefrontKernels> wavefront_pipelines_{};

@@ -102,7 +102,8 @@ Options ParseOptions(int argc, const char* const* argv) {
     } else if (option == "--preset") {
       const auto preset = ParseQualityPreset(next());
       if (!preset) {
-        throw std::invalid_argument("--preset must be interactive or reference");
+        throw std::invalid_argument(
+            "--preset must be interactive, balanced or reference");
       }
       // Later options edit the preset's controls.
       ApplyPreset(result.controls, *preset);
@@ -224,7 +225,7 @@ std::string Usage(bool hydra) {
       "  --nee on|off             next event estimation with MIS (default on)\n"
       "  --restir off|initial|temporal|spatial|combined\n"
       "                           reservoir direct lighting (default off)\n"
-      "  --preset interactive|reference\n"
+      "  --preset interactive|balanced|reference\n"
       "                           temporal radiance and the denoiser, or\n"
       "                           progressive accumulation (the default);\n"
       "                           later options edit it\n"

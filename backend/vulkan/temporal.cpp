@@ -511,4 +511,20 @@ std::vector<std::array<float, 4>> FilterTemporalRadiance(
   return output;
 }
 
+// Mirrors SettleTemporalRadiance in temporal.slang.
+std::array<float, 4> SettleTemporalRadiance(const std::array<float, 4>& prior,
+    const std::array<float, 4>& still, std::uint32_t prior_samples,
+    std::uint32_t still_samples, std::uint32_t max_samples) {
+  const std::uint32_t span =
+      max_samples == 0 ? prior_samples : std::min(prior_samples, max_samples);
+  if (still_samples >= span ||
+      !std::all_of(prior.begin(), prior.end(), [](float value) { return std::isfinite(value); }))
+    return still;
+  const float t = static_cast<float>(still_samples) / static_cast<float>(span);
+  std::array<float, 4> result{};
+  for (std::size_t c = 0; c < 4; ++c)
+    result[c] = prior[c] + (still[c] - prior[c]) * t;
+  return result;
+}
+
 } // namespace Lotus

@@ -50,7 +50,8 @@ constexpr Named kViewNames[] = {{"beauty", 0}, {"depth", 1}, {"normal", 2},
     {"reservoir-age", 6}, {"reservoir-weight", 7}, {"raw", 8},
     {"accumulated", 9}, {"history-length", 10}, {"variance", 11}};
 constexpr Named kIntegratorNames[] = {{"reference", 0}, {"wavefront", 1}};
-constexpr Named kPresetNames[] = {{"interactive", 0}, {"reference", 1}};
+constexpr Named kPresetNames[] = {
+    {"interactive", 0}, {"balanced", 1}, {"reference", 2}};
 
 template <std::size_t N>
 std::string_view NameOf(const Named (&names)[N], int value) {
@@ -114,6 +115,7 @@ FramePlan PlanFrame(const Controls& controls, std::uint64_t frame,
     plan.temporal.filter_iterations = std::clamp(
         controls.filter_iterations, 1U, kTemporalFilterMaxIterations);
   }
+  plan.temporal.settle = plan.temporal.accumulate_radiance && controls.settle;
   plan.temporal_frame = FreshBatch(controls) || TemporalView(controls.view);
 
   PresentView& present = plan.present;
@@ -164,6 +166,7 @@ void ApplyPreset(Controls& controls, QualityPreset preset) {
   ApplyQualityPreset(preset, temporal);
   controls.temporal_radiance = temporal.accumulate_radiance;
   controls.denoise = temporal.filter_iterations != 0;
+  controls.settle = temporal.settle;
   if (controls.denoise) {
     controls.filter_iterations = temporal.filter_iterations;
   }

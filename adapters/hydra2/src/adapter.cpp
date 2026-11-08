@@ -271,6 +271,7 @@ const TfToken kHistoryKeySetting("lotus:historyKey");
 const TfToken kHistoryResetSetting("lotus:historyReset");
 const TfToken kFilterIterationsSetting("lotus:filterIterations");
 const TfToken kInteractiveSetting("lotus:interactive");
+const TfToken kBalancedSetting("lotus:balanced");
 const TfToken kMotionAov("lotus:motion");
 const TfToken kHistoryLengthAov("lotus:historyLength");
 const TfToken kHistoryValidityAov("lotus:historyValidity");
@@ -984,8 +985,12 @@ public:
       else
         restir_diagnostics_.initial = frame.restir.initial;
     }
-    converged_ = !temporal.accumulate_radiance && !reservoir_reuse &&
-                 (!trace || frame.samples_per_pixel >= settings.max_samples);
+    // A settling frame converges as a progressive one does: at the sample
+    // target, after which it traces nothing.
+    converged_ = (frame.temporal.settling &&
+                     frame.temporal.settled_samples >= settings.max_samples) ||
+                 (!temporal.accumulate_radiance && !reservoir_reuse &&
+                     (!trace || frame.samples_per_pixel >= settings.max_samples));
     std::size_t buffers_written{};
     for (const HdRenderPassAovBinding& binding : bindings) {
       auto* buffer =
@@ -2304,9 +2309,12 @@ private:
         delegate.GetRenderSetting<int>(kHistorySamplesSetting, 32), 1, 65536));
     temporal.history_key = static_cast<std::uint64_t>(std::max(
         delegate.GetRenderSetting<int>(kHistoryKeySetting, 0), 0));
+    // A preset overrides the temporal, history and filter settings, and
+    // Interactive wins over Balanced.
     if (delegate.GetRenderSetting<bool>(kInteractiveSetting, false)) {
-      // The preset overrides the temporal, history and filter settings.
       Lotus::ApplyQualityPreset(Lotus::QualityPreset::Interactive, temporal);
+    } else if (delegate.GetRenderSetting<bool>(kBalancedSetting, false)) {
+      Lotus::ApplyQualityPreset(Lotus::QualityPreset::Balanced, temporal);
     } else if (temporal.accumulate_radiance) {
       // The filter needs the accumulation; without it the setting is unused.
       temporal.filter_iterations = static_cast<std::uint32_t>(std::clamp(
@@ -2884,7 +2892,8 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
       {"Temporal history reset counter", kHistoryResetSetting, VtValue(0)},
       {"Temporal filter iterations (SVGF)", kFilterIterationsSetting,
           VtValue(0)},
-      {"Interactive preset", kInteractiveSetting, VtValue(false)}};
+      {"Interactive preset", kInteractiveSetting, VtValue(false)},
+      {"Balanced preset", kBalancedSetting, VtValue(false)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {

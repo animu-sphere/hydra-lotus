@@ -26,6 +26,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   the progressive image. Both hosts map a preset through
   `Lotus::ApplyQualityPreset`, which never changes the estimator
   ([report](docs/reports/2026-11-08-interactive-presets.md)).
+- The Balanced quality preset: `lotus:balanced`, the viewport's
+  `--preset balanced` and its Renderer window's *Settle when still*.
+  Balanced is Interactive while anything changes; once the view is still
+  (`TemporalFrameSettings::settle`), the last changing frame's filtered
+  colour crossfades over the history cap's samples into a progressive
+  accumulation of still samples, which at the sample target is the
+  Reference image bit for bit and stops tracing; Hydra then reports
+  convergence. The history and the stream's samples resume on the next
+  change. `--benchmark-svgf` gains a `settling` series per workload
+  (`--svgf-hold`, schema `lotus-svgf-benchmark-v3`)
+  ([report](docs/reports/2026-11-08-balanced-settling.md)).
 
 ### Changed
 

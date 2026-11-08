@@ -187,6 +187,12 @@ FragmentOutput fragment_main(VertexOutput input) {
     output.depth = 1.0;
     return output;
   }
+  if (kPass == 13) {
+    FragmentOutput output;
+    output.color = SettleTemporalRadiance(input.position.xy);
+    output.depth = 1.0;
+    return output;
+  }
   if (kPass == 4 || kPass == 5) {
     if (kPass == 4)
       WriteTemporalSurface(input.ndc, input.position.xy);

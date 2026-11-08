@@ -117,8 +117,11 @@ public:
   // history stays unfiltered, so changing it never resets the history.
   // lotus:interactive (false by default) selects the Interactive quality
   // preset (Lotus::ApplyQualityPreset), overriding lotus:temporal,
-  // lotus:historySamples and lotus:filterIterations. A render pass that
-  // looks through a different camera prim cuts the history.
+  // lotus:historySamples and lotus:filterIterations. lotus:balanced (false
+  // by default) selects the Balanced preset the same way; with both on,
+  // Interactive wins. Balanced converges once a still view's accumulation
+  // reaches convergedSamplesPerPixel. A render pass that looks through a
+  // different camera prim cuts the history.
   // lotus:restir selects primary direct-light reservoirs, overriding
   // lotus:lightSampling. Candidate/count/radius settings are bounded;
   // lotus:restirTemporal and lotus:restirSpatial select continuous reuse
