@@ -1,14 +1,17 @@
 ---
-status: proposed
+status: accepted
 owner: hydra-lotus
 ---
 
 # Interactive quality: presets and invalidation
 
-> Status: **proposed**, 2026-10-31. This is the contract the
+> Status: **accepted**, 2026-11-08, merged without review changes. This is the
+> contract the
 > [strategy](POST_V060_STRATEGY.md#5-entry-conditions-for-later-work) requires
 > before interactive-quality work changes defaults or history behaviour,
-> written before any code as LOTUS-INTERACTIVE-01. It extends the
+> written before any code as LOTUS-INTERACTIVE-01. Its fixtures and a
+> [baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
+> are recorded. It extends the
 > [temporal reference](../reference/TEMPORAL.md), which owns the implemented
 > behaviour; where this contract is silent, that reference holds unchanged.
 > "Today" below describes `main` at v0.8.0.
@@ -161,12 +164,12 @@ bias. Its one room has weak view-dependent lighting and no moving shadow on a
 still surface, so LOTUS-INTERACTIVE-02 adds a fixed fixture set, declared
 before any fix:
 
-| Fixture | Exposes |
-| --- | --- |
-| The existing `svgf-room`, static and moving | Baseline continuity and disocclusion |
-| An occluder moving over a still receiver | Shadow lag: a surface validity accepts |
-| A camera moving over a low-roughness surface | Reflection lag |
-| A deforming mesh | The deformation row's benefit and approximation |
+| Fixture | Exposes | Workload ([reference](../reference/TEMPORAL.md#headless-svgf-comparison)) |
+| --- | --- | --- |
+| The existing `svgf-room`, static and moving | Baseline continuity and disocclusion | `svgf-room-static-v1`, `svgf-room-moving-camera-block-v1` |
+| An occluder moving over a still receiver | Shadow lag: a surface validity accepts | `occluder-shadow-sweep-v1` |
+| A camera moving over a low-roughness surface | Reflection lag | `glossy-floor-camera-pan-v1` |
+| A deforming mesh | The deformation row's benefit and approximation | `deforming-sheet-v1` |
 
 | Question | Metric | Held to |
 | --- | --- | --- |
