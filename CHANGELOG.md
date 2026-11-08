@@ -7,6 +7,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-09
+
+The Interactive Quality release completes the v0.9.0 milestone. An
+[accepted contract](docs/design/INTERACTIVE_QUALITY.md) separates still-image
+convergence from moving-view behaviour: Interactive, Balanced and Reference
+are presets of the same estimator in Hydra and the viewport, temporal history
+follows a per-change invalidation table, and Balanced settles into the
+Reference image bit for bit once the view is still. Three ghosting candidates
+were measured against the contract and none was adopted. Reference stays the
+default. See the [release record](docs/releases/v0.9.0.md).
+
 ### Added
 
 - `lotus-headless --benchmark-svgf` measures the

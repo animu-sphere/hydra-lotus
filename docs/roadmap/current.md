@@ -6,19 +6,10 @@ by the [development strategy](../design/POST_V060_STRATEGY.md).
 
 ## Execution order
 
-The [Interactive Quality milestone](README.md#v090--interactive-quality) is
-active. Its [contract](../design/INTERACTIVE_QUALITY.md) is accepted, its
-fixed fixtures and a
-[baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
-are recorded, the Interactive and Reference presets and the
-[invalidation table](../design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category)
-are [delivered](../reports/2026-11-08-interactive-presets.md), Balanced
-[settles](../reports/2026-11-08-balanced-settling.md) into the Reference
-image, and the ghosting candidates are
-[measured](../reports/2026-11-09-ghosting-candidates.md#decision)
-(LOTUS-INTERACTIVE-01 to -05). No candidate met the contract's adoption
-rule, and the stop rule closes that investigation. Every task is done and no
-task is active; the milestone's release gate is next.
+No task is active. The [Interactive Quality milestone](README.md#v090--interactive-quality)
+shipped in [v0.9.0](../releases/v0.9.0.md), and the next delivery has not
+been selected. It follows the
+[strategy's entry conditions](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
 
 The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus
 renderer when `hdLotus` is on the plugin path. Its cause is unexplained and
@@ -42,7 +33,8 @@ Phase 9, until an asset or measurement demonstrates the need
 ## Previous delivery evidence
 
 Completed work is tracked by the [release records](../releases/README.md),
-including [materials and lighting](../releases/v0.8.0.md),
+including [interactive quality](../releases/v0.9.0.md),
+[materials and lighting](../releases/v0.8.0.md),
 the [practical foundation](../releases/v0.7.0.md),
 [ReSTIR DI exit review](../reports/2026-10-17-renderer-phase5-exit.md),
 [viewport foundation](../releases/v0.5.2.md),
