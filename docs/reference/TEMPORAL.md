@@ -215,6 +215,7 @@ not primary surfaces, consistent with ordinary scene depth.
 | `motion_depth.xy` | Backward motion, previous pixel minus current pixel, in pixels |
 | `motion_depth.z` | Expected positive depth of this surface in the previous camera |
 | `motion_depth.w` | 1 for a successful projection within the previous clip volume/image/data window; 0 otherwise |
+| `reserved` | Zero, except under the experimental `ReflectionWeight` [rectification](#history-rectification): its factor as float bits wherever `motion_depth.w` is 1 |
 
 Instance IDs survive camera/rigid motion and insertions before them in GPU
 table order. Geometry, visibility, placement count or instancing-mode changes
@@ -545,6 +546,36 @@ half for the prior: 16 more device bytes per pixel. Switching `settle` on
 or off resets nothing; switched on, the first frame keeps a prior and the
 next one settles.
 
+### History rectification
+
+`TemporalFrameSettings::history_rectification` selects one of
+LOTUS-INTERACTIVE-05's experimental ghosting candidates. The
+[measurement](../reports/2026-11-09-ghosting-candidates.md#decision)
+adopted none, so the default `None` is today's accumulation bit for bit and
+no preset, Hydra setting or viewport control selects another. A mode other
+than `None` requires `accumulate_radiance`, and an unknown mode fails before
+advancing history. Changing it resets nothing.
+
+The candidate acts in the accumulation pass on a pixel whose history
+shared validity accepted. It changes the colour kept or the number of
+samples `h` kept from that history. The fresh batch, the moments' weights
+and the filter are unchanged. Neighbours are primary hits on the same
+placement, and statistics use illumination (`DemodulateTemporalColor`).
+
+| Mode | Effect |
+| --- | --- |
+| `NeighbourhoodClamp` | The kept colour's illumination is clamped per channel to the 3x3 fresh batch's mean ± one standard deviation |
+| `AntiLag` | `h` is scaled by `1 - saturate((z - 2) / 2)`, where `z` is the difference between the 5x5 fresh and reprojected mean luminance over the fresh mean's standard error |
+| `ReflectionWeight` | `h` is scaled by `1 - s + s / (1 + (θ / a)^2)`: θ is the angle between the point's directions to the previous and current camera in world space, `a = max(roughness², 0.001)` and `s = metallic + 0.04 (1 - metallic)`. The primary-surface pass writes the factor to `TemporalPixel::reserved` |
+
+Scaled counts round to the nearest sample, and no candidate adds a pass or
+buffer. Their measured effect is in the
+[report](../reports/2026-11-09-ghosting-candidates.md#results). The
+neighbourhood clamp and anti-lag cut the shadow and reflection lag to about
+a fifth but raise a still view's noise. Reflection weighting shortens
+history only under camera motion over low-roughness metal, and it raises
+the unfiltered mean's flicker there.
+
 ### Headless SVGF comparison
 
 `lotus-headless --benchmark-svgf <json-path>` compares the fresh batch
@@ -591,6 +622,7 @@ rejected.
 | `--svgf-reference-seed` | 16777216 | 16777216–1073741823 |
 | `--svgf-reference-samples` (per half) | 1024 | 16–8192 |
 | `--svgf-hold` (frames the settling measurement holds the last pose) | 64 | 4–1024 |
+| `--svgf-rectification` (every temporal frame's [rectification](#history-rectification)) | `none` | `none`, `clamp`, `anti-lag`, `reflection` |
 
 Per workload and output the report gives the MSE per frame and its mean,
 the frame-delta MSE (the change of each pixel's error from the previous
@@ -610,8 +642,11 @@ reference and the four outputs of the first sequence's last frame. The `research
 both integrators (`lotus-renderer-svgf-benchmark-*`).
 
 Nearest history fetch, geometric rejection and bounded weighting supply this
-foundation. There is no radiance neighbourhood clamp, history filtering,
-anti-lag heuristic or motion-aware BRDF correction. View-dependent shading,
+foundation. There is no history filtering, and the radiance neighbourhood
+clamp, anti-lag heuristic and motion-aware reflection weighting exist only as
+the experimental [rectification](#history-rectification), which the
+[ghosting measurement](../reports/2026-11-09-ghosting-candidates.md#decision)
+did not adopt. View-dependent shading,
 indirect-light changes and jittered silhouette coverage can therefore lag or
 ghost during motion; the
 [interactive-quality baseline](../reports/2026-11-08-interactive-baseline.md#moving-stability-lag-and-disocclusion)

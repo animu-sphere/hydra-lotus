@@ -15,7 +15,9 @@ owner: hydra-lotus
 > are [implemented](../reports/2026-11-08-interactive-presets.md)
 > (LOTUS-INTERACTIVE-03), and Balanced
 > [settles](../reports/2026-11-08-balanced-settling.md) by the mechanism §4
-> records (LOTUS-INTERACTIVE-04). It extends the
+> records (LOTUS-INTERACTIVE-04). Of §7's ghosting candidates
+> [none was adopted](../reports/2026-11-09-ghosting-candidates.md#decision)
+> (LOTUS-INTERACTIVE-05), which closes the delivery order. It extends the
 > [temporal reference](../reference/TEMPORAL.md), which owns the implemented
 > behaviour; where this contract is silent, that reference holds unchanged.
 > "Today" below describes `main` at v0.8.0.
@@ -210,6 +212,16 @@ fixture without raising any other row, and leaves Reference byte-identical. If
 none does on this fixture set, record that once in a report and stop; do not
 extend the set to postpone the conclusion
 ([strategy §6](POST_V060_STRATEGY.md#6-research-track-and-stop-rule)).
+
+**Outcome** (LOTUS-INTERACTIVE-05,
+[report](../reports/2026-11-09-ghosting-candidates.md)). The rows are held
+in both the filtered composite and the temporal mean, which is the history
+and the image a host shows with the filter off. Each candidate lowered the
+lag metric on its fixtures. The neighbourhood clamp and anti-lag raised the
+still view's error in every workload, and reflection weighting raised the
+temporal mean's frame-delta MSE on the glossy floor. None was adopted. The
+candidates remain an experimental setting that no preset selects, and the
+stop rule applies.
 
 ## 8. Invariants
 

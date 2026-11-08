@@ -104,8 +104,13 @@ struct TemporalConstants {
   std::array<std::uint32_t, 4> radiance;
   // Settling frame, still samples, sample target (0 for none).
   std::array<std::uint32_t, 4> settle;
+  // World-space camera positions, w unused.
+  std::array<float, 4> current_eye;
+  std::array<float, 4> previous_eye;
+  // x: TemporalHistoryRectification.
+  std::array<std::uint32_t, 4> rectification;
 };
-static_assert(sizeof(TemporalConstants) == 288);
+static_assert(sizeof(TemporalConstants) == 336);
 static_assert(sizeof(TemporalRadiancePixel) == 32 &&
               offsetof(TemporalRadiancePixel, sample_count) == 16 &&
               offsetof(TemporalRadiancePixel, moments) == 20 &&
@@ -1736,6 +1741,9 @@ public:
           "temporal filtering requires radiance accumulation and at most 8 iterations");
     if (requested.settle && !accumulate)
       return Evidence(FrameStatus::Fail, "settling requires radiance accumulation");
+    if (requested.history_rectification != TemporalHistoryRectification::None &&
+        (!accumulate || requested.history_rectification > TemporalHistoryRectification::ReflectionWeight))
+      return Evidence(FrameStatus::Fail, "history rectification requires radiance accumulation and a known mode");
     auto next_history = temporal_history_;
     auto next_identities = temporal_identities_;
     auto frame_settings = requested;
@@ -1866,6 +1874,16 @@ public:
     constants.radiance = {accumulate ? 1u : 0u, frame_count,
         requested.max_history_samples, filter_iterations};
     constants.settle = {settling ? 1u : 0u, 0u, settings.max_samples, 0u};
+    // A camera's position is its inverse view's translation.
+    const auto Eye = [](const Matrix4& view) {
+      Matrix4 inverse{};
+      return Invert(view, inverse) ? std::array<float, 4>{inverse[12], inverse[13], inverse[14], 1.0F}
+                                   : std::array<float, 4>{};
+    };
+    constants.current_eye = Eye(snapshot.camera.view);
+    if (frame.previous)
+      constants.previous_eye = Eye(frame.previous->camera.view);
+    constants.rectification = {static_cast<std::uint32_t>(requested.history_rectification), 0u, 0u, 0u};
     if (!WriteTemporalBuffer(temporal_constants_, &constants, sizeof(constants), detail) ||
         (!instances.empty() && !WriteTemporalBuffer(temporal_instances_, instances.data(),
                                    instances.size() * sizeof(instances[0]), detail))) {

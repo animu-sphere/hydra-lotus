@@ -2,6 +2,7 @@
 #include <lotus/vulkan_backend.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -821,6 +822,14 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   bad.filter_iterations = 1;
   bad.accumulate_radiance = false;
   Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail, "filter without radiance");
+  bad.filter_iterations = 0;
+  bad.history_rectification = TemporalHistoryRectification::ReflectionWeight;
+  Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail,
+      "history rectification without radiance");
+  bad = temporal;
+  bad.history_rectification = static_cast<TemporalHistoryRectification>(4);
+  Check(renderer.RenderTemporalScene(snapshot, target, 1, bad, settings).status == FrameStatus::Fail,
+      "unknown history rectification");
   auto diagnostic = settings;
   diagnostic.output = SceneOutput::Albedo;
   Check(renderer.RenderTemporalScene(snapshot, target, 1, temporal, diagnostic).status == FrameStatus::Fail, "diagnostic radiance accumulation");
@@ -1074,6 +1083,89 @@ void SettlingSequence(Lotus::OffscreenRenderer& renderer,
 
 } // namespace
 
+// The experimental history rectification (LOTUS-INTERACTIVE-05): the same
+// frames from a cut under each mode. It never changes the fresh batch;
+// the clamp keeps None's history counts, anti-lag and reflection weighting
+// never exceed them, and a still view keeps reflection weighting's image
+// None's bit for bit while camera motion over a low-roughness metal shortens
+// its history.
+void RectificationSequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) {
+  using namespace Lotus;
+  RenderWorld world;
+  SceneExtraction extraction;
+  world.SetMesh("/plane", kPlane, {});
+  Material material;
+  material.base_color = {0.6F, 0.4F, 0.2F};
+  material.metallic = 1;
+  material.roughness = 0.1F;
+  world.SetMaterial("/material", material);
+  world.BindMaterial("/plane", "/material");
+  world.SetEnvironment({1, 2, 3});
+  std::vector<FrameSnapshot> snapshots;
+  for (int f = 0; f < 6; ++f) {
+    auto camera = Perspective();
+    camera.view = Translation(-0.05F * static_cast<float>(std::max(f - 2, 0)));
+    world.SetCamera(camera);
+    snapshots.push_back(world.Commit());
+  }
+  OffscreenTarget target;
+  target.width = 32;
+  target.height = 24;
+  PathTracingSettings settings;
+  settings.integrator = integrator;
+  settings.max_bounces = 1;
+  settings.sample_index = 7;
+  std::uint64_t frame_index = 0;
+  using Frames = std::vector<GpuFrameEvidence>;
+  const auto Run = [&](TemporalHistoryRectification mode) {
+    TemporalFrameSettings temporal;
+    temporal.accumulate_radiance = true;
+    temporal.max_history_samples = 8;
+    temporal.history_rectification = mode;
+    Frames frames;
+    for (std::size_t f = 0; f < snapshots.size(); ++f) {
+      Check(renderer.UpdateScene(extraction.Update(snapshots[f])).status == FrameStatus::Pass, "rectification upload");
+      temporal.frame_index = frame_index++;
+      temporal.camera_cut = f == 0;
+      auto frame = renderer.RenderTemporalScene(snapshots[f], target, 1, temporal, settings);
+      Check(frame.status == FrameStatus::Pass, frame.detail.c_str());
+      Check(frame.validation_message_count == 0, frame.validation_detail.c_str());
+      Check(frame.temporal.radiance_available && frame.temporal.history_available == (f != 0),
+          "rectification history lifecycle");
+      frames.push_back(std::move(frame));
+    }
+    return frames;
+  };
+  const Frames none = Run(TemporalHistoryRectification::None);
+  bool shortened = false;
+  std::size_t weighted = 0;
+  for (auto mode : {TemporalHistoryRectification::NeighbourhoodClamp, TemporalHistoryRectification::AntiLag,
+           TemporalHistoryRectification::ReflectionWeight}) {
+    const Frames frames = Run(mode);
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+      const auto& a = none[f].temporal;
+      const auto& b = frames[f].temporal;
+      Check(a.batch == b.batch, "rectification changed the fresh batch");
+      for (std::size_t i = 0; i < a.radiance.size(); ++i) {
+        const auto kept = b.radiance[i].sample_count, reference = a.radiance[i].sample_count;
+        Check(mode == TemporalHistoryRectification::NeighbourhoodClamp ? kept == reference : kept <= reference,
+            "rectification kept more history than None");
+        // The weight is written wherever the surface reprojects.
+        if (mode == TemporalHistoryRectification::ReflectionWeight && f >= 3 && b.current[i].reserved != 0) {
+          const float weight = std::bit_cast<float>(b.current[i].reserved);
+          Check(weight > 0 && weight < 1, "camera motion left the reflection weight at one");
+          ++weighted;
+          shortened = shortened || kept < reference;
+        }
+      }
+      if (mode == TemporalHistoryRectification::ReflectionWeight && f < 3)
+        Check(TemporalColors(frames[f]) == TemporalColors(none[f]), "a still view changed under reflection weighting");
+    }
+  }
+  Check(weighted > none[3].temporal.current.size() / 2 && shortened,
+      "camera motion over metal kept the full history");
+}
+
 int main(int argc, char** argv) try {
   Lotus::FrameStatus status;
   std::string detail;
@@ -1141,6 +1233,9 @@ int main(int argc, char** argv) try {
     reference = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
     Check(reference != nullptr, detail.c_str());
     SettlingSequence(*renderer, *reference, integrator);
+    renderer = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
+    Check(renderer != nullptr, detail.c_str());
+    RectificationSequence(*renderer, integrator);
   }
   return 0;
 } catch (const std::exception& error) {

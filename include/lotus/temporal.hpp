@@ -32,6 +32,29 @@ struct TemporalValidationSettings {
   float max_motion_pixels = 32.0F;
 };
 
+// Experimental history rectification, LOTUS-INTERACTIVE-05's ghosting
+// candidates (docs/design/INTERACTIVE_QUALITY.md section 7). Each changes
+// only how much of a valid pixel's history the accumulation keeps, or the
+// colour it keeps; validity, the fresh batch and the filter are unchanged.
+// None is today's accumulation bit for bit, and no preset selects another.
+enum class TemporalHistoryRectification : std::uint32_t {
+  None,
+  // The reprojected illumination is clamped per channel to the mean plus or
+  // minus one standard deviation of the fresh batch's illumination over the
+  // 3x3 neighbours on the same placement.
+  NeighbourhoodClamp,
+  // The kept history shrinks by lambda = saturate((z - 2) / 2), where z is
+  // the difference of the 5x5 same-placement neighbourhood's fresh and
+  // reprojected mean illumination luminance over the fresh mean's standard
+  // error: none below two standard errors, all of it from four.
+  AntiLag,
+  // The kept history is scaled by 1 - s + s / (1 + (theta / a)^2), where
+  // theta is the angle between the surface point's directions to the
+  // previous and current camera, a = max(roughness^2, 0.001) the specular
+  // lobe's width and s = metallic + 0.04 (1 - metallic) its share.
+  ReflectionWeight,
+};
+
 struct TemporalFrameSettings {
   // A rendered frame's identity, independent of scene revisions and spp.
   std::uint64_t frame_index = 0;
@@ -69,6 +92,9 @@ struct TemporalFrameSettings {
   // frame, never settles. Like the filter, turning it on or off resets no
   // history.
   bool settle = false;
+  // Experimental; requires accumulate_radiance unless None. Changing it
+  // resets no history.
+  TemporalHistoryRectification history_rectification = TemporalHistoryRectification::None;
 };
 
 struct TemporalFrame {
@@ -179,6 +205,9 @@ struct TemporalPixel {
   // The shading normal facing the camera, octahedral snorm16 x in bits
   // 0-15 and y in bits 16-31 (UnpackTemporalNormal).
   std::uint32_t shading_normal = 0;
+  // Zero, except under TemporalHistoryRectification::ReflectionWeight:
+  // the share of history it keeps, as float bits, wherever the surface
+  // reprojects (motion_depth[3] == 1).
   std::uint32_t reserved = 0;
 };
 

@@ -18,6 +18,9 @@ struct TemporalConstants {
   uint4 history; // x: preceding frame available; y/z: full target extent.
   uint4 radiance; // enabled, fresh samples, bounded history samples, filter iterations
   uint4 settle; // x: settling frame; y: still samples; z: sample target, 0 for none
+  float4 current_eye; // World-space camera positions.
+  float4 previous_eye;
+  uint4 rectification; // x: TemporalHistoryRectification
 };
 [[vk::binding(8, 0)]] ConstantBuffer<TemporalConstants> temporal_frame;
 
@@ -137,6 +140,89 @@ float3 Remodulate(float3 illumination, uint albedo) {
       a.z > 0.0 ? illumination.z * a.z : illumination.z);
 }
 
+// TemporalHistoryRectification's codes.
+static const uint kRectifyClamp = 1u;
+static const uint kRectifyAntiLag = 2u;
+static const uint kRectifyReflection = 3u;
+
+// A fresh-batch neighbour for rectification: a primary hit on the placement.
+bool RectifyNeighbour(int2 q, uint64_t instance_id, out uint index) {
+  const uint2 extent = temporal_frame.history.yz;
+  index = 0u;
+  if (any(q < 0) || q.x >= int(extent.x) || q.y >= int(extent.y))
+    return false;
+  index = uint(q.y) * extent.x + uint(q.x);
+  return (temporal_surface[index].flags & 1u) != 0 &&
+      temporal_surface[index].instance_id == instance_id;
+}
+
+// NeighbourhoodClamp: the reprojected illumination clamped per channel to
+// the 3x3 fresh neighbourhood's mean plus or minus one standard deviation.
+float4 ClampHistory(int2 p, float4 old_color) {
+  const TemporalPixel s = temporal_surface[uint(p.y) * temporal_frame.history.y + uint(p.x)];
+  float3 sum = float3(0.0);
+  float3 squares = float3(0.0);
+  float count = 0.0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      uint q;
+      if (!RectifyNeighbour(p + int2(dx, dy), s.instance_id, q))
+        continue;
+      const float3 v = Demodulate(temporal_batch[q].xyz, temporal_surface[q].albedo);
+      sum += v;
+      squares += v * v;
+      count += 1.0;
+    }
+  }
+  const float3 mean = sum / count;
+  const float3 deviation = sqrt(max(squares / count - mean * mean, 0.0));
+  const float3 kept = clamp(Demodulate(old_color.xyz, s.albedo), mean - deviation, mean + deviation);
+  return float4(Remodulate(kept, s.albedo), old_color.w);
+}
+
+// AntiLag: the share of history to drop, from the 5x5 neighbourhood's fresh
+// and reprojected mean illumination luminance against the fresh mean's
+// standard error.
+float AntiLagDrop(int2 p) {
+  const TemporalPixel s = temporal_surface[uint(p.y) * temporal_frame.history.y + uint(p.x)];
+  float fresh = 0.0;
+  float squares = 0.0;
+  float count = 0.0;
+  float history = 0.0;
+  float histories = 0.0;
+  for (int dy = -2; dy <= 2; ++dy) {
+    for (int dx = -2; dx <= 2; ++dx) {
+      uint q;
+      if (!RectifyNeighbour(p + int2(dx, dy), s.instance_id, q))
+        continue;
+      const uint albedo = temporal_surface[q].albedo;
+      const float l = Luminance(float4(Demodulate(temporal_batch[q].xyz, albedo), 0.0));
+      fresh += l;
+      squares += l * l;
+      count += 1.0;
+      const TemporalValidityPixel validity = temporal_validity[q];
+      if (validity.valid == 0)
+        continue;
+      const TemporalRadiancePixel old = temporal_old_radiance[validity.previous_index];
+      if (old.sample_count == 0 || !all(isfinite(old.color)))
+        continue;
+      history += Luminance(float4(Demodulate(old.color.xyz, albedo), 0.0));
+      histories += 1.0;
+    }
+  }
+  if (histories == 0.0 || count < 2.0)
+    return 0.0;
+  const float mean = fresh / count;
+  const float variance = max(squares - count * mean * mean, 0.0) / (count - 1.0);
+  const float z = abs(history / histories - mean) / sqrt(variance / count + 1.0e-12);
+  return saturate((z - 2.0) * 0.5);
+}
+
+// Scales a kept history count, rounding to the nearest sample.
+uint ScaleKept(uint kept, float scale) {
+  return uint(round(float(kept) * saturate(scale)));
+}
+
 // The batch's illumination luminance moments are blended with the colour's
 // weights. The variance pass, which needs every pixel's moments, writes the
 // variance.
@@ -153,12 +239,22 @@ public float4 AccumulateTemporalRadiance(float2 pixel) {
     const TemporalValidityPixel validity = temporal_validity[index];
     if (validity.valid != 0) {
       const TemporalRadiancePixel old = temporal_old_radiance[validity.previous_index];
-      const uint kept = min(old.sample_count, cap - output.sample_count);
+      uint kept = min(old.sample_count, cap - output.sample_count);
       const float2 old_moments = float2(old.first_moment, old.second_moment);
+      float4 old_color = old.color;
+      const uint rectification = temporal_frame.rectification.x;
+      if (kept != 0 && all(isfinite(old.color)) && all(isfinite(old_moments))) {
+        if (rectification == kRectifyClamp)
+          old_color = ClampHistory(int2(pixel), old_color);
+        else if (rectification == kRectifyAntiLag)
+          kept = ScaleKept(kept, 1.0 - AntiLagDrop(int2(pixel)));
+        else if (rectification == kRectifyReflection)
+          kept = ScaleKept(kept, asfloat(temporal_surface[index].reserved));
+      }
       if (kept != 0 && all(isfinite(old.color)) && all(isfinite(old_moments))) {
         const uint count = kept + output.sample_count;
         const float blend = float(kept) / float(count);
-        output.color += (old.color - output.color) * blend;
+        output.color += (old_color - output.color) * blend;
         moments += (old_moments - moments) * blend;
         output.sample_count = count;
       }
@@ -514,6 +610,19 @@ public void WriteTemporalSurface(float2 ndc, float2 pixel) {
         all(projected.xy >= -1.0) && all(projected.xy < 1.0) &&
         all(previous_pixel >= begin) && all(previous_pixel < end)) {
       output.motion_depth = float4(previous_pixel - pixel, depth, 1.0);
+      // ReflectionWeight's share of history to keep, as float bits; zero
+      // (no history) otherwise, the reserved word.
+      if (temporal_frame.rectification.x == kRectifyReflection) {
+        const float3 to_current = temporal_frame.current_eye.xyz - world.xyz;
+        const float3 to_previous = temporal_frame.previous_eye.xyz - previous_world.xyz;
+        const float cosine = dot(to_current, to_previous) /
+            max(length(to_current) * length(to_previous), 1.0e-20);
+        const float theta = acos(clamp(cosine, -1.0, 1.0));
+        const float lobe = max(surface.roughness * surface.roughness, 0.001);
+        const float share = surface.metallic + 0.04 * (1.0 - surface.metallic);
+        const float ratio = theta / lobe;
+        output.reserved = asuint(1.0 - share + share / (1.0 + ratio * ratio));
+      }
     }
   }
   temporal_surface[index] = output;

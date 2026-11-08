@@ -12,12 +12,13 @@ fixed fixtures and a
 [baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
 are recorded, the Interactive and Reference presets and the
 [invalidation table](../design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category)
-are [delivered](../reports/2026-11-08-interactive-presets.md), and Balanced
+are [delivered](../reports/2026-11-08-interactive-presets.md), Balanced
 [settles](../reports/2026-11-08-balanced-settling.md) into the Reference
-image (LOTUS-INTERACTIVE-01 to -04).
-
-1. **LOTUS-INTERACTIVE-05 (P1).** Measure the ghosting candidates under the
-   contract's adoption and stop rule. A measured negative closes the task.
+image, and the ghosting candidates are
+[measured](../reports/2026-11-09-ghosting-candidates.md#decision)
+(LOTUS-INTERACTIVE-01 to -05). No candidate met the contract's adoption
+rule, and the stop rule closes that investigation. Every task is done and no
+task is active; the milestone's release gate is next.
 
 The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus
 renderer when `hdLotus` is on the plugin path. Its cause is unexplained and

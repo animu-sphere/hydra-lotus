@@ -41,7 +41,11 @@ struct Options {
   unsigned hold = 64;
   unsigned seed = kSeed, reference_seed = kReferenceSeed, bounces = 4;
   Integrator integrator = Integrator::Reference;
+  // LOTUS-INTERACTIVE-05's ghosting candidate, for every temporal frame.
+  TemporalHistoryRectification rectification = TemporalHistoryRectification::None;
 };
+
+constexpr std::array<const char*, 4> kRectifications{"none", "clamp", "anti-lag", "reflection"};
 
 void Require(bool condition, const std::string& why) {
   if (!condition)
@@ -99,7 +103,7 @@ Options Parse(int argc, char** argv) {
                                 "[--svgf-seed <0..8388607>] [--svgf-reference-seed <16777216..1073741823>] "
                                 "[--svgf-reference-samples <16..8192>] [--svgf-bounces <1..64>] "
                                 "[--svgf-history-cap <1..65536>] [--svgf-iterations <1..8>] "
-                                "[--svgf-hold <4..1024>]");
+                                "[--svgf-hold <4..1024>] [--svgf-rectification <none|clamp|anti-lag|reflection>]");
   Options options;
   options.report = argv[2];
   for (int i = 3; i < argc; ++i) {
@@ -138,7 +142,12 @@ Options Parse(int argc, char** argv) {
       options.iterations = Number(value, 1, kTemporalFilterMaxIterations);
     else if (option == "--svgf-hold")
       options.hold = Number(value, 4, 1024);
-    else
+    else if (option == "--svgf-rectification") {
+      const auto found = std::find(kRectifications.begin(), kRectifications.end(), value);
+      if (found == kRectifications.end())
+        throw std::invalid_argument("invalid rectification: " + std::string(value));
+      options.rectification = static_cast<TemporalHistoryRectification>(found - kRectifications.begin());
+    } else
       throw std::invalid_argument("unknown benchmark option: " + std::string(option));
   }
   // Each sequence's batches stay inside its stride, below the references.
@@ -673,6 +682,7 @@ void Sequence(OffscreenRenderer& renderer, SceneExtraction& extraction, const Wo
   temporal.accumulate_radiance = true;
   temporal.max_history_samples = options.cap;
   temporal.filter_iterations = options.iterations;
+  temporal.history_rectification = options.rectification;
   std::array<std::vector<double>, kMeasuredOutputs> previous;
   for (unsigned f = 0; f < options.frames; ++f) {
     Upload(renderer, extraction, work.snapshots[f]);
@@ -788,6 +798,7 @@ std::vector<float> Transit(OffscreenRenderer& renderer, SceneExtraction& extract
   ApplyQualityPreset(shown == Shown::Balanced ? QualityPreset::Balanced : QualityPreset::Interactive, temporal);
   temporal.max_history_samples = options.cap;
   temporal.filter_iterations = options.iterations;
+  temporal.history_rectification = options.rectification;
   std::vector<double> previous;
   std::vector<float> value;
   for (unsigned f = 0; f < options.frames + options.hold; ++f) {
@@ -1041,6 +1052,7 @@ int SvgfBenchmarkMain(int argc, char** argv) {
         << ",\"sequences\":" << options.sequences << ",\"fresh_samples_per_frame\":" << options.batch
         << ",\"history_cap\":" << options.cap << ",\"filter_iterations\":" << options.iterations
         << ",\"settling_hold_frames\":" << options.hold
+        << ",\"history_rectification\":" << Quote(kRectifications[static_cast<std::size_t>(options.rectification)])
         << ",\"max_bounces\":" << options.bounces << ",\"sample_index\":" << options.seed
         << ",\"sequence_stride\":" << kSequenceStride << ",\"reference_seed\":" << options.reference_seed
         << ",\"reference_samples_per_half\":" << options.reference_samples << ",\"reference_halves\":2}"
