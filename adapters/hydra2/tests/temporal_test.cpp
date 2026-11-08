@@ -50,6 +50,15 @@ def Camera "Camera"
     uniform token[] xformOpOrder = ["xformOp:translate"]
 }
 
+def Camera "Side"
+{
+    float focalLength = 18
+    float horizontalAperture = 20.955
+    float verticalAperture = 20.955
+    double3 xformOp:translate = (0.12, 1, 4)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+
 def Xform "World"
 {
     def Mesh "Floor"
@@ -118,6 +127,7 @@ const TfToken kCap("lotus:historySamples");
 const TfToken kKey("lotus:historyKey");
 const TfToken kReset("lotus:historyReset");
 const TfToken kFilter("lotus:filterIterations");
+const TfToken kInteractive("lotus:interactive");
 const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
     TfToken("lotus:historyLength"), TfToken("lotus:historyValidity"),
     TfToken("lotus:historyRejection")};
@@ -125,9 +135,10 @@ const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
 void Contract() {
   HdLotusRenderDelegate delegate;
   const auto descriptors = delegate.GetRenderSettingDescriptors();
-  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 5>{{
+  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 6>{{
            {kTemporal, VtValue(false)}, {kCap, VtValue(32)},
-           {kKey, VtValue(0)}, {kReset, VtValue(0)}, {kFilter, VtValue(0)}}}) {
+           {kKey, VtValue(0)}, {kReset, VtValue(0)}, {kFilter, VtValue(0)},
+           {kInteractive, VtValue(false)}}}) {
     Check(std::any_of(descriptors.begin(), descriptors.end(),
               [&](const auto& d) { return d.key == key && d.defaultValue == value; }),
         "missing temporal setting/default: " + key.GetString());
@@ -248,6 +259,17 @@ public:
     Check(stage_->GetPrimAtPath(SdfPath(path)).GetAttribute(
               TfToken("xformOp:translate")).Set(translation), "edit transform");
   }
+  // Moves the panel's apex: a deformation with its topology unchanged.
+  void Deform(float apex_height) {
+    const VtVec3fArray points{GfVec3f(-0.8F, 0.1F, 0.5F),
+        GfVec3f(0.8F, 0.1F, -0.3F), GfVec3f(0, apex_height, 0)};
+    Check(stage_->GetPrimAtPath(SdfPath("/World/Panel")).GetAttribute(
+              TfToken("points")).Set(points), "edit points");
+  }
+  void UseCamera(const char* path) {
+    state_->SetCamera(dynamic_cast<const HdCamera*>(
+        index_->GetSprim(HdPrimTypeTokens->camera, SdfPath(path))));
+  }
   void ColorClear(bool enabled) {
     bindings_[0].clearValue = enabled ? VtValue(GfVec4f(0)) : VtValue();
     state_->SetAovBindings(bindings_);
@@ -331,6 +353,9 @@ public:
     valid_ = valid; moved_ = moved; rejected_ = rejected;
     return frame;
   }
+  bool Converged() const {
+    return pass_->IsConverged();
+  }
   std::size_t valid_{}, moved_{}, rejected_{};
 private:
   HdLotusRenderDelegate delegate_;
@@ -372,8 +397,24 @@ void Sequence(bool wavefront) {
   session.Render(R::None);
   session.Setting(kKey, VtValue(7));
   session.Render(R::HistoryKeyChanged);
+  // The history cap and the sample target keep the history.
   session.Setting(kCap, VtValue(2));
-  session.Render(R::RenderSettingsChanged);
+  session.Render(R::None);
+  session.Setting(HdRenderSettingsTokens->convergedSamplesPerPixel, VtValue(kSamples + 5));
+  session.Render(R::None);
+  session.Setting(HdRenderSettingsTokens->convergedSamplesPerPixel, VtValue(kSamples));
+  session.Render(R::None);
+  // A non-emissive mesh deforming keeps the others' history.
+  session.Deform(1.4F);
+  session.Render(R::None);
+  Check(session.valid_ > 0 && session.rejected_ > 0,
+      "deformation reset globally or kept the deformed panel's history");
+  // A different stage camera is a cut, and so is going back.
+  session.UseCamera("/Side");
+  session.Render(R::CameraCut);
+  session.Render(R::None);
+  session.UseCamera("/Camera");
+  session.Render(R::CameraCut);
   session.Setting(kWavefrontSetting, VtValue(!wavefront));
   session.Render(R::RenderSettingsChanged);
   session.Setting(kWavefrontSetting, VtValue(wavefront));
@@ -427,6 +468,62 @@ void Sequence(bool wavefront) {
       "temporal selection depends on debug AOV bindings");
   session.DebugBindings(true);
   session.Render(R::None);
+
+  // lotus:interactive overrides lotus:temporal, the cap and the filter.
+  // Interactive keeps the history it finds, as the cap and filter do.
+  session.Setting(kInteractive, VtValue(true));
+  {
+    TfErrorMark errors;
+    const auto interactive = session.Frame();
+    Check(errors.IsClean() && interactive.status == Lotus::FrameStatus::Pass &&
+              interactive.temporal.filter_iterations == Lotus::kTemporalFilterIterations &&
+              interactive.temporal.reset_reason == R::None,
+        "lotus:interactive did not filter, or reset history");
+    for (const auto& pixel : interactive.temporal.radiance)
+      Check(pixel.sample_count <= Lotus::kInteractiveHistorySamples, "Interactive history cap");
+  }
+  session.Setting(kTemporal, VtValue(false));
+  session.Setting(kCap, VtValue(4));
+  session.Setting(kFilter, VtValue(0));
+  {
+    TfErrorMark errors;
+    const auto overridden = session.Frame();
+    Check(errors.IsClean() && overridden.temporal.radiance_available &&
+              overridden.temporal.filter_iterations == Lotus::kTemporalFilterIterations &&
+              overridden.temporal.reset_reason == R::None && !session.Converged(),
+        "lotus:interactive did not override the temporal settings");
+  }
+  // Leaving Interactive for Reference and entering it again are global.
+  session.Setting(kInteractive, VtValue(false));
+  session.Render(R::None, false);
+  session.Setting(kInteractive, VtValue(true));
+  session.Setting(kFilter, VtValue(0));
+  {
+    TfErrorMark errors;
+    const auto entered = session.Frame();
+    Check(errors.IsClean() && entered.temporal.reset_reason == R::RenderSettingsChanged &&
+              !entered.temporal.history_available,
+        "entering Interactive from metadata-only Reference kept history");
+  }
+  // Reference without debug AOVs renders progressively, which breaks the
+  // stream; entering Interactive again reports the settings change.
+  session.Setting(kInteractive, VtValue(false));
+  session.DebugBindings(false);
+  {
+    TfErrorMark errors;
+    const auto progressive = session.Frame();
+    Check(errors.IsClean() && !progressive.temporal.available &&
+              progressive.samples_per_pixel == 1,
+        "Reference did not render progressively");
+  }
+  session.DebugBindings(true);
+  session.Setting(kInteractive, VtValue(true));
+  {
+    TfErrorMark errors;
+    const auto entered = session.Frame();
+    Check(errors.IsClean() && entered.temporal.reset_reason == R::RenderSettingsChanged,
+        "entering Interactive after progressive Reference frames");
+  }
 }
 } // namespace
 

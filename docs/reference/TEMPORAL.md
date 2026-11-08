@@ -19,6 +19,12 @@ owns delivery status.
 | `lotus:historyKey` | int, 0 | Caller compatibility token, clamped to nonnegative; a change resets history |
 | `lotus:historyReset` | int, 0 | Change this counter to declare one camera cut; the new value is consumed only by a successful temporal frame |
 | `lotus:filterIterations` | int, 0 | [Edge-aware filter](#edge-aware-filtering) iterations over `lotus:temporal`'s colour, clamped to [0, 8]; unused without `lotus:temporal`, and a change never resets history |
+| `lotus:interactive` | bool, false | The [Interactive preset](../design/INTERACTIVE_QUALITY.md#3-presets): overrides the three settings above with temporal radiance, 32 history samples and 5 filter iterations. Off, they work as described; with all of them at their defaults that is the Reference preset |
+
+Both hosts map a preset through `ApplyQualityPreset` in
+`include/lotus/temporal.hpp`, which sets only the accumulation, the history
+cap and the filter. The viewport's `--preset` and its Renderer window write
+its controls the same way ([build guide](../guides/BUILDING.md)).
 
 Temporal colour and the render pass remain unconverged so hosts keep drawing
 fresh batches. `convergedSamplesPerPixel` continues to control progressive
@@ -40,13 +46,15 @@ rendered frame index or a pending reset counter.
 
 One delegate retains one GPU view. Render-pass identity is retained with a
 token; switching passes conservatively cuts temporal history, including
-when cameras and extents happen to match. Alternating views do not retain
-independent histories. Successful ordinary renders interrupt the stream;
-failed submissions recreate the renderer on the next pass. Camera/rigid
-motion, scene/settings classification and same-count instancer reordering
-follow the backend contracts below. There is no automatic camera-cut
-heuristic: increment `lotus:historyReset` or change `lotus:historyKey` when
-the host knows a cut or incompatible edit occurred.
+when cameras and extents happen to match. A render pass state that looks
+through a different camera prim cuts too, and so does going back.
+Alternating views do not retain independent histories. Successful ordinary
+renders interrupt the stream; failed submissions recreate the renderer on
+the next pass. Camera/rigid motion, scene/settings classification and
+same-count instancer reordering follow the backend contracts below. There is
+no camera-cut heuristic for a camera that jumps: increment
+`lotus:historyReset` or change `lotus:historyKey` when the host knows a cut
+or incompatible edit occurred.
 
 `LOTUS_HYDRA_EVIDENCE` optionally appends per-frame availability, reset code,
 batch seed, valid/moving pixel counts and maximum effective history count
@@ -100,8 +108,11 @@ not alter correspondence.
 
 There is no correspondence when either frame lacks a visible, nonempty mesh,
 the geometry resource changes, instancing mode or placement count changes,
-or the ordinal is absent. Geometry replacements are conservatively rejected,
-including point deformation with unchanged topology. Same-count instancer
+or the ordinal is absent. Geometry replacements have no correspondence,
+including point deformation with unchanged topology: the deformed placement
+gets a new identity, so validity rejects its pixels while other placements
+keep theirs (the GPU radiance mode below classifies the edit as a whole).
+Same-count instancer
 reordering cannot be identified from the scene's ordinal-only representation;
 the consumer must reset history when reordering instances.
 
@@ -339,21 +350,28 @@ metadata retains its fixed pixel-centre/sample-0 coverage realization while
 radiance is box-filtered and jittered within the pixel, as before.
 
 Radiance mode adds automatic global resets, after the ordinary frame/window/
-key/cut reset priorities:
+key/cut reset priorities. They implement the
+[invalidation table](../design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category):
 
 | Change | `reset_reason` |
 | --- | --- |
-| Enabling radiance after metadata-only, integrator, light estimator, reservoir proposal/candidate count/reuse mode/spatial radius, base RNG index, bounce limit, per-batch sample limit, history cap or background colour | `RenderSettingsChanged` |
-| Constant environment, environment map, analytic lights, material table, texture resources, mesh insertion/removal, geometry resource, binding, visibility or instancing mode/count | `SceneChanged` |
-| Camera or existing rigid-placement transform only | No global reset; shared validity controls each pixel |
+| Enabling radiance after metadata-only or after ordinary (progressive) frames, integrator, light estimator, reservoir proposal/candidate count/reuse mode/spatial radius, base RNG index, bounce limit, clear colour or environment background | `RenderSettingsChanged` |
+| Constant environment, environment map, analytic lights, material table, texture resources, mesh insertion/removal, a topology change, binding, visibility or instancing mode/count | `SceneChanged` |
+| Rigid motion or any deformation of a visible emitter: a mesh whose bound material has a nonzero emission value or an emission texture | `SceneChanged` |
+| Camera motion, a non-emitter's rigid motion, or its deformation with the same point count, triangles and faces | No global reset; shared validity controls each pixel and rejects a deformed placement's pixels |
+| Sample target (`max_samples`, which bounds a batch) or history cap | No reset; a pixel keeps `min(h, cap - n)` of its history under the new cap |
+
+Because an ordinary frame interrupts the stream, a renderer's next temporal
+frame reports `RenderSettingsChanged`, not `ExplicitReset`: leaving the
+Reference preset is a settings change.
 
 Scene classification conservatively resets for unused material/texture edits
 too. Same-count instance reordering requires a caller cut/key change. Moving
-emissive/occluding geometry may change illumination without changing the
-primary surface: supported rigid motion therefore preserves an approximate
-history, not an unbiased moving-scene estimator. Use explicit cuts/keys for
-changes requiring immediate radiance replacement. Validation thresholds
-remain per-frame controls and do not reset the stream globally.
+or deforming occluding geometry may change illumination without changing the
+primary surface: rigid motion and non-emitter deformation therefore preserve
+an approximate history, not an unbiased moving-scene estimator. Use explicit
+cuts/keys for changes requiring immediate radiance replacement. Validation
+thresholds remain per-frame controls and do not reset the stream globally.
 
 `TemporalProducts::radiance` and `previous_radiance` are 32-byte
 `TemporalRadiancePixel` debug records: linear RGBA `color`, uint32
@@ -510,8 +528,10 @@ starts with a camera cut and a disjoint sample range; the first is then
 rendered again and must reproduce every output bit for bit
 (`deterministic`); the progressive renders are not repeated. Resets after
 the cut are counted by reason
-(`history_resets_after_cut`), not rejected: today a deforming mesh resets
-every frame.
+(`history_resets_after_cut`), not rejected. In the
+[baseline](../reports/2026-11-08-interactive-baseline.md) a deforming mesh
+reset every frame; since LOTUS-INTERACTIVE-03 only the sheet's pixels are
+rejected.
 
 | Option | Default | Range |
 | --- | --- | --- |
@@ -582,5 +602,13 @@ every filtered pixel with the CPU oracle, and checks the albedo and shading
 normal products ([filter evidence](../reports/2026-10-18-svgf-filter.md)).
 The filter is not history: nothing filtered is reused. Hydra controls and
 AOV bindings are described [above](#hydra-controls-and-debug-aovs).
-Geometry deformation is conservatively rejected.
+It checks each row of the
+[invalidation table](../design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category)
+that the backend classifies: a non-emitter's deformation rejects only its
+own pixels, a topology change and an emitter's motion reset, and the sample
+target and history cap keep the history
+([presets report](../reports/2026-11-08-interactive-presets.md)).
+`lotus-renderer-hydra-temporal-gpu` checks the Hydra rows: `lotus:interactive`
+and its override, entering and leaving it, a stage camera change, the cap,
+the sample target and a points edit.
 No ReSTIR state is introduced, and the filter keeps none across frames.

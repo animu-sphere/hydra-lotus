@@ -11,7 +11,9 @@ owner: hydra-lotus
 > before interactive-quality work changes defaults or history behaviour,
 > written before any code as LOTUS-INTERACTIVE-01. Its fixtures and a
 > [baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
-> are recorded. It extends the
+> are recorded, and the Interactive and Reference presets and §5's changes
+> are [implemented](../reports/2026-11-08-interactive-presets.md)
+> (LOTUS-INTERACTIVE-03). It extends the
 > [temporal reference](../reference/TEMPORAL.md), which owns the implemented
 > behaviour; where this contract is silent, that reference holds unchanged.
 > "Today" below describes `main` at v0.8.0.

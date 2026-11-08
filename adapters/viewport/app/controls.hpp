@@ -97,14 +97,31 @@ struct FramePlan {
 // temporal radiance history behind a fresh batch is the backend's to keep.
 [[nodiscard]] bool Restarts(const Controls& before, const Controls& after);
 
+// Puts `controls` in a quality preset (docs/design/INTERACTIVE_QUALITY.md)
+// through ApplyQualityPreset: Interactive turns temporal radiance and the
+// denoiser on with the preset's history samples and iterations; Reference
+// turns both off and accumulates. The estimator, the sample limit, the
+// reservoirs and the view stay as they are.
+void ApplyPreset(Controls& controls, QualityPreset preset);
+
+// The preset the controls are in: the one ApplyPreset leaves them unchanged
+// by. Editing a control a preset sets leaves it, and the result is nothing.
+[[nodiscard]] std::optional<QualityPreset> ActivePreset(
+    const Controls& controls);
+
 // Names, as the command line and the developer UI spell them.
 [[nodiscard]] std::string_view Name(RestirMode mode);
 [[nodiscard]] std::string_view Name(DebugView view);
 [[nodiscard]] std::string_view Name(Integrator integrator);
+[[nodiscard]] std::string_view Name(QualityPreset preset);
 [[nodiscard]] std::optional<RestirMode> ParseRestirMode(std::string_view name);
 [[nodiscard]] std::optional<DebugView> ParseDebugView(std::string_view name);
 [[nodiscard]] std::optional<Integrator> ParseIntegrator(std::string_view name);
+[[nodiscard]] std::optional<QualityPreset> ParseQualityPreset(
+    std::string_view name);
 
+inline constexpr std::array<QualityPreset, 2> kQualityPresets{
+    QualityPreset::Interactive, QualityPreset::Reference};
 inline constexpr std::array<RestirMode, 5> kRestirModes{RestirMode::Off,
     RestirMode::Initial, RestirMode::Temporal, RestirMode::Spatial,
     RestirMode::Combined};

@@ -239,5 +239,46 @@ int main() {
         "integrator names round-trip");
   }
   Check(!Lotus::viewport::ParseDebugView("Depth"), "names are lower case");
+
+  // Presets set only how samples are kept and shown; the defaults are
+  // Reference, and editing a control a preset sets leaves it.
+  using Lotus::QualityPreset;
+  using Lotus::viewport::ActivePreset;
+  using Lotus::viewport::ApplyPreset;
+  Check(ActivePreset(defaults) == QualityPreset::Reference,
+      "the defaults are the Reference preset");
+  Controls preset = defaults;
+  preset.integrator = Integrator::Wavefront;
+  preset.nee = false;
+  preset.samples = 64;
+  preset.view = DebugView::Variance;
+  ApplyPreset(preset, QualityPreset::Interactive);
+  const FramePlan interactive = Plan(preset);
+  Check(interactive.temporal_frame && interactive.temporal.accumulate_radiance &&
+            interactive.temporal.max_history_samples == Lotus::kInteractiveHistorySamples &&
+            interactive.temporal.filter_iterations == Lotus::kTemporalFilterIterations,
+      "Interactive plans capped, filtered temporal radiance");
+  Check(interactive.settings.integrator == Integrator::Wavefront &&
+            interactive.settings.light_sampling == LightSampling::Bsdf &&
+            interactive.settings.max_samples == 64 &&
+            interactive.present.view == DebugView::Variance,
+      "a preset keeps the estimator, the sample limit and the view");
+  Check(ActivePreset(preset) == QualityPreset::Interactive, "Interactive is active");
+  Controls edited = preset;
+  edited.history_samples = 8;
+  Check(!ActivePreset(edited), "editing the history samples leaves the preset");
+  edited = preset;
+  edited.integrator = Integrator::Reference;
+  Check(ActivePreset(edited) == QualityPreset::Interactive,
+      "the estimator is not part of a preset");
+  ApplyPreset(preset, QualityPreset::Reference);
+  Check(!preset.temporal_radiance && !preset.denoise && Progressive(preset) &&
+            !Plan(preset).temporal.accumulate_radiance &&
+            ActivePreset(preset) == QualityPreset::Reference,
+      "Reference accumulates progressively without history or filter");
+  for (const QualityPreset p : Lotus::viewport::kQualityPresets) {
+    Check(Lotus::viewport::ParseQualityPreset(Name(p)) == p,
+        "preset names round-trip");
+  }
   return failures == 0 ? 0 : 1;
 }

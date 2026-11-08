@@ -50,6 +50,7 @@ constexpr Named kViewNames[] = {{"beauty", 0}, {"depth", 1}, {"normal", 2},
     {"reservoir-age", 6}, {"reservoir-weight", 7}, {"raw", 8},
     {"accumulated", 9}, {"history-length", 10}, {"variance", 11}};
 constexpr Named kIntegratorNames[] = {{"reference", 0}, {"wavefront", 1}};
+constexpr Named kPresetNames[] = {{"interactive", 0}, {"reference", 1}};
 
 template <std::size_t N>
 std::string_view NameOf(const Named (&names)[N], int value) {
@@ -158,6 +159,32 @@ bool Restarts(const Controls& before, const Controls& after) {
          a.restir_candidates != b.restir_candidates;
 }
 
+void ApplyPreset(Controls& controls, QualityPreset preset) {
+  TemporalFrameSettings temporal = PlanFrame(controls, 0, {}).temporal;
+  ApplyQualityPreset(preset, temporal);
+  controls.temporal_radiance = temporal.accumulate_radiance;
+  controls.denoise = temporal.filter_iterations != 0;
+  if (controls.denoise) {
+    controls.filter_iterations = temporal.filter_iterations;
+  }
+  if (temporal.accumulate_radiance) {
+    controls.history_samples = temporal.max_history_samples;
+  } else {
+    controls.accumulate = true;
+  }
+}
+
+std::optional<QualityPreset> ActivePreset(const Controls& controls) {
+  for (const QualityPreset preset : kQualityPresets) {
+    Controls applied = controls;
+    ApplyPreset(applied, preset);
+    if (applied == controls) {
+      return preset;
+    }
+  }
+  return std::nullopt;
+}
+
 std::string_view Name(RestirMode mode) {
   return NameOf(kRestirNames, static_cast<int>(mode));
 }
@@ -168,6 +195,14 @@ std::string_view Name(DebugView view) {
 
 std::string_view Name(Integrator integrator) {
   return NameOf(kIntegratorNames, static_cast<int>(integrator));
+}
+
+std::string_view Name(QualityPreset preset) {
+  return NameOf(kPresetNames, static_cast<int>(preset));
+}
+
+std::optional<QualityPreset> ParseQualityPreset(std::string_view name) {
+  return Parse<QualityPreset>(kPresetNames, name);
 }
 
 std::optional<RestirMode> ParseRestirMode(std::string_view name) {

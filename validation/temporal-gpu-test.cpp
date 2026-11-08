@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 namespace {
@@ -622,6 +623,12 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
     const auto recovery = Render(2);
     Check(recovery.temporal.history_available, "radiance reset did not recover");
   };
+  // A change of the invalidation table's "none" or "per pixel" rows.
+  auto Keep = [&](const char* message) {
+    const auto frame = Render(2);
+    Check(frame.temporal.history_available && frame.temporal.reset_reason == TemporalResetReason::None, message);
+    return frame;
+  };
   auto MeasureMotion = [&] {
     const auto frame = Render(2);
     Check(frame.temporal.history_available, "motion reset radiance globally");
@@ -713,6 +720,52 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Reset(TemporalResetReason::SceneChanged);
   world.RemoveLight("/light");
   Reset(TemporalResetReason::SceneChanged);
+  // A non-emitter that deforms with its topology unchanged keeps the history
+  // per pixel: its own pixels are rejected, the plane's behind it kept.
+  auto panel = kPlane;
+  panel.positions = {{-0.5F, -1, -2}, {1.5F, -1, -2}, {1.5F, 1, -2}, {-0.5F, 1, -2}};
+  world.SetMesh("/panel", panel, {});
+  Reset(TemporalResetReason::SceneChanged);
+  panel.positions[2][2] = -2.2F;
+  world.SetMesh("/panel", panel, {});
+  {
+    const auto frame = Keep("non-emitter deformation reset radiance globally");
+    const auto& p = frame.temporal;
+    // Only the deformed placement loses its rigid correspondence (flag bit 1).
+    std::optional<std::uint64_t> deformed_id;
+    std::uint64_t kept_pixels = 0, deformed_pixels = 0;
+    for (std::size_t i = 0; i < p.current.size(); ++i) {
+      if ((p.current[i].flags & 1u) == 0)
+        continue;
+      if ((p.current[i].flags & 2u) == 0) {
+        Check(!deformed_id || *deformed_id == p.current[i].instance_id, "another placement lost its correspondence");
+        deformed_id = p.current[i].instance_id;
+        Check(!p.validity[i].valid, "deformed placement reused history");
+        ++deformed_pixels;
+      } else if (p.validity[i].valid)
+        ++kept_pixels;
+    }
+    Check(deformed_pixels > 0 && kept_pixels > 0, "deformation exercised no rejection or no reuse");
+  }
+  // A changed topology resets.
+  panel.triangles = {{0, 1, 3}, {1, 2, 3}};
+  world.SetMesh("/panel", panel, {});
+  Reset(TemporalResetReason::SceneChanged);
+  world.BindMaterial("/panel", "/material");
+  Reset(TemporalResetReason::SceneChanged);
+  MeshInstance instanced;
+  instanced.instancer_transforms = std::vector<Matrix4>{IdentityMatrix()};
+  world.SetMeshInstance("/panel", instanced);
+  Reset(TemporalResetReason::SceneChanged);
+  instanced.instancer_transforms->push_back(Translation(0.25F));
+  world.SetMeshInstance("/panel", instanced);
+  Reset(TemporalResetReason::SceneChanged);
+  MeshInstance hidden;
+  hidden.visible = false;
+  world.SetMeshInstance("/panel", hidden);
+  Reset(TemporalResetReason::SceneChanged);
+  world.RemoveMesh("/panel");
+  Reset(TemporalResetReason::SceneChanged);
   material.emission = {0.2F, 0.4F, 0.8F};
   world.SetMaterial("/material", material);
   Reset(TemporalResetReason::SceneChanged);
@@ -720,6 +773,11 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   unused.width = unused.height = 1;
   unused.texels = {255, 0, 0, 255};
   world.SetTexture("/unused", unused);
+  Reset(TemporalResetReason::SceneChanged);
+  // An emitter's rigid motion and its deformation change the lighting
+  // anywhere.
+  instance.world_from_object = Translation(0.5F, 0.3F);
+  world.SetMeshInstance("/plane", instance);
   Reset(TemporalResetReason::SceneChanged);
   auto deformed = kPlane;
   deformed.positions[0][0] -= 0.1F;
@@ -735,11 +793,17 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Reset(TemporalResetReason::RenderSettingsChanged);
   settings.max_bounces = 0;
   Reset(TemporalResetReason::RenderSettingsChanged);
+  // The sample target and the history cap keep the history; the oracle
+  // checks that the new cap bounds every pixel's kept samples.
   settings.max_samples = 1;
-  Reset(TemporalResetReason::RenderSettingsChanged);
+  (void)Keep("sample target reset radiance history");
   temporal.max_history_samples = 4;
-  Reset(TemporalResetReason::RenderSettingsChanged);
+  (void)Keep("history cap reset radiance history");
   target.clear_color = {0.1F, 0.2F, 0.3F, 1};
+  Reset(TemporalResetReason::RenderSettingsChanged);
+  settings.environment_background = true;
+  Reset(TemporalResetReason::RenderSettingsChanged);
+  settings.environment_background = false;
   Reset(TemporalResetReason::RenderSettingsChanged);
 
   // Invalid calls do not consume the preceding radiance/RNG stream.
@@ -775,15 +839,17 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Reset(TemporalResetReason::RenderSettingsChanged);
   Check(renderer.RenderScene(ExtractDrawSummary(snapshot), target, 1, settings).status == FrameStatus::Pass,
       "ordinary frame after radiance");
-  Reset(TemporalResetReason::ExplicitReset);
+  // Leaving the progressive (Reference) render is a settings change.
+  Reset(TemporalResetReason::RenderSettingsChanged);
 
   // Disocclusion: a foreground leaves a background of another colour. Old
   // foreground samples must not survive on a newly exposed background hit.
+  // The foreground does not emit: an emitter's motion resets globally.
   auto foreground = kPlane;
   foreground.positions = {{-1, -1, -2}, {1, -1, -2}, {1, 1, -2}, {-1, 1, -2}};
   world.SetMesh("/foreground", foreground, {});
   Material red;
-  red.emission = {8, 0, 0};
+  red.base_color = {0.9F, 0.05F, 0.05F};
   world.SetMaterial("/red", red);
   world.BindMaterial("/foreground", "/red");
   Reset(TemporalResetReason::SceneChanged);

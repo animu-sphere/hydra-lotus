@@ -145,6 +145,19 @@ int main() {
   Check(Rejects({"--filter-iterations", "0"}), "zero filter iterations");
   Check(Rejects({"--filter-iterations", "9"}), "too many filter iterations");
   Check(Rejects({"--split"}), "a split without a view");
+  const auto interactive = Parse({"--preset", "interactive"});
+  Check(interactive.controls.temporal_radiance && interactive.controls.denoise &&
+            interactive.controls.history_samples == 32 &&
+            interactive.controls.filter_iterations == 5,
+      "--preset interactive");
+  const auto edited = Parse({"--preset", "interactive", "--filter-iterations", "2"});
+  Check(edited.controls.denoise && edited.controls.filter_iterations == 2,
+      "options after --preset edit it");
+  const auto reference = Parse({"--denoise", "--preset", "reference"});
+  Check(!reference.controls.denoise && !reference.controls.temporal_radiance &&
+            reference.controls.accumulate,
+      "--preset reference");
+  Check(Rejects({"--preset", "balanced"}), "an unknown preset");
   Check(Rejects({"--bogus"}), "unknown option");
   Check(Lotus::viewport::Usage(true).find("--usd <stage>") !=
             std::string::npos,

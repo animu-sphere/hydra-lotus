@@ -460,6 +460,7 @@ again after a change; the launcher above runs the executable just built
 | `--integrator reference\|wavefront` | the path tracer to start with |
 | `--nee on\|off` | next event estimation with MIS, on by default; off leaves BSDF sampling alone |
 | `--restir off\|initial\|temporal\|spatial\|combined` | reservoir direct lighting at the camera surface, off by default |
+| `--preset interactive\|reference` | a [quality preset](../design/INTERACTIVE_QUALITY.md#3-presets): Interactive turns on temporal radiance (32 history samples) and the denoiser (5 iterations); Reference, the default, accumulates progressively without either. The estimator, sample limit, reservoirs and view are kept, and options after it edit it |
 | `--temporal-radiance` | reuse each pixel's radiance history |
 | `--denoise` | filter the temporal radiance with SVGF's edge-aware à-trous filter; turns temporal radiance on |
 | `--filter-iterations N` | the filter's à-trous iterations, 1–8, 5 by default |
@@ -498,11 +499,13 @@ before rendering. A changed camera or scene restarts the accumulation; a
 time code that changes nothing continues it.
 
 The Renderer window (Dear ImGui, drawn over the presented frame) changes the
-options above while the viewport runs: the integrator, the sample limit and
-accumulation, NEE/MIS, the ReSTIR mode and candidate count, temporal radiance
-reuse and its history length, the denoiser and its iteration count, and the
-presented product with its colour scale and an optional split at a chosen
-position. It shows the extent and samples per pixel. Pointer and keyboard input
+options above while the viewport runs: the quality preset, the integrator,
+the sample limit and accumulation, NEE/MIS, the ReSTIR mode and candidate
+count, temporal radiance reuse and its history length, the denoiser and its
+iteration count, and the presented product with its colour scale and an
+optional split at a chosen position. Editing a control the preset sets
+leaves the preset, and the preset list then shows Custom. It shows the
+extent and samples per pixel. Pointer and keyboard input
 over the window goes to it rather than the camera; it writes no files. The
 settings logic is `adapters/viewport/controls.{hpp,cpp}`, which
 `lotus-viewport-controls` covers without a window or GPU.

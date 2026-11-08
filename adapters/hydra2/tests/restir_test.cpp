@@ -506,7 +506,7 @@ void Sequence(bool wavefront) {
   Check(session.Color() == initial, "converged diagnostic binding changed colour");
   Check(session.DebugData() == diagnostics, "converged fresh binding lost last diagnostic");
   session.Setting(kTemporalReuse, VtValue(true));
-  session.Render(true, R::ExplicitReset);
+  session.Render(true, R::RenderSettingsChanged);
   Check(session.Render(true).restir.history_available, "no static reservoir history");
   session.Move("/Camera", GfVec3d(0.12, 1, 4));
   Check(session.Render(true).restir.history_available, "camera reset reservoir domain");

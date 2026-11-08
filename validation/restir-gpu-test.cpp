@@ -591,7 +591,7 @@ void TemporalLifecycle(OffscreenRenderer& renderer, Integrator integrator) {
   Check(f.Temporal().restir.history_available, "maximum valid history cap rejected");
   f.settings.restir_temporal = false;
   (void)f.Render();
-  reset(TemporalResetReason::ExplicitReset);
+  reset(TemporalResetReason::RenderSettingsChanged);
   // Reservoir and radiance histories can be enabled together.
   TemporalFrameSettings radiance; radiance.accumulate_radiance = true;
   auto both = f.Temporal(radiance);

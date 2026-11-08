@@ -270,6 +270,7 @@ const TfToken kHistorySamplesSetting("lotus:historySamples");
 const TfToken kHistoryKeySetting("lotus:historyKey");
 const TfToken kHistoryResetSetting("lotus:historyReset");
 const TfToken kFilterIterationsSetting("lotus:filterIterations");
+const TfToken kInteractiveSetting("lotus:interactive");
 const TfToken kMotionAov("lotus:motion");
 const TfToken kHistoryLengthAov("lotus:historyLength");
 const TfToken kHistoryValidityAov("lotus:historyValidity");
@@ -930,8 +931,12 @@ public:
       return;
     }
     temporal.frame_index = frame_index_;
+    // The pass's camera prim; a free camera without one is the empty path.
+    const SdfPath camera =
+        state.GetCamera() != nullptr ? state.GetCamera()->GetId() : SdfPath();
     temporal.camera_cut = (history_reset_ && *history_reset_ != history_reset) ||
-        (temporal_view_ && temporal_view_ != view);
+        (temporal_view_ && temporal_view_ != view) ||
+        (temporal_camera_ && *temporal_camera_ != camera);
     const Lotus::GpuFrameEvidence frame =
         temporal_products ? renderer_->RenderTemporalScene(
                                 snapshot, target, 1, temporal, settings)
@@ -961,6 +966,7 @@ public:
     if (temporal_products) {
       history_reset_ = history_reset;
       temporal_view_ = view;
+      temporal_camera_ = camera;
     }
     if (settings.light_sampling != Lotus::LightSampling::RestirInitial) {
       restir_diagnostics_ = {};
@@ -1232,6 +1238,8 @@ private:
   // One retained GPU view per delegate. Switching passes cuts its stream;
   // retaining the token prevents identity reuse when a pass is destroyed.
   std::shared_ptr<const int> temporal_view_;
+  // The camera prim of the latest temporal frame; a different one cuts.
+  std::optional<SdfPath> temporal_camera_;
   bool converged_ = true;
 };
 
@@ -2296,8 +2304,11 @@ private:
         delegate.GetRenderSetting<int>(kHistorySamplesSetting, 32), 1, 65536));
     temporal.history_key = static_cast<std::uint64_t>(std::max(
         delegate.GetRenderSetting<int>(kHistoryKeySetting, 0), 0));
-    // The filter needs the accumulation; without it the setting is unused.
-    if (temporal.accumulate_radiance) {
+    if (delegate.GetRenderSetting<bool>(kInteractiveSetting, false)) {
+      // The preset overrides the temporal, history and filter settings.
+      Lotus::ApplyQualityPreset(Lotus::QualityPreset::Interactive, temporal);
+    } else if (temporal.accumulate_radiance) {
+      // The filter needs the accumulation; without it the setting is unused.
       temporal.filter_iterations = static_cast<std::uint32_t>(std::clamp(
           delegate.GetRenderSetting<int>(kFilterIterationsSetting, 0), 0,
           static_cast<int>(Lotus::kTemporalFilterMaxIterations)));
@@ -2872,7 +2883,8 @@ HdLotusRenderDelegate::GetRenderSettingDescriptors() const {
       {"Temporal history compatibility key", kHistoryKeySetting, VtValue(0)},
       {"Temporal history reset counter", kHistoryResetSetting, VtValue(0)},
       {"Temporal filter iterations (SVGF)", kFilterIterationsSetting,
-          VtValue(0)}};
+          VtValue(0)},
+      {"Interactive preset", kInteractiveSetting, VtValue(false)}};
 }
 
 Lotus::FrameSnapshot HdLotusRenderDelegate::GetFrameSnapshot() {

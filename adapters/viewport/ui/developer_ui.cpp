@@ -70,6 +70,12 @@ constexpr const char* kRejections[] = {"accepted", "miss", "invalid data",
     "depth discontinuity", "normal discontinuity", "history unavailable",
     "correspondence missing", "reprojection outside"};
 
+const char* Label(QualityPreset preset) {
+  return preset == QualityPreset::Interactive
+             ? "Interactive (stable while moving)"
+             : "Reference (converges, unbiased)";
+}
+
 const char* Label(RestirMode mode) {
   switch (mode) {
   case RestirMode::Off:
@@ -372,6 +378,19 @@ private:
     }
     ImGui::Text("%ux%u  %u / %u spp", status.width, status.height,
         status.samples_per_pixel, controls.samples);
+
+    ImGui::SeparatorText("Preset");
+    // Editing a control the preset sets leaves it: the combo then shows
+    // Custom until a preset is chosen again.
+    const std::optional<QualityPreset> active = ActivePreset(controls);
+    if (ImGui::BeginCombo("Quality", active ? Label(*active) : "Custom")) {
+      for (const QualityPreset preset : kQualityPresets) {
+        if (ImGui::Selectable(Label(preset), active == preset)) {
+          ApplyPreset(controls, preset);
+        }
+      }
+      ImGui::EndCombo();
+    }
 
     ImGui::SeparatorText("Integration");
     int integrator = controls.integrator == Integrator::Wavefront ? 1 : 0;

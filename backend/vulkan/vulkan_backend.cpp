@@ -214,8 +214,34 @@ constexpr std::uint32_t kTemporalCompositePass = 12;
 // Surface, validity, accumulation, variance and filter timestamp pairs.
 constexpr std::uint32_t kTemporalTimestampQueries = 10;
 
-// Rigid placements and cameras may move; edits that can alter illumination
-// anywhere reset radiance globally, including indirect/emissive changes.
+// Whether a visible mesh lights others: its bound material emits, by a
+// value or through a texture. A missing binding is the default material,
+// which does not.
+bool EmitsLight(const LotusScene& scene, const SceneMesh& mesh) {
+  if (!mesh.instance.visible)
+    return false;
+  const auto found = scene.materials.find(mesh.material);
+  if (found == scene.materials.end())
+    return false;
+  const Material& material = found->second;
+  return material.emission_texture.has_value() ||
+         std::any_of(material.emission.begin(), material.emission.end(),
+             [](float value) { return value != 0.0F; });
+}
+
+// A deformation keeps the triangles, their faces and the point count; only
+// point positions and per-corner values change.
+bool SameTopology(const MeshGeometry& a, const MeshGeometry& b) {
+  return a.positions.size() == b.positions.size() && a.triangles == b.triangles &&
+         a.source_faces == b.source_faces;
+}
+
+// The scene rows of the invalidation table (INTERACTIVE_QUALITY.md section
+// 5). Cameras and non-emissive placements may move rigidly, and a
+// non-emissive mesh may deform with its topology unchanged: shared validity
+// rejects the deformed placement's pixels, whose identity changes. Edits
+// that can alter illumination anywhere reset radiance globally, including
+// any motion or deformation of an emitter.
 bool TemporalSceneCompatible(const LotusScene& a, const LotusScene& b) {
   if (&a == &b)
     return true;
@@ -226,17 +252,29 @@ bool TemporalSceneCompatible(const LotusScene& a, const LotusScene& b) {
   auto old = b.meshes.begin();
   for (const auto& [key, mesh] : a.meshes) {
     const auto& previous = old->second;
-    if (key != old->first || mesh.geometry != previous.geometry ||
-        mesh.material != previous.material || mesh.instance.visible != previous.instance.visible ||
+    if (key != old->first || mesh.material != previous.material ||
+        mesh.instance.visible != previous.instance.visible ||
         mesh.instance.instancer_transforms.has_value() != previous.instance.instancer_transforms.has_value() ||
         (mesh.instance.instancer_transforms &&
             mesh.instance.instancer_transforms->size() != previous.instance.instancer_transforms->size()))
+      return false;
+    // The material tables are equal, so the mesh emits in both or neither.
+    const bool emits = EmitsLight(a, mesh);
+    if (mesh.geometry != previous.geometry &&
+        (emits || !mesh.geometry || !previous.geometry ||
+            !SameTopology(*mesh.geometry, *previous.geometry)))
+      return false;
+    if (emits && mesh.instance != previous.instance)
       return false;
     ++old;
   }
   return true;
 }
 
+// What a change of resets radiance history globally. The sample target
+// (max_samples, which only bounds a batch) and the history cap are not part
+// of it: a pixel's kept samples are min(previous count, cap - fresh), so a
+// new cap or batch size applies to the existing history.
 struct TemporalTransportKey {
   Integrator integrator;
   LightSampling light_sampling;
@@ -249,8 +287,6 @@ struct TemporalTransportKey {
   bool accumulate_radiance;
   std::uint32_t sample_index;
   std::uint32_t max_bounces;
-  std::uint32_t max_samples;
-  std::uint32_t max_history_samples;
   std::array<float, 4> background;
   bool environment_background;
   bool operator==(const TemporalTransportKey&) const = default;
@@ -1702,12 +1738,15 @@ public:
     } catch (const std::invalid_argument& error) {
       return Evidence(FrameStatus::Fail, error.what());
     }
+    // Only an ordinary frame resets this renderer's history: the stream
+    // changed from progressive rendering (the Reference preset) to temporal.
+    if (frame.reset_reason == TemporalResetReason::ExplicitReset)
+      frame.reset_reason = TemporalResetReason::RenderSettingsChanged;
     const TemporalTransportKey radiance_key{settings.integrator, settings.light_sampling,
         settings.restir_proposal,
         settings.restir_candidates, settings.restir_temporal, settings.restir_max_history_candidates,
         settings.restir_spatial, settings.restir_spatial_radius,
-        accumulate, settings.sample_index, settings.max_bounces, settings.max_samples,
-        requested.max_history_samples, target.clear_color,
+        accumulate, settings.sample_index, settings.max_bounces, target.clear_color,
         settings.environment_background};
     if (fresh_batch && frame.previous) {
       if (!temporal_transport_key_ || *temporal_transport_key_ != radiance_key) {
