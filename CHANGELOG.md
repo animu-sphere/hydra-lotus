@@ -18,8 +18,25 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   `progressive`, which is the Reference preset's progressive render. The
   report schema is `lotus-svgf-benchmark-v2`
   ([baseline](docs/reports/2026-11-08-interactive-baseline.md)).
+- The Interactive and Reference
+  [quality presets](docs/design/INTERACTIVE_QUALITY.md#3-presets): the
+  `lotus:interactive` render setting, the viewport's `--preset` option and a
+  Quality list in its Renderer window. Interactive is temporal radiance with
+  32 history samples and five SVGF iterations; Reference, the default, is
+  the progressive image. Both hosts map a preset through
+  `Lotus::ApplyQualityPreset`, which never changes the estimator
+  ([report](docs/reports/2026-11-08-interactive-presets.md)).
 
 ### Changed
+
+- Temporal radiance history follows the contract's
+  [invalidation table](docs/design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category):
+  an emitter's rigid motion resets it; a non-emitter's deformation with
+  unchanged topology rejects only that mesh's pixels instead of resetting
+  every pixel; changing the sample target or the history cap no longer
+  resets it; Hydra cuts it when the render pass looks through a different
+  camera prim; and the first temporal frame after progressive frames
+  reports `RenderSettingsChanged` instead of `ExplicitReset`.
 
 - The [interactive-quality contract](docs/design/INTERACTIVE_QUALITY.md) is
   accepted (LOTUS-INTERACTIVE-01).

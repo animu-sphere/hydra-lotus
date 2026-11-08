@@ -229,6 +229,34 @@ inline constexpr std::uint32_t kTemporalVarianceBatches = 4;
 inline constexpr std::uint32_t kTemporalFilterIterations = 5;
 inline constexpr std::uint32_t kTemporalFilterMaxIterations = 8;
 
+// The named presets of docs/design/INTERACTIVE_QUALITY.md. A preset selects
+// only how samples are kept and shown, never the estimator: integrator,
+// light sampling, bounces, sample index and the scene stay the host's.
+enum class QualityPreset {
+  // One fresh sample per frame, a capped per-pixel history and the
+  // edge-aware filter; it never converges.
+  Interactive,
+  // Progressive, unfiltered and without history: today's default.
+  Reference,
+};
+
+// Interactive's history cap and filter iterations.
+inline constexpr std::uint32_t kInteractiveHistorySamples = 32;
+
+// Sets the preset's accumulate_radiance, max_history_samples and
+// filter_iterations in `temporal` and leaves its other fields. Reference
+// leaves the history cap, which it does not use. Every host maps a preset
+// through this function, so none has its own idea of one. Inline, so that
+// GPU-free host code can call it without the backend.
+inline void ApplyQualityPreset(
+    QualityPreset preset, TemporalFrameSettings& temporal) {
+  const bool interactive = preset == QualityPreset::Interactive;
+  temporal.accumulate_radiance = interactive;
+  temporal.filter_iterations = interactive ? kTemporalFilterIterations : 0;
+  if (interactive)
+    temporal.max_history_samples = kInteractiveHistorySamples;
+}
+
 // CPU oracle for the GPU filter and composite, in its float arithmetic.
 // Each pixel with a history starts from its illumination and the variance
 // of its mean, variance / b for b batches of history. Iteration i averages

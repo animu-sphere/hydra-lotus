@@ -695,6 +695,29 @@ void Filter() {
     Close(output[i][0], radiance[i].color[0], "filter crossed a depth or normal edge");
 }
 
+// A preset writes only how samples are kept and shown.
+void Presets() {
+  Lotus::TemporalFrameSettings base;
+  base.frame_index = 7;
+  base.history_key = 3;
+  base.camera_cut = true;
+  base.max_history_samples = 900;
+  base.filter_iterations = 2;
+  auto interactive = base;
+  Lotus::ApplyQualityPreset(Lotus::QualityPreset::Interactive, interactive);
+  Check(interactive.accumulate_radiance && interactive.max_history_samples == 32 &&
+            interactive.filter_iterations == Lotus::kTemporalFilterIterations,
+      "Interactive preset settings");
+  auto reference = interactive;
+  Lotus::ApplyQualityPreset(Lotus::QualityPreset::Reference, reference);
+  Check(!reference.accumulate_radiance && reference.filter_iterations == 0 &&
+            reference.max_history_samples == 32,
+      "Reference preset settings");
+  for (const auto& preset : {interactive, reference})
+    Check(preset.frame_index == 7 && preset.history_key == 3 && preset.camera_cut,
+        "a preset changed a caller-owned setting");
+}
+
 } // namespace
 
 int main() try {
@@ -705,7 +728,8 @@ int main() try {
   PixelFetch();
   Variance();
   Filter();
-  std::cout << "temporal lifecycle, correspondence, reprojection, rejection, variance and filter PASS\n";
+  Presets();
+  std::cout << "temporal lifecycle, correspondence, reprojection, rejection, variance, filter and presets PASS\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

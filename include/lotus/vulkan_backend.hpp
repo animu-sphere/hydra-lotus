@@ -777,8 +777,11 @@ public:
   // this stream. Same-count instancer reordering requires a cut/key change.
   // accumulate_radiance traces a fresh batch per call and reuses validated
   // per-pixel radiance with bounded sample counts. It automatically resets
-  // for transport settings and non-rigid scene edits. Camera/rigid motion
-  // preserves compatible history; history_key/camera_cut reset explicitly.
+  // for transport settings and for scene edits that can change lighting
+  // anywhere, an emitter's motion or deformation among them. Camera and
+  // non-emitter rigid motion, and a non-emitter's deformation with unchanged
+  // topology, preserve compatible history per pixel; the sample target and
+  // the history cap do not reset it. history_key/camera_cut reset explicitly.
   // A progressive frame after a fresh batch (radiance or reservoir reuse)
   // restarts the accumulation.
   [[nodiscard]] virtual GpuFrameEvidence RenderTemporalScene(
