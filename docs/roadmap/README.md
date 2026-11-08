@@ -58,7 +58,7 @@ completion of its parent phase.
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
 | Materials & Lighting — cross-phase delivery | ✅ every task closed, each selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a [MaterialX Standard Surface subset](../reports/2026-10-29-materialx-standard-surface.md#decision), a [dielectric transmission lobe](../reports/2026-10-29-dielectric-transmission.md#decision), [texture transforms, per-face materials and primvar colour](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision), and [skinned meshes](../reports/2026-10-31-skinned-meshes.md#decision); no lighting task, since no asset demonstrated a lighting gap; [release gate passed](../reports/2026-10-31-v0.8.0-release-gate.md); selected subsets only | [v0.8.0](../releases/v0.8.0.md) ([plan](#v080--materials--lighting)) |
-| Interactive Quality — cross-phase delivery | 🚧 [contract](../design/INTERACTIVE_QUALITY.md) accepted; fixed fixtures and a [baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md) recorded; [Interactive and Reference presets and the invalidation table](../reports/2026-11-08-interactive-presets.md) delivered; [Balanced settling](../reports/2026-11-08-balanced-settling.md) delivered; [ghosting candidates](../reports/2026-11-09-ghosting-candidates.md#decision) measured, none adopted; every task closed, release gate next | v0.9.0 ([plan](#v090--interactive-quality)) |
+| Interactive Quality — cross-phase delivery | ✅ every task closed under the accepted [contract](../design/INTERACTIVE_QUALITY.md): fixed fixtures and a [baseline](../reports/2026-11-08-interactive-baseline.md), [Interactive and Reference presets and the invalidation table](../reports/2026-11-08-interactive-presets.md), [Balanced settling](../reports/2026-11-08-balanced-settling.md), and [ghosting candidates](../reports/2026-11-09-ghosting-candidates.md#decision) measured with none adopted; [release gate passed](../reports/2026-11-09-v0.9.0-release-gate.md); selected subsets only | [v0.9.0](../releases/v0.9.0.md) ([plan](#v090--interactive-quality)) |
 
 ## v0.9.0 — Interactive Quality
 
@@ -78,6 +78,9 @@ the same core, under the
 The [active queue](current.md#execution-order) owns the order. Changing a
 default, ReSTIR GI and a new denoiser are not exit gates. Reference-quality
 regressions remain disqualifying.
+
+Every task met its exit evidence and shipped in
+[v0.9.0](../releases/v0.9.0.md) on 2026-11-09.
 
 ## v0.8.0 — Materials & Lighting
 
