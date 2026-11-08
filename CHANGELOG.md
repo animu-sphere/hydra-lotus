@@ -7,6 +7,23 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Added
+
+- `lotus-headless --benchmark-svgf` measures the
+  [interactive-quality contract's](docs/design/INTERACTIVE_QUALITY.md) fixed
+  fixture set: besides `svgf-room`, a shadow swept over a still floor by an
+  occluder out of view, a camera panning over a roughness-0.1 metal floor and
+  a waving sheet of fixed topology. Each scene reports the MSE in its lagging
+  region, the resets after the cut by reason, and a fourth output,
+  `progressive`, which is the Reference preset's progressive render. The
+  report schema is `lotus-svgf-benchmark-v2`
+  ([baseline](docs/reports/2026-11-08-interactive-baseline.md)).
+
+### Changed
+
+- The [interactive-quality contract](docs/design/INTERACTIVE_QUALITY.md) is
+  accepted (LOTUS-INTERACTIVE-01).
+
 ## [0.8.0] - 2026-10-31
 
 The Materials & Lighting release completes the v0.8.0 milestone. An

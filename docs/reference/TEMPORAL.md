@@ -487,14 +487,31 @@ HUD ([usage](../guides/BUILDING.md#the-standalone-viewport),
 
 `lotus-headless --benchmark-svgf <json-path>` compares the fresh batch
 (raw), the temporal mean and the filtered composite of the same renders
-with a high-spp reference. Its workload, `svgf-room`, is a closed room lit
-by an emissive ceiling panel, with a checker-textured floor, a white box and
-a rough metal block: a static view, and a moving one that pans the camera
-and slides the block. Every pose's reference is the mean of two disjoint
-halves from the reference integrator, NEE/MIS, which also estimate its
-noise. Each sequence starts with a camera cut and a disjoint sample range;
-the first is then rendered again and must reproduce every output bit for
-bit (`deterministic`).
+with a high-spp reference, and a separate progressive render of the same
+frames, one batch per frame: the image the Reference
+[preset](../design/INTERACTIVE_QUALITY.md#3-presets) shows. It restarts at
+the sequence's sample index on every change, so on a moving workload it
+repeats its random numbers every frame
+([DES-Q7](../design/DESIGN_POLICY.md#53-open-questions)) and its
+frame-delta MSE understates its flicker. Its workloads are the
+[interactive-quality contract's fixed set](../design/INTERACTIVE_QUALITY.md#7-measuring-still-and-moving-separately):
+
+| Workload | Scene | Lag region |
+| --- | --- | --- |
+| `svgf-room-static-v1` | A closed room lit by an emissive ceiling panel, with a checker-textured floor, a white box and a rough metal block; a still view | None |
+| `svgf-room-moving-camera-block-v1` | The same room; the camera pans and the block slides | None |
+| `occluder-shadow-sweep-v1` | A still camera looking down at a floor; an occluder above the view slides and sweeps a small panel's shadow across it | Pixels whose reference changes between poses |
+| `glossy-floor-camera-pan-v1` | The room's shell with a roughness-0.1 metal floor and three coloured posts; the tilted camera pans | The metal floor's pixels |
+| `deforming-sheet-v1` | The room's shell with a still camera facing a waving sheet of fixed topology | The sheet's pixels |
+
+Every pose's reference is the mean of two disjoint halves from the
+reference integrator, NEE/MIS, which also estimate its noise. Each sequence
+starts with a camera cut and a disjoint sample range; the first is then
+rendered again and must reproduce every output bit for bit
+(`deterministic`); the progressive renders are not repeated. Resets after
+the cut are counted by reason
+(`history_resets_after_cut`), not rejected: today a deforming mesh resets
+every frame.
 
 | Option | Default | Range |
 | --- | --- | --- |
@@ -513,18 +530,22 @@ bit (`deterministic`).
 Per workload and output the report gives the MSE per frame and its mean,
 the frame-delta MSE (the change of each pixel's error from the previous
 frame: flicker and lag), the MSE by history length in batches (the response
-after disocclusion or rejection) and the last frame's squared error of the
-sequences' mean, split into expected noise and an estimate of squared bias.
-`metric_notes` in the report defines each; it asserts no quality or speed
-threshold. Its PFMs are the reference and the three outputs of the first
-sequence's last frame. The `research` tier runs a small configuration under
+after disocclusion or rejection), the MSE in the lag region per frame and
+pooled after the cut, and the last frame's squared error of the sequences'
+mean, split into expected noise and an estimate of squared bias.
+`metric_notes` in the report (schema `lotus-svgf-benchmark-v2`) defines
+each; it asserts no quality or speed threshold. Its PFMs are the last pose's
+reference and the four outputs of the first sequence's last frame. The `research` tier runs a small configuration under
 both integrators (`lotus-renderer-svgf-benchmark-*`).
 
 Nearest history fetch, geometric rejection and bounded weighting supply this
 foundation. There is no radiance neighbourhood clamp, history filtering,
 anti-lag heuristic or motion-aware BRDF correction. View-dependent shading,
 indirect-light changes and jittered silhouette coverage can therefore lag or
-ghost during motion. The [accumulation report](../reports/2026-10-12-temporal-radiance.md)
+ghost during motion; the
+[interactive-quality baseline](../reports/2026-11-08-interactive-baseline.md#moving-stability-lag-and-disocclusion)
+measures shadow and reflection lag above a single sample's error in their
+regions. The [accumulation report](../reports/2026-10-12-temporal-radiance.md)
 measures static equivalence, moving-image error and exposed-surface rejection;
 it does not establish production-quality temporal reconstruction.
 

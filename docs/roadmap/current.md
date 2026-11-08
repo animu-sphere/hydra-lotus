@@ -7,22 +7,18 @@ by the [development strategy](../design/POST_V060_STRATEGY.md).
 ## Execution order
 
 The [Interactive Quality milestone](README.md#v090--interactive-quality) is
-active. Its [contract](../design/INTERACTIVE_QUALITY.md) comes first, because
-the [strategy](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work)
-requires it before defaults or history behaviour change.
+active. Its [contract](../design/INTERACTIVE_QUALITY.md) is accepted, and its
+fixed fixtures and a
+[baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
+are recorded (LOTUS-INTERACTIVE-01 and -02).
 
-1. **LOTUS-INTERACTIVE-01 (P0).** Review the
-   [contract](../design/INTERACTIVE_QUALITY.md), then mark it accepted.
-2. **LOTUS-INTERACTIVE-02 (P0).** Add the
-   [fixed fixture set](../design/INTERACTIVE_QUALITY.md#7-measuring-still-and-moving-separately)
-   and record a baseline of today's behaviour, with no renderer change.
-3. **LOTUS-INTERACTIVE-03 (P0).** Add the Interactive and Reference presets to
+1. **LOTUS-INTERACTIVE-03 (P0).** Add the Interactive and Reference presets to
    both hosts, and make the
    [invalidation table](../design/INTERACTIVE_QUALITY.md#5-invalidation-by-change-category)'s
    changes, with a test per row.
-4. **LOTUS-INTERACTIVE-04 (P1).** Add Balanced
+2. **LOTUS-INTERACTIVE-04 (P1).** Add Balanced
    [settling](../design/INTERACTIVE_QUALITY.md#4-settling).
-5. **LOTUS-INTERACTIVE-05 (P1).** Measure the ghosting candidates under the
+3. **LOTUS-INTERACTIVE-05 (P1).** Measure the ghosting candidates under the
    contract's adoption and stop rule. A measured negative closes the task.
 
 The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus

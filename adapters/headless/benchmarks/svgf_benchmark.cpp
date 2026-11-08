@@ -12,11 +12,11 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <tuple>
 
 namespace LotusHeadless {
 namespace {
@@ -24,8 +24,10 @@ using namespace Lotus;
 constexpr double kPi = 3.14159265358979323846;
 constexpr unsigned kSeed = 17, kSequenceStride = 65537, kReferenceSeed = 1U << 24;
 // What each frame is compared as: the fresh batch, the temporal mean and the
-// filtered composite of the same render.
-constexpr std::array<const char*, 3> kOutputs{"raw", "temporal", "filtered"};
+// filtered composite of the same render, and a separate progressive render
+// restarted on every change, which is what the Reference preset shows.
+constexpr std::array<const char*, 4> kOutputs{"raw", "temporal", "filtered", "progressive"};
+constexpr std::size_t kMeasuredOutputs = 3;
 // History length in batches: 1, 2-3, 4-7 and 8 or more.
 constexpr std::array<const char*, 4> kBuckets{"1", "2-3", "4-7", "8+"};
 
@@ -163,11 +165,76 @@ MeshGeometry Box(std::array<float, 3> low, std::array<float, 3> high) {
   return box;
 }
 
+Matrix4 RotationX(float radians) {
+  auto matrix = IdentityMatrix();
+  matrix[5] = matrix[10] = std::cos(radians);
+  matrix[6] = std::sin(radians);
+  matrix[9] = -std::sin(radians);
+  return matrix;
+}
+
+// Where a fixture's lag shows: no region, the pixels whose primary surface has
+// one material's base colour, or the pixels whose reference changes between
+// poses of a fixture whose visible surfaces never move.
+enum class LagRegion { None, Albedo, Swept };
+
 struct Workload {
   std::string id;
+  // The contract's fixture this workload stands for.
+  std::string fixture;
+  // A reference per frame; otherwise every frame shares the first pose's.
   bool moving = false;
+  LagRegion lag = LagRegion::None;
+  std::array<float, 3> lag_albedo{};
   std::vector<FrameSnapshot> snapshots;
 };
+
+void Lambert(RenderWorld& world, const char* id, std::array<float, 3> albedo) {
+  Material material;
+  material.ior = 1;
+  material.base_color = albedo;
+  world.SetMaterial(id, material);
+}
+
+void Place(RenderWorld& world, const char* id, MeshGeometry geometry, const char* material) {
+  world.SetMesh(id, std::move(geometry), {});
+  world.BindMaterial(id, material);
+}
+
+// svgf-room's shell: X and Y in [-2, 2], Z in [-7, 1], red left and green
+// right walls, white elsewhere, and an emissive ceiling panel. The floor's
+// material is the caller's.
+void RoomShell(RenderWorld& world, const char* floor_material) {
+  Lambert(world, "/white", {0.8F, 0.8F, 0.8F});
+  Lambert(world, "/red", {0.8F, 0.15F, 0.1F});
+  Lambert(world, "/green", {0.15F, 0.7F, 0.2F});
+  Material panel;
+  panel.base_color = {0.8F, 0.8F, 0.8F};
+  panel.emission = {15, 14, 12};
+  world.SetMaterial("/panel", panel);
+  constexpr float x = 2, y = 2, back = -7, front = 1;
+  auto floor_quad = Quad({-x, -y, back}, {x, -y, back}, {x, -y, front}, {-x, -y, front});
+  floor_quad.texcoords["st"] = {{0, 0}, {1, 0}, {1, 1}, {0, 0}, {1, 1}, {0, 1}};
+  Place(world, "/floor", floor_quad, floor_material);
+  Place(world, "/ceiling", Quad({-x, y, back}, {-x, y, front}, {x, y, front}, {x, y, back}), "/white");
+  Place(world, "/back", Quad({-x, -y, back}, {-x, y, back}, {x, y, back}, {x, -y, back}), "/white");
+  Place(world, "/front", Quad({-x, -y, front}, {x, -y, front}, {x, y, front}, {-x, y, front}), "/white");
+  Place(world, "/left", Quad({-x, -y, back}, {-x, -y, front}, {-x, y, front}, {-x, y, back}), "/red");
+  Place(world, "/right", Quad({x, -y, back}, {x, y, back}, {x, y, front}, {x, -y, front}), "/green");
+  Place(world, "/panel",
+      Quad({-0.6F, 1.95F, -4.6F}, {-0.6F, 1.95F, -3.4F}, {0.6F, 1.95F, -3.4F}, {0.6F, 1.95F, -4.6F}), "/panel");
+}
+
+Camera Pinhole(Matrix4 view = IdentityMatrix()) {
+  Camera camera;
+  camera.view = view;
+  camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
+  return camera;
+}
+
+float Phase(const Options& options, unsigned frame) {
+  return static_cast<float>(2 * kPi * frame / options.frames);
+}
 
 // A closed room lit by an emissive ceiling panel, so most light is indirect.
 // The floor is a textured checker, which demodulation must keep sharp; a
@@ -176,17 +243,9 @@ struct Workload {
 Workload MakeRoom(const Options& options, bool moving) {
   Workload result;
   result.moving = moving;
+  result.fixture = "svgf-room";
   result.id = moving ? "svgf-room-moving-camera-block-v1" : "svgf-room-static-v1";
   RenderWorld world;
-  auto lambert = [&](const char* id, std::array<float, 3> albedo) {
-    Material material;
-    material.ior = 1;
-    material.base_color = albedo;
-    world.SetMaterial(id, material);
-  };
-  lambert("/white", {0.8F, 0.8F, 0.8F});
-  lambert("/red", {0.8F, 0.15F, 0.1F});
-  lambert("/green", {0.15F, 0.7F, 0.2F});
   Texture checker;
   checker.width = checker.height = 8;
   for (unsigned y = 0; y < 8; ++y)
@@ -207,35 +266,13 @@ Workload MakeRoom(const Options& options, bool moving) {
   metal.metallic = 1;
   metal.roughness = 0.3F;
   world.SetMaterial("/metal", metal);
-  Material panel;
-  panel.base_color = {0.8F, 0.8F, 0.8F};
-  panel.emission = {15, 14, 12};
-  world.SetMaterial("/panel", panel);
-  constexpr float x = 2, y = 2, back = -7, front = 1;
-  auto floor_quad = Quad({-x, -y, back}, {x, -y, back}, {x, -y, front}, {-x, -y, front});
-  floor_quad.texcoords["st"] = {{0, 0}, {1, 0}, {1, 1}, {0, 0}, {1, 1}, {0, 1}};
-  const std::array<std::tuple<const char*, MeshGeometry, const char*>, 7> meshes{{
-      {"/floor", floor_quad, "/floor"},
-      {"/ceiling", Quad({-x, y, back}, {-x, y, front}, {x, y, front}, {x, y, back}), "/white"},
-      {"/back", Quad({-x, -y, back}, {-x, y, back}, {x, y, back}, {x, -y, back}), "/white"},
-      {"/front", Quad({-x, -y, front}, {x, -y, front}, {x, y, front}, {-x, y, front}), "/white"},
-      {"/left", Quad({-x, -y, back}, {-x, -y, front}, {-x, y, front}, {-x, y, back}), "/red"},
-      {"/right", Quad({x, -y, back}, {x, y, back}, {x, y, front}, {x, -y, front}), "/green"},
-      {"/panel", Quad({-0.6F, 1.95F, -4.6F}, {-0.6F, 1.95F, -3.4F}, {0.6F, 1.95F, -3.4F}, {0.6F, 1.95F, -4.6F}),
-          "/panel"}}};
-  for (const auto& [id, geometry, material] : meshes) {
-    world.SetMesh(id, geometry, {});
-    world.BindMaterial(id, material);
-  }
-  world.SetMesh("/tall", Box({-1.3F, -y, -5.5F}, {-0.3F, 0.4F, -4.5F}), {});
-  world.BindMaterial("/tall", "/white");
-  world.SetMesh("/block", Box({0.4F, -y, -4.2F}, {1.4F, -1, -3.2F}), {});
-  world.BindMaterial("/block", "/metal");
+  RoomShell(world, "/floor");
+  Place(world, "/tall", Box({-1.3F, -2, -5.5F}, {-0.3F, 0.4F, -4.5F}), "/white");
+  Place(world, "/block", Box({0.4F, -2, -4.2F}, {1.4F, -1, -3.2F}), "/metal");
   for (unsigned f = 0; f < options.frames; ++f) {
-    Camera camera;
-    camera.projection = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1.2F, -1, 0, 0, -2.2F, 0};
+    Camera camera = Pinhole();
     if (moving) {
-      const float phase = static_cast<float>(2 * kPi * f / options.frames);
+      const float phase = Phase(options, f);
       camera.view = Translation(0.4F * std::sin(phase));
       MeshInstance instance;
       instance.world_from_object = Translation(-0.8F * std::sin(phase + 0.3F) + 0.8F * std::sin(0.3F));
@@ -244,6 +281,120 @@ Workload MakeRoom(const Options& options, bool moving) {
     world.SetCamera(camera);
     result.snapshots.push_back(world.Commit());
   }
+  return result;
+}
+
+// Shadow lag. A still camera three units up looks 60 degrees down at a floor
+// and sees nothing above its own height. A small panel above and behind it
+// lights the floor through an occluder that, just above the camera, slides in
+// X and sweeps a shadow about 2.2 times its size across the floor. Every
+// visible surface is still and passes validity, so any change is lighting the
+// history must catch up with; its region is where the reference changes.
+Workload MakeShadowSweep(const Options& options) {
+  Workload result;
+  result.id = "occluder-shadow-sweep-v1";
+  result.fixture = "moving-occluder-still-receiver";
+  result.moving = true;
+  result.lag = LagRegion::Swept;
+  RenderWorld world;
+  Lambert(world, "/receiver", {0.7F, 0.68F, 0.62F});
+  Lambert(world, "/wall", {0.8F, 0.8F, 0.8F});
+  Lambert(world, "/occluder", {0.5F, 0.5F, 0.5F});
+  Material panel;
+  panel.base_color = {0.8F, 0.8F, 0.8F};
+  panel.emission = {300, 290, 270};
+  world.SetMaterial("/panel", panel);
+  Place(world, "/floor", Quad({-10, 0, -12}, {10, 0, -12}, {10, 0, 3}, {-10, 0, 3}), "/receiver");
+  Place(world, "/back", Quad({-10, 0, -12}, {-10, 6, -12}, {10, 6, -12}, {10, 0, -12}), "/wall");
+  Place(world, "/panel", Quad({-0.25F, 6, 1.75F}, {-0.25F, 6, 2.25F}, {0.25F, 6, 2.25F}, {0.25F, 6, 1.75F}), "/panel");
+  Place(world, "/occluder", Box({-0.4F, 3.25F, -1.1F}, {0.4F, 3.35F, -0.3F}), "/occluder");
+  world.SetCamera(Pinhole(Multiply(RotationX(static_cast<float>(kPi / 3)), Translation(0, -3))));
+  for (unsigned f = 0; f < options.frames; ++f) {
+    MeshInstance instance;
+    instance.world_from_object = Translation(0.9F * std::sin(Phase(options, f)));
+    world.SetMeshInstance("/occluder", instance);
+    result.snapshots.push_back(world.Commit());
+  }
+  return result;
+}
+
+// Reflection lag. svgf-room's shell with a low-roughness metal floor and three
+// coloured posts; the camera, tilted down, pans across. The reflected posts
+// move with their mirrored depth, not with the floor's motion vectors.
+Workload MakeGlossyPan(const Options& options) {
+  Workload result;
+  result.id = "glossy-floor-camera-pan-v1";
+  result.fixture = "camera-over-low-roughness-surface";
+  result.moving = true;
+  result.lag = LagRegion::Albedo;
+  RenderWorld world;
+  Material mirror;
+  mirror.base_color = result.lag_albedo = {0.94F, 0.92F, 0.88F};
+  mirror.metallic = 1;
+  mirror.roughness = 0.1F;
+  world.SetMaterial("/mirror", mirror);
+  Lambert(world, "/post-red", {0.85F, 0.2F, 0.15F});
+  Lambert(world, "/post-yellow", {0.85F, 0.75F, 0.2F});
+  Lambert(world, "/post-blue", {0.2F, 0.35F, 0.85F});
+  RoomShell(world, "/mirror");
+  Place(world, "/post-a", Box({-1.4F, -2, -5.6F}, {-0.9F, 0.2F, -5.1F}), "/post-red");
+  Place(world, "/post-b", Box({-0.25F, -2, -6.2F}, {0.25F, 0.8F, -5.7F}), "/post-yellow");
+  Place(world, "/post-c", Box({0.9F, -2, -5.0F}, {1.4F, -0.4F, -4.5F}), "/post-blue");
+  for (unsigned f = 0; f < options.frames; ++f) {
+    const float phase = Phase(options, f);
+    world.SetCamera(Pinhole(Multiply(RotationX(0.3F), Translation(-0.6F * std::sin(phase), -0.4F))));
+    result.snapshots.push_back(world.Commit());
+  }
+  return result;
+}
+
+// Deformation. svgf-room's shell with a white floor and a still camera
+// facing a waving sheet of fixed topology. Today every pixel resets on its
+// every frame; the contract keeps the history of the pixels it leaves.
+Workload MakeDeformingSheet(const Options& options) {
+  Workload result;
+  result.id = "deforming-sheet-v1";
+  result.fixture = "deforming-mesh";
+  result.moving = true;
+  result.lag = LagRegion::Albedo;
+  RenderWorld world;
+  Lambert(world, "/sheet", result.lag_albedo = {0.25F, 0.45F, 0.8F});
+  RoomShell(world, "/white");
+  world.SetCamera(Pinhole());
+  constexpr unsigned columns = 32, rows = 16;
+  MeshGeometry sheet;
+  for (unsigned r = 0; r < rows; ++r)
+    for (unsigned c = 0; c < columns; ++c) {
+      const auto at = [](unsigned v, unsigned w) { return v + w * (columns + 1); };
+      sheet.triangles.push_back({at(c, r), at(c + 1, r), at(c + 1, r + 1)});
+      sheet.triangles.push_back({at(c, r), at(c + 1, r + 1), at(c, r + 1)});
+      sheet.source_faces.push_back(r * columns + c);
+      sheet.source_faces.push_back(r * columns + c);
+    }
+  for (unsigned f = 0; f < options.frames; ++f) {
+    const float phase = Phase(options, f);
+    sheet.positions.clear();
+    for (unsigned r = 0; r <= rows; ++r)
+      for (unsigned c = 0; c <= columns; ++c) {
+        const float u = static_cast<float>(c) / columns, v = static_cast<float>(r) / rows;
+        // Pinned along its bottom edge, the wave grows towards the top.
+        const float wave = 0.35F * v * std::sin(static_cast<float>(2 * kPi) * u * 1.5F - phase);
+        sheet.positions.push_back({-1.3F + 2.6F * u, -1.6F + 2.4F * v, -4.4F + wave});
+      }
+    Place(world, "/sheet", sheet, "/sheet");
+    result.snapshots.push_back(world.Commit());
+  }
+  return result;
+}
+
+// The contract's fixed set, in report order.
+std::vector<Workload> Workloads(const Options& options) {
+  std::vector<Workload> result;
+  result.push_back(MakeRoom(options, false));
+  result.push_back(MakeRoom(options, true));
+  result.push_back(MakeShadowSweep(options));
+  result.push_back(MakeGlossyPan(options));
+  result.push_back(MakeDeformingSheet(options));
   return result;
 }
 
@@ -293,8 +444,35 @@ struct Baseline {
   std::vector<std::vector<float>> images;
   std::vector<std::vector<double>> variance;
   std::vector<double> split_rmse;
+  // LagRegion::Swept: the pixels whose reference changes between poses.
+  std::vector<std::uint8_t> swept;
   std::string device = "null";
 };
+
+double Luminance(const std::vector<float>& rgb, std::size_t pixel) {
+  return 0.2126 * rgb[pixel * 3] + 0.7152 * rgb[pixel * 3 + 1] + 0.0722 * rgb[pixel * 3 + 2];
+}
+
+// A pixel is swept when its reference luminance ranges over more than a tenth
+// of its brightest pose and six times the references' mean noise, so finite
+// reference noise alone never marks it.
+std::vector<std::uint8_t> Swept(const Baseline& baseline) {
+  const std::size_t pixels = baseline.images.front().size() / 3;
+  double noise = 0;
+  for (const auto& pose : baseline.variance)
+    noise += std::accumulate(pose.begin(), pose.end(), 0.0) / pose.size();
+  noise = std::sqrt(noise / baseline.variance.size());
+  std::vector<std::uint8_t> swept(pixels);
+  for (std::size_t i = 0; i < pixels; ++i) {
+    double low = INFINITY, high = 0;
+    for (const auto& image : baseline.images) {
+      low = std::min(low, Luminance(image, i));
+      high = std::max(high, Luminance(image, i));
+    }
+    swept[i] = high - low > std::max(0.1 * high, 6 * noise);
+  }
+  return swept;
+}
 
 Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const Options& options,
     const std::filesystem::path& images) {
@@ -334,7 +512,33 @@ Baseline MakeReference(OffscreenRenderer& renderer, const Workload& work, const 
   }
   const RgbImage last{options.size, options.size, result.images.back()};
   Require(WritePfm(images / (work.id + "-reference.pfm"), last).empty(), "cannot save reference image");
+  if (work.lag == LagRegion::Swept)
+    result.swept = Swept(result);
   return result;
+}
+
+const char* ResetName(TemporalResetReason reason) {
+  switch (reason) {
+  case TemporalResetReason::None:
+    return "none";
+  case TemporalResetReason::FirstFrame:
+    return "first-frame";
+  case TemporalResetReason::ExplicitReset:
+    return "explicit-reset";
+  case TemporalResetReason::CameraCut:
+    return "camera-cut";
+  case TemporalResetReason::FrameGap:
+    return "frame-gap";
+  case TemporalResetReason::TargetChanged:
+    return "target-changed";
+  case TemporalResetReason::HistoryKeyChanged:
+    return "history-key-changed";
+  case TemporalResetReason::RenderSettingsChanged:
+    return "render-settings-changed";
+  case TemporalResetReason::SceneChanged:
+    return "scene-changed";
+  }
+  return "unknown";
 }
 
 std::uint64_t Hash(std::uint64_t hash, const void* data, std::size_t bytes) {
@@ -350,16 +554,102 @@ struct OutputStatistics {
   std::vector<double> mse, delta;
   std::array<double, 4> bucket_squared{};
   std::array<std::uint64_t, 4> bucket_components{};
+  // The lag region per frame, summed over sequences: squared error and
+  // components.
+  std::vector<double> lag_squared;
+  std::vector<std::uint64_t> lag_components;
   // The last frame across sequences, per component.
   std::vector<double> last_sum, last_squares;
 };
 
 struct Run {
-  std::array<OutputStatistics, 3> outputs;
+  std::array<OutputStatistics, kOutputs.size()> outputs;
   std::vector<double> filter_ms, accumulation_ms, variance_ms, surface_ms, reprojection_ms;
   std::vector<std::uint64_t> hashes;
   std::uint64_t filter_bytes = 0, radiance_bytes = 0;
+  // Frames after a sequence's cut that the renderer rendered without history,
+  // by reason, and the lag region's pixels summed over frames.
+  std::map<std::string, unsigned> resets;
+  std::uint64_t lag_pixels = 0;
+  // The first sequence's lag region per frame.
+  std::vector<std::vector<std::uint8_t>> lag_regions;
+
+  explicit Run(std::size_t frames, std::size_t components) {
+    for (auto& statistics : outputs) {
+      statistics.mse.assign(frames, 0);
+      statistics.delta.assign(frames, 0);
+      statistics.lag_squared.assign(frames, 0);
+      statistics.lag_components.assign(frames, 0);
+      statistics.last_sum.assign(components, 0);
+      statistics.last_squares.assign(components, 0);
+    }
+  }
 };
+
+// Whether a pixel's primary surface has the base colour, to unorm8.
+bool AlbedoMatches(const TemporalPixel& pixel, const std::array<float, 3>& albedo) {
+  if ((pixel.flags & 1U) == 0)
+    return false;
+  const auto found = UnpackTemporalAlbedo(pixel.albedo);
+  for (std::size_t c = 0; c < 3; ++c)
+    if (std::abs(found[c] - albedo[c]) > 0.6F / 255)
+      return false;
+  return true;
+}
+
+// One output's frame against the pose's reference. batches gives a pixel's
+// history length in batches, or a negative value to leave it out of the
+// buckets.
+template <typename Batches>
+void Score(Run& run, std::size_t o, const Workload& work, const Baseline& baseline, const Options& options,
+    unsigned f, const std::vector<float>& value, const std::vector<std::uint8_t>& lag, Batches batches,
+    std::vector<double>& previous, const std::filesystem::path& images, bool save) {
+  const std::size_t pixels = lag.size();
+  const auto& reference = baseline.images[work.moving ? f : 0];
+  auto& statistics = run.outputs[o];
+  std::vector<double> error(value.size());
+  double squared = 0;
+  for (std::size_t k = 0; k < error.size(); ++k) {
+    error[k] = double(value[k]) - reference[k];
+    squared += error[k] * error[k];
+  }
+  statistics.mse[f] += squared / error.size();
+  for (std::size_t i = 0; i < pixels; ++i) {
+    if (!lag[i])
+      continue;
+    for (std::size_t c = 0; c < 3; ++c)
+      statistics.lag_squared[f] += error[i * 3 + c] * error[i * 3 + c];
+    statistics.lag_components[f] += 3;
+  }
+  if (f != 0) {
+    double delta = 0;
+    for (std::size_t k = 0; k < error.size(); ++k)
+      delta += std::pow(error[k] - previous[k], 2);
+    statistics.delta[f] += delta / error.size();
+    // The cut frame would fill the first bucket with every pixel.
+    for (std::size_t i = 0; i < pixels; ++i) {
+      const float length = batches(i);
+      if (length < 0)
+        continue;
+      const std::size_t bucket = length < 2 ? 0 : length < 4 ? 1 : length < 8 ? 2 : 3;
+      for (std::size_t c = 0; c < 3; ++c)
+        statistics.bucket_squared[bucket] += error[i * 3 + c] * error[i * 3 + c];
+      statistics.bucket_components[bucket] += 3;
+    }
+  }
+  if (f + 1 == options.frames) {
+    for (std::size_t k = 0; k < error.size(); ++k) {
+      statistics.last_sum[k] += value[k];
+      statistics.last_squares[k] += double(value[k]) * value[k];
+    }
+    if (save) {
+      const RgbImage image{options.size, options.size, value};
+      Require(WritePfm(images / (work.id + "-" + kOutputs[o] + ".pfm"), image).empty(),
+          "cannot save measured image");
+    }
+  }
+  previous = std::move(error);
+}
 
 // One temporal sequence from a camera cut: the raw batch, the temporal mean
 // and the filtered composite of every frame, against the pose's reference.
@@ -377,7 +667,7 @@ void Sequence(OffscreenRenderer& renderer, SceneExtraction& extraction, const Wo
   temporal.accumulate_radiance = true;
   temporal.max_history_samples = options.cap;
   temporal.filter_iterations = options.iterations;
-  std::array<std::vector<double>, 3> previous;
+  std::array<std::vector<double>, kMeasuredOutputs> previous;
   for (unsigned f = 0; f < options.frames; ++f) {
     Upload(renderer, extraction, work.snapshots[f]);
     temporal.frame_index = frame_index++;
@@ -386,19 +676,34 @@ void Sequence(OffscreenRenderer& renderer, SceneExtraction& extraction, const Wo
     RequireFrame(frame, options.size);
     const auto& products = frame.temporal;
     Require(products.radiance_available && products.filter_iterations == options.iterations &&
-                products.radiance.size() == pixels && products.batch.size() == pixels,
+                products.radiance.size() == pixels && products.batch.size() == pixels &&
+                products.current.size() == pixels,
         "missing temporal products");
-    Require(products.history_available == (f != 0), "unexpected history reset");
+    Require(f != 0 || !products.history_available, "history survived a camera cut");
+    // Today's behaviour is the measurement: a reset after the cut is counted,
+    // not rejected.
+    if (f != 0 && !products.history_available)
+      ++run.resets[ResetName(products.reset_reason)];
     std::vector<float> temporal_rgba(pixels * 4);
     for (std::size_t i = 0; i < pixels; ++i)
       std::memcpy(temporal_rgba.data() + i * 4, products.radiance[i].color.data(), 16);
-    const std::array<std::vector<float>, 3> values{
+    const std::array<std::vector<float>, kMeasuredOutputs> values{
         Rgb(products.batch.front().data(), pixels), Rgb(temporal_rgba.data(), pixels),
         Rgb(reinterpret_cast<const float*>(frame.color.payload.data()), pixels)};
     std::uint64_t hash = 1469598103934665603ULL;
     for (const auto& value : values)
       hash = Hash(hash, value.data(), value.size() * sizeof(float));
     run.hashes.push_back(hash);
+    // The primary surface is the unjittered pixel centre's, the same in every
+    // sequence; the progressive renders reuse the first sequence's regions.
+    std::vector<std::uint8_t> lag(pixels);
+    for (std::size_t i = 0; i < pixels; ++i)
+      lag[i] = work.lag == LagRegion::Swept    ? baseline.swept[i]
+               : work.lag == LagRegion::Albedo ? AlbedoMatches(products.current[i], work.lag_albedo)
+                                               : 0;
+    run.lag_pixels += std::accumulate(lag.begin(), lag.end(), std::uint64_t{0});
+    if (run.lag_regions.size() == f)
+      run.lag_regions.push_back(lag);
     if (products.timestamp_available) {
       run.filter_ms.push_back(products.filter_gpu_ms);
       run.accumulation_ms.push_back(products.accumulation_gpu_ms);
@@ -408,47 +713,42 @@ void Sequence(OffscreenRenderer& renderer, SceneExtraction& extraction, const Wo
     }
     run.filter_bytes = products.filter_bytes;
     run.radiance_bytes = products.radiance_bytes;
-    const auto& reference = baseline.images[work.moving ? f : 0];
     const float batch = static_cast<float>(std::min(options.batch, options.cap));
-    for (std::size_t o = 0; o < values.size(); ++o) {
-      auto& statistics = run.outputs[o];
-      std::vector<double> error(values[o].size());
-      double squared = 0;
-      for (std::size_t k = 0; k < error.size(); ++k) {
-        error[k] = double(values[o][k]) - reference[k];
-        squared += error[k] * error[k];
-      }
-      statistics.mse[f] += squared / error.size();
-      if (f != 0) {
-        double delta = 0;
-        for (std::size_t k = 0; k < error.size(); ++k)
-          delta += std::pow(error[k] - previous[o][k], 2);
-        statistics.delta[f] += delta / error.size();
-        // The cut frame would fill the first bucket with every pixel.
-        for (std::size_t i = 0; i < pixels; ++i) {
-          const auto count = products.radiance[i].sample_count;
-          if (count == 0)
-            continue;
-          const float batches = static_cast<float>(count) / batch;
-          const std::size_t bucket = batches < 2 ? 0 : batches < 4 ? 1 : batches < 8 ? 2 : 3;
-          for (std::size_t c = 0; c < 3; ++c)
-            statistics.bucket_squared[bucket] += error[i * 3 + c] * error[i * 3 + c];
-          statistics.bucket_components[bucket] += 3;
-        }
-      }
-      if (f + 1 == options.frames) {
-        for (std::size_t k = 0; k < error.size(); ++k) {
-          statistics.last_sum[k] += values[o][k];
-          statistics.last_squares[k] += double(values[o][k]) * values[o][k];
-        }
-        if (save) {
-          const RgbImage image{options.size, options.size, values[o]};
-          Require(WritePfm(images / (work.id + "-" + kOutputs[o] + ".pfm"), image).empty(),
-              "cannot save measured image");
-        }
-      }
-      previous[o] = std::move(error);
-    }
+    const auto history = [&](std::size_t i) {
+      const auto count = products.radiance[i].sample_count;
+      return count == 0 ? -1.0F : static_cast<float>(count) / batch;
+    };
+    for (std::size_t o = 0; o < values.size(); ++o)
+      Score(run, o, work, baseline, options, f, values[o], lag, history, previous[o], images, save);
+  }
+}
+
+// What the Reference preset shows over the same frames: the progressive
+// render, a batch per frame as hosts draw it, restarting at the sequence's
+// sample index on every change. A moving workload therefore shows one batch
+// per frame with the same random numbers each time (DES-Q7); the still one
+// accumulates.
+void Progressive(OffscreenRenderer& renderer, SceneExtraction& extraction, const Workload& work,
+    const Baseline& baseline, const Options& options, unsigned sequence, Run& run,
+    const std::filesystem::path& images, bool save) {
+  OffscreenTarget target;
+  target.width = target.height = options.size;
+  const std::size_t pixels = std::size_t{options.size} * options.size;
+  PathTracingSettings settings;
+  settings.integrator = options.integrator;
+  settings.max_bounces = options.bounces;
+  settings.sample_index = options.seed + sequence * kSequenceStride;
+  std::vector<double> previous;
+  for (unsigned f = 0; f < options.frames; ++f) {
+    Upload(renderer, extraction, work.snapshots[f]);
+    const unsigned batches = work.moving ? 1 : f + 1;
+    const auto frame =
+        renderer.RenderScene(ExtractDrawSummary(work.snapshots[f]), target, options.batch, settings);
+    RequireFrame(frame, options.size);
+    Require(frame.samples_per_pixel == batches * options.batch, "wrong progressive sample count");
+    const auto value = Rgb(reinterpret_cast<const float*>(frame.color.payload.data()), pixels);
+    Score(run, kOutputs.size() - 1, work, baseline, options, f, value, run.lag_regions[f],
+        [batches](std::size_t) { return static_cast<float>(batches); }, previous, images, save);
   }
 }
 
@@ -461,27 +761,19 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Option
   Require(renderer != nullptr, detail);
   SceneExtraction extraction;
   std::uint64_t frame_index = 0;
-  Run run;
   const std::size_t components = std::size_t{options.size} * options.size * 3;
-  for (auto& statistics : run.outputs) {
-    statistics.mse.assign(options.frames, 0);
-    statistics.delta.assign(options.frames, 0);
-    statistics.last_sum.assign(components, 0);
-    statistics.last_squares.assign(components, 0);
-  }
+  Run run(options.frames, components);
   for (unsigned sequence = 0; sequence < options.sequences; ++sequence)
     Sequence(*renderer, extraction, work, baseline, options, sequence, frame_index, run, images, sequence == 0);
   // Deterministic validation: the first sequence again, from a new cut, must
   // reproduce every output bit for bit.
-  Run repeat;
-  for (auto& statistics : repeat.outputs) {
-    statistics.mse.assign(options.frames, 0);
-    statistics.delta.assign(options.frames, 0);
-    statistics.last_sum.assign(components, 0);
-    statistics.last_squares.assign(components, 0);
-  }
+  Run repeat(options.frames, components);
   Sequence(*renderer, extraction, work, baseline, options, 0, frame_index, repeat, images, false);
   const bool deterministic = std::equal(repeat.hashes.begin(), repeat.hashes.end(), run.hashes.begin());
+  // After every temporal frame, so no progressive render sits between two.
+  for (unsigned sequence = 0; sequence < options.sequences; ++sequence)
+    Progressive(*renderer, extraction, work, baseline, options, sequence, run, images, sequence == 0);
+  constexpr std::array<const char*, 3> kRegions{"none", "albedo", "swept"};
 
   const double sequences = options.sequences;
   const auto& last_variance = baseline.variance.back();
@@ -492,11 +784,18 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Option
   reference_noise /= baseline.variance.size();
   std::ostringstream out;
   out << std::setprecision(9);
-  out << "{\"id\":" << Quote(work.id) << ",\"moving\":" << (work.moving ? "true" : "false")
-      << ",\"reference_split_rmse\":";
+  out << "{\"id\":" << Quote(work.id) << ",\"fixture\":" << Quote(work.fixture)
+      << ",\"moving\":" << (work.moving ? "true" : "false") << ",\"reference_split_rmse\":";
   Array(out, baseline.split_rmse);
   out << ",\"reference_noise_mse\":" << reference_noise << ",\"deterministic\":"
-      << (deterministic ? "true" : "false") << ",\"outputs\":{";
+      << (deterministic ? "true" : "false") << ",\"history_resets_after_cut\":{";
+  bool first_reset = true;
+  for (const auto& [reason, count] : run.resets) {
+    out << (first_reset ? "" : ",") << Quote(reason) << ':' << count;
+    first_reset = false;
+  }
+  out << "},\"lag_region\":{\"kind\":" << Quote(kRegions[static_cast<std::size_t>(work.lag)])
+      << ",\"mean_pixels\":" << double(run.lag_pixels) / (sequences * options.frames) << "},\"outputs\":{";
   for (std::size_t o = 0; o < kOutputs.size(); ++o) {
     const auto& statistics = run.outputs[o];
     std::vector<double> mse(options.frames), delta(options.frames - 1);
@@ -536,6 +835,26 @@ std::string Measure(const Workload& work, const Baseline& baseline, const Option
         out << statistics.bucket_squared[b] / statistics.bucket_components[b];
       out << '}';
     }
+    // The lag region after the cut, pooled; per frame, null where it is empty.
+    out << "],\"lag_region_mse\":";
+    double lag_squared = 0;
+    std::uint64_t lag_components = 0;
+    for (unsigned f = 1; f < options.frames; ++f) {
+      lag_squared += statistics.lag_squared[f];
+      lag_components += statistics.lag_components[f];
+    }
+    if (lag_components == 0)
+      out << "null";
+    else
+      out << lag_squared / lag_components;
+    out << ",\"lag_region_mse_by_frame\":[";
+    for (unsigned f = 0; f < options.frames; ++f) {
+      out << (f ? "," : "");
+      if (statistics.lag_components[f] == 0)
+        out << "null";
+      else
+        out << statistics.lag_squared[f] / statistics.lag_components[f];
+    }
     out << "],\"last_frame_ensemble\":{\"mean_mse\":" << mean_squared << ",\"noise_mse\":" << noise
         << ",\"reference_noise_mse\":" << last_reference_noise
         << ",\"excess_mse\":" << mean_squared - noise - last_reference_noise << "}}";
@@ -573,18 +892,18 @@ int SvgfBenchmarkMain(int argc, char** argv) {
     std::string detail, device = "null";
     std::vector<std::string> scenes;
     try {
-      for (bool moving : {false, true}) {
-        // Each reference has its own renderer too: both workloads upload the
-        // same geometry.
+      const auto workloads = Workloads(options);
+      for (const auto& work : workloads) {
+        // Each reference has its own renderer too: workloads upload the same
+        // geometry.
         auto renderer = Renderer(executable, status, detail);
         if (!renderer)
           break;
-        const auto work = MakeRoom(options, moving);
         const auto baseline = MakeReference(*renderer, work, options, image_root);
         device = baseline.device;
         scenes.push_back(Measure(work, baseline, options, executable, image_root));
       }
-      if (scenes.size() == 2) {
+      if (scenes.size() == workloads.size()) {
         status = FrameStatus::Pass;
         detail = "measurement completed; no quality or speed threshold asserted";
       }
@@ -593,7 +912,7 @@ int SvgfBenchmarkMain(int argc, char** argv) {
       detail = error.what();
     }
     std::ostringstream out;
-    out << "{\"schema\":\"lotus-svgf-benchmark-v1\",\"status\":"
+    out << "{\"schema\":\"lotus-svgf-benchmark-v2\",\"status\":"
         << Quote(status == FrameStatus::Pass ? "pass" : status == FrameStatus::Skip ? "skip"
                                                                                     : "fail")
         << ",\"detail\":" << Quote(detail) << ",\"started_unix\":" << started
@@ -602,7 +921,7 @@ int SvgfBenchmarkMain(int argc, char** argv) {
         << ",\"configuration\":" << Quote(LOTUS_BENCHMARK_CONFIG)
         << ",\"system\":" << Quote(LOTUS_BENCHMARK_SYSTEM) << "},\"device\":" << device
         << ",\"procedure\":{\"integrator\":" << Quote(options.integrator == Integrator::Reference ? "reference" : "wavefront")
-        << ",\"reference_integrator\":\"reference\",\"light_sampling\":\"nee-mis\",\"workload\":\"svgf-room\""
+        << ",\"reference_integrator\":\"reference\",\"light_sampling\":\"nee-mis\",\"workloads\":[\"svgf-room\",\"moving-occluder-still-receiver\",\"camera-over-low-roughness-surface\",\"deforming-mesh\"]"
         << ",\"width\":" << options.size << ",\"height\":" << options.size << ",\"frames\":" << options.frames
         << ",\"sequences\":" << options.sequences << ",\"fresh_samples_per_frame\":" << options.batch
         << ",\"history_cap\":" << options.cap << ",\"filter_iterations\":" << options.iterations
@@ -611,12 +930,15 @@ int SvgfBenchmarkMain(int argc, char** argv) {
         << ",\"reference_samples_per_half\":" << options.reference_samples << ",\"reference_halves\":2}"
         << ",\"image_directory\":" << Quote(image_root.filename().string())
         << ",\"metric_notes\":{"
-           "\"outputs\":\"One render per frame: raw is its fresh batch, temporal the bounded temporal mean (the history), filtered the a-trous composite of that mean. The filter never feeds back into history.\","
+           "\"outputs\":\"One render per frame: raw is its fresh batch, temporal the bounded temporal mean (the history), filtered the a-trous composite of that mean. The filter never feeds back into history. progressive is a separate progressive render restarted at the sequence's sample index on every change: the Reference preset's image. A moving workload therefore repeats its random numbers every frame (DES-Q7), which lowers its frame-delta MSE.\","
            "\"mse\":\"RGB squared error against the pose's reference, every pixel, averaged over sequences and then frames. Finite reference noise (reference_noise_mse) is included, not subtracted.\","
            "\"frame_delta_mse\":\"Temporal residual: each frame's error minus the previous frame's at the same pixel, squared. It measures flicker and lag; the cut frame has none.\","
            "\"history_buckets\":\"Squared error by the pixel's history length in batches, frames after the cut pooled: the response after disocclusion or rejection.\","
            "\"last_frame_ensemble\":\"The last frame across independent sequences. Mean MSE is the squared error of their mean; noise is its expected sampling part; excess estimates the squared bias, and can be negative.\","
-           "\"deterministic\":\"The first sequence rendered again from a new cut reproduced every raw, temporal and filtered value bit for bit.\","
+           "\"history_resets_after_cut\":\"Frames after each sequence's cut rendered without history, by reset reason, summed over sequences: today's invalidation, recorded rather than required.\","
+           "\"lag_region\":\"Where the fixture's lag shows: albedo is every pixel whose primary surface has the fixture's lagging material, per frame; swept is every pixel whose reference luminance ranges over more than a tenth of its brightest pose and six times the mean reference noise; none has no region. mean_pixels averages its size over frames.\","
+           "\"lag_region_mse\":\"RGB squared error against the pose's reference in the lag region, frames after the cut pooled; by frame, null where the region is empty.\","
+           "\"deterministic\":\"The first sequence rendered again from a new cut reproduced every raw, temporal and filtered value bit for bit; progressive is not repeated.\","
            "\"gpu_ms_median\":\"Per frame, with whatever validation layers are active; filter covers every iteration and the composite.\"},\"scenes\":[";
     for (std::size_t i = 0; i < scenes.size(); ++i)
       out << (i ? "," : "") << scenes[i];
