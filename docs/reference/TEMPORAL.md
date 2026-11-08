@@ -20,14 +20,16 @@ owns delivery status.
 | `lotus:historyReset` | int, 0 | Change this counter to declare one camera cut; the new value is consumed only by a successful temporal frame |
 | `lotus:filterIterations` | int, 0 | [Edge-aware filter](#edge-aware-filtering) iterations over `lotus:temporal`'s colour, clamped to [0, 8]; unused without `lotus:temporal`, and a change never resets history |
 | `lotus:interactive` | bool, false | The [Interactive preset](../design/INTERACTIVE_QUALITY.md#3-presets): overrides the three settings above with temporal radiance, 32 history samples and 5 filter iterations. Off, they work as described; with all of them at their defaults that is the Reference preset |
+| `lotus:balanced` | bool, false | The Balanced preset: Interactive's three settings and [settling](#settling). With `lotus:interactive` also on, Interactive wins |
 
 Both hosts map a preset through `ApplyQualityPreset` in
 `include/lotus/temporal.hpp`, which sets only the accumulation, the history
-cap and the filter. The viewport's `--preset` and its Renderer window write
+cap, the filter and settling. The viewport's `--preset` and its Renderer window write
 its controls the same way ([build guide](../guides/BUILDING.md)).
 
 Temporal colour and the render pass remain unconverged so hosts keep drawing
-fresh batches. `convergedSamplesPerPixel` continues to control progressive
+fresh batches, except that a settling frame converges once its still
+samples reach `convergedSamplesPerPixel`. That setting continues to control progressive
 convergence when temporal radiance and
 [reservoir reuse](RESTIR.md#hydra-controls-and-diagnostics) are disabled. The sample seed, integrator
 and light-sampling settings retain their existing meanings. Radiance mode
@@ -501,6 +503,48 @@ these views at run time and times the variance and filter passes in its
 HUD ([usage](../guides/BUILDING.md#the-standalone-viewport),
 [evidence](../reports/2026-10-18-svgf-viewport.md)).
 
+### Settling
+
+`TemporalFrameSettings::settle`, the Balanced
+[preset's](../design/INTERACTIVE_QUALITY.md#4-settling) convergence, needs
+`accumulate_radiance`; without it the call fails before advancing history.
+A frame *settles* when its camera, target and windows, scene snapshot and
+transport key equal the preceding frame's, no cut is declared, the
+preceding frame also had `settle`, and no reservoir reuse is selected:
+reuse traces a fresh batch every frame, so it never settles. Anything else
+is a changing frame, rendered exactly as without `settle`, which also keeps
+its displayed colour (the filtered composite) as the *prior*.
+
+A settling frame does not trace a fresh batch. It continues `RenderScene`'s
+progressive accumulation, restarted by the first settling frame at
+`PathTracingSettings::sample_index` and stopped at `max_samples`, so the
+still samples are the Reference preset's, bit for bit, and a settled frame
+traces nothing. A crossfade pass then writes the colour. The prior counts
+as `c = max_history_samples` samples wherever the last changing frame had a
+history, and as none on a miss: the filtered colour stands for its
+neighbourhood, so a pixel the history had just rejected must not drop to a
+single sample. With `n` still samples and `w = min(c, max_samples)` (`c`
+when `max_samples` is zero), the colour is `prior + (still - prior) * n / w`
+while `n < w`, and exactly the still mean from then on, on misses at once,
+and wherever the prior is not finite. `SettleTemporalRadiance` is its CPU
+oracle. The prior thus leaves within the history cap's samples, the filter
+with it, and at the sample target the colour is the progressive image over
+every pixel, misses included. No filter, accumulation or variance pass
+runs.
+
+The radiance history is left as the last changing frame wrote it, with its
+cap unchanged, and the RNG offset of the stream is not advanced: the next
+change continues both, as if the still frames had not happened. The surface
+and validity passes still run, so debug products stay current. A settling
+frame reports `settling`, `settled_samples` (the still samples in its
+colour), `batch_samples` (the samples it added, zero once settled) and
+`settle_gpu_ms` (the crossfade, in the accumulation's timestamp pair);
+`batch` holds the still mean, `radiance` the retained history and
+`previous_radiance` nothing. With `settle` the batch buffer has a second
+half for the prior: 16 more device bytes per pixel. Switching `settle` on
+or off resets nothing; switched on, the first frame keeps a prior and the
+next one settles.
+
 ### Headless SVGF comparison
 
 `lotus-headless --benchmark-svgf <json-path>` compares the fresh batch
@@ -546,6 +590,7 @@ rejected.
 | `--svgf-seed` | 17 | 0–8388607 |
 | `--svgf-reference-seed` | 16777216 | 16777216–1073741823 |
 | `--svgf-reference-samples` (per half) | 1024 | 16–8192 |
+| `--svgf-hold` (frames the settling measurement holds the last pose) | 64 | 4–1024 |
 
 Per workload and output the report gives the MSE per frame and its mean,
 the frame-delta MSE (the change of each pixel's error from the previous
@@ -553,7 +598,13 @@ frame: flicker and lag), the MSE by history length in batches (the response
 after disocclusion or rejection), the MSE in the lag region per frame and
 pooled after the cut, and the last frame's squared error of the sequences'
 mean, split into expected noise and an estimate of squared bias.
-`metric_notes` in the report (schema `lotus-svgf-benchmark-v2`) defines
+Each workload's `settling` series renders its frames from a cut and then
+holds the last pose, under a sample target the hold reaches on its last
+frame, as Balanced, Interactive and Reference show it, and gives MSE and
+frame-delta MSE per frame for each, Balanced's mean frame-delta MSE before
+the hold (the moving view's), the largest during the hold, and whether
+every sequence's last Balanced frame is its Reference frame bit for bit.
+`metric_notes` in the report (schema `lotus-svgf-benchmark-v3`) defines
 each; it asserts no quality or speed threshold. Its PFMs are the last pose's
 reference and the four outputs of the first sequence's last frame. The `research` tier runs a small configuration under
 both integrators (`lotus-renderer-svgf-benchmark-*`).
@@ -610,5 +661,13 @@ target and history cap keep the history
 ([presets report](../reports/2026-11-08-interactive-presets.md)).
 `lotus-renderer-hydra-temporal-gpu` checks the Hydra rows: `lotus:interactive`
 and its override, entering and leaving it, a stage camera change, the cap,
-the sample target and a points edit.
+the sample target and a points edit; and `lotus:balanced` settling,
+converging to the Reference image and losing to `lotus:interactive`.
+Under both integrators the GPU test holds a view after camera motion past
+the sample target and checks every settling frame: the still mean against
+an independent progressive render bit for bit, every pixel's crossfade
+against `SettleTemporalRadiance`, the retained history, the converged colour
+against Reference bit for bit and unchanged after it, and that a switch to
+Interactive and back, a change and a cut each behave as [above](#settling)
+([settling report](../reports/2026-11-08-balanced-settling.md)).
 No ReSTIR state is introduced, and the filter keeps none across frames.

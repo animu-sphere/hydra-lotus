@@ -896,6 +896,182 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   std::cout << "filter PASS; filtered_frames=" << filtered << " max_filter_rel_error=" << max_filter_error
             << " max_filter_gpu_ms=" << filter_gpu_ms << '\n';
 }
+// Balanced settling (docs/design/INTERACTIVE_QUALITY.md section 4): a still
+// view's colour crossfades from the last changing frame's into a
+// progressive accumulation of still samples alone, which is the Reference
+// image once it reaches the sample target, and then stops.
+void SettlingSequence(Lotus::OffscreenRenderer& renderer,
+    Lotus::OffscreenRenderer& reference, Lotus::Integrator integrator) {
+  using namespace Lotus;
+  RenderWorld world;
+  SceneExtraction extraction, reference_extraction;
+  auto camera = Perspective();
+  world.SetCamera(camera);
+  // A card with misses around it: every pixel must settle.
+  world.SetMesh("/card",
+      {{{-2, -2, -4}, {2, -2, -4}, {2, 2, -4}, {-2, 2, -4}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
+  Material material;
+  material.base_color = {0.6F, 0.4F, 0.2F};
+  material.metallic = 1;
+  material.roughness = 0.5F;
+  world.SetMaterial("/material", material);
+  world.BindMaterial("/card", "/material");
+  world.SetEnvironment({1, 2, 3});
+  OffscreenTarget target;
+  target.width = 64;
+  target.height = 48;
+  const std::size_t pixels = std::size_t{target.width} * target.height;
+  PathTracingSettings settings;
+  settings.integrator = integrator;
+  settings.max_bounces = 1;
+  settings.sample_index = 31;
+  settings.max_samples = 40;
+  TemporalFrameSettings temporal;
+  ApplyQualityPreset(QualityPreset::Balanced, temporal);
+  FrameSnapshot snapshot;
+  auto Render = [&] {
+    snapshot = world.Commit();
+    Check(renderer.UpdateScene(extraction.Update(snapshot)).status == FrameStatus::Pass, "settling upload");
+    auto frame = renderer.RenderTemporalScene(snapshot, target, 1, temporal, settings);
+    Check(frame.status == FrameStatus::Pass, frame.detail.c_str());
+    Check(frame.validation_message_count == 0, frame.validation_detail.c_str());
+    Check(frame.temporal.radiance.size() == pixels && frame.temporal.batch.size() == pixels,
+        "settling products");
+    ++temporal.frame_index;
+    return frame;
+  };
+  // The Reference preset's image of the same view: a progressive render,
+  // restarted at the host's sample index.
+  auto Progressive = [&](bool restart) {
+    Check(reference.UpdateScene(reference_extraction.Update(snapshot)).status == FrameStatus::Pass,
+        "progressive upload");
+    if (restart) {
+      auto prime = settings;
+      prime.sample_index ^= 0x80000000u;
+      Check(reference.RenderScene(ExtractDrawSummary(snapshot), target, 1, prime).status == FrameStatus::Pass,
+          "progressive restart failed");
+    }
+    auto frame = reference.RenderScene(ExtractDrawSummary(snapshot), target, 1, settings);
+    Check(frame.status == FrameStatus::Pass, frame.detail.c_str());
+    return Colors(frame);
+  };
+  auto Same = [](const auto& a, const auto& b) {
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0;
+  };
+
+  // A cut and a moving camera: Balanced is Interactive while it changes.
+  GpuFrameEvidence last;
+  for (int k = 0; k < 4; ++k) {
+    camera.view = Translation(-0.05F * static_cast<float>(k));
+    world.SetCamera(camera);
+    last = Render();
+    Check(!last.temporal.settling && last.temporal.settled_samples == 0 &&
+              last.temporal.filter_iterations == kTemporalFilterIterations,
+        "a moving view settled");
+    Check(k == 0 || last.temporal.history_available, "a moving view lost its history");
+  }
+  Check(last.temporal.radiance_bytes == pixels * 176, "the settling prior's memory");
+  std::uint64_t misses = 0;
+  for (const auto& p : last.temporal.current)
+    misses += (p.flags & 1u) == 0;
+  Check(misses != 0 && misses != pixels, "the card leaves no misses");
+  const auto prior = Colors(last);
+  const auto history = last.temporal.radiance;
+  const std::uint32_t resume_index = last.temporal.batch_sample_index + last.temporal.batch_samples;
+
+  // Held still past the sample target.
+  std::vector<float> converged, progressive;
+  std::uint64_t crossfaded = 0;
+  for (std::uint32_t n = 1; n <= settings.max_samples + 2; ++n) {
+    const auto frame = Render();
+    const auto& p = frame.temporal;
+    const std::uint32_t samples = std::min(n, settings.max_samples);
+    const std::uint32_t added = n <= settings.max_samples ? 1u : 0u;
+    Check(p.settling && p.history_available && p.reset_reason == TemporalResetReason::None,
+        "a still view did not settle");
+    Check(p.settled_samples == samples && frame.samples_per_pixel == samples, "settled sample count");
+    Check(p.batch_samples == added && p.batch_sample_index == settings.sample_index + samples - added,
+        "a still sample's index");
+    Check(p.filter_iterations == 0 && p.previous_radiance.empty(), "settling filtered or wrote history");
+    Check(Same(p.radiance, history), "settling changed the last changing frame's history");
+    std::vector<float> still;
+    for (const auto& value : p.batch)
+      still.insert(still.end(), value.begin(), value.end());
+    // The still accumulation is the progressive render, bit for bit.
+    if (added != 0)
+      progressive = Progressive(n == 1);
+    Check(Same(still, progressive), "the still accumulation differs from the progressive image");
+    const auto output = Colors(frame);
+    for (std::size_t i = 0; i < pixels; ++i) {
+      const std::array<float, 4> from{prior[i * 4], prior[i * 4 + 1], prior[i * 4 + 2], prior[i * 4 + 3]};
+      const std::array<float, 4> to{still[i * 4], still[i * 4 + 1], still[i * 4 + 2], still[i * 4 + 3]};
+      // A pixel with history counts its prior as the history cap.
+      const std::uint32_t weight = history[i].sample_count != 0 ? temporal.max_history_samples : 0u;
+      const auto expected = SettleTemporalRadiance(from, to, weight, samples, settings.max_samples);
+      const std::uint32_t span = std::min(weight, settings.max_samples);
+      crossfaded += samples < span;
+      for (unsigned c = 0; c < 4; ++c) {
+        const float actual = output[i * 4 + c];
+        if (samples >= span)
+          Check(actual == to[c], "a settled pixel is not the still mean");
+        else if (!std::isfinite(actual) ||
+                 std::abs(actual - expected[c]) > 0.00002 * std::max(1.0F, std::abs(expected[c]))) {
+          std::cerr << "pixel " << i << " channel " << c << " samples " << samples << ": actual=" << actual
+                    << " expected=" << expected[c] << '\n';
+          throw std::runtime_error("settling crossfade differs from CPU oracle");
+        }
+      }
+    }
+    if (n == settings.max_samples)
+      converged = output;
+    else if (n > settings.max_samples)
+      Check(Same(output, converged), "a converged view changed");
+  }
+  Check(crossfaded != 0, "no pixel crossfaded");
+  // The correct end: the Reference image bit for bit, every pixel.
+  Check(Same(converged, progressive), "the settled image is not the Reference image");
+
+  // Switching to Interactive and back resets nothing; the retained history
+  // and the stream's samples resume.
+  ApplyQualityPreset(QualityPreset::Interactive, temporal);
+  auto frame = Render();
+  Check(!frame.temporal.settling && frame.temporal.history_available &&
+            frame.temporal.reset_reason == TemporalResetReason::None &&
+            frame.temporal.batch_sample_index == resume_index && Same(frame.temporal.previous_radiance, history),
+      "switching to Interactive did not resume the history");
+  ApplyQualityPreset(QualityPreset::Balanced, temporal);
+  frame = Render();
+  Check(!frame.temporal.settling && frame.temporal.history_available &&
+            frame.temporal.reset_reason == TemporalResetReason::None,
+      "switching to Balanced reset or settled without a prior");
+  frame = Render();
+  Check(frame.temporal.settling && frame.temporal.settled_samples == 1, "Balanced did not settle again");
+  // A change ends settling at once.
+  const auto kept = frame.temporal.radiance;
+  camera.view = Translation(0.05F);
+  world.SetCamera(camera);
+  frame = Render();
+  Check(!frame.temporal.settling && frame.temporal.history_available &&
+            frame.temporal.reset_reason == TemporalResetReason::None &&
+            frame.temporal.filter_iterations == kTemporalFilterIterations &&
+            Same(frame.temporal.previous_radiance, kept),
+      "a change did not end settling or resume the history");
+  temporal.camera_cut = true;
+  frame = Render();
+  temporal.camera_cut = false;
+  Check(!frame.temporal.settling && !frame.temporal.history_available &&
+            frame.temporal.reset_reason == TemporalResetReason::CameraCut,
+      "a cut settled");
+  auto invalid = temporal;
+  invalid.accumulate_radiance = false;
+  invalid.filter_iterations = 0;
+  Check(renderer.RenderTemporalScene(snapshot, target, 1, invalid, settings).status == FrameStatus::Fail,
+      "settling without accumulation");
+  std::cout << "settling " << (integrator == Integrator::Wavefront ? "wavefront" : "reference")
+            << ": " << crossfaded << " crossfaded pixel frames, converged at " << settings.max_samples
+            << " samples to the Reference image\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -960,6 +1136,11 @@ int main(int argc, char** argv) try {
     auto reference = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
     Check(reference != nullptr, detail.c_str());
     AccumulationSequence(*renderer, *reference, integrator);
+    renderer = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
+    Check(renderer != nullptr, detail.c_str());
+    reference = Lotus::CreateOffscreenRenderer(vertex, fragment, status, detail, shaders);
+    Check(reference != nullptr, detail.c_str());
+    SettlingSequence(*renderer, *reference, integrator);
   }
   return 0;
 } catch (const std::exception& error) {

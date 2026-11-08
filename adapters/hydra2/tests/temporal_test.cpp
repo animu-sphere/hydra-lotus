@@ -128,6 +128,7 @@ const TfToken kKey("lotus:historyKey");
 const TfToken kReset("lotus:historyReset");
 const TfToken kFilter("lotus:filterIterations");
 const TfToken kInteractive("lotus:interactive");
+const TfToken kBalanced("lotus:balanced");
 const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
     TfToken("lotus:historyLength"), TfToken("lotus:historyValidity"),
     TfToken("lotus:historyRejection")};
@@ -135,10 +136,10 @@ const std::array<TfToken, 4> kAovs{TfToken("lotus:motion"),
 void Contract() {
   HdLotusRenderDelegate delegate;
   const auto descriptors = delegate.GetRenderSettingDescriptors();
-  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 6>{{
+  for (const auto& [key, value] : std::array<std::pair<TfToken, VtValue>, 7>{{
            {kTemporal, VtValue(false)}, {kCap, VtValue(32)},
            {kKey, VtValue(0)}, {kReset, VtValue(0)}, {kFilter, VtValue(0)},
-           {kInteractive, VtValue(false)}}}) {
+           {kInteractive, VtValue(false)}, {kBalanced, VtValue(false)}}}) {
     Check(std::any_of(descriptors.begin(), descriptors.end(),
               [&](const auto& d) { return d.key == key && d.defaultValue == value; }),
         "missing temporal setting/default: " + key.GetString());
@@ -356,6 +357,12 @@ public:
   bool Converged() const {
     return pass_->IsConverged();
   }
+  std::vector<float> Color() {
+    const auto* data = static_cast<const float*>(color_.Map());
+    std::vector<float> values(data, data + std::size_t{kSize} * kSize * 4);
+    color_.Unmap();
+    return values;
+  }
   std::size_t valid_{}, moved_{}, rejected_{};
 private:
   HdLotusRenderDelegate delegate_;
@@ -523,6 +530,45 @@ void Sequence(bool wavefront) {
     const auto entered = session.Frame();
     Check(errors.IsClean() && entered.temporal.reset_reason == R::RenderSettingsChanged,
         "entering Interactive after progressive Reference frames");
+  }
+
+  // lotus:balanced settles a still view: it converges at the sample target
+  // to the Reference image and then renders nothing new. Switching from
+  // Interactive resets nothing, and Interactive wins over it.
+  session.Setting(kBalanced, VtValue(true));
+  session.Setting(kInteractive, VtValue(false));
+  session.DebugBindings(false);
+  {
+    TfErrorMark errors;
+    auto frame = session.Frame();
+    Check(errors.IsClean() && frame.temporal.reset_reason == R::None &&
+              !frame.temporal.settling && !session.Converged(),
+        "switching from Interactive to Balanced");
+    std::vector<float> settled;
+    for (int n = 1; n <= kSamples + 1; ++n) {
+      frame = session.Frame();
+      Check(errors.IsClean() && frame.temporal.settling &&
+                frame.temporal.settled_samples == std::uint32_t(std::min(n, kSamples)) &&
+                session.Converged() == (n >= kSamples),
+          "lotus:balanced did not settle or converge");
+      if (n >= kSamples) {
+        const auto color = session.Color();
+        Check(settled.empty() || color == settled, "a converged Balanced view changed");
+        settled = color;
+      }
+    }
+    session.Setting(kInteractive, VtValue(true));
+    frame = session.Frame();
+    Check(errors.IsClean() && !frame.temporal.settling && !session.Converged() &&
+              frame.temporal.reset_reason == R::None,
+        "lotus:interactive did not win over lotus:balanced");
+    session.Setting(kInteractive, VtValue(false));
+    session.Setting(kBalanced, VtValue(false));
+    for (int n = 1; n <= kSamples; ++n)
+      frame = session.Frame();
+    Check(errors.IsClean() && !frame.temporal.available && session.Converged() &&
+              session.Color() == settled,
+        "the settled Balanced image is not the Reference image");
   }
 }
 } // namespace

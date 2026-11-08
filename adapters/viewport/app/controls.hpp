@@ -48,6 +48,10 @@ struct Controls {
   bool denoise = false;
   // A-trous iterations, 1..kTemporalFilterMaxIterations.
   std::uint32_t filter_iterations = kTemporalFilterIterations;
+  // Balanced's settling: once nothing changes, the temporal radiance settles
+  // into the progressive image at `samples` (TemporalFrameSettings::settle).
+  // It needs the history.
+  bool settle = false;
   DebugView view = DebugView::Beauty;
   // Show the view left of `split_position` (a fraction of the width) and
   // beauty right of it, as a comparison.
@@ -99,9 +103,10 @@ struct FramePlan {
 
 // Puts `controls` in a quality preset (docs/design/INTERACTIVE_QUALITY.md)
 // through ApplyQualityPreset: Interactive turns temporal radiance and the
-// denoiser on with the preset's history samples and iterations; Reference
-// turns both off and accumulates. The estimator, the sample limit, the
-// reservoirs and the view stay as they are.
+// denoiser on with the preset's history samples and iterations, Balanced
+// does the same and settles, and Reference turns all three off and
+// accumulates. The estimator, the sample limit, the reservoirs and the view
+// stay as they are.
 void ApplyPreset(Controls& controls, QualityPreset preset);
 
 // The preset the controls are in: the one ApplyPreset leaves them unchanged
@@ -120,8 +125,9 @@ void ApplyPreset(Controls& controls, QualityPreset preset);
 [[nodiscard]] std::optional<QualityPreset> ParseQualityPreset(
     std::string_view name);
 
-inline constexpr std::array<QualityPreset, 2> kQualityPresets{
-    QualityPreset::Interactive, QualityPreset::Reference};
+inline constexpr std::array<QualityPreset, 3> kQualityPresets{
+    QualityPreset::Interactive, QualityPreset::Balanced,
+    QualityPreset::Reference};
 inline constexpr std::array<RestirMode, 5> kRestirModes{RestirMode::Off,
     RestirMode::Initial, RestirMode::Temporal, RestirMode::Spatial,
     RestirMode::Combined};

@@ -460,7 +460,7 @@ again after a change; the launcher above runs the executable just built
 | `--integrator reference\|wavefront` | the path tracer to start with |
 | `--nee on\|off` | next event estimation with MIS, on by default; off leaves BSDF sampling alone |
 | `--restir off\|initial\|temporal\|spatial\|combined` | reservoir direct lighting at the camera surface, off by default |
-| `--preset interactive\|reference` | a [quality preset](../design/INTERACTIVE_QUALITY.md#3-presets): Interactive turns on temporal radiance (32 history samples) and the denoiser (5 iterations); Reference, the default, accumulates progressively without either. The estimator, sample limit, reservoirs and view are kept, and options after it edit it |
+| `--preset interactive\|balanced\|reference` | a [quality preset](../design/INTERACTIVE_QUALITY.md#3-presets): Interactive turns on temporal radiance (32 history samples) and the denoiser (5 iterations); Balanced does the same and, once the view is still, settles into the progressive image at `--samples` (the Renderer window's *Settle when still*); Reference, the default, accumulates progressively without any of them. The estimator, sample limit, reservoirs and view are kept, and options after it edit it. In a `--usd` session settling selects `lotus:balanced`, whose history and filter values then apply |
 | `--temporal-radiance` | reuse each pixel's radiance history |
 | `--denoise` | filter the temporal radiance with SVGF's edge-aware à-trous filter; turns temporal radiance on |
 | `--filter-iterations N` | the filter's à-trous iterations, 1–8, 5 by default |

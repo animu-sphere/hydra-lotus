@@ -11,9 +11,11 @@ owner: hydra-lotus
 > before interactive-quality work changes defaults or history behaviour,
 > written before any code as LOTUS-INTERACTIVE-01. Its fixtures and a
 > [baseline of today's behaviour](../reports/2026-11-08-interactive-baseline.md)
-> are recorded, and the Interactive and Reference presets and §5's changes
+> are recorded, the Interactive and Reference presets and §5's changes
 > are [implemented](../reports/2026-11-08-interactive-presets.md)
-> (LOTUS-INTERACTIVE-03). It extends the
+> (LOTUS-INTERACTIVE-03), and Balanced
+> [settles](../reports/2026-11-08-balanced-settling.md) by the mechanism §4
+> records (LOTUS-INTERACTIVE-04). It extends the
 > [temporal reference](../reference/TEMPORAL.md), which owns the implemented
 > behaviour; where this contract is silent, that reference holds unchanged.
 > "Today" below describes `main` at v0.8.0.
@@ -105,6 +107,24 @@ samples arrive, and fade the filter by the same measure. The
 [SVGF comparison](../reports/2026-10-18-svgf-filter.md#static-convergence)
 shows why the filter must leave: in its room the temporal mean overtakes the
 filtered image within about fourteen frames of a held view.
+
+**Delivered mechanism** (LOTUS-INTERACTIVE-04,
+[report](../reports/2026-11-08-balanced-settling.md)). The prior is the
+last changing frame's displayed colour, the filtered composite, so one weight
+fades the mean and the filter together. The still samples are the
+progressive accumulation the Reference preset would trace, restarted at the
+host's sample index; the history is not extended. A pixel with a history
+crossfades from the prior to the still mean over `min(32, sample target)`
+still samples, the history cap, and shows the still mean exactly from then
+on, a miss at once. Fading over each pixel's own history length instead
+failed requirement 3 on the deforming sheet, whose rejected pixels dropped
+from the filtered colour to one sample.
+At the sample target the image is therefore the Reference image bit for bit,
+which passes requirement 1 trivially, and the progressive accumulation gives
+requirements 2 and 4. The history stays the last changing frame's with its
+cap of 32 unchanged, so "returns to 32" holds without a raised cap: the next
+change continues it. The
+[temporal reference](../reference/TEMPORAL.md#settling) owns the details.
 
 ## 5. Invalidation by change category
 

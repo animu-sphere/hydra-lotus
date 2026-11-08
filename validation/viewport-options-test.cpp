@@ -157,7 +157,13 @@ int main() {
   Check(!reference.controls.denoise && !reference.controls.temporal_radiance &&
             reference.controls.accumulate,
       "--preset reference");
-  Check(Rejects({"--preset", "balanced"}), "an unknown preset");
+  const auto balanced = Parse({"--preset", "balanced"});
+  Check(balanced.controls.temporal_radiance && balanced.controls.denoise &&
+            balanced.controls.settle && balanced.controls.history_samples == 32,
+      "--preset balanced");
+  Check(!Parse({"--preset", "balanced", "--preset", "interactive"}).controls.settle,
+      "--preset interactive after balanced");
+  Check(Rejects({"--preset", "progressive"}), "an unknown preset");
   Check(Rejects({"--bogus"}), "unknown option");
   Check(Lotus::viewport::Usage(true).find("--usd <stage>") !=
             std::string::npos,

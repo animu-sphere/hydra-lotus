@@ -56,6 +56,19 @@ struct TemporalFrameSettings {
   // accumulate_radiance and at most kTemporalFilterMaxIterations. The
   // history stays unfiltered, so changing it never resets the stream.
   std::uint32_t filter_iterations = 0;
+  // Settling, the Balanced preset's convergence once nothing changes. A
+  // frame is still when its camera, target, scene and transport settings
+  // equal the preceding frame's and that frame rendered with `settle`.
+  // A still frame's colour is a progressive accumulation of still frames
+  // alone, which restarts at PathTracingSettings::sample_index and stops at
+  // max_samples as RenderScene's does; the preceding changing frame's
+  // colour crossfades into it over max_history_samples still samples
+  // wherever that frame had a history (SettleTemporalRadiance). The radiance history stays the last changing
+  // frame's, and the next change continues from it. Requires
+  // accumulate_radiance; reservoir reuse, which traces a fresh batch every
+  // frame, never settles. Like the filter, turning it on or off resets no
+  // history.
+  bool settle = false;
 };
 
 struct TemporalFrame {
@@ -236,26 +249,45 @@ enum class QualityPreset {
   // One fresh sample per frame, a capped per-pixel history and the
   // edge-aware filter; it never converges.
   Interactive,
+  // Interactive while anything changes; once still, it settles
+  // (TemporalFrameSettings::settle) into the progressive image.
+  Balanced,
   // Progressive, unfiltered and without history: today's default.
   Reference,
 };
 
-// Interactive's history cap and filter iterations.
+// Interactive's and Balanced's history cap and filter iterations.
 inline constexpr std::uint32_t kInteractiveHistorySamples = 32;
 
-// Sets the preset's accumulate_radiance, max_history_samples and
-// filter_iterations in `temporal` and leaves its other fields. Reference
-// leaves the history cap, which it does not use. Every host maps a preset
-// through this function, so none has its own idea of one. Inline, so that
-// GPU-free host code can call it without the backend.
+// Sets the preset's accumulate_radiance, max_history_samples,
+// filter_iterations and settle in `temporal` and leaves its other fields.
+// Reference leaves the history cap, which it does not use. Every host maps
+// a preset through this function, so none has its own idea of one. Inline,
+// so that GPU-free host code can call it without the backend.
 inline void ApplyQualityPreset(
     QualityPreset preset, TemporalFrameSettings& temporal) {
-  const bool interactive = preset == QualityPreset::Interactive;
-  temporal.accumulate_radiance = interactive;
-  temporal.filter_iterations = interactive ? kTemporalFilterIterations : 0;
-  if (interactive)
+  const bool history = preset != QualityPreset::Reference;
+  temporal.accumulate_radiance = history;
+  temporal.filter_iterations = history ? kTemporalFilterIterations : 0;
+  if (history)
     temporal.max_history_samples = kInteractiveHistorySamples;
+  temporal.settle = preset == QualityPreset::Balanced;
 }
+
+// CPU oracle for a settling frame's colour at one pixel, in the GPU's
+// float arithmetic. `still` is the mean of the still frames'
+// `still_samples` samples and `prior` the last changing frame's colour,
+// which counts as `prior_samples`: the history cap where that frame had a
+// history at the pixel, since its filtered colour stands for the
+// neighbourhood rather than for its own count, and zero on a miss. Over
+// w = min(prior_samples, max_samples) still samples (prior_samples when
+// max_samples is zero) the prior crossfades into the still mean,
+// prior + (still - prior) * still_samples / w. From w still samples on, and
+// wherever the prior is not finite, the result is `still` bit for bit.
+[[nodiscard]] std::array<float, 4> SettleTemporalRadiance(
+    const std::array<float, 4>& prior, const std::array<float, 4>& still,
+    std::uint32_t prior_samples, std::uint32_t still_samples,
+    std::uint32_t max_samples);
 
 // CPU oracle for the GPU filter and composite, in its float arithmetic.
 // Each pixel with a history starts from its illumination and the variance

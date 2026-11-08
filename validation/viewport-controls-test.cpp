@@ -263,7 +263,27 @@ int main() {
             interactive.settings.max_samples == 64 &&
             interactive.present.view == DebugView::Variance,
       "a preset keeps the estimator, the sample limit and the view");
-  Check(ActivePreset(preset) == QualityPreset::Interactive, "Interactive is active");
+  Check(ActivePreset(preset) == QualityPreset::Interactive && !interactive.temporal.settle,
+      "Interactive is active and never settles");
+  Controls balanced = preset;
+  ApplyPreset(balanced, QualityPreset::Balanced);
+  const FramePlan settling = Plan(balanced);
+  Check(balanced.settle && settling.temporal.settle &&
+            settling.temporal.accumulate_radiance == interactive.temporal.accumulate_radiance &&
+            settling.temporal.max_history_samples == interactive.temporal.max_history_samples &&
+            settling.temporal.filter_iterations == interactive.temporal.filter_iterations &&
+            ActivePreset(balanced) == QualityPreset::Balanced,
+      "Balanced is Interactive that settles");
+  Controls unsettled = balanced;
+  unsettled.settle = false;
+  Check(ActivePreset(unsettled) == QualityPreset::Interactive,
+      "turning settling off is Interactive");
+  unsettled = balanced;
+  unsettled.temporal_radiance = unsettled.denoise = false;
+  Check(!Plan(unsettled).temporal.settle, "settling needs the history");
+  ApplyPreset(balanced, QualityPreset::Interactive);
+  Check(!balanced.settle && ActivePreset(balanced) == QualityPreset::Interactive,
+      "Interactive turns settling off");
   Controls edited = preset;
   edited.history_samples = 8;
   Check(!ActivePreset(edited), "editing the history samples leaves the preset");
@@ -272,7 +292,7 @@ int main() {
   Check(ActivePreset(edited) == QualityPreset::Interactive,
       "the estimator is not part of a preset");
   ApplyPreset(preset, QualityPreset::Reference);
-  Check(!preset.temporal_radiance && !preset.denoise && Progressive(preset) &&
+  Check(!preset.temporal_radiance && !preset.denoise && !preset.settle && Progressive(preset) &&
             !Plan(preset).temporal.accumulate_radiance &&
             ActivePreset(preset) == QualityPreset::Reference,
       "Reference accumulates progressively without history or filter");

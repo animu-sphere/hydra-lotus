@@ -706,16 +706,43 @@ void Presets() {
   auto interactive = base;
   Lotus::ApplyQualityPreset(Lotus::QualityPreset::Interactive, interactive);
   Check(interactive.accumulate_radiance && interactive.max_history_samples == 32 &&
-            interactive.filter_iterations == Lotus::kTemporalFilterIterations,
+            interactive.filter_iterations == Lotus::kTemporalFilterIterations &&
+            !interactive.settle,
       "Interactive preset settings");
-  auto reference = interactive;
+  auto balanced = base;
+  balanced.settle = false;
+  Lotus::ApplyQualityPreset(Lotus::QualityPreset::Balanced, balanced);
+  Check(balanced.accumulate_radiance && balanced.max_history_samples == 32 &&
+            balanced.filter_iterations == Lotus::kTemporalFilterIterations && balanced.settle,
+      "Balanced preset settings");
+  auto reference = balanced;
   Lotus::ApplyQualityPreset(Lotus::QualityPreset::Reference, reference);
   Check(!reference.accumulate_radiance && reference.filter_iterations == 0 &&
-            reference.max_history_samples == 32,
+            reference.max_history_samples == 32 && !reference.settle,
       "Reference preset settings");
-  for (const auto& preset : {interactive, reference})
+  for (const auto& preset : {interactive, balanced, reference})
     Check(preset.frame_index == 7 && preset.history_key == 3 && preset.camera_cut,
         "a preset changed a caller-owned setting");
+}
+
+// The settling crossfade: the prior fades into the still mean over its
+// weight, bounded by the sample target, and then is gone exactly.
+void Settling() {
+  using Lotus::SettleTemporalRadiance;
+  const std::array<float, 4> prior{1, 2, 3, 1}, still{3, 2, 1, 0.5F};
+  const auto at = [&](std::uint32_t history, std::uint32_t samples, std::uint32_t target) {
+    return SettleTemporalRadiance(prior, still, history, samples, target);
+  };
+  Check(at(32, 0, 0) == prior, "no still sample keeps the prior");
+  const auto quarter = at(32, 8, 0);
+  Check(quarter[0] == 1.5F && quarter[1] == 2 && quarter[2] == 2.5F && quarter[3] == 0.875F,
+      "a quarter of the prior's weight crossfades a quarter");
+  Check(at(32, 32, 0) == still && at(32, 40, 0) == still, "the prior leaves at its weight");
+  Check(at(32, 16, 16) == still, "the sample target bounds the crossfade");
+  Check(at(32, 8, 16)[0] == 2, "the crossfade spans the sample target");
+  Check(at(0, 1, 0) == still && at(0, 0, 0) == still, "a prior without weight is not shown");
+  const std::array<float, 4> broken{std::numeric_limits<float>::infinity(), 0, 0, 1};
+  Check(SettleTemporalRadiance(broken, still, 32, 1, 0) == still, "a non-finite prior is dropped");
 }
 
 } // namespace
@@ -729,7 +756,8 @@ int main() try {
   Variance();
   Filter();
   Presets();
-  std::cout << "temporal lifecycle, correspondence, reprojection, rejection, variance, filter and presets PASS\n";
+  Settling();
+  std::cout << "temporal lifecycle, correspondence, reprojection, rejection, variance, filter, presets and settling PASS\n";
   return 0;
 } catch (const std::exception& error) {
   std::cerr << error.what() << '\n';

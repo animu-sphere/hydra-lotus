@@ -399,6 +399,9 @@ private:
         VtValue(static_cast<int>(plan.temporal.max_history_samples)));
     set("lotus:filterIterations",
         VtValue(static_cast<int>(plan.temporal.filter_iterations)));
+    // The Balanced preset's setting, which also applies its history and
+    // filter values over the three above.
+    set("lotus:balanced", VtValue(plan.temporal.settle));
     render_delegate_.SetPresentView(plan.present);
   }
 

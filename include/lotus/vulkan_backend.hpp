@@ -134,6 +134,16 @@ struct TemporalProducts {
   // The filter's persistent ping-pong halves and guides, zero until a frame
   // filters.
   std::uint64_t filter_bytes = 0;
+  // A still frame under TemporalFrameSettings::settle. Its colour holds
+  // `settled_samples` still samples, at most PathTracingSettings::
+  // max_samples, and equals the progressive image once they reach it;
+  // `batch` holds their mean, `radiance` the retained history of the last
+  // changing frame, unchanged, and `previous_radiance` nothing. No filter
+  // runs, and batch_samples counts the samples this frame added.
+  bool settling = false;
+  std::uint32_t settled_samples = 0;
+  // The crossfade pass on a settling frame.
+  double settle_gpu_ms = 0.0;
 };
 
 // Last fresh sample's initial direct-light reservoir, top-left rows.

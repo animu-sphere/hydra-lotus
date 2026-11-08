@@ -7,7 +7,7 @@ if(NOT DEFINED EXECUTABLE OR NOT DEFINED TEST_ROOT OR NOT DEFINED INTEGRATOR)
 endif()
 file(MAKE_DIRECTORY "${TEST_ROOT}")
 set(report "${TEST_ROOT}/svgf.json")
-foreach(rejected "--svgf-iterations;9" "--svgf-sequences;1" "--svgf-unknown;1")
+foreach(rejected "--svgf-iterations;9" "--svgf-sequences;1" "--svgf-hold;2" "--svgf-unknown;1")
   execute_process(COMMAND "${EXECUTABLE}" --benchmark-svgf "${TEST_ROOT}/rejected.json" ${rejected}
     RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET TIMEOUT 60)
   if(NOT result STREQUAL "2" OR EXISTS "${TEST_ROOT}/rejected.json")
@@ -17,7 +17,7 @@ endforeach()
 execute_process(COMMAND "${EXECUTABLE}" --benchmark-svgf "${report}"
   --benchmark-integrator "${INTEGRATOR}" --benchmark-label "CTest quoted \"label\""
   --benchmark-size 32 --benchmark-frames 4 --svgf-sequences 2 --svgf-reference-samples 32
-  --svgf-iterations 3 --svgf-history-cap 8
+  --svgf-iterations 3 --svgf-history-cap 8 --svgf-hold 6
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 300)
 if(NOT result STREQUAL "0" AND NOT result STREQUAL "77")
   message(FATAL_ERROR "SVGF benchmark failed (${result}):\n${output}\n${error}")
@@ -29,9 +29,10 @@ string(JSON label GET "${json}" build label)
 string(JSON integrator GET "${json}" procedure integrator)
 string(JSON iterations GET "${json}" procedure filter_iterations)
 string(JSON cap GET "${json}" procedure history_cap)
+string(JSON hold GET "${json}" procedure settling_hold_frames)
 string(JSON count LENGTH "${json}" scenes)
-if(NOT schema STREQUAL "lotus-svgf-benchmark-v2" OR NOT label STREQUAL "CTest quoted \"label\"" OR
-   NOT integrator STREQUAL INTEGRATOR OR NOT iterations EQUAL 3 OR NOT cap EQUAL 8)
+if(NOT schema STREQUAL "lotus-svgf-benchmark-v3" OR NOT label STREQUAL "CTest quoted \"label\"" OR
+   NOT integrator STREQUAL INTEGRATOR OR NOT iterations EQUAL 3 OR NOT cap EQUAL 8 OR NOT hold EQUAL 6)
   message(FATAL_ERROR "Wrong schema, build or procedure")
 endif()
 if(result STREQUAL "77")
@@ -87,6 +88,23 @@ foreach(s RANGE 0 4)
     endif()
     if(NOT EXISTS "${TEST_ROOT}/${image_directory}/${id}-${output}.pfm")
       message(FATAL_ERROR "Missing ${output} image for ${id}")
+    endif()
+  endforeach()
+  # Settling: Balanced settles in the hold and converges to the Reference
+  # frame bit for bit; a still workload has no moving view to compare with.
+  string(JSON settled GET "${json}" scenes ${s} settling settling_frames_per_sequence)
+  string(JSON equal GET "${json}" scenes ${s} settling converged_equals_reference)
+  string(JSON moving_delta TYPE "${json}" scenes ${s} settling moving_frame_delta_mse)
+  string(JSON no_pop TYPE "${json}" scenes ${s} settling no_pop)
+  if(NOT settled GREATER_EQUAL 6 OR NOT equal OR (s EQUAL 0) EQUAL (moving_delta STREQUAL "NUMBER") OR
+     (s EQUAL 0) EQUAL (no_pop STREQUAL "BOOLEAN"))
+    message(FATAL_ERROR "Settling did not settle, converge to Reference or compare with the moving view in ${id}")
+  endif()
+  foreach(output balanced interactive reference)
+    string(JSON frames LENGTH "${json}" scenes ${s} settling outputs ${output} mse_by_frame)
+    string(JSON deltas LENGTH "${json}" scenes ${s} settling outputs ${output} frame_delta_mse_by_frame)
+    if(NOT frames EQUAL 10 OR NOT deltas EQUAL 10)
+      message(FATAL_ERROR "Incomplete ${output} settling statistics in ${id}")
     endif()
   endforeach()
   string(JSON filter_bytes GET "${json}" scenes ${s} memory filter_bytes)
