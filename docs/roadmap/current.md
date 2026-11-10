@@ -12,13 +12,15 @@ then the IR v2 design and the BSDF API contract, before any model
 ([contract §11](../design/MATERIALX_SHADING_MODELS.md#11-recommended-order)).
 LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
 
-1. **Contract review.** Review the
-   [contract](../design/MATERIALX_SHADING_MODELS.md), settle its
-   [design-review decisions](../design/MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)
-   as the tasks that need them start, then mark it accepted.
-2. **LOTUS-MATERIALX-01.** Design material IR v2, and render
-   `UsdPreviewSurface` through it with its fixtures and committed references
-   unchanged.
+1. **Contract review.** Done: the
+   [contract](../design/MATERIALX_SHADING_MODELS.md) is accepted. Its
+   remaining [design-review decisions](../design/MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)
+   (§10.2, §10.4, §10.5) are settled as the tasks that need them start.
+2. **LOTUS-MATERIALX-01.** Material IR v2: the
+   [design](../design/MATERIAL_IR_V2.md) is accepted, settling contract
+   §10.1, §10.3 and §10.6. Render `UsdPreviewSurface` through it with its
+   fixtures and committed references unchanged
+   ([acceptance](../design/MATERIAL_IR_V2.md#9-acceptance-for-lotus-materialx-01)).
 3. **LOTUS-MATERIALX-02.** Write the BSDF API contract and move both
    integrators onto it, with consistency and PDF-normalization tests.
 4. **LOTUS-MATERIALX-03.** Add layer and mix composition, with consistency,
