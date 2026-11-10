@@ -101,7 +101,10 @@ foundation fixtures. Candidates include dielectric/metal GGX, IOR,
 transmission, coat, sheen and representative MaterialX node translation.
 Existing support is defined by the [scene reference](../reference/SCENE.md#materials-and-environment),
 not this list. Choose subsurface scattering, arbitrary graphs and additional
-UsdLux options separately on cost and benefit.
+UsdLux options separately on cost and benefit. The
+[MaterialX shading-model contract](MATERIALX_SHADING_MODELS.md#12-relation-to-earlier-policy)
+is the exception: its delivery is chosen by direction, and that contract
+with its design documents is the entry condition.
 
 Lighting adoption requires a fixed many-light comparison covering GPU time,
 quality, memory and low-light-count behavior. Interactive-quality work
