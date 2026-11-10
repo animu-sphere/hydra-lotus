@@ -252,7 +252,7 @@ std::string RequestTexture(HdLotusMaterialTranslation& translation,
 bool SameTexcoords(const Lotus::Material& material, const std::string& texcoords,
     const std::array<float, 2>& fallback) {
   return !Lotus::HasTextureInputs(material) ||
-         (material.texcoords == texcoords && material.texcoord_fallback == fallback);
+         (material.geometry.texcoords == texcoords && material.geometry.texcoord_fallback == fallback);
 }
 
 // One output of a MaterialX node graph: constant components, or a texture
@@ -627,21 +627,22 @@ public:
 
   void Translate() {
     Lotus::Material& material = translation_.material;
+    Lotus::PreviewSurface& preview = Lotus::Preview(material);
     constexpr double kLargest = 3.4e38;
     // Standard Surface's defaults where the IR's differ.
-    material.base_color = {0.8F, 0.8F, 0.8F};
-    material.roughness = 0.2F;
+    preview.base_color = {0.8F, 0.8F, 0.8F};
+    preview.roughness = 0.2F;
 
     Color(Weighted(Tokens->base, Tokens->base_color, ConstantValue({0.8F, 0.8F, 0.8F})),
-        material.base_color, material.base_color_texture, 0.0, 1.0);
+        preview.base_color, preview.base_color_texture, 0.0, 1.0);
     Color(Weighted(Tokens->emission, Tokens->emission_color,
               ConstantValue({1.0F, 1.0F, 1.0F}), 0.0F),
-        material.emission, material.emission_texture, 0.0, kLargest);
-    Scalar(Tokens->metalness, material.metallic, &material.metallic_texture,
+        preview.emission, preview.emission_texture, 0.0, kLargest);
+    Scalar(Tokens->metalness, preview.metallic, &preview.metallic_texture,
         0.0, 1.0);
-    Scalar(Tokens->specular_roughness, material.roughness,
-        &material.roughness_texture, 0.0, 1.0);
-    Scalar(Tokens->specular_IOR, material.ior, nullptr, 1.0, kLargest);
+    Scalar(Tokens->specular_roughness, preview.roughness,
+        &preview.roughness_texture, 0.0, 1.0);
+    Scalar(Tokens->specular_IOR, preview.ior, nullptr, 1.0, kLargest);
     Transmission();
     Specular();
     Opacity();
@@ -696,8 +697,8 @@ private:
     if (!SameTexcoords(material, value.texcoords, value.texcoord_fallback)) {
       return false;
     }
-    material.texcoords = value.texcoords;
-    material.texcoord_fallback = value.texcoord_fallback;
+    material.geometry.texcoords = value.texcoords;
+    material.geometry.texcoord_fallback = value.texcoord_fallback;
     RequestTexture(translation_, value.file, value.color_space);
     return true;
   }
@@ -749,23 +750,24 @@ private:
   // dispersion and extra roughness are ignored.
   void Transmission() {
     Lotus::Material& material = translation_.material;
+    Lotus::PreviewSurface& preview = Lotus::Preview(material);
     const auto weight = graph_.Input(node_, Tokens->transmission, ConstantValue({0.0F}));
     if (!weight || weight->lookup || weight->width != 1) {
       translation_.unrepresented_inputs.push_back(Tokens->transmission);
     } else {
-      material.transmission =
+      preview.transmission =
           static_cast<float>(std::clamp<double>(weight->constant[0], 0.0, 1.0));
     }
     if (Connection(node_, Tokens->thin_walled) != nullptr) {
       translation_.unrepresented_inputs.push_back(Tokens->thin_walled);
     } else if (const VtValue* thin = Parameter(node_, Tokens->thin_walled)) {
       if (thin->IsHolding<bool>()) {
-        material.thin_walled = thin->UncheckedGet<bool>();
+        preview.thin_walled = thin->UncheckedGet<bool>();
       } else if (const auto flag = ReadScalar(*thin)) {
-        material.thin_walled = *flag != 0.0;
+        preview.thin_walled = *flag != 0.0;
       }
     }
-    if (!(material.transmission > 0.0F)) {
+    if (!(preview.transmission > 0.0F)) {
       return;
     }
     const auto color = graph_.Input(node_, Tokens->transmission_color,
@@ -774,14 +776,14 @@ private:
       translation_.unrepresented_inputs.push_back(Tokens->transmission_color);
     } else {
       for (std::size_t c = 0; c < 3; ++c) {
-        material.transmission_color[c] =
+        preview.transmission_color[c] =
             static_cast<float>(std::clamp<double>(color->constant[c], 0.0, 1.0));
       }
     }
     const auto depth = graph_.Input(node_, Tokens->transmission_depth, ConstantValue({0.0F}));
     if (!depth || depth->lookup || depth->constant[0] != 0.0F) {
       translation_.unrepresented_inputs.push_back(Tokens->transmission_depth);
-      material.transmission_color = {1.0F, 1.0F, 1.0F};
+      preview.transmission_color = {1.0F, 1.0F, 1.0F};
     }
     const auto scatter = graph_.Input(node_, Tokens->transmission_scatter,
         ConstantValue({0.0F, 0.0F, 0.0F}));
@@ -805,8 +807,8 @@ private:
   void Specular() {
     const auto weight = graph_.Input(node_, Tokens->specular, ConstantValue({1.0F}));
     if (weight && !weight->lookup && weight->constant[0] == 0.0F &&
-        !(translation_.material.transmission > 0.0F)) {
-      translation_.material.ior = 1.0F;
+        !(Lotus::Preview(translation_.material).transmission > 0.0F)) {
+      Lotus::Preview(translation_.material).ior = 1.0F;
       return;
     }
     if (!weight || weight->lookup || weight->constant[0] != 1.0F) {
@@ -833,7 +835,7 @@ private:
     if (r != g || g != b) {
       translation_.unrepresented_inputs.push_back(Tokens->opacity);
     }
-    translation_.material.opacity = static_cast<float>(
+    translation_.material.geometry.opacity = static_cast<float>(
         std::clamp((double(r) + double(g) + double(b)) / 3.0, 0.0, 1.0));
   }
 
@@ -853,11 +855,11 @@ private:
       return;
     }
     if (value->lookup) {
-      material.normal_texture = value->lookup;
+      material.geometry.normal_texture = value->lookup;
       return;
     }
     for (std::size_t c = 0; c < 3; ++c) {
-      material.normal[c] = std::clamp(value->constant[c], -1.0F, 1.0F);
+      material.geometry.normal[c] = std::clamp(value->constant[c], -1.0F, 1.0F);
     }
   }
 
@@ -1073,8 +1075,8 @@ private:
             .value_or(result.fallback);
     result.texture =
         RequestTexture(translation_, ReadFile(texture), ReadColorSpace(texture));
-    material.texcoords = std::move(coordinates.texcoords);
-    material.texcoord_fallback = coordinates.fallback;
+    material.geometry.texcoords = std::move(coordinates.texcoords);
+    material.geometry.texcoord_fallback = coordinates.fallback;
     lookup = std::move(result);
     return true;
   }
@@ -1126,35 +1128,36 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
 
   SurfaceReader surface(converted, node->second, translation);
   Lotus::Material& material = translation.material;
+  Lotus::PreviewSurface& preview = Lotus::Preview(material);
   constexpr double kLargest = 3.4e38;
-  if (!surface.ColorPrimvar(Tokens->diffuseColor, material.base_color,
-          material.base_color_primvar)) {
-    surface.Color(Tokens->diffuseColor, material.base_color,
-        material.base_color_texture, 0.0, 1.0);
+  if (!surface.ColorPrimvar(Tokens->diffuseColor, preview.base_color,
+          material.geometry.base_color_primvar)) {
+    surface.Color(Tokens->diffuseColor, preview.base_color,
+        preview.base_color_texture, 0.0, 1.0);
   }
-  surface.Color(Tokens->emissiveColor, material.emission,
-      material.emission_texture, 0.0, kLargest);
-  surface.Scalar(Tokens->roughness, material.roughness,
-      &material.roughness_texture, 0.0, 1.0);
+  surface.Color(Tokens->emissiveColor, preview.emission,
+      preview.emission_texture, 0.0, kLargest);
+  surface.Scalar(Tokens->roughness, preview.roughness,
+      &preview.roughness_texture, 0.0, 1.0);
   float specular_workflow = 0.0F;
   surface.Scalar(Tokens->useSpecularWorkflow, specular_workflow, nullptr, 0.0,
       1.0);
   // The specular workflow ignores metallic.
   if (specular_workflow == 0.0F) {
-    surface.Scalar(Tokens->metallic, material.metallic,
-        &material.metallic_texture, 0.0, 1.0);
-    surface.Scalar(Tokens->ior, material.ior, nullptr, 1.0, kLargest);
+    surface.Scalar(Tokens->metallic, preview.metallic,
+        &preview.metallic_texture, 0.0, 1.0);
+    surface.Scalar(Tokens->ior, preview.ior, nullptr, 1.0, kLargest);
   }
-  material.use_specular_workflow = specular_workflow != 0.0F;
-  surface.Color(Tokens->normal, material.normal,
-      material.normal_texture, -1.0, 1.0);
-  surface.Scalar(Tokens->opacity, material.opacity,
-      &material.opacity_texture, 0.0, 1.0);
-  surface.Scalar(Tokens->opacityThreshold, material.opacity_threshold,
+  preview.use_specular_workflow = specular_workflow != 0.0F;
+  surface.Color(Tokens->normal, material.geometry.normal,
+      material.geometry.normal_texture, -1.0, 1.0);
+  surface.Scalar(Tokens->opacity, material.geometry.opacity,
+      &material.geometry.opacity_texture, 0.0, 1.0);
+  surface.Scalar(Tokens->opacityThreshold, material.geometry.opacity_threshold,
       nullptr, 0.0, 1.0);
-  if (material.use_specular_workflow) {
-    surface.Color(Tokens->specularColor, material.specular_color,
-        material.specular_color_texture, 0.0, 1.0);
+  if (preview.use_specular_workflow) {
+    surface.Color(Tokens->specularColor, preview.specular_color,
+        preview.specular_color_texture, 0.0, 1.0);
   }
   return translation;
 }

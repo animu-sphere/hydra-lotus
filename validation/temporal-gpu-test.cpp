@@ -49,7 +49,7 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
   world.SetCamera(Perspective());
   world.SetMesh("/plane", kPlane, {});
   Material material;
-  material.emission = {0.25F, 0.5F, 1.0F};
+  Lotus::Preview(material).emission = {0.25F, 0.5F, 1.0F};
   world.SetMaterial("/material", material);
   world.BindMaterial("/plane", "/material");
   OffscreenTarget target;
@@ -199,7 +199,7 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
             churn.temporal.current[0].material_id == moving.temporal.current[0].material_id &&
             churn.temporal.current[0].flags == 7,
       "GPU slot churn changed stable identity");
-  material.base_color[0] = 0.1F;
+  Lotus::Preview(material).base_color[0] = 0.1F;
   world.SetMaterial("/material", material);
   const auto edit = Render();
   Check(edit.temporal.current[0].instance_id == churn.temporal.current[0].instance_id &&
@@ -241,8 +241,8 @@ void Sequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator integrator) 
       "snapshot mismatch consumed history");
 
   // Texture identity changes follow the resources the bound material reads.
-  material.base_color_texture = TextureInput{};
-  material.base_color_texture->texture = "/used";
+  Lotus::Preview(material).base_color_texture = TextureInput{};
+  Lotus::Preview(material).base_color_texture->texture = "/used";
   world.SetMaterial("/material", material);
   const auto textured = Render();
   Texture texel{1, 1, TextureFormat::Rgba8Unorm, {128, 128, 128, 255}};
@@ -455,9 +455,9 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   world.SetCamera(Perspective());
   world.SetMesh("/plane", kPlane, {});
   Material material;
-  material.base_color = {0.6F, 0.4F, 0.2F};
-  material.metallic = 1;
-  material.roughness = 0.5F;
+  Lotus::Preview(material).base_color = {0.6F, 0.4F, 0.2F};
+  Lotus::Preview(material).metallic = 1;
+  Lotus::Preview(material).roughness = 0.5F;
   world.SetMaterial("/material", material);
   world.BindMaterial("/plane", "/material");
   world.SetEnvironment({1, 2, 3});
@@ -767,7 +767,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   Reset(TemporalResetReason::SceneChanged);
   world.RemoveMesh("/panel");
   Reset(TemporalResetReason::SceneChanged);
-  material.emission = {0.2F, 0.4F, 0.8F};
+  Lotus::Preview(material).emission = {0.2F, 0.4F, 0.8F};
   world.SetMaterial("/material", material);
   Reset(TemporalResetReason::SceneChanged);
   Texture unused;
@@ -858,7 +858,7 @@ void AccumulationSequence(Lotus::OffscreenRenderer& renderer,
   foreground.positions = {{-1, -1, -2}, {1, -1, -2}, {1, 1, -2}, {-1, 1, -2}};
   world.SetMesh("/foreground", foreground, {});
   Material red;
-  red.base_color = {0.9F, 0.05F, 0.05F};
+  Lotus::Preview(red).base_color = {0.9F, 0.05F, 0.05F};
   world.SetMaterial("/red", red);
   world.BindMaterial("/foreground", "/red");
   Reset(TemporalResetReason::SceneChanged);
@@ -920,9 +920,9 @@ void SettlingSequence(Lotus::OffscreenRenderer& renderer,
   world.SetMesh("/card",
       {{{-2, -2, -4}, {2, -2, -4}, {2, 2, -4}, {-2, 2, -4}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   Material material;
-  material.base_color = {0.6F, 0.4F, 0.2F};
-  material.metallic = 1;
-  material.roughness = 0.5F;
+  Lotus::Preview(material).base_color = {0.6F, 0.4F, 0.2F};
+  Lotus::Preview(material).metallic = 1;
+  Lotus::Preview(material).roughness = 0.5F;
   world.SetMaterial("/material", material);
   world.BindMaterial("/card", "/material");
   world.SetEnvironment({1, 2, 3});
@@ -1095,9 +1095,9 @@ void RectificationSequence(Lotus::OffscreenRenderer& renderer, Lotus::Integrator
   SceneExtraction extraction;
   world.SetMesh("/plane", kPlane, {});
   Material material;
-  material.base_color = {0.6F, 0.4F, 0.2F};
-  material.metallic = 1;
-  material.roughness = 0.1F;
+  Lotus::Preview(material).base_color = {0.6F, 0.4F, 0.2F};
+  Lotus::Preview(material).metallic = 1;
+  Lotus::Preview(material).roughness = 0.1F;
   world.SetMaterial("/material", material);
   world.BindMaterial("/plane", "/material");
   world.SetEnvironment({1, 2, 3});

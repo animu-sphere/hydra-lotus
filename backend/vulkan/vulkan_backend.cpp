@@ -185,8 +185,11 @@ struct PathConstants {
   std::uint32_t distant_count;
   // PathTracingSettings::environment_background.
   std::uint32_t environment_background;
+  // The GPU scene's material binding table, which follows its records.
+  std::uint64_t material_bindings;
 };
-static_assert(sizeof(PathConstants) == 208 &&
+static_assert(sizeof(PathConstants) == 216 &&
+              offsetof(PathConstants, material_bindings) == 208 &&
               offsetof(PathConstants, restir_proposal) == 180 &&
               offsetof(PathConstants, light_nodes) == 184 &&
               offsetof(PathConstants, analytic_lights) == 136 &&
@@ -232,10 +235,10 @@ bool EmitsLight(const LotusScene& scene, const SceneMesh& mesh) {
   const auto found = scene.materials.find(mesh.material);
   if (found == scene.materials.end())
     return false;
-  const Material& material = found->second;
-  return material.emission_texture.has_value() ||
-         std::any_of(material.emission.begin(), material.emission.end(),
-             [](float value) { return value != 0.0F; });
+  const auto* material = std::get_if<PreviewSurface>(&found->second.surface);
+  return material != nullptr && (material->emission_texture.has_value() ||
+         std::any_of(material->emission.begin(), material->emission.end(),
+             [](float value) { return value != 0.0F; }));
 }
 
 // A deformation keeps the triangles, their faces and the point count; only
@@ -2403,6 +2406,7 @@ public:
     constants.ndc_from_pixel[3] = -2.0F * viewport.y / viewport.height - 1.0F;
     constants.instances = scene_.InstanceAddress();
     constants.materials = scene_.MaterialAddress();
+    constants.material_bindings = scene_.MaterialBindingAddress();
     constants.light_sampling = settings.light_sampling == LightSampling::Mis
                                    ? kMisLightSampling
                                : settings.light_sampling == LightSampling::RestirInitial

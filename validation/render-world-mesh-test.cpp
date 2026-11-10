@@ -90,16 +90,16 @@ int main() try {
       "a new mesh or scene did not start unbound, without materials and "
       "with a black environment");
   auto invalid_material = material;
-  invalid_material.base_color[1] = 1.5F;
+  Lotus::Preview(invalid_material).base_color[1] = 1.5F;
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.roughness = -0.25F;
+  Lotus::Preview(invalid_material).roughness = -0.25F;
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.metallic = std::numeric_limits<float>::quiet_NaN();
+  Lotus::Preview(invalid_material).metallic = std::numeric_limits<float>::quiet_NaN();
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.emission[2] = -1.0F;
+  Lotus::Preview(invalid_material).emission[2] = -1.0F;
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   Reject([&] { world.SetMaterial("", material); });
   Reject([&] { world.BindMaterial("/missing", "/paint"); });
@@ -144,8 +144,8 @@ int main() try {
       bound.scene->meshes.at("/mesh").material == "/paint" &&
       edited.scene->meshes.at("/mesh").material.empty(),
       "a material binding copied geometry or changed a retained snapshot");
-  material.base_color = {0.5F, 0.25F, 1.0F};
-  material.emission = {2.0F, 0.0F, 0.0F};
+  Lotus::Preview(material).base_color = {0.5F, 0.25F, 1.0F};
+  Lotus::Preview(material).emission = {2.0F, 0.0F, 0.0F};
   world.SetMaterial("/paint", material);
   const auto painted = world.Commit();
   Check(painted.revision == bound.revision + 1 &&
@@ -324,65 +324,65 @@ int main() try {
   Reject([&] { world.SetTexture("/tex", invalid_texture); });
   Reject([&] { world.SetTexture("", texture); });
   invalid_material = material;
-  invalid_material.base_color_texture = Lotus::TextureInput{};
+  Lotus::Preview(invalid_material).base_color_texture = Lotus::TextureInput{};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
-  invalid_material.base_color_texture = Lotus::TextureInput{"/tex", 1};
+  Lotus::Preview(invalid_material).base_color_texture = Lotus::TextureInput{"/tex", 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.roughness_texture = Lotus::TextureInput{"/tex", 4};
+  Lotus::Preview(invalid_material).roughness_texture = Lotus::TextureInput{"/tex", 4};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
-  invalid_material.roughness_texture = Lotus::TextureInput{"/tex", 3};
-  invalid_material.roughness_texture->bias[2] =
+  Lotus::Preview(invalid_material).roughness_texture = Lotus::TextureInput{"/tex", 3};
+  Lotus::Preview(invalid_material).roughness_texture->bias[2] =
       std::numeric_limits<float>::quiet_NaN();
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.texcoord_fallback[1] = infinity;
+  invalid_material.geometry.texcoord_fallback[1] = infinity;
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.normal = {0, infinity, 1};
+  invalid_material.geometry.normal = {0, infinity, 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
-  invalid_material.normal = {0, -1.01F, 1};
+  invalid_material.geometry.normal = {0, -1.01F, 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   invalid_material = material;
-  invalid_material.normal_texture = Lotus::TextureInput{"/tex", 1};
+  invalid_material.geometry.normal_texture = Lotus::TextureInput{"/tex", 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   for (const float value : {-0.01F, 1.01F, infinity,
            std::numeric_limits<float>::quiet_NaN()}) {
     invalid_material = material;
-    invalid_material.opacity = value;
+    invalid_material.geometry.opacity = value;
     Reject([&] { world.SetMaterial("/paint", invalid_material); });
     invalid_material = material;
-    invalid_material.opacity_threshold = value;
+    invalid_material.geometry.opacity_threshold = value;
     Reject([&] { world.SetMaterial("/paint", invalid_material); });
   }
   invalid_material = material;
-  invalid_material.opacity_texture = Lotus::TextureInput{"/tex", 4};
+  invalid_material.geometry.opacity_texture = Lotus::TextureInput{"/tex", 4};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   for (float value : {0.99F, -1.0F, infinity, std::numeric_limits<float>::quiet_NaN()}) {
     invalid_material = material;
-    invalid_material.ior = value;
+    Lotus::Preview(invalid_material).ior = value;
     Reject([&] { world.SetMaterial("/paint", invalid_material); });
   }
   for (float value : {-0.01F, 1.01F, infinity, std::numeric_limits<float>::quiet_NaN()}) {
     invalid_material = material;
-    invalid_material.specular_color[1] = value;
+    Lotus::Preview(invalid_material).specular_color[1] = value;
     Reject([&] { world.SetMaterial("/paint", invalid_material); });
   }
   invalid_material = material;
-  invalid_material.specular_color_texture = Lotus::TextureInput{"/tex", 1};
+  Lotus::Preview(invalid_material).specular_color_texture = Lotus::TextureInput{"/tex", 1};
   Reject([&] { world.SetMaterial("/paint", invalid_material); });
   Check(world.Commit().revision == uv.revision,
       "rejected textures or texture inputs changed the scene revision");
-  material.metallic_texture = Lotus::TextureInput{"/tex", 3};
-  material.normal = {-1, 0.5F, 0};
-  material.normal_texture = Lotus::TextureInput{"/tex"};
-  material.opacity = 0.75F;
-  material.opacity_threshold = 0.5F;
-  material.opacity_texture = Lotus::TextureInput{"/tex", 3};
-  material.use_specular_workflow = true;
-  material.specular_color = {0.7F, 0.2F, 0.05F};
-  material.specular_color_texture = Lotus::TextureInput{"/tex"};
-  material.texcoords = "st";
+  Lotus::Preview(material).metallic_texture = Lotus::TextureInput{"/tex", 3};
+  material.geometry.normal = {-1, 0.5F, 0};
+  material.geometry.normal_texture = Lotus::TextureInput{"/tex"};
+  material.geometry.opacity = 0.75F;
+  material.geometry.opacity_threshold = 0.5F;
+  material.geometry.opacity_texture = Lotus::TextureInput{"/tex", 3};
+  Lotus::Preview(material).use_specular_workflow = true;
+  Lotus::Preview(material).specular_color = {0.7F, 0.2F, 0.05F};
+  Lotus::Preview(material).specular_color_texture = Lotus::TextureInput{"/tex"};
+  material.geometry.texcoords = "st";
   world.SetMaterial("/paint", material);
   world.SetTexture("/tex", texture);
   const auto textured = world.Commit();

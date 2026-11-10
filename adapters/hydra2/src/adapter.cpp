@@ -1052,13 +1052,13 @@ private:
     if (material.IsEmpty() && (display.color || display.varying_color || display.opacity)) {
       Lotus::Material fallback;
       if (display.color) {
-        fallback.base_color = *display.color;
+        Lotus::Preview(fallback).base_color = *display.color;
       }
       if (display.varying_color) {
-        fallback.base_color_primvar = HdTokens->displayColor.GetString();
+        fallback.geometry.base_color_primvar = HdTokens->displayColor.GetString();
       }
       if (display.opacity) {
-        fallback.opacity = *display.opacity;
+        fallback.geometry.opacity = *display.opacity;
       }
       world_.SetMaterial(key, fallback);
       world_.BindMaterial(id.GetString(), key);

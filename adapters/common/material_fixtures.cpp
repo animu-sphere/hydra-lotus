@@ -105,14 +105,14 @@ Lotus::Matrix4 ToFloat(const Matrix4d& matrix) {
 
 Lotus::Material Dielectric(const std::array<float, 3>& base, float roughness = 0.5F) {
   Lotus::Material material;
-  material.base_color = base;
-  material.roughness = roughness;
+  Lotus::Preview(material).base_color = base;
+  Lotus::Preview(material).roughness = roughness;
   return material;
 }
 
 Lotus::Material Metal(const std::array<float, 3>& base, float roughness, float metallic) {
   Lotus::Material material = Dielectric(base, roughness);
-  material.metallic = metallic;
+  Lotus::Preview(material).metallic = metallic;
   return material;
 }
 
@@ -162,10 +162,10 @@ void SetMaterialBasics(Lotus::RenderWorld& world) {
   SetStudio(world, "/MaterialBasics");
 
   Lotus::Material specular = Dielectric({0.05F, 0.05F, 0.05F}, 0.2F);
-  specular.use_specular_workflow = true;
-  specular.specular_color = {0.9F, 0.6F, 0.3F};
+  Lotus::Preview(specular).use_specular_workflow = true;
+  Lotus::Preview(specular).specular_color = {0.9F, 0.6F, 0.3F};
   Lotus::Material ior = Dielectric({0.1F, 0.2F, 0.6F}, 0.1F);
-  ior.ior = 2.5F;
+  Lotus::Preview(ior).ior = 2.5F;
   constexpr std::array<float, 3> kGrey{0.5F, 0.5F, 0.5F};
   constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
   constexpr std::array<float, 3> kGold{0.9F, 0.6F, 0.2F};
@@ -292,8 +292,8 @@ std::array<float, 6> Float(const St& transform) {
 // A material whose base colour is `lookup`, at the set `texcoords`.
 Lotus::Material Textured(Lotus::TextureInput lookup, std::string texcoords = "st") {
   Lotus::Material material;
-  material.base_color_texture = std::move(lookup);
-  material.texcoords = std::move(texcoords);
+  Lotus::Preview(material).base_color_texture = std::move(lookup);
+  material.geometry.texcoords = std::move(texcoords);
   return material;
 }
 
@@ -325,7 +325,7 @@ Lotus::MeshGeometry Card(std::map<std::string, Texcoords> texcoords) {
 void DarkerMetal(Lotus::RenderWorld& world) {
   const std::string key = "/MaterialBasics/Looks/Metal50";
   Lotus::Material metal = world.Commit().scene->materials.at(key);
-  for (float& channel : metal.base_color) channel *= 0.9F;
+  for (float& channel : Lotus::Preview(metal).base_color) channel *= 0.9F;
   world.SetMaterial(key, metal);
 }
 
@@ -411,14 +411,14 @@ void SetMaterialTextures(Lotus::RenderWorld& world) {
     return Lookup("palette.png", "sRGB", s, t);
   };
   Lotus::Material grey_alpha = Textured(Lookup("grey-alpha.png", "auto"));
-  grey_alpha.roughness_texture = Channel(Lookup("grey-alpha.png", "auto"), 3);
+  Lotus::Preview(grey_alpha).roughness_texture = Channel(Lookup("grey-alpha.png", "auto"), 3);
   Lotus::Material alpha = Textured(Lookup("rgba.png", "sRGB"));
-  alpha.roughness_texture = Channel(Lookup("rgba.png", "sRGB"), 3);
+  Lotus::Preview(alpha).roughness_texture = Channel(Lookup("rgba.png", "sRGB"), 3);
   Lotus::Material orm;
-  orm.base_color = {0.95F, 0.64F, 0.54F};
-  orm.metallic_texture = Channel(Lookup("rgba.png", "raw"), 2);
-  orm.roughness_texture = Channel(Lookup("rgba.png", "raw"), 1);
-  orm.texcoords = "st";
+  Lotus::Preview(orm).base_color = {0.95F, 0.64F, 0.54F};
+  Lotus::Preview(orm).metallic_texture = Channel(Lookup("rgba.png", "raw"), 2);
+  Lotus::Preview(orm).roughness_texture = Channel(Lookup("rgba.png", "raw"), 1);
+  orm.geometry.texcoords = "st";
   Lotus::TextureInput scale_bias = Lookup("palette.png", "raw");
   scale_bias.scale = {2.0F, 2.0F, 2.0F, 1.0F};
   scale_bias.bias = {-0.5F, -0.5F, -0.5F, 0.0F};
@@ -432,16 +432,16 @@ void SetMaterialTextures(Lotus::RenderWorld& world) {
   no_file.texture = "|auto";
   no_file.fallback = {0.2F, 0.6F, 0.9F, 1.0F};
   Lotus::Material constant = Textured(palette(), "");
-  constant.texcoord_fallback = {0.6F, 0.3F};
+  constant.geometry.texcoord_fallback = {0.6F, 0.3F};
   Lotus::Material absent = Textured(palette(), "absent");
-  absent.texcoord_fallback = {0.1F, 0.9F};
+  absent.geometry.texcoord_fallback = {0.1F, 0.9F};
   Lotus::TextureInput transformed = palette();
   transformed.st_transform = Float(Transform2d(2, 2, 30, 0.25, 0));
   // Untranslated connections leave their inputs' defaults: the ramp's
   // metallic at a second texture-coordinate source, a colour output on
   // roughness and a scalar output on the base colour.
   Lotus::Material colour_on_scalar;
-  colour_on_scalar.base_color = {0.3F, 0.5F, 0.7F};
+  Lotus::Preview(colour_on_scalar).base_color = {0.3F, 0.5F, 0.7F};
 
   using Sets = std::map<std::string, Texcoords>;
   const Sets unit{{"st", Corners(kUnit)}};
@@ -673,8 +673,8 @@ Lotus::TextureInput NormalMap(const std::string& file, const std::string& space 
 
 Lotus::Material Bumpy(std::optional<Lotus::TextureInput> normal) {
   Lotus::Material material = Dielectric({0.7F, 0.7F, 0.7F}, 0.4F);
-  if (normal) material.texcoords = "st";
-  material.normal_texture = std::move(normal);
+  if (normal) material.geometry.texcoords = "st";
+  material.geometry.normal_texture = std::move(normal);
   return material;
 }
 
@@ -682,8 +682,8 @@ Lotus::Material Bumpy(std::optional<Lotus::TextureInput> normal) {
 void FlippedGreen(Lotus::RenderWorld& world) {
   const std::string key = "/MaterialNormals/Looks/Mapped";
   Lotus::Material material = world.Commit().scene->materials.at(key);
-  material.normal_texture->scale[1] = -2.0F;
-  material.normal_texture->bias[1] = 1.0F;
+  material.geometry.normal_texture->scale[1] = -2.0F;
+  material.geometry.normal_texture->bias[1] = 1.0F;
   world.SetMaterial(key, material);
 }
 
@@ -706,13 +706,13 @@ void SetMaterialNormals(Lotus::RenderWorld& world) {
   // Without a lookup the constant names no texture-coordinate set, so it
   // takes the normal-only frame whether or not the mesh has st.
   Lotus::Material constant = Bumpy(std::nullopt);
-  constant.normal = {0.4F, 0.3F, 0.866F};
+  constant.geometry.normal = {0.4F, 0.3F, 0.866F};
   Lotus::Material absent = Bumpy(NormalMap("tilts.png"));
-  absent.texcoords = "absent";
-  absent.texcoord_fallback = {0.25F, 0.75F};
+  absent.geometry.texcoords = "absent";
+  absent.geometry.texcoord_fallback = {0.25F, 0.75F};
   Lotus::Material glossy = Metal({0.95F, 0.64F, 0.54F}, 0.25F, 1.0F);
-  glossy.normal_texture = NormalMap("tilts.png", "raw", Lotus::TextureWrap::Repeat);
-  glossy.texcoords = "st";
+  glossy.geometry.normal_texture = NormalMap("tilts.png", "raw", Lotus::TextureWrap::Repeat);
+  glossy.geometry.texcoords = "st";
   const std::map<std::string, Lotus::Material> looks{
       {"Smooth", Dielectric({0.6F, 0.6F, 0.6F}, 0.3F)},
       {"Mapped", Bumpy(NormalMap("tilts.png"))},
@@ -850,15 +850,15 @@ Lotus::Texture Glow(bool srgb) {
 
 Lotus::Material Emissive(const std::array<float, 3>& emission) {
   Lotus::Material material;
-  material.emission = emission;
+  Lotus::Preview(material).emission = emission;
   return material;
 }
 
 // A material whose emission is `lookup`, at st.
 Lotus::Material Glowing(Lotus::TextureInput lookup) {
   Lotus::Material material;
-  material.emission_texture = std::move(lookup);
-  material.texcoords = "st";
+  Lotus::Preview(material).emission_texture = std::move(lookup);
+  material.geometry.texcoords = "st";
   return material;
 }
 
@@ -889,7 +889,7 @@ void SetMaterialEmission(Lotus::RenderWorld& world) {
 
   using Lotus::TextureWrap;
   Lotus::Material metal = Metal({0.95F, 0.64F, 0.54F}, 0.25F, 1.0F);
-  metal.emission = {0.6F, 0.2F, 0.1F};
+  Lotus::Preview(metal).emission = {0.6F, 0.2F, 0.1F};
   Lotus::TextureInput scale_bias = Lookup("palette.png", "raw");
   scale_bias.scale = {3.0F, 3.0F, 3.0F, 1.0F};
   scale_bias.bias = {0.2F, 0.1F, 0.0F, 0.0F};
@@ -901,10 +901,10 @@ void SetMaterialEmission(Lotus::RenderWorld& world) {
   inverted.scale = {-1.0F, -1.0F, -1.0F, 1.0F};
   inverted.bias = {1.0F, 1.0F, 1.0F, 0.0F};
   Lotus::Material shared = Glowing(Lookup("palette.png", "sRGB"));
-  shared.base_color_texture = Lookup("palette.png", "sRGB");
+  Lotus::Preview(shared).base_color_texture = Lookup("palette.png", "sRGB");
   Lotus::Material unlit = Glowing(Lookup("palette.png", "sRGB"));
-  unlit.base_color = {0.0F, 0.0F, 0.0F};
-  unlit.ior = 1.0F;
+  Lotus::Preview(unlit).base_color = {0.0F, 0.0F, 0.0F};
+  Lotus::Preview(unlit).ior = 1.0F;
   const std::map<std::string, Lotus::Material> looks{
       {"Warm", Emissive({1.0F, 0.6F, 0.2F})},
       {"Bright", Emissive({6.0F, 6.0F, 6.0F})},
@@ -1021,9 +1021,9 @@ Texel Cutout(std::uint32_t x, std::uint32_t y) {
 
 Lotus::Material Covered(float opacity, float threshold = 0.0F) {
   Lotus::Material material;
-  material.base_color = {0.2F, 0.6F, 0.7F};
-  material.opacity = opacity;
-  material.opacity_threshold = threshold;
+  Lotus::Preview(material).base_color = {0.2F, 0.6F, 0.7F};
+  material.geometry.opacity = opacity;
+  material.geometry.opacity_threshold = threshold;
   return material;
 }
 
@@ -1031,8 +1031,8 @@ Lotus::Material Covered(float opacity, float threshold = 0.0F) {
 // at st.
 Lotus::Material Masked(const Lotus::TextureInput& lookup, float threshold = 0.5F) {
   Lotus::Material material = Textured(lookup);
-  material.opacity_texture = Channel(lookup, 3);
-  material.opacity_threshold = threshold;
+  material.geometry.opacity_texture = Channel(lookup, 3);
+  material.geometry.opacity_threshold = threshold;
   return material;
 }
 
@@ -1069,27 +1069,27 @@ void SetMaterialAlpha(Lotus::RenderWorld& world) {
 
   using Lotus::TextureWrap;
   Lotus::Material ramp = Covered(1.0F, 0.5F);
-  ramp.opacity_texture = Channel(Lookup("ramp.png", "raw"), 0);
-  ramp.texcoords = "st";
+  ramp.geometry.opacity_texture = Channel(Lookup("ramp.png", "raw"), 0);
+  ramp.geometry.texcoords = "st";
   Lotus::TextureInput inverse = Channel(Lookup("cutout.png", "sRGB"), 3);
   inverse.scale = {1.0F, 1.0F, 1.0F, -1.0F};
   inverse.bias = {0.0F, 0.0F, 0.0F, 1.0F};
   Lotus::Material inverted = Covered(1.0F, 0.5F);
-  inverted.opacity_texture = inverse;
-  inverted.texcoords = "st";
+  inverted.geometry.opacity_texture = inverse;
+  inverted.geometry.texcoords = "st";
   // The unresolved file keeps its authored path and returns its fallback.
   Lotus::TextureInput missing = Lookup("palette.png", "sRGB");
   missing.texture = "./textures/missing.png|sRGB";
   missing.fallback = {0.9F, 0.2F, 0.6F, 0.3F};
   Lotus::Material minified = Covered(1.0F, 0.5F);
-  minified.opacity_texture =
+  minified.geometry.opacity_texture =
       Channel(Lookup("checker.png", "raw", TextureWrap::Repeat, TextureWrap::Repeat), 0);
-  minified.texcoords = "st";
+  minified.geometry.texcoords = "st";
   Lotus::Material glowing_mask = Masked(Lookup("cutout.png", "sRGB"));
-  glowing_mask.base_color_texture.reset();
-  glowing_mask.emission = {1.0F, 0.6F, 0.2F};
+  Lotus::Preview(glowing_mask).base_color_texture.reset();
+  Lotus::Preview(glowing_mask).emission = {1.0F, 0.6F, 0.2F};
   Lotus::Material glowing_half = Emissive({1.0F, 0.6F, 0.2F});
-  glowing_half.opacity = 0.5F;
+  glowing_half.geometry.opacity = 0.5F;
   const std::map<std::string, Lotus::Material> looks{
       {"Half", Covered(0.5F)},
       {"Quarter", Covered(0.25F)},
@@ -1193,7 +1193,7 @@ void SetMaterialAlpha(Lotus::RenderWorld& world) {
     } else {
       const std::string display = mesh + ".lotus:displayColor";
       Lotus::Material covered = Dielectric({0.2F, 0.6F, 0.7F});
-      covered.opacity = 0.3F;
+      covered.geometry.opacity = 0.3F;
       world.SetMaterial(display, covered);
       world.BindMaterial(mesh, display);
     }
@@ -1217,8 +1217,8 @@ Lotus::TextureInput Periodic(const std::string& file, const std::string& space) 
 // A Standard Surface whose base_color is `lookup`, at `texcoords`.
 Lotus::Material StandardTextured(Lotus::TextureInput lookup, std::string texcoords = "st") {
   Lotus::Material material = Standard();
-  material.base_color_texture = std::move(lookup);
-  material.texcoords = std::move(texcoords);
+  Lotus::Preview(material).base_color_texture = std::move(lookup);
+  material.geometry.texcoords = std::move(texcoords);
   return material;
 }
 
@@ -1229,8 +1229,8 @@ Lotus::Material StandardBumpy(float scale) {
   lookup.scale = {2.0F * scale, 2.0F * scale, 2.0F, 1.0F};
   lookup.bias = {-scale, -scale, -1.0F, 0.0F};
   lookup.fallback = {-scale, -scale, -1.0F, 1.0F};
-  material.normal_texture = lookup;
-  material.texcoords = "st";
+  material.geometry.normal_texture = lookup;
+  material.geometry.texcoords = "st";
   return material;
 }
 
@@ -1238,7 +1238,7 @@ Lotus::Material StandardBumpy(float scale) {
 void UnweightedImage(Lotus::RenderWorld& world) {
   const std::string key = "/MaterialMtlx/Looks/WeightedImage";
   Lotus::Material material = world.Commit().scene->materials.at(key);
-  material.base_color_texture->scale = {1.0F, 1.0F, 1.0F, 1.0F};
+  Lotus::Preview(material).base_color_texture->scale = {1.0F, 1.0F, 1.0F, 1.0F};
   world.SetMaterial(key, material);
 }
 
@@ -1262,28 +1262,28 @@ void SetMaterialMtlx(Lotus::RenderWorld& world) {
   constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
   constexpr std::array<float, 3> kBlack{0.0F, 0.0F, 0.0F};
   Lotus::Material metal = Standard(kCopper, 0.3F);
-  metal.metallic = 1.0F;
+  Lotus::Preview(metal).metallic = 1.0F;
   Lotus::Material ior = Standard({0.1F, 0.2F, 0.6F}, 0.1F);
-  ior.ior = 2.5F;
+  Lotus::Preview(ior).ior = 2.5F;
   Lotus::Material no_specular = Standard({0.6F, 0.6F, 0.6F}, 0.1F);
-  no_specular.ior = 1.0F;
+  Lotus::Preview(no_specular).ior = 1.0F;
   // emission x emission_color, in float.
   Lotus::Material emissive = Standard(kBlack);
-  emissive.emission = {2.0F * 1.0F, 2.0F * 0.6F, 2.0F * 0.2F};
+  Lotus::Preview(emissive).emission = {2.0F * 1.0F, 2.0F * 0.6F, 2.0F * 0.2F};
   Lotus::Material opacity = Standard(kTeal);
-  opacity.opacity = 0.5F;
+  opacity.geometry.opacity = 0.5F;
   // base 1.5 x (1, 0.5, -0.25), metalness -1 and roughness 1.5, clamped.
   Lotus::Material clamped = Standard({1.0F, 1.5F * 0.5F, 0.0F}, 1.0F);
   Lotus::TextureInput weighted = Periodic("palette.png", "sRGB");
   weighted.scale = {0.5F, 0.5F, 0.5F, 1.0F};
   weighted.fallback = {0.0F, 0.0F, 0.0F, 1.0F};
   Lotus::Material channels = Standard(kCopper);
-  channels.metallic_texture = Channel(Periodic("rgba.png", "raw"), 2);
-  channels.roughness_texture = Periodic("ramp.png", "raw");
-  channels.texcoords = "st";
+  Lotus::Preview(channels).metallic_texture = Channel(Periodic("rgba.png", "raw"), 2);
+  Lotus::Preview(channels).roughness_texture = Periodic("ramp.png", "raw");
+  channels.geometry.texcoords = "st";
   Lotus::Material emission_map = Standard(kBlack);
-  emission_map.emission_texture = Periodic("palette.png", "raw");
-  emission_map.texcoords = "st";
+  Lotus::Preview(emission_map).emission_texture = Periodic("palette.png", "raw");
+  emission_map.geometry.texcoords = "st";
   const std::map<std::string, Lotus::Material> looks{
       {"Defaults", Standard()},
       {"Weighted", Standard({0.5F * 0.9F, 0.5F * 0.3F, 0.5F * 0.1F})},
@@ -1387,9 +1387,9 @@ namespace {
 Lotus::Material Glass(float roughness, const std::array<float, 3>& tint = {1.0F, 1.0F, 1.0F},
     bool thin_walled = false) {
   Lotus::Material material = Standard({0.8F, 0.8F, 0.8F}, roughness);
-  material.transmission = 1.0F;
-  material.transmission_color = tint;
-  material.thin_walled = thin_walled;
+  Lotus::Preview(material).transmission = 1.0F;
+  Lotus::Preview(material).transmission_color = tint;
+  Lotus::Preview(material).thin_walled = thin_walled;
   return material;
 }
 
@@ -1397,7 +1397,7 @@ Lotus::Material Glass(float roughness, const std::array<float, 3>& tint = {1.0F,
 void UntintedGlass(Lotus::RenderWorld& world) {
   const std::string key = "/MaterialTransmission/Looks/Tinted";
   Lotus::Material material = world.Commit().scene->materials.at(key);
-  material.transmission_color = {1.0F, 1.0F, 1.0F};
+  Lotus::Preview(material).transmission_color = {1.0F, 1.0F, 1.0F};
   world.SetMaterial(key, material);
 }
 
@@ -1410,14 +1410,14 @@ void SetMaterialTransmission(Lotus::RenderWorld& world) {
   constexpr std::array<float, 3> kTeal{0.2F, 0.6F, 0.7F};
   constexpr std::array<float, 3> kAmber{0.9F, 0.45F, 0.15F};
   Lotus::Material matched = Glass(0.4F, {0.5F, 0.8F, 0.9F});
-  matched.ior = 1.0F;
+  Lotus::Preview(matched).ior = 1.0F;
   Lotus::Material partial = Standard(kTeal, 0.15F);
-  partial.transmission = 0.5F;
-  partial.metallic = 0.25F;
+  Lotus::Preview(partial).transmission = 0.5F;
+  Lotus::Preview(partial).metallic = 0.25F;
   Lotus::Material thin_matched = Glass(0.2F, {0.9F, 0.6F, 0.3F}, true);
-  thin_matched.ior = 1.0F;
+  Lotus::Preview(thin_matched).ior = 1.0F;
   Lotus::Material thin_dense = Glass(0.0F, {1.0F, 1.0F, 1.0F}, true);
-  thin_dense.ior = 2.42F;
+  Lotus::Preview(thin_dense).ior = 2.42F;
   const std::map<std::string, Lotus::Material> looks{
       {"Smooth", Glass(0.0F)},
       {"Rough", Glass(0.35F)},
@@ -1494,7 +1494,7 @@ namespace {
 void ReversedRotation(Lotus::RenderWorld& world) {
   const std::string key = "/MaterialTransforms/Looks/Rotate";
   Lotus::Material material = world.Commit().scene->materials.at(key);
-  material.base_color_texture->st_transform = Float(Transform2d(1, 1, -30, 0, 0));
+  Lotus::Preview(material).base_color_texture->st_transform = Float(Transform2d(1, 1, -30, 0, 0));
   world.SetMaterial(key, material);
 }
 
@@ -1507,10 +1507,10 @@ void BakedTransforms(Lotus::RenderWorld& world) {
   for (const auto& [key, source] : scene->materials) {
     Lotus::Material material = source;
     std::vector<std::optional<Lotus::TextureInput>*> lookups;
-    for (auto* input : {&material.base_color_texture, &material.roughness_texture,
-             &material.metallic_texture, &material.emission_texture,
-             &material.normal_texture, &material.opacity_texture,
-             &material.specular_color_texture})
+    for (auto* input : {&Lotus::Preview(material).base_color_texture, &Lotus::Preview(material).roughness_texture,
+             &Lotus::Preview(material).metallic_texture, &Lotus::Preview(material).emission_texture,
+             &material.geometry.normal_texture, &material.geometry.opacity_texture,
+             &Lotus::Preview(material).specular_color_texture})
       if (input->has_value()) lookups.push_back(input);
     if (lookups.empty() || std::any_of(lookups.begin(), lookups.end(), [&](const auto* input) {
           return (*input)->st_transform != (*lookups.front())->st_transform;
@@ -1519,8 +1519,8 @@ void BakedTransforms(Lotus::RenderWorld& world) {
     const std::array<float, 6> m = (*lookups.front())->st_transform;
     baked[key] = m;
     for (auto* input : lookups) (*input)->st_transform = kIdentity;
-    const auto [s, t] = material.texcoord_fallback;
-    material.texcoord_fallback = {m[0] * s + m[1] * t + m[2], m[3] * s + m[4] * t + m[5]};
+    const auto [s, t] = material.geometry.texcoord_fallback;
+    material.geometry.texcoord_fallback = {m[0] * s + m[1] * t + m[2], m[3] * s + m[4] * t + m[5]};
     world.SetMaterial(key, material);
   }
   for (const auto& [key, mesh] : scene->meshes) {
@@ -1590,27 +1590,27 @@ void SetMaterialTransforms(Lotus::RenderWorld& world) {
     lookup.scale = {2.0F, 2.0F, 2.0F, 1.0F};
     lookup.bias = {-1.0F, -1.0F, -1.0F, 0.0F};
     Lotus::Material material = Dielectric({0.7F, 0.7F, 0.7F}, 0.4F);
-    material.normal_texture = lookup;
-    material.texcoords = "st";
+    material.geometry.normal_texture = lookup;
+    material.geometry.texcoords = "st";
     return material;
   };
   Lotus::Material per_input = Textured(Lookup("palette.png", "sRGB", TextureWrap::Repeat, TextureWrap::Repeat));
-  per_input.roughness_texture = Channel(placed("ramp.png", "raw", Transform2d(4, 4, 0, 0, 0)), 0);
+  Lotus::Preview(per_input).roughness_texture = Channel(placed("ramp.png", "raw", Transform2d(4, 4, 0, 0, 0)), 0);
   Lotus::Material emission;
-  emission.base_color = {0.0F, 0.0F, 0.0F};
-  emission.emission_texture = placed("palette.png", "sRGB", Transform2d(1, 1, 60, 0, 0));
-  emission.texcoords = "st";
+  Lotus::Preview(emission).base_color = {0.0F, 0.0F, 0.0F};
+  Lotus::Preview(emission).emission_texture = placed("palette.png", "sRGB", Transform2d(1, 1, 60, 0, 0));
+  emission.geometry.texcoords = "st";
   // in (0.5, 0.25), no mesh set.
   Lotus::Material constant =
       Textured(placed("palette.png", "sRGB", Transform2d(1, 1, 0, 0.125, 0.5), TextureWrap::Clamp), "");
-  constant.texcoord_fallback = {0.5F, 0.25F};
+  constant.geometry.texcoord_fallback = {0.5F, 0.25F};
   Lotus::Material absent =
       Textured(placed("palette.png", "sRGB", Transform2d(2, 2, 0, 0, 0), TextureWrap::Clamp), "absent");
-  absent.texcoord_fallback = {0.125F, 0.25F};
+  absent.geometry.texcoord_fallback = {0.125F, 0.25F};
   Lotus::Material coverage = Dielectric({0.2F, 0.6F, 0.7F});
-  coverage.opacity_texture = Channel(placed("cutout.png", "sRGB", Transform2d(1, 1, 45, 0, 0)), 3);
-  coverage.opacity_threshold = 0.5F;
-  coverage.texcoords = "st";
+  coverage.geometry.opacity_texture = Channel(placed("cutout.png", "sRGB", Transform2d(1, 1, 45, 0, 0)), 3);
+  coverage.geometry.opacity_threshold = 0.5F;
+  coverage.geometry.texcoords = "st";
 
   const std::array<std::pair<const char*, Lotus::Material>, 15> cards{{
       {"Scale", palette(Transform2d(2, 2, 0, 0, 0))},
@@ -1649,11 +1649,11 @@ void SetMaterialSubsets(Lotus::RenderWorld& world) {
   world.SetTexture("textures/palette.png|sRGB", Image(4, Lotus::TextureFormat::Rgba8Srgb, Palette));
   const std::array<float, 3> red{0.8F, 0.1F, 0.05F}, blue{0.1F, 0.2F, 0.8F}, grey{0.6F, 0.6F, 0.6F};
   Lotus::Material half = Dielectric(red);
-  half.opacity = 0.5F;
+  half.geometry.opacity = 0.5F;
   Lotus::Material glow;
-  glow.emission = {2.0F, 1.0F, 0.5F};
+  Lotus::Preview(glow).emission = {2.0F, 1.0F, 0.5F};
   Lotus::Material tint = Dielectric({0.0F, 0.0F, 0.0F}, 0.4F);
-  tint.base_color_primvar = "tint";
+  tint.geometry.base_color_primvar = "tint";
   const std::map<std::string, Lotus::Material> looks{
       {"Grey", Dielectric(grey, 0.3F)},
       {"Red", Dielectric(red, 0.3F)},
@@ -1762,7 +1762,7 @@ void SetMaterialPrimvars(Lotus::RenderWorld& world) {
 
   const auto reader = [](const char* name, std::array<float, 3> fallback = {0.0F, 0.0F, 0.0F}) {
     Lotus::Material material = Dielectric(fallback, 0.4F);
-    material.base_color_primvar = name;
+    material.geometry.base_color_primvar = name;
     return material;
   };
   // Its emission's connection is not translated.
@@ -1801,11 +1801,11 @@ void SetMaterialPrimvars(Lotus::RenderWorld& world) {
   const Lotus::MeshGeometry plain = Card({});
   const Lotus::Material teal = Dielectric({0.2F, 0.6F, 0.7F});
   Lotus::Material varying;
-  varying.base_color_primvar = "displayColor";
+  varying.geometry.base_color_primvar = "displayColor";
   Lotus::Material opacity_color = teal;
-  opacity_color.opacity = 0.25F;
+  opacity_color.geometry.opacity = 0.25F;
   Lotus::Material opacity_only;
-  opacity_only.opacity = 0.5F;
+  opacity_only.geometry.opacity = 0.5F;
 
   struct Object {
     const char* name;

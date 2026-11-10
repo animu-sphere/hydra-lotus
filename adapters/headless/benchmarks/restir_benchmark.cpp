@@ -237,21 +237,21 @@ Workload MakeMixedWorkload(const Options& options, bool moving) {
                        : "animated-area-environment-static-v1";
   RenderWorld world;
   Material diffuse;
-  diffuse.ior = spheres ? 1.5F : 1;
+  Lotus::Preview(diffuse).ior = spheres ? 1.5F : 1;
   if (spheres)
-    diffuse.roughness = 0.18F;
-  diffuse.base_color = {0.8F, 0.12F, 0.04F};
+    Lotus::Preview(diffuse).roughness = 0.18F;
+  Lotus::Preview(diffuse).base_color = {0.8F, 0.12F, 0.04F};
   Material metal;
-  metal.base_color = {0.06F, 0.3F, 0.85F};
-  metal.metallic = 1;
-  metal.roughness = narrow ? 0.08F : (spheres ? 0.5F : 0.35F);
+  Lotus::Preview(metal).base_color = {0.06F, 0.3F, 0.85F};
+  Lotus::Preview(metal).metallic = 1;
+  Lotus::Preview(metal).roughness = narrow ? 0.08F : (spheres ? 0.5F : 0.35F);
   // Animation phase zero is the unedited fixture; sin(phase) scales every edit.
   auto set_materials = [&](float phase) {
     auto lambert = diffuse;
-    lambert.base_color[1] += 0.15F * (1 - std::cos(phase));
+    Lotus::Preview(lambert).base_color[1] += 0.15F * (1 - std::cos(phase));
     world.SetMaterial("/diffuse", lambert);
     auto glossy_metal = metal;
-    glossy_metal.roughness += 0.2F * std::sin(phase);
+    Lotus::Preview(glossy_metal).roughness += 0.2F * std::sin(phase);
     world.SetMaterial("/metal", glossy_metal);
   };
   set_materials(0);
@@ -368,17 +368,17 @@ Workload MakeInterreflectionWorkload(const Options& options, bool moving) {
   RenderWorld world;
   auto lambert = [&](const char* id, std::array<float, 3> albedo) {
     Material material;
-    material.ior = 1;
-    material.base_color = albedo;
+    Lotus::Preview(material).ior = 1;
+    Lotus::Preview(material).base_color = albedo;
     world.SetMaterial(id, material);
   };
   lambert("/white", {0.8F, 0.8F, 0.8F});
   lambert("/red", {0.8F, 0.15F, 0.1F});
   lambert("/green", {0.15F, 0.7F, 0.2F});
   Material metal;
-  metal.base_color = {0.9F, 0.75F, 0.5F};
-  metal.metallic = 1;
-  metal.roughness = 0.3F;
+  Lotus::Preview(metal).base_color = {0.9F, 0.75F, 0.5F};
+  Lotus::Preview(metal).metallic = 1;
+  Lotus::Preview(metal).roughness = 0.3F;
   world.SetMaterial("/metal", metal);
   constexpr float x = 2, y = 2, back = -7, front = 1;
   const std::array<std::tuple<const char*, MeshGeometry, const char*>, 6> walls{{
@@ -442,8 +442,8 @@ Workload MakeWorkload(const Options& options, bool moving) {
   result.id = moving ? "many-distant-moving-shadow-v1" : "many-distant-plane-v1";
   RenderWorld world;
   Material diffuse;
-  diffuse.ior = 1;
-  diffuse.base_color = {0.5F, 0.75F, 1};
+  Lotus::Preview(diffuse).ior = 1;
+  Lotus::Preview(diffuse).base_color = {0.5F, 0.75F, 1};
   world.SetMaterial("/diffuse", diffuse);
   world.SetMesh("/plane", {{{-12, -12, -4}, {12, -12, -4}, {12, 12, -4}, {-12, 12, -4}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, {});
   world.BindMaterial("/plane", "/diffuse");
@@ -469,7 +469,7 @@ Workload MakeWorkload(const Options& options, bool moving) {
                                     double(light.world_from_light[9]) * light.world_from_light[9] +
                                     double(light.world_from_light[10]) * light.world_from_light[10]);
     for (unsigned c = 0; c < 3; ++c)
-      result.integral[c] += diffuse.base_color[c] * light.radiance[c] * light.world_from_light[10] / (length * kPi);
+      result.integral[c] += Lotus::Preview(diffuse).base_color[c] * light.radiance[c] * light.world_from_light[10] / (length * kPi);
   }
   for (unsigned f = 0; f < options.frames; ++f) {
     Camera camera;

@@ -72,7 +72,13 @@ void ValidateTextureInput(const std::optional<TextureInput>& input,
   }
 }
 
-void ValidateMaterial(const Material& material) {
+void ValidateMaterial(const Material& material_ir) {
+  if (material_ir.Model() != ShadingModel::UsdPreviewSurface) {
+    throw std::invalid_argument(
+        "only UsdPreviewSurface materials have parameters yet");
+  }
+  const MaterialGeometry& geometry = material_ir.geometry;
+  const PreviewSurface& material = Preview(material_ir);
   if (!Finite(material.base_color) ||
       !std::all_of(material.base_color.begin(), material.base_color.end(),
           UnitInterval)) {
@@ -90,17 +96,17 @@ void ValidateMaterial(const Material& material) {
   ValidateTextureInput(material.roughness_texture, false);
   ValidateTextureInput(material.metallic_texture, false);
   ValidateTextureInput(material.emission_texture, true);
-  if (!Finite(material.normal) ||
-      !std::all_of(material.normal.begin(), material.normal.end(),
+  if (!Finite(geometry.normal) ||
+      !std::all_of(geometry.normal.begin(), geometry.normal.end(),
           [](float value) { return value >= -1.0F && value <= 1.0F; })) {
     throw std::invalid_argument("tangent normal components must be in [-1, 1]");
   }
-  ValidateTextureInput(material.normal_texture, true);
-  if (!UnitInterval(material.opacity) ||
-      !UnitInterval(material.opacity_threshold)) {
+  ValidateTextureInput(geometry.normal_texture, true);
+  if (!UnitInterval(geometry.opacity) ||
+      !UnitInterval(geometry.opacity_threshold)) {
     throw std::invalid_argument("opacity and threshold must be in [0, 1]");
   }
-  ValidateTextureInput(material.opacity_texture, false);
+  ValidateTextureInput(geometry.opacity_texture, false);
   if (!std::isfinite(material.ior) || material.ior < 1.0F) {
     throw std::invalid_argument("ior must be finite and >= 1");
   }
@@ -121,8 +127,8 @@ void ValidateMaterial(const Material& material) {
     throw std::invalid_argument(
         "transmission needs the metallic workflow's ior");
   }
-  if (!std::isfinite(material.texcoord_fallback[0]) ||
-      !std::isfinite(material.texcoord_fallback[1])) {
+  if (!std::isfinite(geometry.texcoord_fallback[0]) ||
+      !std::isfinite(geometry.texcoord_fallback[1])) {
     throw std::invalid_argument("texture coordinate fallback must be finite");
   }
 }

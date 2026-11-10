@@ -193,12 +193,12 @@ Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets) 
         }
       work.world.SetTexture(key, std::move(texture));
       Lotus::Material material;
-      material.texcoords = "st";
-      material.base_color_texture = Lotus::TextureInput{};
-      material.base_color_texture->texture = key;
-      material.base_color_texture->wrap_s = material.base_color_texture->wrap_t =
+      material.geometry.texcoords = "st";
+      Lotus::Preview(material).base_color_texture = Lotus::TextureInput{};
+      Lotus::Preview(material).base_color_texture->texture = key;
+      Lotus::Preview(material).base_color_texture->wrap_s = Lotus::Preview(material).base_color_texture->wrap_t =
           Lotus::TextureWrap::Repeat;
-      material.roughness = 0.25F + 0.04F * i;
+      Lotus::Preview(material).roughness = 0.25F + 0.04F * i;
       work.world.SetMaterial(key, material);
       work.world.BindMaterial(key, key);
     }

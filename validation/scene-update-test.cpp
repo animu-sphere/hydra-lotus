@@ -61,9 +61,9 @@ int main() try {
 
   // The table is the default material, then the materials in key order.
   Lotus::Material metal;
-  metal.metallic = 1.0F;
+  Lotus::Preview(metal).metallic = 1.0F;
   Lotus::Material glow;
-  glow.emission = {1.0F, 2.0F, 3.0F};
+  Lotus::Preview(glow).emission = {1.0F, 2.0F, 3.0F};
   world.SetMaterial("/m/metal", metal);
   world.SetMaterial("/m/glow", glow);
   world.BindMaterial("/b", "/m/metal");
@@ -77,7 +77,7 @@ int main() try {
       "a material binding uploaded geometry or planned the wrong table");
 
   // A value edit rewrites the table and leaves the instances.
-  metal.roughness = 0.25F;
+  Lotus::Preview(metal).roughness = 0.25F;
   world.SetMaterial("/m/metal", metal);
   update = extraction.Update(world.Commit());
   Check(!update.instances_changed && update.materials_changed &&
@@ -306,13 +306,13 @@ int main() try {
   mapped.texcoords["st"] = {{{0, 0}}, {{2, 0}}, {{0, 2}}};
   world.SetMesh("/a", mapped, instance);
   Lotus::Material painted;
-  painted.base_color_texture = Lotus::TextureInput{"/t/checker"};
+  Lotus::Preview(painted).base_color_texture = Lotus::TextureInput{"/t/checker"};
   Lotus::TextureInput missing;
   missing.texture = "/t/missing";
   missing.channel = 1;
-  painted.roughness_texture = missing;
-  painted.normal_texture = Lotus::TextureInput{"/t/checker"};
-  painted.texcoords = "st";
+  Lotus::Preview(painted).roughness_texture = missing;
+  painted.geometry.normal_texture = Lotus::TextureInput{"/t/checker"};
+  painted.geometry.texcoords = "st";
   world.SetMaterial("/m/painted", painted);
   world.BindMaterial("/a", "/m/painted");
   const auto textured = world.Commit();
@@ -325,7 +325,7 @@ int main() try {
             update.materials[2].material == painted &&
             update.materials[2].textures ==
                 std::array<const Lotus::Texture*, Lotus::kMaterialTextureInputs>{
-                    checker_texture, nullptr, nullptr, nullptr, checker_texture} &&
+                    nullptr, checker_texture, checker_texture} &&
             update.instances_changed && update.instances.size() == 1 &&
             update.instances[0].geometry == mapped_a &&
             update.instances[0].material == 2 && update.instances[0].texcoords == 1,
@@ -343,14 +343,14 @@ int main() try {
                                        checker_texture} &&
       update.texture_uploads.size() == 1 &&
       update.texture_uploads[0].get() == replaced &&
-      update.materials_changed && update.materials[2].textures[0] == replaced &&
-      update.materials[2].textures[4] == replaced &&
+      update.materials_changed && update.materials[2].textures[Lotus::kPreviewBaseColorSlot] == replaced &&
+      update.materials[2].textures[Lotus::kNormalSlot] == replaced &&
       !update.instances_changed && update.geometry_uploads.empty(),
       "a texture edit did not replace exactly the texture and the table");
 
   // A set the mesh lacks reads none; a removed texture leaves its lookup to
   // the fallback.
-  painted.texcoords = "uv";
+  painted.geometry.texcoords = "uv";
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.instances_changed &&
@@ -373,18 +373,18 @@ int main() try {
 
   // A constant tangent normal still needs its named UV frame even without
   // a texture lookup. Restoring the identity stops reading the set.
-  painted.base_color_texture.reset();
-  painted.roughness_texture.reset();
-  painted.normal_texture.reset();
-  painted.normal = {0.5F, 0, 0.866025404F};
-  painted.texcoords = "st";
+  Lotus::Preview(painted).base_color_texture.reset();
+  Lotus::Preview(painted).roughness_texture.reset();
+  painted.geometry.normal_texture.reset();
+  painted.geometry.normal = {0.5F, 0, 0.866025404F};
+  painted.geometry.texcoords = "st";
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && update.instances_changed &&
             update.instances[0].texcoords == 1 &&
             update.geometry_uploads.empty() && update.texture_uploads.empty(),
       "a constant tangent normal did not select its UV frame");
-  painted.normal = Lotus::Material{}.normal;
+  painted.geometry.normal = Lotus::MaterialGeometry{}.normal;
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && update.instances_changed &&
@@ -403,23 +403,23 @@ int main() try {
     colored.colors["tint"] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     colour_world.SetMesh("/a", colored, instance);
     Lotus::Material tinted;
-    tinted.base_color_primvar = "tint";
+    tinted.geometry.base_color_primvar = "tint";
     colour_world.SetMaterial("/m/tinted", tinted);
     colour_world.BindMaterial("/a", "/m/tinted");
     auto colour_update = colour_extraction.Update(colour_world.Commit());
     Check(colour_update.instances.size() == 1 && colour_update.instances[0].colors == 1 &&
               colour_update.instances[0].texcoords == Lotus::kNoTexcoords,
         "the base colour's primvar did not select its colour set");
-    tinted.base_color_primvar = "absent";
+    tinted.geometry.base_color_primvar = "absent";
     colour_world.SetMaterial("/m/tinted", tinted);
     colour_update = colour_extraction.Update(colour_world.Commit());
     Check(colour_update.instances.size() == 1 &&
               colour_update.instances[0].colors == Lotus::kNoColors,
         "a primvar the geometry lacks selected a colour set");
-    tinted.base_color_primvar = "tint";
+    tinted.geometry.base_color_primvar = "tint";
     colour_world.SetMaterial("/m/tinted", tinted);
     (void)colour_extraction.Update(colour_world.Commit());
-    tinted.base_color_texture = Lotus::TextureInput{"/t/checker"};
+    Lotus::Preview(tinted).base_color_texture = Lotus::TextureInput{"/t/checker"};
     colour_world.SetMaterial("/m/tinted", tinted);
     colour_update = colour_extraction.Update(colour_world.Commit());
     Check(colour_update.instances.size() == 1 &&
@@ -439,33 +439,34 @@ int main() try {
   }
 
   // Changing coverage without changing the lookup touches only the table.
-  painted.opacity_texture = Lotus::TextureInput{"/t/unused", 3};
+  painted.geometry.opacity_texture = Lotus::TextureInput{"/t/unused", 3};
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && update.instances_changed &&
             update.instances[0].texcoords == 1 &&
-            update.materials[2].textures[5] != nullptr &&
+            update.materials[2].textures[Lotus::kOpacitySlot] != nullptr &&
             update.geometry_uploads.empty(),
       "an opacity-only texture did not select its coordinates and image");
-  painted.opacity = 0.25F;
-  painted.opacity_threshold = 0.5F;
+  painted.geometry.opacity = 0.25F;
+  painted.geometry.opacity_threshold = 0.5F;
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && !update.instances_changed &&
             update.geometry_uploads.empty() && update.texture_uploads.empty(),
       "a coverage edit changed geometry or instances");
 
-  painted.opacity_texture.reset();
-  painted.specular_color_texture = Lotus::TextureInput{"/t/unused"};
-  painted.use_specular_workflow = true;
+  painted.geometry.opacity_texture.reset();
+  Lotus::Preview(painted).specular_color_texture = Lotus::TextureInput{"/t/unused"};
+  Lotus::Preview(painted).use_specular_workflow = true;
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && !update.instances_changed &&
-            update.materials[2].textures[6] != nullptr &&
-            update.materials[2].textures[5] == nullptr && update.geometry_uploads.empty(),
-      "a specular-only lookup did not resolve the seventh texture slot");
-  painted.ior = 2.0F;
-  painted.specular_color = {0.1F, 0.3F, 0.5F};
+            update.materials[2].textures[Lotus::kPreviewSpecularColorSlot] != nullptr &&
+            update.materials[2].textures[Lotus::kOpacitySlot] == nullptr &&
+            update.geometry_uploads.empty(),
+      "a specular-only lookup did not resolve its texture slot");
+  Lotus::Preview(painted).ior = 2.0F;
+  Lotus::Preview(painted).specular_color = {0.1F, 0.3F, 0.5F};
   world.SetMaterial("/m/painted", painted);
   update = extraction.Update(world.Commit());
   Check(update.materials_changed && !update.instances_changed &&

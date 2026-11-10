@@ -585,12 +585,9 @@ public void WriteTemporalSurface(float2 ndc, float2 pixel) {
   output.material_id = identity.material_id;
   output.flags = 1u | identity.flags;
   const SurfaceHit surface = ReconstructHit(hit, ray.Direction);
-  // Transmitted light is tinted by the transmission colour, not the base
-  // colour, so the transmitted share demodulates by that.
-  output.albedo = PackAlbedo(surface.bsdf.transmission > 0.0
-      ? lerp(surface.base_color, SpectrumToRgb(surface.bsdf.transmission_color),
-            surface.bsdf.transmission)
-      : surface.base_color);
+  // The model's surface summary: transmitted light demodulates by the
+  // colour that tints it, not the base colour.
+  output.albedo = PackAlbedo(surface.albedo);
   output.shading_normal = PackNormal(surface.shading_normal);
   if ((identity.flags & 2u) != 0) {
     const float4 previous_world = mul(identity.previous_world_from_object,
@@ -618,8 +615,9 @@ public void WriteTemporalSurface(float2 ndc, float2 pixel) {
         const float cosine = dot(to_current, to_previous) /
             max(length(to_current) * length(to_previous), 1.0e-20);
         const float theta = acos(clamp(cosine, -1.0, 1.0));
-        const float lobe = max(surface.roughness * surface.roughness, 0.001);
-        const float share = surface.metallic + 0.04 * (1.0 - surface.metallic);
+        const float lobe =
+            max(surface.specular_roughness * surface.specular_roughness, 0.001);
+        const float share = surface.specular_share;
         const float ratio = theta / lobe;
         output.reserved = asuint(1.0 - share + share / (1.0 + ratio * ratio));
       }

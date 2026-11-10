@@ -206,8 +206,8 @@ struct Workload {
 
 void Lambert(RenderWorld& world, const char* id, std::array<float, 3> albedo) {
   Material material;
-  material.ior = 1;
-  material.base_color = albedo;
+  Lotus::Preview(material).ior = 1;
+  Lotus::Preview(material).base_color = albedo;
   world.SetMaterial(id, material);
 }
 
@@ -224,8 +224,8 @@ void RoomShell(RenderWorld& world, const char* floor_material) {
   Lambert(world, "/red", {0.8F, 0.15F, 0.1F});
   Lambert(world, "/green", {0.15F, 0.7F, 0.2F});
   Material panel;
-  panel.base_color = {0.8F, 0.8F, 0.8F};
-  panel.emission = {15, 14, 12};
+  Lotus::Preview(panel).base_color = {0.8F, 0.8F, 0.8F};
+  Lotus::Preview(panel).emission = {15, 14, 12};
   world.SetMaterial("/panel", panel);
   constexpr float x = 2, y = 2, back = -7, front = 1;
   auto floor_quad = Quad({-x, -y, back}, {x, -y, back}, {x, -y, front}, {-x, -y, front});
@@ -272,14 +272,14 @@ Workload MakeRoom(const Options& options, bool moving) {
     }
   world.SetTexture("/checker", std::move(checker));
   Material floor;
-  floor.ior = 1;
-  floor.base_color_texture = TextureInput{"/checker", 0, TextureWrap::Repeat, TextureWrap::Repeat};
-  floor.texcoords = "st";
+  Lotus::Preview(floor).ior = 1;
+  Lotus::Preview(floor).base_color_texture = TextureInput{"/checker", 0, TextureWrap::Repeat, TextureWrap::Repeat};
+  floor.geometry.texcoords = "st";
   world.SetMaterial("/floor", floor);
   Material metal;
-  metal.base_color = {0.9F, 0.75F, 0.5F};
-  metal.metallic = 1;
-  metal.roughness = 0.3F;
+  Lotus::Preview(metal).base_color = {0.9F, 0.75F, 0.5F};
+  Lotus::Preview(metal).metallic = 1;
+  Lotus::Preview(metal).roughness = 0.3F;
   world.SetMaterial("/metal", metal);
   RoomShell(world, "/floor");
   Place(world, "/tall", Box({-1.3F, -2, -5.5F}, {-0.3F, 0.4F, -4.5F}), "/white");
@@ -316,8 +316,8 @@ Workload MakeShadowSweep(const Options& options) {
   Lambert(world, "/wall", {0.8F, 0.8F, 0.8F});
   Lambert(world, "/occluder", {0.5F, 0.5F, 0.5F});
   Material panel;
-  panel.base_color = {0.8F, 0.8F, 0.8F};
-  panel.emission = {300, 290, 270};
+  Lotus::Preview(panel).base_color = {0.8F, 0.8F, 0.8F};
+  Lotus::Preview(panel).emission = {300, 290, 270};
   world.SetMaterial("/panel", panel);
   Place(world, "/floor", Quad({-10, 0, -12}, {10, 0, -12}, {10, 0, 3}, {-10, 0, 3}), "/receiver");
   Place(world, "/back", Quad({-10, 0, -12}, {-10, 6, -12}, {10, 6, -12}, {10, 0, -12}), "/wall");
@@ -344,9 +344,9 @@ Workload MakeGlossyPan(const Options& options) {
   result.lag = LagRegion::Albedo;
   RenderWorld world;
   Material mirror;
-  mirror.base_color = result.lag_albedo = {0.94F, 0.92F, 0.88F};
-  mirror.metallic = 1;
-  mirror.roughness = 0.1F;
+  Lotus::Preview(mirror).base_color = result.lag_albedo = {0.94F, 0.92F, 0.88F};
+  Lotus::Preview(mirror).metallic = 1;
+  Lotus::Preview(mirror).roughness = 0.1F;
   world.SetMaterial("/mirror", mirror);
   Lambert(world, "/post-red", {0.85F, 0.2F, 0.15F});
   Lambert(world, "/post-yellow", {0.85F, 0.75F, 0.2F});

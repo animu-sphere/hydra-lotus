@@ -181,12 +181,8 @@ bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
     const Lotus::Material& material, const Lotus::LotusScene& scene,
     const Lotus::GpuSceneContents& contents) {
   Lotus::Material expected = material;
-  expected.texcoords.clear();
-  const std::array<std::optional<Lotus::TextureInput>*, Lotus::kMaterialTextureInputs> inputs{
-      &expected.base_color_texture, &expected.roughness_texture,
-      &expected.metallic_texture, &expected.emission_texture,
-      &expected.normal_texture, &expected.opacity_texture,
-      &expected.specular_color_texture};
+  expected.geometry.texcoords.clear();
+  const auto inputs = Lotus::PreviewTextureInputs(expected);
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const std::uint32_t slot = gpu.texture_slots[index];
     if (!inputs[index]->has_value()) {
@@ -258,15 +254,15 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
       std::vector<std::vector<std::array<float, 2>>> texcoords;
       std::uint32_t set = Lotus::kNoTexcoords;
       for (const auto& [name, values] : mesh.geometry->texcoords) {
-        if (name == material.texcoords &&
-            (Lotus::HasTextureInputs(material) || material.normal != Lotus::Material{}.normal))
+        if (name == material.geometry.texcoords &&
+            (Lotus::HasTextureInputs(material) || material.geometry.normal != Lotus::MaterialGeometry{}.normal))
           set = static_cast<std::uint32_t>(texcoords.size());
         texcoords.push_back(values);
       }
       std::vector<std::vector<std::array<float, 3>>> colors;
       std::uint32_t color_set = Lotus::kNoColors;
       for (const auto& [name, values] : mesh.geometry->colors) {
-        if (name == material.base_color_primvar && !material.base_color_texture)
+        if (name == material.geometry.base_color_primvar && !Lotus::Preview(material).base_color_texture)
           color_set = static_cast<std::uint32_t>(colors.size());
         colors.push_back(values);
       }
@@ -515,10 +511,10 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
 
   const Lotus::GpuSceneStats moved = before;
   Lotus::Material material;
-  material.base_color = {0.25F, 0.5F, 0.75F};
-  material.roughness = 0.125F;
-  material.metallic = 0.5F;
-  material.emission = {1.0F, 2.0F, 3.0F};
+  Lotus::Preview(material).base_color = {0.25F, 0.5F, 0.75F};
+  Lotus::Preview(material).roughness = 0.125F;
+  Lotus::Preview(material).metallic = 0.5F;
+  Lotus::Preview(material).emission = {1.0F, 2.0F, 3.0F};
   world.SetMaterial("/paint", material);
   world.BindMaterial("/quad", "/paint");
   if (auto failure = apply("material binding"); !failure.empty()) {
@@ -534,7 +530,7 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
       "material binding", "the TLAS was built or updated");
 
   const Lotus::GpuSceneStats bound = before;
-  material.base_color = {0.75F, 0.5F, 0.25F};
+  Lotus::Preview(material).base_color = {0.75F, 0.5F, 0.25F};
   world.SetMaterial("/paint", material);
   if (auto failure = apply("material edit"); !failure.empty()) {
     return failure;
@@ -684,30 +680,30 @@ std::string SceneUploadFailure(Lotus::OffscreenRenderer& renderer,
   mapped.texcoords["st"] = {{{0.25F, 0}}, {{2, 0}}, {{0, -1}}};
   world.SetMesh("/triangle", mapped, Lotus::MeshInstance{});
   Lotus::Material textured;
-  textured.base_color_texture = Lotus::TextureInput{"/checker"};
-  textured.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
-  textured.base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
-  textured.roughness_texture = Lotus::TextureInput{"/missing", 2};
-  textured.roughness_texture->fallback = {0.1F, 0.2F, 0.3F, 0.4F};
-  textured.emission_texture = Lotus::TextureInput{"/radiance"};
-  textured.emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  textured.emission_texture->scale = {2.0F, 2.0F, 2.0F, 1.0F};
-  textured.emission_texture->bias = {0.5F, 0.0F, 0.0F, 0.0F};
-  textured.texcoords = "st";
-  textured.texcoord_fallback = {0.5F, 0.75F};
-  textured.normal = {0.25F, -0.5F, 0.75F};
-  textured.normal_texture = Lotus::TextureInput{"/checker"};
-  textured.normal_texture->scale = {2, 2, 2, 1};
-  textured.normal_texture->bias = {-1, -1, -1, 0};
-  textured.opacity = 0.75F;
-  textured.opacity_threshold = 0.5F;
-  textured.opacity_texture = Lotus::TextureInput{"/checker"};
-  textured.opacity_texture->channel = 3;
-  textured.ior = 2.0F;
-  textured.use_specular_workflow = true;
-  textured.specular_color = {0.1F, 0.3F, 0.5F};
-  textured.specular_color_texture = Lotus::TextureInput{"/checker"};
-  textured.specular_color_texture->scale = {0.5F, 0.75F, 1, 1};
+  Lotus::Preview(textured).base_color_texture = Lotus::TextureInput{"/checker"};
+  Lotus::Preview(textured).base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  Lotus::Preview(textured).base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
+  Lotus::Preview(textured).roughness_texture = Lotus::TextureInput{"/missing", 2};
+  Lotus::Preview(textured).roughness_texture->fallback = {0.1F, 0.2F, 0.3F, 0.4F};
+  Lotus::Preview(textured).emission_texture = Lotus::TextureInput{"/radiance"};
+  Lotus::Preview(textured).emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(textured).emission_texture->scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  Lotus::Preview(textured).emission_texture->bias = {0.5F, 0.0F, 0.0F, 0.0F};
+  textured.geometry.texcoords = "st";
+  textured.geometry.texcoord_fallback = {0.5F, 0.75F};
+  textured.geometry.normal = {0.25F, -0.5F, 0.75F};
+  textured.geometry.normal_texture = Lotus::TextureInput{"/checker"};
+  textured.geometry.normal_texture->scale = {2, 2, 2, 1};
+  textured.geometry.normal_texture->bias = {-1, -1, -1, 0};
+  textured.geometry.opacity = 0.75F;
+  textured.geometry.opacity_threshold = 0.5F;
+  textured.geometry.opacity_texture = Lotus::TextureInput{"/checker"};
+  textured.geometry.opacity_texture->channel = 3;
+  Lotus::Preview(textured).ior = 2.0F;
+  Lotus::Preview(textured).use_specular_workflow = true;
+  Lotus::Preview(textured).specular_color = {0.1F, 0.3F, 0.5F};
+  Lotus::Preview(textured).specular_color_texture = Lotus::TextureInput{"/checker"};
+  Lotus::Preview(textured).specular_color_texture->scale = {0.5F, 0.75F, 1, 1};
   world.SetMaterial("/textured", textured);
   world.BindMaterial("/triangle", "/textured");
   if (auto failure = apply("texture insertion"); !failure.empty())
@@ -911,7 +907,7 @@ SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
   }
   if (verdict.failure.empty() && verdict.available) {
     Lotus::Material material;
-    material.base_color = {0.25F, 0.5F, 0.75F};
+    Lotus::Preview(material).base_color = {0.25F, 0.5F, 0.75F};
     world.SetMaterial("/grid/paint", material);
     world.BindMaterial("/grid", "/grid/paint");
     verdict.failure =
@@ -919,7 +915,7 @@ SceneTimestampVerdict SceneTimestamps(Lotus::OffscreenRenderer& renderer) {
   }
   if (verdict.failure.empty() && verdict.available) {
     Lotus::Material material;
-    material.base_color = {0.75F, 0.5F, 0.25F};
+    Lotus::Preview(material).base_color = {0.75F, 0.5F, 0.25F};
     world.SetMaterial("/grid/paint", material);
     verdict.failure =
         step("material edit", Phase::Runs, Phase::Skipped, Phase::Skipped);
@@ -1293,19 +1289,19 @@ Rgb GgxAlbedo(const Rgb& f0, double roughness, double cos_view, double f90 = 1.0
 // the separable diffuse coat integrates analytically, since the cosine-
 // weighted average of (1-cos(theta))^5 is 1/21.
 Rgb SurfaceAlbedo(const Lotus::Material& material, double cos_view) {
-  const double m = material.use_specular_workflow ? 0.0 : material.metallic;
-  const double ratio = (double{material.ior} - 1) / (double{material.ior} + 1);
-  const double edge = material.use_specular_workflow || material.ior > 1 ? 1 : 0;
+  const double m = Lotus::Preview(material).use_specular_workflow ? 0.0 : Lotus::Preview(material).metallic;
+  const double ratio = (double{Lotus::Preview(material).ior} - 1) / (double{Lotus::Preview(material).ior} + 1);
+  const double edge = Lotus::Preview(material).use_specular_workflow || Lotus::Preview(material).ior > 1 ? 1 : 0;
   Rgb dielectric{}, f0{};
   for (int c = 0; c < 3; ++c) {
-    dielectric[c] = material.use_specular_workflow ? material.specular_color[c] : ratio * ratio;
-    f0[c] = m * material.base_color[c] + (1 - m) * dielectric[c];
+    dielectric[c] = Lotus::Preview(material).use_specular_workflow ? Lotus::Preview(material).specular_color[c] : ratio * ratio;
+    f0[c] = m * Lotus::Preview(material).base_color[c] + (1 - m) * dielectric[c];
   }
-  Rgb result = GgxAlbedo(f0, material.roughness, cos_view, m + (1 - m) * edge);
+  Rgb result = GgxAlbedo(f0, Lotus::Preview(material).roughness, cos_view, m + (1 - m) * edge);
   for (int c = 0; c < 3; ++c) {
     const double exit = 1 - dielectric[c] - (edge - dielectric[c]) * std::pow(1 - cos_view, 5);
     const double entry = 1 - dielectric[c] - (edge - dielectric[c]) / 21;
-    result[c] += material.base_color[c] * (1 - m) * exit * entry;
+    result[c] += Lotus::Preview(material).base_color[c] * (1 - m) * exit * entry;
   }
   return result;
 }
@@ -1535,9 +1531,9 @@ std::string BsdfFailure(PathScenes& scenes) {
   Lotus::MeshInstance front;
   world.SetMesh("/panel", triangle, front);
   Lotus::Material lambert;
-  lambert.ior = 1;
-  lambert.base_color = {0.5F, 0.25F, 0.75F};
-  lambert.emission = {0.1F, 0.05F, 0.0F};
+  Lotus::Preview(lambert).ior = 1;
+  Lotus::Preview(lambert).base_color = {0.5F, 0.25F, 0.75F};
+  Lotus::Preview(lambert).emission = {0.1F, 0.05F, 0.0F};
   Paint(world, "/panel", lambert);
   world.SetEnvironment({0.8F, 0.6F, 0.4F});
   // Lambert under a constant environment reflects albedo * environment for
@@ -1588,9 +1584,9 @@ std::string BsdfFailure(PathScenes& scenes) {
   for (const Case& entry : cases) {
     Lotus::Material material;
     for (int c = 0; c < 3; ++c)
-      material.base_color[c] = static_cast<float>(entry.base[c]);
-    material.roughness = entry.roughness;
-    material.metallic = entry.metallic;
+      Lotus::Preview(material).base_color[c] = static_cast<float>(entry.base[c]);
+    Lotus::Preview(material).roughness = entry.roughness;
+    Lotus::Preview(material).metallic = entry.metallic;
     Paint(world, "/plane", material);
     const Rgb expected = SurfaceAlbedo(material, cos_tilt);
     if (auto failure = scenes.ExpectMean(entry.name, 16, expected); !failure.empty())
@@ -1612,13 +1608,13 @@ std::string BsdfFailure(PathScenes& scenes) {
     world.SetMesh("/plane", large, tilted);
     for (int mode = 0; mode < 6; ++mode) {
       Lotus::Material material;
-      material.base_color = mode % 2 == 0 ? std::array<float, 3>{0, 0, 0} : std::array<float, 3>{1, 1, 1};
-      material.ior = mode == 2 ? 2.5F : 1.5F;
-      material.roughness = mode == 0 ? 0 : (mode == 1 ? 1 : 0.5F);
-      material.use_specular_workflow = mode >= 3;
-      material.specular_color = mode == 4 ? std::array<float, 3>{0, 0, 0} :
+      Lotus::Preview(material).base_color = mode % 2 == 0 ? std::array<float, 3>{0, 0, 0} : std::array<float, 3>{1, 1, 1};
+      Lotus::Preview(material).ior = mode == 2 ? 2.5F : 1.5F;
+      Lotus::Preview(material).roughness = mode == 0 ? 0 : (mode == 1 ? 1 : 0.5F);
+      Lotus::Preview(material).use_specular_workflow = mode >= 3;
+      Lotus::Preview(material).specular_color = mode == 4 ? std::array<float, 3>{0, 0, 0} :
           (mode == 5 ? std::array<float, 3>{1, 1, 1} : std::array<float, 3>{0.7F, 0.2F, 0.05F});
-      material.metallic = mode >= 3 ? 1.0F : 0.0F;
+      Lotus::Preview(material).metallic = mode >= 3 ? 1.0F : 0.0F;
       Paint(world, "/plane", material);
       const Rgb expected = SurfaceAlbedo(material, cos_view);
       for (double value : expected)
@@ -1901,8 +1897,8 @@ std::string NormalsFailure(PathScenes& scenes) {
     position[1] *= 4.0F;
   }
   Lotus::Material lambert;
-  lambert.base_color = {0.5F, 0.25F, 0.75F};
-  lambert.ior = 1;
+  Lotus::Preview(lambert).base_color = {0.5F, 0.25F, 0.75F};
+  Lotus::Preview(lambert).ior = 1;
   const Rgb albedo{0.5, 0.25, 0.75};
   plane.normals.assign(6, {0, 0, 3});
   world.SetMesh("/plane", plane, Lotus::MeshInstance{});
@@ -1925,16 +1921,16 @@ std::string NormalsFailure(PathScenes& scenes) {
   // reflect them 60 degrees from the vertical onto it.
   world.SetEnvironment({});
   Lotus::Material mirror;
-  mirror.base_color = {1.0F, 1.0F, 1.0F};
-  mirror.roughness = 0.0F;
-  mirror.metallic = 1.0F;
+  Lotus::Preview(mirror).base_color = {1.0F, 1.0F, 1.0F};
+  Lotus::Preview(mirror).roughness = 0.0F;
+  Lotus::Preview(mirror).metallic = 1.0F;
   plane.normals.clear();
   world.SetMesh("/plane", plane, Lotus::MeshInstance{});
   Paint(world, "/plane", mirror);
   Lotus::Material wall;
-  wall.base_color = {0.0F, 0.0F, 0.0F};
-  wall.ior = 1;
-  wall.emission = {2.0F, 1.0F, 0.5F};
+  Lotus::Preview(wall).base_color = {0.0F, 0.0F, 0.0F};
+  Lotus::Preview(wall).ior = 1;
+  Lotus::Preview(wall).emission = {2.0F, 1.0F, 0.5F};
   world.SetMesh("/wall",
       {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}},
           {{0, 1, 2}, {0, 2, 3}}, {0, 0}},
@@ -2107,9 +2103,9 @@ Expected SurfaceOracle(const Lotus::LotusScene& scene, const OrthographicHit& hi
   const auto found = scene.materials.find(hit.mesh->material);
   const Lotus::Material material =
       found == scene.materials.end() ? Lotus::Material{} : found->second;
-  std::array<double, 2> st{material.texcoord_fallback[0],
-      material.texcoord_fallback[1]};
-  const auto set = hit.mesh->geometry->texcoords.find(material.texcoords);
+  std::array<double, 2> st{material.geometry.texcoord_fallback[0],
+      material.geometry.texcoord_fallback[1]};
+  const auto set = hit.mesh->geometry->texcoords.find(material.geometry.texcoords);
   if (set != hit.mesh->geometry->texcoords.end()) {
     for (int axis = 0; axis < 2; ++axis) {
       const auto corner = [&](std::size_t k) {
@@ -2125,10 +2121,10 @@ Expected SurfaceOracle(const Lotus::LotusScene& scene, const OrthographicHit& hi
   const auto unit = [](double value) { return std::clamp(value, 0.0, 1.0); };
   Expected expected;
   if (output == Lotus::SceneOutput::Albedo) {
-    expected.value = {material.base_color[0], material.base_color[1],
-        material.base_color[2], 1.0};
-    if (material.base_color_texture) {
-      const Expected value = lookup(*material.base_color_texture);
+    expected.value = {Lotus::Preview(material).base_color[0], Lotus::Preview(material).base_color[1],
+        Lotus::Preview(material).base_color[2], 1.0};
+    if (Lotus::Preview(material).base_color_texture) {
+      const Expected value = lookup(*Lotus::Preview(material).base_color_texture);
       for (int c = 0; c < 3; ++c) {
         expected.value[c] = unit(value.value[c]);
         expected.tolerance[c] = value.tolerance[c];
@@ -2136,9 +2132,9 @@ Expected SurfaceOracle(const Lotus::LotusScene& scene, const OrthographicHit& hi
     }
     return expected;
   }
-  expected.value = {material.roughness, material.metallic, 0.0, 1.0};
+  expected.value = {Lotus::Preview(material).roughness, Lotus::Preview(material).metallic, 0.0, 1.0};
   const std::array<const std::optional<Lotus::TextureInput>*, 2> inputs{
-      &material.roughness_texture, &material.metallic_texture};
+      &Lotus::Preview(material).roughness_texture, &Lotus::Preview(material).metallic_texture};
   for (int c = 0; c < 2; ++c) {
     if (*inputs[c]) {
       const Expected value = lookup(**inputs[c]);
@@ -2300,8 +2296,8 @@ std::string NormalMapDiagnosticFailure(const Lotus::FrameSnapshot& snapshot,
       const double a = -1 / (1 + base[2]);
       Vec3 tangent{1 + base[0] * base[0] * a, base[0] * base[1] * a, -base[0]};
       Vec3 bitangent{base[0] * base[1] * a, 1 + base[1] * base[1] * a, -base[1]};
-      std::array<double, 2> st{material.texcoord_fallback[0], material.texcoord_fallback[1]};
-      if (const auto set = geometry.texcoords.find(material.texcoords);
+      std::array<double, 2> st{material.geometry.texcoord_fallback[0], material.geometry.texcoord_fallback[1]};
+      if (const auto set = geometry.texcoords.find(material.geometry.texcoords);
           set != geometry.texcoords.end()) {
         const auto& uv = set->second;
         const auto& uv0 = uv[hit.triangle * 3];
@@ -2328,9 +2324,9 @@ std::string NormalMapDiagnosticFailure(const Lotus::FrameSnapshot& snapshot,
               c = -c;
         }
       }
-      Vec3 mapped{material.normal[0], material.normal[1], material.normal[2]};
-      if (material.normal_texture) {
-        const auto lookup = LookupOracle(*snapshot.scene, *material.normal_texture, st[0], st[1]);
+      Vec3 mapped{material.geometry.normal[0], material.geometry.normal[1], material.geometry.normal[2]};
+      if (material.geometry.normal_texture) {
+        const auto lookup = LookupOracle(*snapshot.scene, *material.geometry.normal_texture, st[0], st[1]);
         for (int c = 0; c < 3; ++c)
           mapped[c] = std::clamp(lookup.value[c], -1.0, 1.0);
       }
@@ -2397,18 +2393,18 @@ std::string NormalMapsFailure(PathScenes& scenes) {
     if (index == 6)
       panel.texcoords.erase("st");
     Lotus::Material material;
-    material.texcoords = "st";
-    material.texcoord_fallback = {0.5F, 0.5F};
-    material.normal_texture = Lotus::TextureInput{index == 2 ? "/signed" : "/normal"};
-    material.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
-    material.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
+    material.geometry.texcoords = "st";
+    material.geometry.texcoord_fallback = {0.5F, 0.5F};
+    material.geometry.normal_texture = Lotus::TextureInput{index == 2 ? "/signed" : "/normal"};
+    material.geometry.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
+    material.geometry.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
     if (index != 2) {
-      material.normal_texture->scale = {2, 2, 2, 1};
-      material.normal_texture->bias = {-1, -1, -1, 0};
+      material.geometry.normal_texture->scale = {2, 2, 2, 1};
+      material.geometry.normal_texture->bias = {-1, -1, -1, 0};
     }
     if (index == 7) {
-      material.normal_texture->texture = "/missing";
-      material.normal_texture->fallback = {-0.3F, 0.4F, 0.8F, 1};
+      material.geometry.normal_texture->texture = "/missing";
+      material.geometry.normal_texture->fallback = {-0.3F, 0.4F, 0.8F, 1};
     }
     const std::string key = "/panel" + std::to_string(index);
     world.SetMesh(key, panel, instance);
@@ -2439,16 +2435,16 @@ std::string NormalMapsFailure(PathScenes& scenes) {
   if (auto failure = check("texture edit"); !failure.empty())
     return failure;
   auto material = world.Commit().scene->materials.at("/panel7");
-  material.normal_texture->fallback = {0, 0, 0, 1};
+  material.geometry.normal_texture->fallback = {0, 0, 0, 1};
   world.SetMaterial("/panel7", material);
   if (auto failure = check("zero normal fallback"); !failure.empty())
     return failure;
-  material.normal_texture.reset();
-  material.normal = {0.3F, -0.4F, -0.8F};
+  material.geometry.normal_texture.reset();
+  material.geometry.normal = {0.3F, -0.4F, -0.8F};
   world.SetMaterial("/panel7", material);
   if (auto failure = check("constant signed normal"); !failure.empty())
     return failure;
-  material.normal = {1, 0, 0};
+  material.geometry.normal = {1, 0, 0};
   world.SetMaterial("/panel7", material);
   if (auto failure = check("tangent normal fallback"); !failure.empty())
     return failure;
@@ -2465,24 +2461,24 @@ std::string NormalMapsFailure(PathScenes& scenes) {
   }
   world.SetMesh("/plane", plane, Lotus::MeshInstance{});
   Lotus::Material mirror;
-  mirror.base_color = {1, 1, 1};
-  mirror.roughness = 0;
-  mirror.metallic = 1;
+  Lotus::Preview(mirror).base_color = {1, 1, 1};
+  Lotus::Preview(mirror).roughness = 0;
+  Lotus::Preview(mirror).metallic = 1;
   Paint(world, "/plane", mirror);
   Lotus::Material wall;
-  wall.base_color = {0, 0, 0};
-  wall.ior = 1;
-  wall.emission = {2, 1, 0.5F};
+  Lotus::Preview(wall).base_color = {0, 0, 0};
+  Lotus::Preview(wall).ior = 1;
+  Lotus::Preview(wall).emission = {2, 1, 0.5F};
   world.SetMesh("/wall", {{{6, -20, 0.5F}, {6, 20, 0.5F}, {6, 20, 10}, {6, -20, 10}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}}, Lotus::MeshInstance{});
   Paint(world, "/wall", wall);
   if (auto failure = scenes.ExpectExact(4, {0, 0, 0}); !failure.empty())
     return failure;
   world.SetTexture("/tilt", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
                                 [](std::uint32_t, std::uint32_t) -> Rgba { return {0.5, 0, 0.866025404, 1}; }));
-  mirror.normal_texture = Lotus::TextureInput{"/tilt"};
-  mirror.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  mirror.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
-  mirror.texcoords = "st";
+  mirror.geometry.normal_texture = Lotus::TextureInput{"/tilt"};
+  mirror.geometry.normal_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  mirror.geometry.normal_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  mirror.geometry.texcoords = "st";
   Paint(world, "/plane", mirror);
   if (auto failure = scenes.ExpectExact(4, {2, 1, 0.5}); !failure.empty())
     return "mapped mirror: " + failure;
@@ -2501,25 +2497,25 @@ std::string OpacityFailure(PathScenes& scenes) {
   behind.world_from_object = Translation(0, 0, -2);
   world.SetMesh("/back", square, behind);
   Lotus::Material front;
-  front.ior = 1;
-  front.base_color = {1, 0, 0};
-  front.emission = {4, 0, 0};
-  front.texcoords = "st";
+  Lotus::Preview(front).ior = 1;
+  Lotus::Preview(front).base_color = {1, 0, 0};
+  Lotus::Preview(front).emission = {4, 0, 0};
+  front.geometry.texcoords = "st";
   Lotus::Material back;
-  back.ior = 1;
-  back.base_color = {0, 1, 0};
-  back.emission = {0, 2, 1};
+  Lotus::Preview(back).ior = 1;
+  Lotus::Preview(back).base_color = {0, 1, 0};
+  Lotus::Preview(back).emission = {0, 2, 1};
   Paint(world, "/front", front);
   Paint(world, "/back", back);
   if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty()) return failure;
-  front.opacity = 0;
+  front.geometry.opacity = 0;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty()) return failure;
-  front.opacity = front.opacity_threshold = 0.5F;
+  front.geometry.opacity = front.geometry.opacity_threshold = 0.5F;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
     return "threshold equality: " + failure;
-  front.opacity = 0.499F;
+  front.geometry.opacity = 0.499F;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
     return "below threshold: " + failure;
@@ -2528,18 +2524,18 @@ std::string OpacityFailure(PathScenes& scenes) {
   settings.output = Lotus::SceneOutput::Albedo;
   Lotus::GpuFrameEvidence background;
   if (auto failure = scenes.Render(settings, background); !failure.empty()) return failure;
-  front.opacity = 1;
+  front.geometry.opacity = 1;
   Paint(world, "/front", front);
   Lotus::GpuFrameEvidence foreground;
   if (auto failure = scenes.Render(settings, foreground); !failure.empty()) return failure;
   world.SetTexture("/alpha", MakeTexture(2, 1, Lotus::TextureFormat::Rgba8Srgb,
       [](std::uint32_t i, std::uint32_t) -> Rgba { return {1, 1, 1, i == 0 ? 0.25 : 0.75}; }));
-  front.opacity_texture = Lotus::TextureInput{"/alpha", 3};
-  front.opacity_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  front.opacity_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  front.geometry.opacity_texture = Lotus::TextureInput{"/alpha", 3};
+  front.geometry.opacity_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  front.geometry.opacity_texture->wrap_t = Lotus::TextureWrap::Clamp;
   // Alpha must remain linear even in an sRGB image; exercise scale and bias.
-  front.opacity_texture->scale[3] = 0.8F;
-  front.opacity_texture->bias[3] = 0.1F;
+  front.geometry.opacity_texture->scale[3] = 0.8F;
+  front.geometry.opacity_texture->bias[3] = 0.1F;
   Paint(world, "/front", front);
   const auto mask_check = [&](bool mirrored) -> std::string {
     Lotus::GpuFrameEvidence frame;
@@ -2551,13 +2547,13 @@ std::string OpacityFailure(PathScenes& scenes) {
     const auto& depths = frame.depth.payload;
     const auto& fg_depth = foreground.depth.payload;
     const auto& bg_depth = background.depth.payload;
-    const auto& lookup = *front.opacity_texture;
+    const auto& lookup = *front.geometry.opacity_texture;
     std::size_t accepted = 0, rejected = 0;
     for (std::uint32_t y = 0; y < scenes.Target().height; ++y) {
       for (std::uint32_t x = 0; x < scenes.Target().width; ++x) {
         const double s = (x + 0.5) / scenes.Target().width;
         const auto texel = LookupOracle(*snapshot.scene, lookup, mirrored ? 1 - s : s, 0.5);
-        const bool hit = std::clamp(texel.value[3], 0.0, 1.0) >= front.opacity_threshold;
+        const bool hit = std::clamp(texel.value[3], 0.0, 1.0) >= front.geometry.opacity_threshold;
         hit ? ++accepted : ++rejected;
         const std::size_t p = y * scenes.Target().width + x;
         const auto& expected = hit ? fg : bg;
@@ -2577,8 +2573,8 @@ std::string OpacityFailure(PathScenes& scenes) {
       [](std::uint32_t i, std::uint32_t) -> Rgba { return {1, 1, 1, i == 0 ? 0.75 : 0.25}; }));
   if (auto failure = mask_check(true); !failure.empty()) return "texture replacement: " + failure;
   world.RemoveTexture("/alpha");
-  front.opacity_texture->fallback = {1, 1, 1, 0.5F};
-  front.opacity_texture->scale[3] = 0;
+  front.geometry.opacity_texture->fallback = {1, 1, 1, 0.5F};
+  front.geometry.opacity_texture->scale[3] = 0;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
     return "unscaled missing-image fallback: " + failure;
@@ -2586,39 +2582,39 @@ std::string OpacityFailure(PathScenes& scenes) {
       [](std::uint32_t, std::uint32_t) -> Rgba {
         return {-0.25, 2, 1, std::numeric_limits<float>::max()};
       }));
-  front.opacity_texture->scale = {1, 1, 1, 1};
-  front.opacity_texture->scale[3] = 2;
-  front.opacity_texture->bias = {0, 0, 0, 0};
-  front.texcoords = "absent";
-  front.texcoord_fallback = {0.5F, 0.5F};
+  front.geometry.opacity_texture->scale = {1, 1, 1, 1};
+  front.geometry.opacity_texture->scale[3] = 2;
+  front.geometry.opacity_texture->bias = {0, 0, 0, 0};
+  front.geometry.texcoords = "absent";
+  front.geometry.texcoord_fallback = {0.5F, 0.5F};
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
     return "non-finite float alpha: " + failure;
-  front.opacity_texture->channel = 0;
+  front.geometry.opacity_texture->channel = 0;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {0, 2, 1}); !failure.empty())
     return "negative red coverage: " + failure;
-  front.opacity_texture->channel = 1;
+  front.geometry.opacity_texture->channel = 1;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectExact(0, {4, 0, 0}); !failure.empty())
     return "clamped green coverage without a UV set: " + failure;
-  front.opacity_texture.reset();
-  front.base_color = {0, 0, 0};
-  back.base_color = {0, 0, 0};
+  front.geometry.opacity_texture.reset();
+  Lotus::Preview(front).base_color = {0, 0, 0};
+  Lotus::Preview(back).base_color = {0, 0, 0};
   Paint(world, "/back", back);
-  front.opacity = 0.25F;
-  front.opacity_threshold = 0;
+  front.geometry.opacity = 0.25F;
+  front.geometry.opacity_threshold = 0;
   Paint(world, "/front", front);
   if (auto failure = scenes.ExpectMean("one coverage layer", 32, {1, 1.5, 0.75}); !failure.empty()) return failure;
   behind.world_from_object = Translation(0, 0, -1);
   world.SetMesh("/middle", square, behind);
   Lotus::Material middle;
-  middle.ior = 1;
-  middle.base_color = {0, 0, 0};
-  middle.emission = {0, 2, 0};
-  middle.opacity = 0.5F;
+  Lotus::Preview(middle).ior = 1;
+  Lotus::Preview(middle).base_color = {0, 0, 0};
+  Lotus::Preview(middle).emission = {0, 2, 0};
+  middle.geometry.opacity = 0.5F;
   Paint(world, "/middle", middle);
-  back.emission = {0, 0, 2};
+  Lotus::Preview(back).emission = {0, 0, 2};
   Paint(world, "/back", back);
   if (auto failure = scenes.ExpectMean("two independent coverage layers", 32, {1, 0.75, 0.75}); !failure.empty()) return failure;
   world.RemoveMesh("/middle");
@@ -2633,7 +2629,7 @@ std::string OpacityFailure(PathScenes& scenes) {
     const double a = values[4 * p + 3];
     alpha += a;
     for (int c = 0; c < 3; ++c) {
-      const double expected = a * front.emission[c] + (1 - a) * scenes.Target().clear_color[c];
+      const double expected = a * Lotus::Preview(front).emission[c] + (1 - a) * scenes.Target().clear_color[c];
       if (std::abs(values[4 * p + c] - expected) > 1e-5)
         return "background compositing differs from coverage alpha";
     }
@@ -2660,26 +2656,26 @@ std::string OpacityFailure(PathScenes& scenes) {
   for (auto& p : plane.positions) { p[0] *= 4; p[1] *= 4; }
   world.SetMesh("/mirror", plane, Lotus::MeshInstance{});
   Lotus::Material mirror;
-  mirror.base_color = {1, 1, 1};
-  mirror.roughness = 0;
-  mirror.metallic = 1;
-  mirror.normal = {0.5F, 0, 0.866025404F};
+  Lotus::Preview(mirror).base_color = {1, 1, 1};
+  Lotus::Preview(mirror).roughness = 0;
+  Lotus::Preview(mirror).metallic = 1;
+  mirror.geometry.normal = {0.5F, 0, 0.866025404F};
   Paint(world, "/mirror", mirror);
   const auto wall = [](float x) -> Lotus::MeshGeometry {
     return {{{x, -20, 0.5F}, {x, 20, 0.5F}, {x, 20, 10}, {x, -20, 10}}, {{0, 1, 2}, {0, 2, 3}}, {0, 0}};
   };
   world.SetMesh("/cutout", wall(3), Lotus::MeshInstance{});
-  front.opacity = 0;
-  front.opacity_threshold = 0.5F;
+  front.geometry.opacity = 0;
+  front.geometry.opacity_threshold = 0.5F;
   Paint(world, "/cutout", front);
   world.SetMesh("/light", wall(6), Lotus::MeshInstance{});
   Paint(world, "/light", back);
   if (auto failure = scenes.ExpectExact(1, {0, 0, 2}); !failure.empty()) return "secondary cut-out: " + failure;
-  front.opacity = 1;
+  front.geometry.opacity = 1;
   Paint(world, "/cutout", front);
   if (auto failure = scenes.ExpectExact(1, {4, 0, 0}); !failure.empty()) return "secondary accepted surface: " + failure;
-  front.opacity = 0.25F;
-  front.opacity_threshold = 0;
+  front.geometry.opacity = 0.25F;
+  front.geometry.opacity_threshold = 0;
   Paint(world, "/cutout", front);
   if (auto failure = scenes.ExpectMean("secondary coverage", 32, {1, 0, 1.5}); !failure.empty()) return failure;
   scenes.Summarize("cut-outs, threshold equality, linear texture alpha, mirrored UVs, replacement, fallback, primary alpha and deterministic repeat passed");
@@ -2724,10 +2720,10 @@ std::string TexturesFailure(PathScenes& scenes) {
       MappedSquare({{"st", {{{-0.6F, -0.4F}, {1.7F, -0.4F}, {1.7F, 1.3F}, {-0.6F, 1.3F}}}}}),
       instance);
   Lotus::Material repeat;
-  repeat.base_color_texture = Lotus::TextureInput{"/checker"};
-  repeat.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
-  repeat.base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
-  repeat.texcoords = "st";
+  Lotus::Preview(repeat).base_color_texture = Lotus::TextureInput{"/checker"};
+  Lotus::Preview(repeat).base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  Lotus::Preview(repeat).base_color_texture->wrap_t = Lotus::TextureWrap::Mirror;
+  repeat.geometry.texcoords = "st";
   Paint(world, "/repeat", repeat);
   // Upper right: clamp along s, the black border along t, scaled and biased.
   instance.world_from_object = place(0.5F, 0.5F);
@@ -2735,12 +2731,12 @@ std::string TexturesFailure(PathScenes& scenes) {
       MappedSquare({{"st", {{{-0.5F, -0.5F}, {1.5F, -0.5F}, {1.5F, 1.5F}, {-0.5F, 1.5F}}}}}),
       instance);
   Lotus::Material clamp;
-  clamp.base_color_texture = Lotus::TextureInput{"/checker"};
-  clamp.base_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  clamp.base_color_texture->wrap_t = Lotus::TextureWrap::Black;
-  clamp.base_color_texture->scale = {1.0F, 0.5F, 1.0F, 1.0F};
-  clamp.base_color_texture->bias = {0.0F, 0.25F, 0.0F, 0.0F};
-  clamp.texcoords = "st";
+  Lotus::Preview(clamp).base_color_texture = Lotus::TextureInput{"/checker"};
+  Lotus::Preview(clamp).base_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(clamp).base_color_texture->wrap_t = Lotus::TextureWrap::Black;
+  Lotus::Preview(clamp).base_color_texture->scale = {1.0F, 0.5F, 1.0F, 1.0F};
+  Lotus::Preview(clamp).base_color_texture->bias = {0.0F, 0.25F, 0.0F, 0.0F};
+  clamp.geometry.texcoords = "st";
   Paint(world, "/clamp", clamp);
   // Lower left: a float texture, read through the second of two sets and
   // pushed out of [0, 1], which the base colour clamps.
@@ -2750,12 +2746,12 @@ std::string TexturesFailure(PathScenes& scenes) {
           {"uv", {{{0.9F, -0.2F}, {1.1F, 1.2F}, {-0.3F, 1.0F}, {0.1F, 0.0F}}}}}),
       instance);
   Lotus::Material floating;
-  floating.base_color_texture = Lotus::TextureInput{"/float"};
-  floating.base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
-  floating.base_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
-  floating.base_color_texture->scale = {0.5F, 1.0F, 1.0F, 1.0F};
-  floating.base_color_texture->bias = {0.1F, 0.0F, -0.2F, 0.0F};
-  floating.texcoords = "uv";
+  Lotus::Preview(floating).base_color_texture = Lotus::TextureInput{"/float"};
+  Lotus::Preview(floating).base_color_texture->wrap_s = Lotus::TextureWrap::Repeat;
+  Lotus::Preview(floating).base_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(floating).base_color_texture->scale = {0.5F, 1.0F, 1.0F, 1.0F};
+  Lotus::Preview(floating).base_color_texture->bias = {0.1F, 0.0F, -0.2F, 0.0F};
+  floating.geometry.texcoords = "uv";
   Paint(world, "/float", floating);
   // Lower right: a lookup whose texture is missing, and one on a mesh
   // without the set its material reads.
@@ -2764,17 +2760,17 @@ std::string TexturesFailure(PathScenes& scenes) {
           {{0, 1, 2}}, {0}},
       Lotus::MeshInstance{});
   Lotus::Material missing;
-  missing.base_color_texture = Lotus::TextureInput{"/absent"};
-  missing.base_color_texture->fallback = {0.2F, 0.4F, 0.6F, 1.0F};
-  missing.roughness_texture = Lotus::TextureInput{"/absent", 3};
-  missing.roughness_texture->fallback = {0.0F, 0.0F, 0.0F, 0.375F};
+  Lotus::Preview(missing).base_color_texture = Lotus::TextureInput{"/absent"};
+  Lotus::Preview(missing).base_color_texture->fallback = {0.2F, 0.4F, 0.6F, 1.0F};
+  Lotus::Preview(missing).roughness_texture = Lotus::TextureInput{"/absent", 3};
+  Lotus::Preview(missing).roughness_texture->fallback = {0.0F, 0.0F, 0.0F, 0.375F};
   Paint(world, "/missing", missing);
   world.SetMesh("/unmapped",
       {{{0.95F, -0.95F, 0}, {0.95F, -0.05F, 0}, {0.1F, -0.05F, 0}},
           {{0, 1, 2}}, {0}},
       Lotus::MeshInstance{});
   Lotus::Material unmapped = repeat;
-  unmapped.texcoord_fallback = {0.3F, 0.8F};
+  unmapped.geometry.texcoord_fallback = {0.3F, 0.8F};
   Paint(world, "/unmapped", unmapped);
 
   std::map<std::string, std::size_t> albedo;
@@ -2782,15 +2778,15 @@ std::string TexturesFailure(PathScenes& scenes) {
       !failure.empty())
     return "albedo: " + failure;
   // Roughness from green and metallic from alpha of a linear texture.
-  repeat.roughness_texture = Lotus::TextureInput{"/linear", 1};
-  repeat.roughness_texture->wrap_s = Lotus::TextureWrap::Mirror;
-  repeat.roughness_texture->wrap_t = Lotus::TextureWrap::Repeat;
-  repeat.roughness_texture->scale = {1.0F, 1.5F, 1.0F, 1.0F};
-  repeat.metallic_texture = Lotus::TextureInput{"/linear", 3};
-  repeat.metallic_texture->wrap_t = Lotus::TextureWrap::Clamp;
-  repeat.metallic_texture->bias = {0.0F, 0.0F, 0.0F, -0.125F};
+  Lotus::Preview(repeat).roughness_texture = Lotus::TextureInput{"/linear", 1};
+  Lotus::Preview(repeat).roughness_texture->wrap_s = Lotus::TextureWrap::Mirror;
+  Lotus::Preview(repeat).roughness_texture->wrap_t = Lotus::TextureWrap::Repeat;
+  Lotus::Preview(repeat).roughness_texture->scale = {1.0F, 1.5F, 1.0F, 1.0F};
+  Lotus::Preview(repeat).metallic_texture = Lotus::TextureInput{"/linear", 3};
+  Lotus::Preview(repeat).metallic_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(repeat).metallic_texture->bias = {0.0F, 0.0F, 0.0F, -0.125F};
   Paint(world, "/repeat", repeat);
-  clamp.metallic_texture = Lotus::TextureInput{"/checker", 0};
+  Lotus::Preview(clamp).metallic_texture = Lotus::TextureInput{"/checker", 0};
   Paint(world, "/clamp", clamp);
   std::map<std::string, std::size_t> parameters;
   if (auto failure = SurfaceOutputFailure(scenes,
@@ -2842,10 +2838,10 @@ std::string TexturesFailure(PathScenes& scenes) {
       MappedSquare({{"st", {{{0, 0}, {1, 0}, {1, 1}, {0, 1}}}}}),
       Lotus::MeshInstance{});
   Lotus::Material wall;
-  wall.base_color_texture = Lotus::TextureInput{"/blocks"};
-  wall.ior = 1;
-  wall.emission_texture = Lotus::TextureInput{"/glow"};
-  wall.texcoords = "st";
+  Lotus::Preview(wall).base_color_texture = Lotus::TextureInput{"/blocks"};
+  Lotus::Preview(wall).ior = 1;
+  Lotus::Preview(wall).emission_texture = Lotus::TextureInput{"/glow"};
+  wall.geometry.texcoords = "st";
   Paint(world, "/wall", wall);
   world.SetEnvironment({1.0F, 1.0F, 1.0F});
   const Lotus::OffscreenTarget& target = scenes.Target();
@@ -2889,16 +2885,16 @@ std::string TexturesFailure(PathScenes& scenes) {
   // radiance. Replacement, missing-image fallback and lookup overflow must
   // all update transport without replacing the plane.
   wall = Lotus::Material{};
-  wall.use_specular_workflow = true;
-  wall.base_color = {0.4F, 0.2F, 0.1F};
-  wall.specular_color = {0.3F, 0.1F, 0.05F};
-  wall.specular_color_texture = Lotus::TextureInput{"/specular"};
-  wall.specular_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  wall.specular_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
-  wall.specular_color_texture->scale = {2, 0.5F, 1, 1};
-  wall.specular_color_texture->bias = {-0.1F, 0.1F, 0.05F, 0};
-  wall.specular_color_texture->fallback = {0.8F, 0.3F, 0.1F, 1};
-  wall.texcoords = "st";
+  Lotus::Preview(wall).use_specular_workflow = true;
+  Lotus::Preview(wall).base_color = {0.4F, 0.2F, 0.1F};
+  Lotus::Preview(wall).specular_color = {0.3F, 0.1F, 0.05F};
+  Lotus::Preview(wall).specular_color_texture = Lotus::TextureInput{"/specular"};
+  Lotus::Preview(wall).specular_color_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(wall).specular_color_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(wall).specular_color_texture->scale = {2, 0.5F, 1, 1};
+  Lotus::Preview(wall).specular_color_texture->bias = {-0.1F, 0.1F, 0.05F, 0};
+  Lotus::Preview(wall).specular_color_texture->fallback = {0.8F, 0.3F, 0.1F, 1};
+  wall.geometry.texcoords = "st";
   for (int mode = 0; mode < 5; ++mode) {
     if (mode < 3) {
       const auto format = mode == 1 ? Lotus::TextureFormat::Rgba8Srgb : Lotus::TextureFormat::Rgba32Float;
@@ -2911,18 +2907,18 @@ std::string TexturesFailure(PathScenes& scenes) {
     } else {
       world.SetTexture("/specular", MakeTexture(1, 1, Lotus::TextureFormat::Rgba32Float,
                                         [](std::uint32_t, std::uint32_t) -> Rgba { return {2, 1, 1, 1}; }));
-      wall.specular_color_texture->scale[0] = std::numeric_limits<float>::max();
+      Lotus::Preview(wall).specular_color_texture->scale[0] = std::numeric_limits<float>::max();
     }
     Paint(world, "/wall", wall);
     const auto snapshot = world.Commit();
-    const auto sampled = LookupOracle(*snapshot.scene, *wall.specular_color_texture, 0.5, 0.5);
+    const auto sampled = LookupOracle(*snapshot.scene, *Lotus::Preview(wall).specular_color_texture, 0.5, 0.5);
     Lotus::Material evaluated = wall;
     bool finite = true;
     for (int c = 0; c < 3; ++c)
       finite &= std::isfinite(static_cast<float>(sampled.value[c]));
     if (finite)
       for (int c = 0; c < 3; ++c)
-        evaluated.specular_color[c] = static_cast<float>(std::clamp(sampled.value[c], 0.0, 1.0));
+        Lotus::Preview(evaluated).specular_color[c] = static_cast<float>(std::clamp(sampled.value[c], 0.0, 1.0));
     const std::string name = "specular texture mode " + std::to_string(mode);
     if (auto failure = scenes.ExpectMean(name.c_str(), 32, SurfaceAlbedo(evaluated, 1)); !failure.empty())
       return name + ": " + failure;
@@ -2947,9 +2943,9 @@ std::string MultibounceFailure(PathScenes& scenes) {
   const Rgb albedo{0.5, 0.25, 0.75};
   const Rgb emission{0.1, 0.15, 0.025};
   Lotus::Material material;
-  material.base_color = {0.5F, 0.25F, 0.75F};
-  material.emission = {0.1F, 0.15F, 0.025F};
-  material.ior = 1;
+  Lotus::Preview(material).base_color = {0.5F, 0.25F, 0.75F};
+  Lotus::Preview(material).emission = {0.1F, 0.15F, 0.025F};
+  Lotus::Preview(material).ior = 1;
   Paint(world, "/box", material);
   world.SetEnvironment({1.0F, 1.0F, 1.0F});
   for (const std::uint32_t bounces : {0U, 1U, 3U}) {
@@ -3045,9 +3041,9 @@ std::string AccumulationFailure(PathScenes& scenes) {
   triangle.source_faces = {0};
   world.SetMesh("/panel", triangle, Lotus::MeshInstance{});
   Lotus::Material material;
-  material.base_color = {0.5F, 0.25F, 0.75F};
-  material.emission = {2.5F, 1.25F, 0.5F};
-  material.ior = 1;
+  Lotus::Preview(material).base_color = {0.5F, 0.25F, 0.75F};
+  Lotus::Preview(material).emission = {2.5F, 1.25F, 0.5F};
+  Lotus::Preview(material).ior = 1;
   Paint(world, "/panel", material);
   world.SetEnvironment({2.0F, 1.0F, 0.5F});
   const Rgb radiance{0.5 * 2.0 + 2.5, 0.25 * 1.0 + 1.25, 0.75 * 0.5 + 0.5};
@@ -3122,8 +3118,8 @@ std::string AccumulationFailure(PathScenes& scenes) {
   // A GGX-Lambert mixture makes every sample's radiance random. A material
   // change restarts the accumulation; 1 + 3 + 12 samples in three frames
   // are the same image as 16 in one.
-  material.metallic = 0.5F;
-  material.roughness = 0.4F;
+  Lotus::Preview(material).metallic = 0.5F;
+  Lotus::Preview(material).roughness = 0.4F;
   Paint(world, "/panel", material);
   Lotus::GpuFrameEvidence whole;
   settings.sample_index = 1000;
@@ -3681,15 +3677,15 @@ std::string CoverageScatteringFailure(PathScenes& scenes) {
   auto& world = scenes.World();
   world.SetCamera(OrthographicCamera());
   Lotus::Material layer;
-  layer.ior = 1;
-  layer.base_color = {1, 1, 1};
-  layer.opacity = 0.25F;
-  layer.opacity_threshold = 0;
+  Lotus::Preview(layer).ior = 1;
+  Lotus::Preview(layer).base_color = {1, 1, 1};
+  layer.geometry.opacity = 0.25F;
+  layer.geometry.opacity_threshold = 0;
   world.SetMesh("/layer", Square(), Lotus::MeshInstance{});
   Paint(world, "/layer", layer);
   Lotus::Material black;
-  black.ior = 1;
-  black.base_color = {0, 0, 0};
+  Lotus::Preview(black).ior = 1;
+  Lotus::Preview(black).base_color = {0, 0, 0};
   Lotus::MeshInstance behind;
   behind.world_from_object = Translation(0, 0, -2);
   world.SetMesh("/back", Square(), behind);
@@ -3700,7 +3696,7 @@ std::string CoverageScatteringFailure(PathScenes& scenes) {
   above.world_from_object[0] = above.world_from_object[5] = 1.5F;
   world.SetMesh("/light", Square(), above);
   Lotus::Material light = black;
-  light.emission = {1, 1, 1};
+  Lotus::Preview(light).emission = {1, 1, 1};
   Paint(world, "/light", light);
 
   scenes.SetIntegrator(Lotus::Integrator::Reference);
@@ -3915,24 +3911,24 @@ void SetOpenLightScene(PathScenes& scenes, bool emitter) {
   floor.world_from_object = Scaling(1.5F, 1.5F, 1);
   world.SetMesh("/floor", Square(), floor);
   Lotus::Material white;
-  white.base_color = {0.8F, 0.8F, 0.8F};
+  Lotus::Preview(white).base_color = {0.8F, 0.8F, 0.8F};
   Paint(world, "/floor", white);
   Lotus::MeshInstance panel;
   panel.world_from_object = Lotus::Multiply(Translation(0.5F, 0.4F, 0.3F),
       Lotus::Multiply(RotationX(40), Scaling(0.35F, 0.35F, 1)));
   world.SetMesh("/panel", Square(), panel);
   Lotus::Material metal;
-  metal.base_color = {0.9F, 0.7F, 0.5F};
-  metal.metallic = 1;
-  metal.roughness = 0.25F;
+  Lotus::Preview(metal).base_color = {0.9F, 0.7F, 0.5F};
+  Lotus::Preview(metal).metallic = 1;
+  Lotus::Preview(metal).roughness = 0.25F;
   Paint(world, "/panel", metal);
   Lotus::MeshInstance layer;
   layer.world_from_object = Lotus::Multiply(Translation(-0.5F, -0.3F, 0.8F),
       Scaling(0.6F, 0.6F, 1));
   world.SetMesh("/layer", Square(), layer);
   Lotus::Material veil;
-  veil.base_color = {0.5F, 0.5F, 0.5F};
-  veil.opacity = 0.25F;
+  Lotus::Preview(veil).base_color = {0.5F, 0.5F, 0.5F};
+  veil.geometry.opacity = 0.25F;
   Paint(world, "/layer", veil);
   if (!emitter)
     return;
@@ -3952,20 +3948,20 @@ void SetOpenLightScene(PathScenes& scenes, bool emitter) {
       Lotus::Multiply(RotationY(-60), Scaling(0.5F, 0.5F, 1)));
   world.SetMesh("/emitter", square, placed);
   Lotus::Material light;
-  light.base_color = {0, 0, 0};
-  light.emission_texture = Lotus::TextureInput{"/radiance"};
-  light.emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
-  light.emission_texture->wrap_t = Lotus::TextureWrap::Clamp;
-  light.texcoords = "st";
-  light.opacity = 0.5F;
+  Lotus::Preview(light).base_color = {0, 0, 0};
+  Lotus::Preview(light).emission_texture = Lotus::TextureInput{"/radiance"};
+  Lotus::Preview(light).emission_texture->wrap_s = Lotus::TextureWrap::Clamp;
+  Lotus::Preview(light).emission_texture->wrap_t = Lotus::TextureWrap::Clamp;
+  light.geometry.texcoords = "st";
+  light.geometry.opacity = 0.5F;
   Paint(world, "/emitter", light);
   Lotus::MeshInstance spark;
   spark.world_from_object = Lotus::Multiply(Translation(1.8F, -0.5F, 1.0F),
       Lotus::Multiply(RotationY(50), Scaling(0.15F, 0.15F, 1)));
   world.SetMesh("/spark", Square(), spark);
   Lotus::Material glow;
-  glow.base_color = {0, 0, 0};
-  glow.emission = {20, 16, 12};
+  Lotus::Preview(glow).base_color = {0, 0, 0};
+  Lotus::Preview(glow).emission = {20, 16, 12};
   Paint(world, "/spark", glow);
 }
 
@@ -4232,8 +4228,8 @@ void SetLightFloor(PathScenes& scenes) {
   floor.world_from_object = Scaling(1.5F, 1.5F, 1);
   world.SetMesh("/floor", Square(), floor);
   Lotus::Material lambert;
-  lambert.base_color = {0.8F, 0.7F, 0.6F};
-  lambert.ior = 1;
+  Lotus::Preview(lambert).base_color = {0.8F, 0.7F, 0.6F};
+  Lotus::Preview(lambert).ior = 1;
   Paint(world, "/floor", lambert);
 }
 
@@ -4298,9 +4294,9 @@ void SetSidePanel(PathScenes& scenes) {
       Lotus::Multiply(RotationY(-60), Scaling(0.5F, 0.5F, 1)));
   world.SetMesh("/panel", Square(), placed);
   Lotus::Material glow;
-  glow.base_color = {0, 0, 0};
-  glow.ior = 1;
-  glow.emission = {8, 6, 4};
+  Lotus::Preview(glow).base_color = {0, 0, 0};
+  Lotus::Preview(glow).ior = 1;
+  Lotus::Preview(glow).emission = {8, 6, 4};
   Paint(world, "/panel", glow);
 }
 
@@ -4318,7 +4314,7 @@ LotusHeadless::RgbImage FloorOracle(PathScenes& scenes, double transmittance,
   for (const auto& [key, mesh] : snapshot.scene->meshes) {
     const auto material = snapshot.scene->materials.find(mesh.material);
     if (key == "/floor" || material == snapshot.scene->materials.end() ||
-        material->second.emission == std::array<float, 3>{})
+        Lotus::Preview(material->second).emission == std::array<float, 3>{})
       continue;
     for (const auto& triangle : mesh.geometry->triangles) {
       std::vector<Vec3> corners;
@@ -4328,7 +4324,7 @@ LotusHeadless::RgbImage FloorOracle(PathScenes& scenes, double transmittance,
             mesh.instance.world_from_object, {p[0], p[1], p[2]}, 1));
       }
       emitters.push_back(corners);
-      const auto& e = material->second.emission;
+      const auto& e = Lotus::Preview(material->second).emission;
       emissions.push_back({e[0], e[1], e[2]});
     }
   }
@@ -4559,8 +4555,8 @@ std::string AnalyticLightsFailure(PathScenes& scenes) {
       Lotus::Multiply(Translation(0, 0, 2.5F), Scaling(50, 50, 1));
   scenes.World().SetMesh("/roof", Square(), roof);
   Lotus::Material black_roof;
-  black_roof.base_color = {0, 0, 0};
-  black_roof.ior = 1;
+  Lotus::Preview(black_roof).base_color = {0, 0, 0};
+  Lotus::Preview(black_roof).ior = 1;
   Paint(scenes.World(), "/roof", black_roof);
   for (const Lotus::Integrator integrator :
       {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
@@ -4574,7 +4570,7 @@ std::string AnalyticLightsFailure(PathScenes& scenes) {
   scenes.SetIntegrator(Lotus::Integrator::Reference);
   // A roof of 50% coverage passes half of each light's light.
   Lotus::Material veil = black_roof;
-  veil.opacity = 0.5F;
+  veil.geometry.opacity = 0.5F;
   Paint(scenes.World(), "/roof", veil);
   for (std::size_t index = 0; index < estimators.size(); ++index) {
     scenes.SetLightSampling(estimators[index]);
@@ -4780,9 +4776,9 @@ std::string EnvironmentOrientationFailure(PathScenes& scenes) {
   floor.world_from_object = Scaling(1.5F, 1.5F, 1);
   world.SetMesh("/floor", Square(), floor);
   Lotus::Material mirror;
-  mirror.base_color = {1, 1, 1};
-  mirror.metallic = 1;
-  mirror.roughness = 0;
+  Lotus::Preview(mirror).base_color = {1, 1, 1};
+  Lotus::Preview(mirror).metallic = 1;
+  Lotus::Preview(mirror).roughness = 0;
   Paint(world, "/floor", mirror);
   const Rgb scale{2, 1, 0.5};
   struct Case {
@@ -5204,20 +5200,20 @@ double ThinWallTransmittance(double roughness, double ior, double cos_view) {
 Lotus::Material Glass(float roughness, bool thin_walled,
     const std::array<float, 3>& tint = {1, 1, 1}) {
   Lotus::Material glass;
-  glass.base_color = {0.8F, 0.2F, 0.1F};
-  glass.roughness = roughness;
-  glass.transmission = 1;
-  glass.transmission_color = tint;
-  glass.thin_walled = thin_walled;
+  Lotus::Preview(glass).base_color = {0.8F, 0.2F, 0.1F};
+  Lotus::Preview(glass).roughness = roughness;
+  Lotus::Preview(glass).transmission = 1;
+  Lotus::Preview(glass).transmission_color = tint;
+  Lotus::Preview(glass).thin_walled = thin_walled;
   return glass;
 }
 
 // A surface that neither reflects nor transmits: black and index-matched.
 Lotus::Material Absorber(const std::array<float, 3>& emission) {
   Lotus::Material absorber;
-  absorber.base_color = {0, 0, 0};
-  absorber.ior = 1;
-  absorber.emission = emission;
+  Lotus::Preview(absorber).base_color = {0, 0, 0};
+  Lotus::Preview(absorber).ior = 1;
+  Lotus::Preview(absorber).emission = emission;
   return absorber;
 }
 
@@ -5310,7 +5306,7 @@ std::string TransmissionChecks(PathScenes& scenes, const std::string& mode) {
   }
   {
     Lotus::Material matched = Glass(0.5F, true, tint);
-    matched.ior = 1;
+    Lotus::Preview(matched).ior = 1;
     emitter(30, {1, 1, 1});
     wall(30, matched);
     if (auto failure = scenes.ExpectMean(name("index-matched wall").c_str(), kSamples,
@@ -5451,7 +5447,7 @@ std::string TransmissionFailure(PathScenes& scenes) {
   back.world_from_object = Lotus::Multiply(Translation(0, 0, -3), Scaling(10, 10, 1));
   world.SetMesh("/wall", Square(), back);
   Lotus::Material grey;
-  grey.base_color = {0.5F, 0.5F, 0.5F};
+  Lotus::Preview(grey).base_color = {0.5F, 0.5F, 0.5F};
   Paint(world, "/wall", grey);
   const struct {
     const char* key;

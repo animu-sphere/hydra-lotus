@@ -36,8 +36,7 @@ constexpr std::uint32_t kNoSlot = std::numeric_limits<std::uint32_t>::max();
 constexpr VkDeviceSize kLightBytes = sizeof(GpuLightRecord);
 constexpr VkDeviceSize kAnalyticLightBytes = sizeof(GpuAnalyticLightRecord);
 static_assert(kAnalyticLightBytes % kLightBytes == 0);
-constexpr std::size_t kEmissionInput = 3;
-static_assert(kEmissionInput < kMaterialTextureInputs);
+constexpr VkDeviceSize kBindingBytes = sizeof(GpuTextureInputRecord);
 
 // One timestamp before Apply's copies and one after each of its phases.
 constexpr std::uint32_t kTimestampCount = 4;
@@ -133,18 +132,24 @@ std::vector<GeometrySection> ChangedSections(const MeshGeometry& previous,
 // estimate only steers which triangles next event estimation samples;
 // emission it misses is still found by BSDF sampling.
 double EmissionEstimate(const SceneMaterial& entry) {
-  const Material& material = entry.material;
+  // Only UsdPreviewSurface has parameters, and the table holds no other
+  // model (ValidMaterial).
+  const PreviewSurface* material =
+      std::get_if<PreviewSurface>(&entry.material.surface);
+  if (material == nullptr) {
+    return 0.0;
+  }
   std::array<double, 3> emission{};
-  if (!material.emission_texture) {
+  if (!material->emission_texture) {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = material.emission[c];
-  } else if (entry.textures[kEmissionInput] == nullptr) {
+      emission[c] = material->emission[c];
+  } else if (entry.textures[kPreviewEmissionSlot] == nullptr) {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = std::max(0.0F, material.emission_texture->fallback[c]);
+      emission[c] = std::max(0.0F, material->emission_texture->fallback[c]);
   } else {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = std::max(0.0F, material.emission_texture->scale[c]) +
-                    std::max(0.0F, material.emission_texture->bias[c]);
+      emission[c] = std::max(0.0F, material->emission_texture->scale[c]) +
+                    std::max(0.0F, material->emission_texture->bias[c]);
   }
   const double mean = (emission[0] + emission[1] + emission[2]) / 3.0;
   return std::isfinite(mean) && mean > 0.0 ? mean : 0.0;
@@ -789,9 +794,22 @@ bool ValidTextureInput(const std::optional<TextureInput>& input,
              [](float value) { return std::isfinite(value); });
 }
 
-bool ValidMaterial(const SceneMaterial& entry) {
-  const Material& material = entry.material;
-  const auto unit = [](float value) { return value >= 0.0F && value <= 1.0F; };
+bool UnitInterval(float value) { return value >= 0.0F && value <= 1.0F; }
+
+// The fields every shading model shares.
+bool ValidGeometry(const MaterialGeometry& geometry) {
+  return std::all_of(geometry.normal.begin(), geometry.normal.end(),
+             [](float value) { return value >= -1.0F && value <= 1.0F; }) &&
+         ValidTextureInput(geometry.normal_texture, true) &&
+         UnitInterval(geometry.opacity) &&
+         UnitInterval(geometry.opacity_threshold) &&
+         ValidTextureInput(geometry.opacity_texture, false) &&
+         std::isfinite(geometry.texcoord_fallback[0]) &&
+         std::isfinite(geometry.texcoord_fallback[1]);
+}
+
+bool ValidPreview(const PreviewSurface& material) {
+  const auto unit = UnitInterval;
   return std::all_of(material.base_color.begin(), material.base_color.end(),
              unit) &&
          unit(material.roughness) && unit(material.metallic) &&
@@ -800,20 +818,33 @@ bool ValidMaterial(const SceneMaterial& entry) {
          ValidTextureInput(material.roughness_texture, false) &&
          ValidTextureInput(material.metallic_texture, false) &&
          ValidTextureInput(material.emission_texture, true) &&
-         std::all_of(material.normal.begin(), material.normal.end(),
-             [](float value) { return value >= -1.0F && value <= 1.0F; }) &&
-         ValidTextureInput(material.normal_texture, true) &&
-         unit(material.opacity) && unit(material.opacity_threshold) &&
-         ValidTextureInput(material.opacity_texture, false) &&
          std::isfinite(material.ior) && material.ior >= 1.0F &&
          std::all_of(material.specular_color.begin(), material.specular_color.end(), unit) &&
          ValidTextureInput(material.specular_color_texture, true) &&
          unit(material.transmission) &&
          std::all_of(material.transmission_color.begin(),
              material.transmission_color.end(), unit) &&
-         !(material.use_specular_workflow && material.transmission > 0.0F) &&
-         std::isfinite(material.texcoord_fallback[0]) &&
-         std::isfinite(material.texcoord_fallback[1]);
+         !(material.use_specular_workflow && material.transmission > 0.0F);
+}
+
+// The models other than UsdPreviewSurface have no parameters until their
+// tasks, so the scene passes cannot shade them yet.
+bool ValidMaterial(const SceneMaterial& entry) {
+  const PreviewSurface* preview =
+      std::get_if<PreviewSurface>(&entry.material.surface);
+  return preview != nullptr && ValidGeometry(entry.material.geometry) &&
+         ValidPreview(*preview);
+}
+
+// The binding table's lookups for a material table.
+std::size_t MaterialBindingCount(const std::vector<SceneMaterial>& table) {
+  std::size_t count = 0;
+  for (const SceneMaterial& entry : table) {
+    for (const auto* input : TextureInputs(entry.material)) {
+      count += input->has_value() ? 1 : 0;
+    }
+  }
+  return count;
 }
 
 bool ValidLight(const Light& light) {
@@ -1586,8 +1617,12 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   }
   const VkDeviceSize instance_bytes =
       update.instances.size() * kInstanceBytes;
-  const VkDeviceSize material_bytes =
+  const std::size_t binding_count =
+      write_materials ? MaterialBindingCount(material_table_) : 0;
+  const VkDeviceSize record_bytes =
       write_materials ? material_table_.size() * kMaterialBytes : 0;
+  const VkDeviceSize material_bytes =
+      record_bytes + binding_count * kBindingBytes;
   // A rewrite that keeps every instance's BLAS and transform, such as a
   // material binding change, leaves the TLAS as it is.
   bool tlas_current =
@@ -1911,34 +1946,44 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         return false;
       }
     }
+    std::uint32_t binding = 0;
     for (std::size_t index = 0; index < material_table_.size(); ++index) {
       const SceneMaterial& entry = material_table_[index];
       const Material& material = entry.material;
+      const MaterialGeometry& geometry = material.geometry;
+      const PreviewSurface& preview = Preview(material);
       GpuMaterialRecord record{};
-      std::copy(material.base_color.begin(), material.base_color.end(),
-          record.base_color_roughness);
-      record.base_color_roughness[3] = material.roughness;
-      std::copy(material.emission.begin(), material.emission.end(),
-          record.emission_metallic);
-      record.emission_metallic[3] = material.metallic;
-      record.texcoord_fallback[0] = material.texcoord_fallback[0];
-      record.texcoord_fallback[1] = material.texcoord_fallback[1];
-      std::copy(material.normal.begin(), material.normal.end(), record.normal);
-      record.normal[3] = material.use_specular_workflow ? 1.0F : 0.0F;
-      std::copy(material.specular_color.begin(), material.specular_color.end(), record.specular_ior);
-      record.specular_ior[3] = material.ior;
-      record.opacity[0] = material.opacity;
-      record.opacity[1] = material.opacity_threshold;
-      record.opacity[2] = material.thin_walled ? 1.0F : 0.0F;
-      std::copy(material.transmission_color.begin(),
-          material.transmission_color.end(), record.transmission);
-      record.transmission[3] = material.transmission;
+      record.model_flags =
+          static_cast<std::uint32_t>(material.Model()) |
+          ((preview.use_specular_workflow ? kPreviewSpecularWorkflow : 0U) |
+              (preview.thin_walled ? kPreviewThinWalled : 0U))
+              << kMaterialFlagShift;
+      record.lookup_base = binding;
+      record.geometry_coverage[0] = geometry.texcoord_fallback[0];
+      record.geometry_coverage[1] = geometry.texcoord_fallback[1];
+      record.geometry_coverage[2] = geometry.opacity;
+      record.geometry_coverage[3] = geometry.opacity_threshold;
+      std::copy(geometry.normal.begin(), geometry.normal.end(),
+          record.geometry_normal);
+      std::copy(preview.base_color.begin(), preview.base_color.end(),
+          record.parameters[0]);
+      record.parameters[0][3] = preview.roughness;
+      std::copy(preview.emission.begin(), preview.emission.end(),
+          record.parameters[1]);
+      record.parameters[1][3] = preview.metallic;
+      std::copy(preview.specular_color.begin(), preview.specular_color.end(),
+          record.parameters[2]);
+      record.parameters[2][3] = preview.ior;
+      std::copy(preview.transmission_color.begin(),
+          preview.transmission_color.end(), record.parameters[3]);
+      record.parameters[3][3] = preview.transmission;
       const auto inputs = TextureInputs(material);
       for (std::size_t input = 0; input < inputs.size(); ++input) {
-        GpuTextureInputRecord& lookup = record.inputs[input];
         if (!inputs[input]->has_value()) {
           continue;
         }
+        record.textured[input / 32] |= 1U << (input % 32);
+        GpuTextureInputRecord lookup{};
         const TextureInput& source = **inputs[input];
         lookup.channel = source.channel;
         lookup.sampler = static_cast<std::uint32_t>(source.wrap_s) * 4 +
@@ -1957,6 +2002,9 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
           lookup.mode = kTextureLookup;
           lookup.texture = texture_slot_of_.at(entry.textures[input]);
         }
+        std::memcpy(staging + offset + record_bytes + binding * kBindingBytes,
+            &lookup, kBindingBytes);
+        ++binding;
       }
       std::memcpy(staging + offset + index * kMaterialBytes, &record,
           kMaterialBytes);
@@ -1965,6 +2013,7 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
         {materials_.buffer, VkBufferCopy{offset, 0, material_bytes}});
     offset += material_bytes;
     material_count_ = static_cast<std::uint32_t>(material_table_.size());
+    material_binding_count_ = static_cast<std::uint32_t>(binding_count);
     materials_current_ = true;
     ++stats_.material_writes;
   }
@@ -2318,7 +2367,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
   stats_.instance_count = instance_count_;
   stats_.instance_bytes = instance_count_ * kInstanceBytes;
   stats_.material_count = material_count_;
-  stats_.material_bytes = material_count_ * kMaterialBytes;
+  stats_.material_bytes = material_count_ * kMaterialBytes +
+                          material_binding_count_ * kBindingBytes;
   stats_.emissive_triangles = emissive_triangles_;
   stats_.analytic_lights = analytic_count_;
   stats_.environment_map = environment_lit_;
@@ -2337,7 +2387,9 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
   contents = GpuSceneContents{};
   contents.environment = environment_;
   const VkDeviceSize instance_bytes = instance_count_ * kInstanceBytes;
-  const VkDeviceSize material_bytes = material_count_ * kMaterialBytes;
+  const VkDeviceSize record_bytes = material_count_ * kMaterialBytes;
+  const VkDeviceSize material_bytes =
+      record_bytes + material_binding_count_ * kBindingBytes;
   const VkDeviceSize tlas_input_bytes =
       tlas_built_ ? tlas_blas_ids_.size() * kTlasInstanceBytes : 0;
   VkDeviceSize total = stats_.geometry_bytes + instance_bytes +
@@ -2505,34 +2557,40 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
         kMaterialBytes);
     GpuMaterialContents& entry = contents.materials.emplace_back();
     Material& material = entry.material;
-    std::copy(record.base_color_roughness, record.base_color_roughness + 3,
-        material.base_color.begin());
-    material.roughness = record.base_color_roughness[3];
-    std::copy(record.emission_metallic, record.emission_metallic + 3,
-        material.emission.begin());
-    material.metallic = record.emission_metallic[3];
-    material.texcoord_fallback = {record.texcoord_fallback[0],
-        record.texcoord_fallback[1]};
-    std::copy(record.normal, record.normal + 3, material.normal.begin());
-    material.use_specular_workflow = record.normal[3] != 0.0F;
-    std::copy(record.specular_ior, record.specular_ior + 3, material.specular_color.begin());
-    material.ior = record.specular_ior[3];
-    material.opacity = record.opacity[0];
-    material.opacity_threshold = record.opacity[1];
-    material.thin_walled = record.opacity[2] != 0.0F;
-    std::copy(record.transmission, record.transmission + 3,
-        material.transmission_color.begin());
-    material.transmission = record.transmission[3];
-    std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
-        &material.base_color_texture, &material.roughness_texture,
-        &material.metallic_texture, &material.emission_texture,
-        &material.normal_texture, &material.opacity_texture,
-        &material.specular_color_texture};
+    // Only UsdPreviewSurface reaches the table (ValidMaterial).
+    MaterialGeometry& geometry = material.geometry;
+    PreviewSurface& preview = Preview(material);
+    const std::uint32_t flags = record.model_flags >> kMaterialFlagShift;
+    preview.use_specular_workflow = (flags & kPreviewSpecularWorkflow) != 0;
+    preview.thin_walled = (flags & kPreviewThinWalled) != 0;
+    geometry.texcoord_fallback = {record.geometry_coverage[0],
+        record.geometry_coverage[1]};
+    geometry.opacity = record.geometry_coverage[2];
+    geometry.opacity_threshold = record.geometry_coverage[3];
+    std::copy(record.geometry_normal, record.geometry_normal + 3,
+        geometry.normal.begin());
+    std::copy(record.parameters[0], record.parameters[0] + 3,
+        preview.base_color.begin());
+    preview.roughness = record.parameters[0][3];
+    std::copy(record.parameters[1], record.parameters[1] + 3,
+        preview.emission.begin());
+    preview.metallic = record.parameters[1][3];
+    std::copy(record.parameters[2], record.parameters[2] + 3,
+        preview.specular_color.begin());
+    preview.ior = record.parameters[2][3];
+    std::copy(record.parameters[3], record.parameters[3] + 3,
+        preview.transmission_color.begin());
+    preview.transmission = record.parameters[3][3];
+    const auto inputs = PreviewTextureInputs(material);
+    std::uint32_t binding = record.lookup_base;
     for (std::size_t input = 0; input < inputs.size(); ++input) {
-      const GpuTextureInputRecord& lookup = record.inputs[input];
-      if (lookup.mode == kConstantInput) {
+      if ((record.textured[input / 32] & (1U << (input % 32))) == 0) {
         continue;
       }
+      GpuTextureInputRecord lookup{};
+      std::memcpy(&lookup,
+          bytes + offset + record_bytes + binding++ * kBindingBytes,
+          kBindingBytes);
       TextureInput& decoded = inputs[input]->emplace();
       decoded.channel = lookup.channel;
       decoded.wrap_s = static_cast<TextureWrap>(lookup.sampler / 4);

@@ -169,15 +169,15 @@ void Check(bool condition, const std::string& message) {
 
 std::string Describe(const Lotus::Material& material) {
   std::ostringstream text;
-  text << "base (" << material.base_color[0] << ", " << material.base_color[1]
-       << ", " << material.base_color[2] << ") roughness "
-       << material.roughness << " metallic " << material.metallic
-       << " emission (" << material.emission[0] << ", "
-       << material.emission[1] << ", " << material.emission[2] << ") ior "
-       << material.ior << " transmission " << material.transmission << " ("
-       << material.transmission_color[0] << ", " << material.transmission_color[1]
-       << ", " << material.transmission_color[2] << ")"
-       << (material.thin_walled ? " thin-walled" : "");
+  text << "base (" << Lotus::Preview(material).base_color[0] << ", " << Lotus::Preview(material).base_color[1]
+       << ", " << Lotus::Preview(material).base_color[2] << ") roughness "
+       << Lotus::Preview(material).roughness << " metallic " << Lotus::Preview(material).metallic
+       << " emission (" << Lotus::Preview(material).emission[0] << ", "
+       << Lotus::Preview(material).emission[1] << ", " << Lotus::Preview(material).emission[2] << ") ior "
+       << Lotus::Preview(material).ior << " transmission " << Lotus::Preview(material).transmission << " ("
+       << Lotus::Preview(material).transmission_color[0] << ", " << Lotus::Preview(material).transmission_color[1]
+       << ", " << Lotus::Preview(material).transmission_color[2] << ")"
+       << (Lotus::Preview(material).thin_walled ? " thin-walled" : "");
   return text.str();
 }
 
@@ -190,11 +190,11 @@ void Expect(const std::string& step, const Lotus::Material& actual,
 Lotus::Material MakeMaterial(std::array<float, 3> base, float roughness,
     float metallic, std::array<float, 3> emission, float ior = 1.5F) {
   Lotus::Material material;
-  material.base_color = base;
-  material.roughness = roughness;
-  material.metallic = metallic;
-  material.emission = emission;
-  material.ior = ior;
+  Lotus::Preview(material).base_color = base;
+  Lotus::Preview(material).roughness = roughness;
+  Lotus::Preview(material).metallic = metallic;
+  Lotus::Preview(material).emission = emission;
+  Lotus::Preview(material).ior = ior;
   return material;
 }
 
@@ -261,8 +261,8 @@ void MaterialXCases() {
   HdLotusMaterialTranslation translation =
       HdLotusTranslateMaterial(StandardSurface({}));
   Lotus::Material expected;
-  expected.base_color = {0.8F, 0.8F, 0.8F};
-  expected.roughness = 0.2F;
+  Lotus::Preview(expected).base_color = {0.8F, 0.8F, 0.8F};
+  Lotus::Preview(expected).roughness = 0.2F;
   Check(translation.unsupported.empty() && translation.connected_inputs.empty() &&
             translation.unrepresented_inputs.empty(),
       "an empty standard surface reported a problem");
@@ -278,7 +278,7 @@ void MaterialXCases() {
           {TfToken("emission_color"), VtValue(GfVec3f(1.0F, 0.5F, 0.0F))},
           {TfToken("opacity"), VtValue(GfVec3f(0.25F))}}));
   expected = MakeMaterial({0.4F, 0.2F, 0.1F}, 1.0F, 0.75F, {2.0F, 1.0F, 0.0F}, 2.0F);
-  expected.opacity = 0.25F;
+  expected.geometry.opacity = 0.25F;
   Expect("standard surface constants", translation.material, expected);
   Check(translation.unrepresented_inputs.empty(),
       "represented constants were reported");
@@ -287,7 +287,7 @@ void MaterialXCases() {
       {{TfToken("specular"), VtValue(0.0F)},
           {TfToken("specular_color"), VtValue(GfVec3f(0.5F))},
           {TfToken("specular_IOR"), VtValue(2.0F)}}));
-  Check(translation.material.ior == 1.0F && translation.unrepresented_inputs.empty(),
+  Check(Lotus::Preview(translation.material).ior == 1.0F && translation.unrepresented_inputs.empty(),
       "specular 0 did not remove the dielectric interface");
 
   // Inputs the IR cannot represent are named, in a fixed order.
@@ -302,7 +302,7 @@ void MaterialXCases() {
   Check(translation.unrepresented_inputs ==
             Tokens({"specular", "specular_color", "opacity", "normal", "coat"}),
       "unrepresented inputs were not reported");
-  Check(translation.material.opacity == 0.5F,
+  Check(translation.material.geometry.opacity == 0.5F,
       "a coloured opacity did not use its mean");
 
   // Transmission (docs/design/TRANSMISSION.md section 9): constants are
@@ -313,9 +313,9 @@ void MaterialXCases() {
           {TfToken("thin_walled"), VtValue(true)},
           {TfToken("specular_IOR"), VtValue(1.33F)}}));
   expected = MakeMaterial({0.8F, 0.8F, 0.8F}, 0.2F, 0.0F, {0, 0, 0}, 1.33F);
-  expected.transmission = 1.0F;
-  expected.transmission_color = {0.9F, 0.5F, 0.0F};
-  expected.thin_walled = true;
+  Lotus::Preview(expected).transmission = 1.0F;
+  Lotus::Preview(expected).transmission_color = {0.9F, 0.5F, 0.0F};
+  Lotus::Preview(expected).thin_walled = true;
   Expect("standard surface transmission", translation.material, expected);
   Check(translation.unrepresented_inputs.empty(),
       "represented transmission inputs were reported");
@@ -333,9 +333,9 @@ void MaterialXCases() {
           {TfToken("transmission_extra_roughness"), VtValue(0.0F)},
           {TfToken("specular"), VtValue(0.0F)},
           {TfToken("specular_IOR"), VtValue(1.8F)}}));
-  Check(translation.material.transmission == 0.5F &&
-            translation.material.ior == 1.8F &&
-            translation.material.transmission_color == std::array<float, 3>{1, 1, 1},
+  Check(Lotus::Preview(translation.material).transmission == 0.5F &&
+            Lotus::Preview(translation.material).ior == 1.8F &&
+            Lotus::Preview(translation.material).transmission_color == std::array<float, 3>{1, 1, 1},
       "transmission with specular 0 and a depth translated as " +
           Describe(translation.material));
   Check(translation.unrepresented_inputs ==
@@ -348,7 +348,7 @@ void MaterialXCases() {
       {{"Weight", "ND_image_float",
           {{TfToken("file"), VtValue(SdfAssetPath("weight.png"))}}}},
       {{"Weight", "out", "Surface", "transmission"}}));
-  Check(translation.material.transmission == 0.0F &&
+  Check(Lotus::Preview(translation.material).transmission == 0.0F &&
             translation.unrepresented_inputs == Tokens({"transmission"}) &&
             translation.textures.empty(),
       "a transmission graph was not left at 0");
@@ -359,9 +359,9 @@ void MaterialXCases() {
           {"Thin", "ND_constant_boolean", {{TfToken("value"), VtValue(true)}}}},
       {{"Tint", "out", "Surface", "transmission_color"},
           {"Thin", "out", "Surface", "thin_walled"}}));
-  Check(translation.material.transmission == 1.0F &&
-            translation.material.transmission_color == std::array<float, 3>{1, 1, 1} &&
-            !translation.material.thin_walled &&
+  Check(Lotus::Preview(translation.material).transmission == 1.0F &&
+            Lotus::Preview(translation.material).transmission_color == std::array<float, 3>{1, 1, 1} &&
+            !Lotus::Preview(translation.material).thin_walled &&
             translation.unrepresented_inputs ==
                 Tokens({"thin_walled", "transmission_color"}),
       "transmission colour and thin-wall graphs were not left at their defaults");
@@ -418,20 +418,20 @@ void MaterialXCases() {
   normal.bias = {-0.5F, -0.25F, -1.0F, 0.0F};
   normal.fallback = {-0.5F, -0.25F, -1.0F, 1.0F};
   expected = Lotus::Material{};
-  expected.base_color = {0.8F, 0.8F, 0.8F};
-  expected.roughness = 0.2F;
-  expected.base_color_texture = colour;
-  expected.roughness_texture = rough;
-  expected.metallic_texture = metal;
-  expected.emission_texture = glow;
-  expected.normal_texture = normal;
-  expected.texcoords = "st";
+  Lotus::Preview(expected).base_color = {0.8F, 0.8F, 0.8F};
+  Lotus::Preview(expected).roughness = 0.2F;
+  Lotus::Preview(expected).base_color_texture = colour;
+  Lotus::Preview(expected).roughness_texture = rough;
+  Lotus::Preview(expected).metallic_texture = metal;
+  Lotus::Preview(expected).emission_texture = glow;
+  expected.geometry.normal_texture = normal;
+  expected.geometry.texcoords = "st";
   Expect("standard surface graph", translation.material, expected);
-  Check(translation.material.base_color_texture == colour &&
-            translation.material.roughness_texture == rough &&
-            translation.material.metallic_texture == metal &&
-            translation.material.emission_texture == glow &&
-            translation.material.normal_texture == normal,
+  Check(Lotus::Preview(translation.material).base_color_texture == colour &&
+            Lotus::Preview(translation.material).roughness_texture == rough &&
+            Lotus::Preview(translation.material).metallic_texture == metal &&
+            Lotus::Preview(translation.material).emission_texture == glow &&
+            translation.material.geometry.normal_texture == normal,
       "the graph's lookups differ");
   Check(translation.connected_inputs.empty() &&
             translation.unrepresented_inputs == Tokens({"coat"}) &&
@@ -470,10 +470,10 @@ void MaterialXCases() {
             Tokens({"emission", "metalness", "specular_roughness",
                 "specular_IOR", "normal"}),
       "untranslated graphs were not reported");
-  Check(translation.material.metallic == 0 && translation.material.roughness == 0.2F &&
-            !translation.material.metallic_texture &&
-            !translation.material.emission_texture &&
-            translation.material.base_color_texture,
+  Check(Lotus::Preview(translation.material).metallic == 0 && Lotus::Preview(translation.material).roughness == 0.2F &&
+            !Lotus::Preview(translation.material).metallic_texture &&
+            !Lotus::Preview(translation.material).emission_texture &&
+            Lotus::Preview(translation.material).base_color_texture,
       "untranslated graphs did not keep their defaults");
 
   // The MaterialX UsdPreviewSurface reads as the universal one.
@@ -481,7 +481,7 @@ void MaterialXCases() {
       Surface(TfToken("ND_UsdPreviewSurface_surfaceshader"),
           {{TfToken("diffuseColor"), VtValue(GfVec3f(0.5F))}}));
   Check(translation.unsupported.empty() &&
-            translation.material.base_color == std::array<float, 3>{0.5F, 0.5F, 0.5F},
+            Lotus::Preview(translation.material).base_color == std::array<float, 3>{0.5F, 0.5F, 0.5F},
       "the MaterialX UsdPreviewSurface was not read");
   Check(HdLotusMaterialRenderContexts() == Tokens({"mtlx"}),
       "the delegate does not request MaterialX networks");
@@ -505,25 +505,25 @@ void TranslatorCases() {
   constexpr float kInfinity = std::numeric_limits<float>::infinity();
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("ior"), VtValue(2.5F)}}));
-  Check(translation.material.ior == 2.5F, "ior was not translated");
+  Check(Lotus::Preview(translation.material).ior == 2.5F, "ior was not translated");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("ior"), VtValue(-1.0F)}}));
-  Check(translation.material.ior == 1, "ior was not clamped to index matching");
+  Check(Lotus::Preview(translation.material).ior == 1, "ior was not clamped to index matching");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("ior"), VtValue(kInfinity)}}));
-  Check(translation.material.ior == 1.5F, "non-finite ior did not keep its default");
+  Check(Lotus::Preview(translation.material).ior == 1.5F, "non-finite ior did not keep its default");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("useSpecularWorkflow"), VtValue(1)},
           {TfToken("specularColor"), VtValue(GfVec3f(1.5F, -1, 0.25F))},
           {TfToken("metallic"), VtValue(1.0F)}, {TfToken("ior"), VtValue(2.5F)}}));
-  Check(translation.material.use_specular_workflow && translation.material.metallic == 0 &&
-            translation.material.ior == 1.5F &&
-            translation.material.specular_color == std::array<float, 3>{1, 0, 0.25F},
+  Check(Lotus::Preview(translation.material).use_specular_workflow && Lotus::Preview(translation.material).metallic == 0 &&
+            Lotus::Preview(translation.material).ior == 1.5F &&
+            Lotus::Preview(translation.material).specular_color == std::array<float, 3>{1, 0, 0.25F},
       "specular workflow did not translate F0 and ignore metallic/ior");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("useSpecularWorkflow"), VtValue(1)},
           {TfToken("specularColor"), VtValue(GfVec3f(0, kNaN, 1))}}));
-  Check(translation.material.specular_color == Lotus::Material{}.specular_color,
+  Check(Lotus::Preview(translation.material).specular_color == Lotus::PreviewSurface{}.specular_color,
       "non-finite specular colour did not keep its default");
   translation = HdLotusTranslateMaterial(Surface(preview,
       {{TfToken("diffuseColor"), VtValue(GfVec3f(kNaN, 0.5F, 0.5F))},
@@ -558,7 +558,7 @@ void TranslatorCases() {
       SdfPath("/Material/Surface"), TfToken("roughness")});
   translation = HdLotusTranslateMaterial(textured);
   Lotus::Material lookup = Lotus::Material{};
-  lookup.base_color_texture =
+  Lotus::Preview(lookup).base_color_texture =
       Lotus::TextureInput{HdLotusTextureKey("", TfToken("auto"))};
   Expect("connected inputs", translation.material, lookup);
   Check(translation.connected_inputs == std::vector<TfToken>{
@@ -618,13 +618,13 @@ void ExpectRadiance(const std::string& step, HdLotusRenderBuffer& buffer,
     // plus the analytic diffuse coat integral. Average the uniform half
     // plane; its pixel means estimate the Monte Carlo standard error.
     constexpr int steps = 65536;
-    const double alpha = std::max(double{coating.roughness} * coating.roughness, 0.001);
+    const double alpha = std::max(double{Lotus::Preview(coating).roughness} * Lotus::Preview(coating).roughness, 0.001);
     const double alpha2 = alpha * alpha;
-    const double ratio = (double{coating.ior} - 1) / (double{coating.ior} + 1);
-    const double edge = coating.use_specular_workflow || coating.ior > 1 ? 1 : 0;
+    const double ratio = (double{Lotus::Preview(coating).ior} - 1) / (double{Lotus::Preview(coating).ior} + 1);
+    const double edge = Lotus::Preview(coating).use_specular_workflow || Lotus::Preview(coating).ior > 1 ? 1 : 0;
     std::array<double, 3> f0{}, specular{};
     for (int c = 0; c < 3; ++c)
-      f0[c] = coating.use_specular_workflow ? coating.specular_color[c] : ratio * ratio;
+      f0[c] = Lotus::Preview(coating).use_specular_workflow ? Lotus::Preview(coating).specular_color[c] : ratio * ratio;
     for (int i = 0; i < steps; ++i) {
       const double z = (i + 0.5) / steps;
       const double h2 = (1 + z) / 2;
@@ -651,7 +651,7 @@ void ExpectRadiance(const std::string& step, HdLotusRenderBuffer& buffer,
     buffer.Unmap();
     constexpr double n = kSize * kSize / 2;
     for (int c = 0; c < 3; ++c) {
-      const double want = expected[c] * (1 - f0[c]) * (1 - f0[c] - (edge - f0[c]) / 21) + specular[c] + coating.emission[c];
+      const double want = expected[c] * (1 - f0[c]) * (1 - f0[c] - (edge - f0[c]) / 21) + specular[c] + Lotus::Preview(coating).emission[c];
       const double mean = sum[c] / n;
       const double tolerance = 5 * std::sqrt(std::max(0.0, (squares[c] - n * mean * mean) / (n - 1) / n)) + 1e-5;
       Check(std::abs(mean - want) <= tolerance, step + ": dielectric mean " +
@@ -758,13 +758,13 @@ int main(int argc, char** argv) try {
   // The diffuse colour is a lookup of an image that cannot be read, which
   // returns its fallback; the specular workflow ignores metallic.
   Lotus::Material specular = materials.at("/Looks/Specular");
-  Check(specular.base_color_texture &&
-            specular.base_color_texture->texture.ends_with("missing.png|auto") &&
-            !first.scene->textures.contains(specular.base_color_texture->texture),
+  Check(Lotus::Preview(specular).base_color_texture &&
+            Lotus::Preview(specular).base_color_texture->texture.ends_with("missing.png|auto") &&
+            !first.scene->textures.contains(Lotus::Preview(specular).base_color_texture->texture),
       "the Specular lookup does not name its missing image");
-  specular.base_color_texture.reset();
+  Lotus::Preview(specular).base_color_texture.reset();
   auto expected_specular = MakeMaterial({0.18F, 0.18F, 0.18F}, 0.125F, 0, {0, 0, 0});
-  expected_specular.use_specular_workflow = true;
+  Lotus::Preview(expected_specular).use_specular_workflow = true;
   Expect("Specular", specular, expected_specular);
   Expect("Unknown", materials.at("/Looks/Unknown"), Lotus::Material{});
   if (gpu) {
@@ -899,7 +899,7 @@ int main(int argc, char** argv) try {
     Check(found != snapshot.scene->materials.end(),
         std::string(step) + ": displayOpacity has no material");
     auto covered = MakeMaterial({0.25F, 0.5F, 0.75F}, 0.5F, 0, {0, 0, 0});
-    covered.opacity = expected;
+    covered.geometry.opacity = expected;
     Expect(step, found->second, covered);
   };
   const auto display_opacity = unbound.CreateAttribute(
@@ -929,29 +929,29 @@ int main(int argc, char** argv) try {
   const auto surface = stage->GetPrimAtPath(SdfPath("/Looks/Glow/Surface"));
   auto coat = removed_mesh.scene->materials.at("/Looks/Glow");
   surface.GetAttribute(TfToken("inputs:ior")).Set(2.5F);
-  coat.ior = 2.5F;
+  Lotus::Preview(coat).ior = 2.5F;
   auto coated = sync();
   Expect("ior edit", coated.scene->materials.at("/Looks/Glow"), coat);
   if (gpu)
-    ExpectRadiance("ior edit", color, 6, coat.base_color, true, coat);
+    ExpectRadiance("ior edit", color, 6, Lotus::Preview(coat).base_color, true, coat);
   surface.CreateAttribute(TfToken("inputs:useSpecularWorkflow"), SdfValueTypeNames->Int).Set(1);
   surface.CreateAttribute(TfToken("inputs:specularColor"), SdfValueTypeNames->Color3f).Set(GfVec3f(0.7F, 0.2F, 0.05F));
   surface.CreateAttribute(TfToken("inputs:metallic"), SdfValueTypeNames->Float).Set(1.0F);
-  coat.use_specular_workflow = true;
-  coat.ior = 1.5F;
-  coat.specular_color = {0.7F, 0.2F, 0.05F};
+  Lotus::Preview(coat).use_specular_workflow = true;
+  Lotus::Preview(coat).ior = 1.5F;
+  Lotus::Preview(coat).specular_color = {0.7F, 0.2F, 0.05F};
   coated = sync();
   Expect("specular workflow", coated.scene->materials.at("/Looks/Glow"), coat);
   Check(coated.scene->meshes.at("/Glowing").geometry == removed_mesh.scene->meshes.at("/Glowing").geometry,
       "a coat edit replaced mesh geometry");
   if (gpu)
-    ExpectRadiance("specular workflow", color, 6, coat.base_color, true, coat);
+    ExpectRadiance("specular workflow", color, 6, Lotus::Preview(coat).base_color, true, coat);
   surface.GetAttribute(TfToken("inputs:specularColor")).Set(GfVec3f(0.1F, 0.4F, 0.8F));
-  coat.specular_color = {0.1F, 0.4F, 0.8F};
+  Lotus::Preview(coat).specular_color = {0.1F, 0.4F, 0.8F};
   coated = sync();
   Expect("specular colour edit", coated.scene->materials.at("/Looks/Glow"), coat);
   if (gpu)
-    ExpectRadiance("specular colour edit", color, 6, coat.base_color, true, coat);
+    ExpectRadiance("specular colour edit", color, 6, Lotus::Preview(coat).base_color, true, coat);
 
   // GeomSubset bindings: each bound subset is a scene mesh that follows edits.
   const std::string subset_key = "/Split.lotus:subset:Right";
