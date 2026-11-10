@@ -6,10 +6,32 @@ by the [development strategy](../design/POST_V060_STRATEGY.md).
 
 ## Execution order
 
-No task is active. The [Interactive Quality milestone](README.md#v090--interactive-quality)
-shipped in [v0.9.0](../releases/v0.9.0.md), and the next delivery has not
-been selected. It follows the
-[strategy's entry conditions](../design/POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).
+The [MaterialX Shading Models milestone](README.md#v0100--materialx-shading-models)
+is active. Its [contract](../design/MATERIALX_SHADING_MODELS.md) comes first,
+then the IR v2 design and the BSDF API contract, before any model
+([contract §11](../design/MATERIALX_SHADING_MODELS.md#11-recommended-order)).
+LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
+
+1. **Contract review.** Review the
+   [contract](../design/MATERIALX_SHADING_MODELS.md), settle its
+   [design-review decisions](../design/MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)
+   as the tasks that need them start, then mark it accepted.
+2. **LOTUS-MATERIALX-01.** Design material IR v2, and render
+   `UsdPreviewSurface` through it with its fixtures and committed references
+   unchanged.
+3. **LOTUS-MATERIALX-02.** Write the BSDF API contract and move both
+   integrators onto it, with consistency and PDF-normalization tests.
+4. **LOTUS-MATERIALX-03.** Add layer and mix composition, with consistency,
+   white-furnace and reciprocity tests.
+5. **LOTUS-MATERIALX-04.** Translate the
+   [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support)
+   and diagnose everything else. It may start beside 01–03.
+6. **LOTUS-MATERIALX-05.** glTF PBR core, the smallest end-to-end slice.
+7. **LOTUS-MATERIALX-06 and 07.** glTF PBR's P1 extensions, and Standard
+   Surface with its own composition.
+8. **LOTUS-MATERIALX-08.** OpenPBR, fuzz over coat over base.
+9. **LOTUS-MATERIALX-10.** The release gate and the per-model compatibility
+   table.
 
 The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus
 renderer when `hdLotus` is on the plugin path. Its cause is unexplained and

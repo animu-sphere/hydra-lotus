@@ -450,6 +450,12 @@ MaterialX ─────────┘
 
 The GPU evaluates the Lotus material IR.
 
+For MaterialX's glTF PBR, Standard Surface and OpenPBR, the
+[shading-model contract](MATERIALX_SHADING_MODELS.md#12-relation-to-earlier-policy)
+refines this: the IR carries the shading model's identity and composes each
+model's BSDF from shared primitives, and the order of work is glTF PBR,
+Standard Surface, OpenPBR.
+
 Selected foundation work may be delivered under the
 [cross-phase rule](#cross-phase-delivery). Expansion starts from demonstrated
 asset gaps, with the strategy's [entry conditions](POST_V060_STRATEGY.md#5-entry-conditions-for-later-work).

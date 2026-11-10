@@ -53,12 +53,41 @@ completion of its parent phase.
 | Renderer Phase 5 — ReSTIR DI | ✅ exit criteria met ([exit review](../reports/2026-10-17-renderer-phase5-exit.md)): initial, temporal and spatial reservoirs, proposals and Hydra controls/AOVs ([contract](../reference/RESTIR.md)); animation/reset contract kept ([animation](../reports/2026-10-17-restir-animation.md), [reset contract](../reports/2026-10-17-restir-reset-contract.md)); no reuse bias, ghosting or localized error detected in the bounded fixtures; [reuse cost](../reports/2026-10-17-restir-reuse-cost.md) at locked clocks: NEE/MIS stays the default, initial-only reservoirs with eight candidates about 1.4× faster to equal quality only with many distant lights, temporal, spatial and combined reuse not worth using; the [stop rule](../design/ROADMAP_POLICY.md#renderer-phase-5--restir-di) applies | [v0.5.0 experimental snapshot](../releases/v0.5.0.md); closure [v0.5.1](../releases/v0.5.1.md) |
 | Renderer Phase 6 — Denoising / SVGF-class pipeline | ✅ exit criteria met ([exit review](../reports/2026-10-18-svgf-viewport.md#renderer-phase-6-exit)): temporal accumulation, moments and variance ([evidence](../reports/2026-10-18-svgf-moments-variance.md)); edge-aware filtering and reference comparison under both integrators ([evidence](../reports/2026-10-18-svgf-filter.md)); run-time switching, raw/filtered comparison, history and variance views and denoise timing in the viewport ([evidence](../reports/2026-10-18-svgf-viewport.md)); [release gate passed](../reports/2026-10-18-v0.6.0-release-gate.md) | [v0.6.0](../releases/v0.6.0.md) |
 | Renderer Phase 7 — ReSTIR GI / advanced reservoir transport | ⬜ | unscheduled |
-| Renderer Phase 8 — Production material support | ⬜ | full phase unscheduled; selected foundation subset in the practical-foundation delivery and selected MaterialX and asset-gap subsets in the Materials & Lighting delivery below |
+| Renderer Phase 8 — Production material support | ⬜ | full phase unscheduled; selected foundation subset in the practical-foundation delivery, selected MaterialX and asset-gap subsets in the Materials & Lighting delivery, and the MaterialX shading-model subset in the MaterialX Shading Models delivery below |
 | Renderer Phase 9 — Advanced sampling and scheduling | ⬜ | full phase unscheduled; selected profiling subset in the practical-foundation delivery below |
 | Renderer Phase 10 — Spectral rendering research | ⬜ | unscheduled |
 | Practical foundation — cross-phase delivery | ✅ every workstream closed ([practical foundation review](../reports/2026-10-28-practical-foundation-closure.md): baseline, top three costs explained and fixed, memory inventory and two adopted reductions; [material foundation review](../reports/2026-10-28-material-foundation-closure.md); [light crossing hierarchy](../reports/2026-10-25-light-crossing-hierarchy.md#decision)); [release gate passed](../reports/2026-10-28-v0.7.0-release-gate.md); selected later-phase subsets only | [v0.7.0](../releases/v0.7.0.md) ([plan](#v070--performance--production-foundation)) |
 | Materials & Lighting — cross-phase delivery | ✅ every task closed, each selected by the [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision): a [MaterialX Standard Surface subset](../reports/2026-10-29-materialx-standard-surface.md#decision), a [dielectric transmission lobe](../reports/2026-10-29-dielectric-transmission.md#decision), [texture transforms, per-face materials and primvar colour](../reports/2026-10-31-texture-transforms-subsets-primvars.md#decision), and [skinned meshes](../reports/2026-10-31-skinned-meshes.md#decision); no lighting task, since no asset demonstrated a lighting gap; [release gate passed](../reports/2026-10-31-v0.8.0-release-gate.md); selected subsets only | [v0.8.0](../releases/v0.8.0.md) ([plan](#v080--materials--lighting)) |
 | Interactive Quality — cross-phase delivery | ✅ every task closed under the accepted [contract](../design/INTERACTIVE_QUALITY.md): fixed fixtures and a [baseline](../reports/2026-11-08-interactive-baseline.md), [Interactive and Reference presets and the invalidation table](../reports/2026-11-08-interactive-presets.md), [Balanced settling](../reports/2026-11-08-balanced-settling.md), and [ghosting candidates](../reports/2026-11-09-ghosting-candidates.md#decision) measured with none adopted; [release gate passed](../reports/2026-11-09-v0.9.0-release-gate.md); selected subsets only | [v0.9.0](../releases/v0.9.0.md) ([plan](#v090--interactive-quality)) |
+| MaterialX Shading Models — cross-phase delivery | 🚧 [contract](../design/MATERIALX_SHADING_MODELS.md) proposed, awaiting review; no implementation yet | v0.10.0 ([plan](#v0100--materialx-shading-models)) |
+
+## v0.10.0 — MaterialX Shading Models
+
+Render MaterialX's glTF PBR, Standard Surface and OpenPBR surfaces with each
+model's semantics and layer order intact, under the
+[shading-model contract](../design/MATERIALX_SHADING_MODELS.md). The goal is
+the principal reflection and transmission features of each model, evaluated
+and sampled consistently with the supported range stated, not complete
+support of all three. The delivery is chosen by direction rather than by an
+asset gap ([contract §12](../design/MATERIALX_SHADING_MODELS.md#12-relation-to-earlier-policy)).
+
+| Task | Delivery scope | Exit evidence |
+| --- | --- | --- |
+| LOTUS-MATERIALX-01 (Renderer Phase 8 subset) | Material IR v2: the shading model's identity and per-model parameters, CPU and GPU layouts | Reviewed design; `UsdPreviewSurface` renders through IR v2 with its fixtures and committed references unchanged |
+| LOTUS-MATERIALX-02 (Renderer Phase 8 subset) | The BSDF API: `Evaluate`, `Sample` and `Pdf`, shared by both integrators | Reviewed contract including delta and transmission measures; consistency and PDF-normalization tests pass |
+| LOTUS-MATERIALX-03 (Renderer Phase 8 subset) | Layer and mix: multiple lobes, Fresnel attenuation, lobe selection | Consistency, white-furnace and reciprocity tests with tolerances per lobe and input domain |
+| LOTUS-MATERIALX-04 (Renderer Phase 8 subset) | MaterialX graph translation: the [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support) | Every unsupported node and connection diagnosed; fixtures fixing colour space, channels, UVs, normal and tangent space, and unconnected defaults |
+| LOTUS-MATERIALX-05 (Renderer Phase 8 subset) | glTF PBR core: the P0 features | Committed textured fixture with references and Hydra/headless agreement |
+| LOTUS-MATERIALX-06 (Renderer Phase 8 subset) | glTF PBR extensions: the P1 features (IOR, transmission, clearcoat, sheen) | Fixture and tests per extension |
+| LOTUS-MATERIALX-07 (Renderer Phase 8 subset) | Standard Surface: its principal lobes and its own composition | Committed textured fixture; the inputs today's subset warns for are supported, partial or diagnosed |
+| LOTUS-MATERIALX-08 (Renderer Phase 8 subset) | OpenPBR: fuzz over coat over base | Committed textured fixture; fuzz and coat layering verified independently |
+| LOTUS-MATERIALX-09 (Renderer Phase 8 subset) | MaterialX validation, run from each stage on | Independent reference comparisons and furnace tests per model |
+| LOTUS-MATERIALX-10 | Release gate | The contract's [acceptance](../design/MATERIALX_SHADING_MODELS.md#9-scope-tracking-and-acceptance): integrator parity, no `UsdPreviewSurface` regression, measured performance and memory, per-model compatibility table |
+
+The [active queue](current.md#execution-order) owns the order. Arbitrary
+BSDF graphs, procedural noise, OSL, dispersion and full subsurface, thin-film
+and volume support are not exit gates. Reference-quality and
+`UsdPreviewSurface` regressions remain disqualifying.
 
 ## v0.9.0 — Interactive Quality
 
@@ -139,7 +168,7 @@ checklist.
 
 | Candidate | Direction | Entry condition |
 | --- | --- | --- |
-| v0.10.0 or later — Advanced Transport (tentative) | Bounded ReSTIR GI / path-guiding evaluation. | An experiment brief meets the [research rules](../design/POST_V060_STRATEGY.md#6-research-track-and-stop-rule); no automatic adoption or default change. |
+| v0.11.0 or later — Advanced Transport (tentative) | Bounded ReSTIR GI / path-guiding evaluation. | An experiment brief meets the [research rules](../design/POST_V060_STRATEGY.md#6-research-track-and-stop-rule); no automatic adoption or default change. |
 | Optional future modes | Neural denoising and spectral experiments. | Optional dependencies and a stable ordinary RGB path; costs and contracts established before expansion. |
 
 Only the [canonical table](#status-at-a-glance) assigns targets. Later

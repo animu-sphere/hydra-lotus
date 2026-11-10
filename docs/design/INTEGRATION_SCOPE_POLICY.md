@@ -19,8 +19,8 @@ and reads no project-specific material schema. Material input is
 `UsdPreviewSurface`, OpenPBR and MaterialX
 ([design policy §17](DESIGN_POLICY.md#17-material),
 [roadmap policy §4](ROADMAP_POLICY.md#renderer-phase-8--production-material-support));
-how the roadmap policy's glTF PBR–compatible mapping fits this rule is
-[DES-Q6](DESIGN_POLICY.md#53-open-questions). A format repository's
+the roadmap policy's glTF PBR–compatible mapping is MaterialX's glTF PBR
+surface ([DES-Q6](DESIGN_POLICY.md#53-open-questions)). A format repository's
 own material semantics reach Lotus only through the standard realizations
 that repository authors. Lotus defines no USD schema of its own
 ([design policy §48](DESIGN_POLICY.md#48-not-done-first)).
