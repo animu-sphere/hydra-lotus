@@ -63,8 +63,18 @@ camera matrix and traces the GPU scene instead of its bootstrap counts.
 `include/lotus/material.hpp` owns the Lotus material IR of Renderer Phase
 1.5 ([design policy §18](../design/DESIGN_POLICY.md#18-material-ir)): a
 `Material` that host translators produce and the GPU material table
-evaluates, independent of any authoring schema. It holds constant values in
-linear RGB, and its defaults are `UsdPreviewSurface`'s:
+evaluates, independent of any authoring schema. Its layout is the
+[material IR v2](../design/MATERIAL_IR_V2.md): a `MaterialGeometry` that
+every shading model shares (`texcoords`, `texcoord_fallback`, `opacity`,
+`opacity_texture`, `opacity_threshold`, `normal`, `normal_texture` and
+`base_color_primvar`), and a `surface` variant holding one model's
+parameters, whose index `Model()` returns as a `ShadingModel`.
+`UsdPreviewSurface` (`PreviewSurface`, reached through `Preview(material)`)
+is the only model with parameters; the `GltfPbr`, `StandardSurface` and
+`OpenPbr` tags are reserved, and the render world and the GPU scene reject
+a material that has one. A default `Material` is a default
+`UsdPreviewSurface`. Values are linear RGB, and the fields and defaults are
+`UsdPreviewSurface`'s:
 
 | Field | Default | Range | Meaning |
 | --- | --- | --- | --- |
@@ -316,16 +326,26 @@ empty plan records no GPU work.
   without one), and the address and index of the colour set its base colour
   reads (zero and `kNoColors` without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 784-byte record per material:
-  base colour and roughness, emission and metallic, the texture-coordinate
-  fallback, the constant tangent normal (with the workflow flag in its fourth
-  component), opacity and threshold, specular colour and ior, transmission
-  colour and weight, then one 96-byte lookup per
-  texture input, in the order base colour, roughness, metallic, emission,
-  normal, opacity and specular colour: its texture slot, its sampler
-  (`wrap_s * 4 + wrap_t`), its channel, its mode (a constant, a lookup, or
-  a lookup whose key names no texture, which returns the fallback), scale,
-  bias, fallback and the two rows of its coordinate transform. It reaches the
+- One device-local material table holds a 128-byte record per material
+  ([material IR v2 §5](../design/MATERIAL_IR_V2.md#5-gpu-layout)): a
+  16-byte header (the `ShadingModel` in the low byte of its first word and
+  the model's flags above it, the first binding's index, and a 64-bit mask
+  of the slots that have a lookup), 32 bytes of geometry (the
+  texture-coordinate fallback, opacity and threshold, the constant tangent
+  normal), then the model's parameters, zero beyond them. For
+  `UsdPreviewSurface` they are base colour and roughness, emission and
+  metallic, specular colour and ior, transmission colour and weight, and
+  its flags are the specular workflow (1) and thin walls (2). A binding
+  table of 96-byte lookups follows the records in the same buffer, one per
+  set mask bit, each material's in slot order: slot *k*'s lookup is binding
+  `lookup_base` plus the set bits below *k*. Slots 0 and 1 are opacity and
+  normal in every model, so the any-hit test never reads the model;
+  `UsdPreviewSurface` numbers base colour, roughness, metallic, emission
+  and specular colour 2 to 6 (`TextureInputs` order). A lookup holds its
+  texture slot, its sampler (`wrap_s * 4 + wrap_t`), its channel, its mode
+  (a lookup, or one whose key names no texture, which returns the
+  fallback), scale, bias, fallback and the two rows of its coordinate
+  transform. A constant material reads no binding. The table reaches the
   device with the first instances and is rewritten whole whenever the plan
   changes it. A plan is rejected when an instance's slot lies outside the
   table, including a table that shrinks below the slots of instances it
@@ -1480,7 +1500,9 @@ measurements stay comparable) or `mis` selects the
 `--benchmark-light-crossing hierarchy` (the default) or `linear` selects
 how rays find the analytic lights they cross
 ([path tracing](#path-tracing)), recorded as `procedure.light_crossing`;
-`scene.light_hierarchy_bytes` records the hierarchy's size.
+`scene.light_hierarchy_bytes` records the hierarchy's size, and
+`scene.materials` and `scene.material_bytes` the material table's entries
+and device bytes, its binding table included.
 `textured-v1`, `instanced-v1` and `geometry-v1` use a white environment,
 coated diffuse surfaces and deterministic grid heights; their light tables
 are empty. The lit workloads light the Cornell box's geometry by analytic

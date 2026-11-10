@@ -83,16 +83,21 @@ SceneUpdate SceneExtraction::Update(const FrameSnapshot& snapshot) {
         // The set the material's lookups read, by its position in key order.
         std::uint32_t texcoords = kNoTexcoords;
         const Material& bound = materials[material].material;
-        if (HasTextureInputs(bound) || bound.normal != Material{}.normal) {
-          const auto set = geometry->texcoords.find(bound.texcoords);
+        if (HasTextureInputs(bound) ||
+            bound.geometry.normal != MaterialGeometry{}.normal) {
+          const auto set = geometry->texcoords.find(bound.geometry.texcoords);
           if (set != geometry->texcoords.end()) {
             texcoords = static_cast<std::uint32_t>(
                 std::distance(geometry->texcoords.begin(), set));
           }
         }
         std::uint32_t colors = kNoColors;
-        if (!bound.base_color_texture) {
-          const auto set = geometry->colors.find(bound.base_color_primvar);
+        // The colour set drives UsdPreviewSurface's base colour unless a
+        // lookup replaces it.
+        const auto* preview = std::get_if<PreviewSurface>(&bound.surface);
+        if (preview != nullptr && !preview->base_color_texture) {
+          const auto set =
+              geometry->colors.find(bound.geometry.base_color_primvar);
           if (set != geometry->colors.end()) {
             colors = static_cast<std::uint32_t>(
                 std::distance(geometry->colors.begin(), set));

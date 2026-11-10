@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace Lotus {
@@ -72,12 +73,55 @@ struct TextureInput {
   bool operator==(const TextureInput&) const = default;
 };
 
-// The Lotus material IR (design policy section 18): what a host's material
-// translator produces and the GPU material table evaluates, independent of
-// any authoring schema. Colours are linear RGB, and the defaults are
-// UsdPreviewSurface's. Each input is a constant or, when it has a texture
-// input, a texture lookup that replaces the constant.
-struct Material {
+// The shading model a material's parameters belong to
+// (docs/design/MATERIAL_IR_V2.md). Same-named parameters of different models
+// stay distinct, and nothing converts one model's parameters into another's.
+enum class ShadingModel : std::uint32_t {
+  UsdPreviewSurface,
+  // Tags reserved for LOTUS-MATERIALX-05, -07 and -08. A material with one
+  // of them has no parameters yet, and the GPU scene rejects it.
+  GltfPbr,
+  StandardSurface,
+  OpenPbr,
+};
+
+// What a material decides before or outside its BSDF, and means the same in
+// every shading model: where its lookups read, what hides the surface and
+// its base shading normal.
+struct MaterialGeometry {
+  // Where the texture inputs look up: the mesh's texture-coordinate set of
+  // this name (MeshGeometry::texcoords), or `texcoord_fallback` on a mesh
+  // without one. Empty names no set.
+  std::string texcoords;
+  std::array<float, 2> texcoord_fallback{0.0F, 0.0F};
+  // Surface coverage in [0, 1]. With a positive threshold, coverage is
+  // binary: opacity >= threshold accepts the surface. Otherwise a ray
+  // accepts it with probability opacity (straight-through on rejection,
+  // without a scattering event). This is presence, not refractive glass.
+  float opacity = 1.0F;
+  float opacity_threshold = 0.0F;
+  std::optional<TextureInput> opacity_texture;
+  // Tangent-space shading normal in [-1, 1], normalized after evaluation.
+  // The identity leaves the mesh's shading normal unchanged. The tangent
+  // follows increasing s and the bitangent increasing t of `texcoords`;
+  // without usable coordinates a stable orthonormal frame is used.
+  std::array<float, 3> normal{0.0F, 0.0F, 1.0F};
+  // RGB already in tangent space: scale/bias belong to the texture input,
+  // so an 8-bit normal map typically uses scale 2, bias -1 and raw texels.
+  std::optional<TextureInput> normal_texture;
+  // The model's colour input (UsdPreviewSurface's base colour) on a mesh
+  // with the colour set of this name (MeshGeometry::colors), clamped into
+  // [0, 1]; the input's own value applies on a mesh without one. Empty names
+  // no set. A texture input on that input wins.
+  std::string base_color_primvar;
+
+  bool operator==(const MaterialGeometry&) const = default;
+};
+
+// UsdPreviewSurface's parameters, with its defaults. Colours are linear RGB.
+// Each input is a constant or, when it has a texture input, a texture
+// lookup that replaces the constant.
+struct PreviewSurface {
   // Lambert albedo, and the GGX reflectance at normal incidence (F0) where
   // the surface is metallic. Each component in [0, 1].
   std::array<float, 3> base_color{0.18F, 0.18F, 0.18F};
@@ -94,17 +138,6 @@ struct Material {
   std::array<float, 3> specular_color{0.0F, 0.0F, 0.0F};
   // Emitted radiance, non-negative, from both sides of the surface.
   std::array<float, 3> emission{0.0F, 0.0F, 0.0F};
-  // Tangent-space shading normal in [-1, 1], normalized after evaluation.
-  // The identity leaves the mesh's shading normal unchanged. The tangent
-  // follows increasing s and the bitangent increasing t of `texcoords`;
-  // without usable coordinates a stable orthonormal frame is used.
-  std::array<float, 3> normal{0.0F, 0.0F, 1.0F};
-  // Surface coverage in [0, 1]. With a positive threshold, coverage is
-  // binary: opacity >= threshold accepts the surface. Otherwise a ray
-  // accepts it with probability opacity (straight-through on rejection,
-  // without a scattering event). This is presence, not refractive glass.
-  float opacity = 1.0F;
-  float opacity_threshold = 0.0F;
   // The share in [0, 1] of the non-metal part that is a dielectric
   // interface transmitting light, with `roughness` and `ior`, instead of the
   // dielectric over Lambert (docs/design/TRANSMISSION.md). Positive values
@@ -121,35 +154,90 @@ struct Material {
   std::optional<TextureInput> roughness_texture;
   std::optional<TextureInput> metallic_texture;
   std::optional<TextureInput> emission_texture;
-  // RGB already in tangent space: scale/bias belong to the texture input,
-  // so an 8-bit normal map typically uses scale 2, bias -1 and raw texels.
-  std::optional<TextureInput> normal_texture;
-  std::optional<TextureInput> opacity_texture;
   std::optional<TextureInput> specular_color_texture;
-  // Where the texture inputs look up: the mesh's texture-coordinate set of
-  // this name (MeshGeometry::texcoords), or `texcoord_fallback` on a mesh
-  // without one. Empty names no set.
-  std::string texcoords;
-  std::array<float, 2> texcoord_fallback{0.0F, 0.0F};
-  // The base colour's source on a mesh with the colour set of this name
-  // (MeshGeometry::colors), clamped into [0, 1]; `base_color` applies on a
-  // mesh without one. Empty names no set. A base colour texture input wins.
-  std::string base_color_primvar;
+
+  bool operator==(const PreviewSurface&) const = default;
+};
+
+// Reserved: their parameters arrive with LOTUS-MATERIALX-05, -07 and -08.
+struct GltfPbr {
+  bool operator==(const GltfPbr&) const = default;
+};
+struct StandardSurface {
+  bool operator==(const StandardSurface&) const = default;
+};
+struct OpenPbr {
+  bool operator==(const OpenPbr&) const = default;
+};
+
+// The Lotus material IR (design policy section 18,
+// docs/design/MATERIAL_IR_V2.md): what a host's material translator produces
+// and the GPU material table evaluates, independent of any authoring schema.
+// The variant's alternatives are in ShadingModel order, so the tag and the
+// parameters cannot disagree. A default material is a default
+// UsdPreviewSurface.
+struct Material {
+  MaterialGeometry geometry;
+  std::variant<PreviewSurface, GltfPbr, StandardSurface, OpenPbr> surface;
+
+  [[nodiscard]] ShadingModel Model() const {
+    return static_cast<ShadingModel>(surface.index());
+  }
 
   bool operator==(const Material&) const = default;
 };
 
-// A material's texture inputs, in the order the GPU material table keeps
-// them: base colour, roughness, metallic, emission, normal, opacity, specular.
-inline constexpr std::size_t kMaterialTextureInputs = 7;
+// The UsdPreviewSurface parameters of a material that has that model.
+[[nodiscard]] inline PreviewSurface& Preview(Material& material) {
+  return std::get<PreviewSurface>(material.surface);
+}
+[[nodiscard]] inline const PreviewSurface& Preview(const Material& material) {
+  return std::get<PreviewSurface>(material.surface);
+}
 
+// A material's texture-input slots, the numbering of the GPU material
+// table's binding mask. Slots 0 and 1 are the geometry's in every model, so
+// the any-hit coverage test never asks for the model; the model's own
+// inputs follow. A slot the model does not have reads no lookup.
+inline constexpr std::size_t kMaterialTextureInputs = 7;
+inline constexpr std::size_t kOpacitySlot = 0;
+inline constexpr std::size_t kNormalSlot = 1;
+// UsdPreviewSurface's slots.
+inline constexpr std::size_t kPreviewBaseColorSlot = 2;
+inline constexpr std::size_t kPreviewRoughnessSlot = 3;
+inline constexpr std::size_t kPreviewMetallicSlot = 4;
+inline constexpr std::size_t kPreviewEmissionSlot = 5;
+inline constexpr std::size_t kPreviewSpecularColorSlot = 6;
+
+// A material's texture inputs in slot order. A slot the model does not have
+// is an empty input.
 [[nodiscard]] inline std::array<const std::optional<TextureInput>*,
     kMaterialTextureInputs>
 TextureInputs(const Material& material) {
-  return {&material.base_color_texture, &material.roughness_texture,
-      &material.metallic_texture, &material.emission_texture,
-      &material.normal_texture, &material.opacity_texture,
-      &material.specular_color_texture};
+  static const std::optional<TextureInput> kNone;
+  std::array<const std::optional<TextureInput>*, kMaterialTextureInputs>
+      inputs{&material.geometry.opacity_texture,
+          &material.geometry.normal_texture, &kNone, &kNone, &kNone, &kNone,
+          &kNone};
+  if (const auto* preview = std::get_if<PreviewSurface>(&material.surface)) {
+    inputs[kPreviewBaseColorSlot] = &preview->base_color_texture;
+    inputs[kPreviewRoughnessSlot] = &preview->roughness_texture;
+    inputs[kPreviewMetallicSlot] = &preview->metallic_texture;
+    inputs[kPreviewEmissionSlot] = &preview->emission_texture;
+    inputs[kPreviewSpecularColorSlot] = &preview->specular_color_texture;
+  }
+  return inputs;
+}
+
+// The same, writable, for a UsdPreviewSurface material.
+[[nodiscard]] inline std::array<std::optional<TextureInput>*,
+    kMaterialTextureInputs>
+PreviewTextureInputs(Material& material) {
+  PreviewSurface& preview = Preview(material);
+  return {&material.geometry.opacity_texture,
+      &material.geometry.normal_texture, &preview.base_color_texture,
+      &preview.roughness_texture, &preview.metallic_texture,
+      &preview.emission_texture, &preview.specular_color_texture};
 }
 
 // Whether any of the material's inputs is a texture lookup.

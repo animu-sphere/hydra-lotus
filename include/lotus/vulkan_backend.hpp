@@ -448,7 +448,8 @@ struct GpuSceneStats {
   bool environment_sampled = false;
   std::uint32_t resident_textures = 0;
   // Device bytes of the geometry buffers, of the instances, of the
-  // material table in use and of the textures' texels.
+  // material table in use (its binding table included) and of the
+  // textures' texels.
   std::uint64_t geometry_bytes = 0;
   std::uint64_t instance_bytes = 0;
   std::uint64_t material_bytes = 0;
@@ -566,10 +567,10 @@ struct GpuTextureContents {
 inline constexpr std::uint32_t kNoTextureSlot =
     std::numeric_limits<std::uint32_t>::max();
 
-// A material table entry as the device holds it. `material` has the
-// constants, the texture inputs with empty keys and no texture-coordinate
-// set name; `texture_slots` has, per TextureInputs entry, the slot of the
-// texture it samples.
+// A material table entry as the device holds it, decoded from its record
+// and bindings. `material` has the constants, the texture inputs with empty
+// keys and no texture-coordinate set name; `texture_slots` has, per
+// TextureInputs slot, the slot of the texture it samples.
 struct GpuMaterialContents {
   Material material;
   std::array<std::uint32_t, kMaterialTextureInputs> texture_slots{

@@ -437,6 +437,8 @@ Result Measure(std::string_view id, const Options& options,
         << initial.stats.resident_geometries << ",\"unique_triangles\":" << triangles
         << ",\"instances\":" << initial.stats.instance_count << ",\"textures\":"
         << initial.stats.resident_textures << ",\"texture_bytes\":" << initial.stats.texture_bytes
+        << ",\"materials\":" << initial.stats.material_count
+        << ",\"material_bytes\":" << initial.stats.material_bytes
         << ",\"emissive_triangles\":" << initial.stats.emissive_triangles
         << ",\"analytic_lights\":" << initial.stats.analytic_lights
         << ",\"light_hierarchy_bytes\":" << initial.stats.light_hierarchy_bytes

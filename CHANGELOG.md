@@ -7,6 +7,20 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The material IR is the [material IR v2](docs/design/MATERIAL_IR_V2.md)
+  (LOTUS-MATERIALX-01): `Lotus::Material` holds a `MaterialGeometry` shared
+  by every shading model and a tagged `surface` whose only model with
+  parameters is `UsdPreviewSurface` (`PreviewSurface`, through `Preview()`).
+  The `GltfPbr`, `StandardSurface` and `OpenPbr` tags are reserved and
+  rejected until their tasks. The GPU material record shrinks from 784 to
+  128 bytes, with texture lookups in a binding table that holds only the
+  inputs a material textures; texture-input slots now put opacity and normal
+  first. Rendered images are unchanged.
+- The fixed benchmarks' JSON records `scene.materials` and
+  `scene.material_bytes`.
+
 ## [0.9.0] - 2026-11-09
 
 The Interactive Quality release completes the v0.9.0 milestone. An

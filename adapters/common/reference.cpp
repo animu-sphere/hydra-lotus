@@ -62,7 +62,7 @@ Lotus::MeshInstance Block(const std::array<float, 3>& size, float degrees,
 
 Lotus::Material CoatedDiffuse(const std::array<float, 3>& albedo) {
   Lotus::Material material;
-  material.base_color = albedo;
+  Lotus::Preview(material).base_color = albedo;
   return material;
 }
 
@@ -260,7 +260,7 @@ void SetCornellBox(Lotus::RenderWorld& world) {
           {{0.35F, 0.98F, -0.35F}}, {{0.35F, 0.98F, 0.35F}}}),
       placed);
   Lotus::Material light = CoatedDiffuse({0.0F, 0.0F, 0.0F});
-  light.emission = {15.0F, 13.0F, 10.0F};
+  Lotus::Preview(light).emission = {15.0F, 13.0F, 10.0F};
   world.SetMaterial("/materials/light", light);
   world.BindMaterial("/cornell/light", "/materials/light");
 
@@ -268,9 +268,9 @@ void SetCornellBox(Lotus::RenderWorld& world) {
   world.SetMesh("/cornell/tall", UnitCube(),
       Block({0.6F, 1.2F, 0.6F}, 17.0F, {-0.35F, -0.399F, -0.3F}));
   Lotus::Material metal;
-  metal.base_color = {0.95F, 0.85F, 0.6F};
-  metal.roughness = 0.35F;
-  metal.metallic = 1.0F;
+  Lotus::Preview(metal).base_color = {0.95F, 0.85F, 0.6F};
+  Lotus::Preview(metal).roughness = 0.35F;
+  Lotus::Preview(metal).metallic = 1.0F;
   world.SetMaterial("/materials/metal", metal);
   world.BindMaterial("/cornell/tall", "/materials/metal");
   world.SetMesh("/cornell/short", UnitCube(),

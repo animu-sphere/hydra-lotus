@@ -40,7 +40,7 @@ MeshGeometry Panel(float x0, float x1, float y0, float y1, float z) {
       {{0, 1, 2}, {0, 2, 3}}, {0, 0}};
 }
 Material Diffuse() {
-  Material m; m.ior = 1; m.base_color = {0.5F, 0.75F, 1};
+  Material m; Lotus::Preview(m).ior = 1; Lotus::Preview(m).base_color = {0.5F, 0.75F, 1};
   return m;
 }
 void PlaneWorld(RenderWorld& world, float zoom = 1) {
@@ -188,7 +188,7 @@ void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator,
         const auto w = vulkan_internal::ReservoirReuseNormalization(expected, supporting);
         Near(r.normalization, w, 8e-6, "spatial corrected normalization");
         if (expected.weight_sum > 0) for (int c = 0; c < 3; ++c)
-          Near(r.reservoir.contribution[c], Diffuse().base_color[c] * colors[expected.sample][c] / kPi * w,
+          Near(r.reservoir.contribution[c], Lotus::Preview(Diffuse()).base_color[c] * colors[expected.sample][c] / kPi * w,
               1e-5, "spatial independent RGB");
         Check(r.reservoir.candidate_count <= (temporal ? 17U : 10U), "spatial counts uncapped");
       }
@@ -196,7 +196,7 @@ void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator,
     }
     const auto mean = Mean(previous);
     for (int c = 0; c < 3; ++c)
-      Near(mean[c], Diffuse().base_color[c] * (colors[0][c] + colors[1][c]) / kPi, 0.03,
+      Near(mean[c], Lotus::Preview(Diffuse()).base_color[c] * (colors[0][c] + colors[1][c]) / kPi, 0.03,
           "spatial independent discrete integral");
     std::cout << "spatial CPU/GPU: temporal=" << temporal << " 6 x 4096; spatial_ms="
               << previous.restir.spatial_gpu_ms << " mean_R=" << mean[0] << '\n';
@@ -347,7 +347,7 @@ void SpatialLifecycle(OffscreenRenderer& renderer, Integrator integrator) {
 
 void SpatialOverflow(OffscreenRenderer& renderer, Integrator integrator) {
   Fixture f(renderer, integrator, 8); PlaneWorld(f.world);
-  auto material = Diffuse(); material.base_color = {1, 1, 1}; f.world.SetMaterial("/diffuse", material);
+  auto material = Diffuse(); Lotus::Preview(material).base_color = {1, 1, 1}; f.world.SetMaterial("/diffuse", material);
   Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance.fill(2.4e38F);
   f.world.SetLight("/light", light);
   f.settings.restir_candidates = 1; f.settings.restir_spatial = true;
@@ -371,7 +371,7 @@ void SpatialMeasurements(OffscreenRenderer& renderer, Integrator integrator) {
     light.radiance = {0.2F + float(i % 7) * 0.2F, 0.1F + float(i % 5) * 0.3F,
         0.3F + float(i % 3) * 0.4F};
     f.world.SetLight(std::to_string(i), light);
-    for (int c = 0; c < 3; ++c) integral[c] += Diffuse().base_color[c] * light.radiance[c] / kPi;
+    for (int c = 0; c < 3; ++c) integral[c] += Lotus::Preview(Diffuse()).base_color[c] * light.radiance[c] / kPi;
   }
   f.settings.restir_candidates = 2; f.settings.restir_max_history_candidates = 8;
   for (unsigned mode = 0; mode < 4; ++mode) {
@@ -498,7 +498,7 @@ void TemporalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
       Near(r.normalization, w, 4e-6, "temporal resolved normalization");
       if (expected.weight_sum > 0)
         for (int c = 0; c < 3; ++c)
-          Near(r.reservoir.contribution[c], Diffuse().base_color[c] * colors[expected.sample][c] / kPi * w,
+          Near(r.reservoir.contribution[c], Lotus::Preview(Diffuse()).base_color[c] * colors[expected.sample][c] / kPi * w,
               5e-6, "temporal selected RGB against independent Lambert");
       Check(r.reservoir.candidate_count <= 5, "history candidate cap not applied to count");
     }
@@ -507,7 +507,7 @@ void TemporalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
   Check(zero_sources != 0, "zero observed history streams were not covered");
   const auto mean = Mean(previous);
   for (int c = 0; c < 3; ++c)
-    Near(mean[c], Diffuse().base_color[c] * (colors[0][c] + colors[1][c]) / kPi,
+    Near(mean[c], Lotus::Preview(Diffuse()).base_color[c] * (colors[0][c] + colors[1][c]) / kPi,
         0.025, "temporal independent integral");
   std::cout << "temporal CPU/GPU oracle: 12 x 4096; capped M<=5; zero sources=" << zero_sources
             << " reuse_ms=" << previous.restir.temporal_gpu_ms << '\n';
@@ -616,7 +616,7 @@ void EmissiveLifecycle(OffscreenRenderer& renderer, Integrator integrator, bool 
   Light light; light.shape = LightShape::Distant; light.angle = 0; light.radiance = {0.5F, 0.5F, 0.5F};
   f.world.SetLight("/light", light);
   f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), {});
-  Material emitter; emitter.ior = 1; emitter.base_color = {0, 0, 0}; emitter.emission = {4, 2, 1};
+  Material emitter; Lotus::Preview(emitter).ior = 1; Lotus::Preview(emitter).base_color = {0, 0, 0}; Lotus::Preview(emitter).emission = {4, 2, 1};
   f.world.SetMaterial("/emitter", emitter); f.world.BindMaterial("/emitter", "/emitter");
   TemporalFrameSettings radiance; radiance.accumulate_radiance = true;
   std::vector<EmissiveFrame> frames;
@@ -645,7 +645,7 @@ void EmissiveLifecycle(OffscreenRenderer& renderer, Integrator integrator, bool 
   auto camera = Perspective(); camera.view = Translation(-0.25F, 0, 0);
   f.world.SetCamera(camera);
   step(R::None, 2);
-  emitter.emission = {1, 2, 4}; f.world.SetMaterial("/emitter", emitter);
+  Lotus::Preview(emitter).emission = {1, 2, 4}; f.world.SetMaterial("/emitter", emitter);
   step(R::SceneChanged, 2);
   step(R::None, 2);
   MeshInstance placement; placement.world_from_object = Translation(0.25F, 0, 0);
@@ -653,12 +653,12 @@ void EmissiveLifecycle(OffscreenRenderer& renderer, Integrator integrator, bool 
   step(R::SceneChanged, 2);
   f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), placement);
   step(R::SceneChanged, 2);
-  emitter.emission = {0, 0, 0}; f.world.SetMaterial("/emitter", emitter);
+  Lotus::Preview(emitter).emission = {0, 0, 0}; f.world.SetMaterial("/emitter", emitter);
   step(R::SceneChanged, 0);
   placement.world_from_object = Translation(0, 0, 0);
   f.world.SetMesh("/plane", kPlane, placement);
   step(R::None, 0);
-  emitter.emission = {4, 2, 1}; f.world.SetMaterial("/emitter", emitter);
+  Lotus::Preview(emitter).emission = {4, 2, 1}; f.world.SetMaterial("/emitter", emitter);
   step(R::SceneChanged, 2);
   MeshInstance hidden = placement; hidden.world_from_object = Translation(0.25F, 0, 0); hidden.visible = false;
   f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), hidden);
@@ -743,7 +743,7 @@ void TemporalDisocclusion(OffscreenRenderer& renderer, Integrator integrator, bo
   Fixture f(renderer, integrator, 32); PlaneWorld(f.world);
   f.settings.restir_spatial = spatial;
   f.world.SetMesh("/front", Panel(-1, 1, -1, 1, -3), {});
-  auto front = Diffuse(); front.base_color = {0.9F, 0.2F, 0.1F};
+  auto front = Diffuse(); Lotus::Preview(front).base_color = {0.9F, 0.2F, 0.1F};
   f.world.SetMaterial("/front", front); f.world.BindMaterial("/front", "/front");
   Light light; light.shape = LightShape::Distant; light.angle = 0;
   light.radiance = {2, 1, 0.5F};
@@ -821,7 +821,7 @@ void Arithmetic(OffscreenRenderer& renderer, Integrator integrator) {
     if (expected.weight_sum == 0) { ++all_zero; continue; }
     const auto normalization = vulkan_internal::ReservoirNormalization(expected);
     for (int c = 0; c < 3; ++c) {
-      const double contribution = Diffuse().base_color[c] * colors[expected.sample][c] / kPi;
+      const double contribution = Lotus::Preview(Diffuse()).base_color[c] * colors[expected.sample][c] / kPi;
       Near(actual.contribution[c], contribution * normalization, 2e-6, "selected RGB resolve");
     }
     Near(actual.contribution[3], 1, 0, "unshadowed visibility");
@@ -836,7 +836,7 @@ void Arithmetic(OffscreenRenderer& renderer, Integrator integrator) {
   Check(frame.color.payload == other.color.payload, "parallel-light integrator mismatch");
   f.settings.integrator = integrator;
   // All-zero material still represents all candidate draws.
-  auto black = Diffuse(); black.base_color = {0, 0, 0}; f.world.SetMaterial("/diffuse", black);
+  auto black = Diffuse(); Lotus::Preview(black).base_color = {0, 0, 0}; f.world.SetMaterial("/diffuse", black);
   for (const auto& p : f.Render().restir.initial)
     Check(p.light == UINT32_MAX && p.weight_sum == 0 && p.candidate_count == 8 &&
         p.contribution == std::array<float, 4>{}, "all-zero target normalization");
@@ -851,10 +851,10 @@ void Visibility(OffscreenRenderer& renderer, Integrator integrator, bool spatial
   light.world_from_light[8] = x; light.world_from_light[10] = z;
   light.radiance = {2, 1, 0.5F}; f.world.SetLight("/light", light);
   f.world.SetMesh("/blocker", Panel(5, 15, -6, 6, -2), {});
-  Material blocker; blocker.ior = 1; blocker.base_color = {0, 0, 0};
+  Material blocker; Lotus::Preview(blocker).ior = 1; Lotus::Preview(blocker).base_color = {0, 0, 0};
   f.world.BindMaterial("/blocker", "/blocker");
   for (float opacity : {0.0F, 0.75F, 1.0F}) {
-    blocker.opacity = opacity; f.world.SetMaterial("/blocker", blocker);
+    blocker.geometry.opacity = opacity; f.world.SetMaterial("/blocker", blocker);
     const auto frame = spatial ? f.Temporal({}, false) : f.Render();
     for (unsigned i = 0; i < frame.restir.initial.size(); ++i) {
       const auto& p = spatial ? frame.restir.spatial[i].reservoir : frame.restir.initial[i];
@@ -864,7 +864,7 @@ void Visibility(OffscreenRenderer& renderer, Integrator integrator, bool spatial
     }
     const auto mean = Mean(frame);
     for (int c = 0; c < 3; ++c)
-      Near(mean[c], Diffuse().base_color[c] * light.radiance[c] * z / kPi * (1 - opacity),
+      Near(mean[c], Lotus::Preview(Diffuse()).base_color[c] * light.radiance[c] * z / kPi * (1 - opacity),
           2e-6, "shadowed independent irradiance");
   }
   std::cout << "visibility: transparent, fractional and opaque PASS\n";
@@ -878,7 +878,7 @@ void VisibilitySampleIdentity(OffscreenRenderer& renderer, Integrator integrator
   light.world_from_light = Translation(6, 0, 0);
   light.radiance = {2, 1, 0.5F}; f.world.SetLight("/light", light);
   f.world.SetMesh("/blocker", Panel(1, 3, -10, 10, -2), {});
-  Material blocker; blocker.opacity = 0.75F;
+  Material blocker; blocker.geometry.opacity = 0.75F;
   f.world.SetMaterial("/blocker", blocker); f.world.BindMaterial("/blocker", "/blocker");
   unsigned same = 0, different = 0, changed_visibility = 0;
   for (unsigned frame_index = 0; frame_index < 6; ++frame_index) {
@@ -909,7 +909,7 @@ void VisibilitySampleIdentity(OffscreenRenderer& renderer, Integrator integrator
         Near(p.selected_target, jacobian / kPi, 3e-6,
             "selected area target at current jittered receiver");
         for (unsigned c = 0; c < 3; ++c) {
-          const double expected = Diffuse().base_color[c] * light.radiance[c] / kPi *
+          const double expected = Lotus::Preview(Diffuse()).base_color[c] * light.radiance[c] / kPi *
               jacobian * p.contribution[3] * normalization;
           Near(p.contribution[c], expected, 4e-6,
               "resolved area contribution at current jittered receiver");
@@ -994,7 +994,7 @@ void ProposalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
       const double w = vulkan_internal::ReservoirNormalization(expected);
       for (unsigned c = 0; c < 3; ++c) {
         const double radiance = (expected.sample == 0 ? 1.0 : 3.0) * std::pow(0.5, c);
-        Near(actual.contribution[c], Diffuse().base_color[c] * radiance / kPi * w,
+        Near(actual.contribution[c], Lotus::Preview(Diffuse()).base_color[c] * radiance / kPi * w,
             3e-6, "proposal independent selected RGB");
       }
       first_light += actual.light == 0;
@@ -1003,7 +1003,7 @@ void ProposalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
     const auto converged = f.Render(255);
     Check(converged.samples_per_pixel == 256, "proposal progressive continuation");
     for (unsigned c = 0; c < 3; ++c)
-      Near(Mean(converged)[c], Diffuse().base_color[c] * 4.0 * std::pow(0.5, c) / kPi,
+      Near(Mean(converged)[c], Lotus::Preview(Diffuse()).base_color[c] * 4.0 * std::pow(0.5, c) / kPi,
           0.002, "proposal independent discrete integral");
   }
   auto snapshot = f.world.Commit();
@@ -1057,7 +1057,7 @@ void Lighting(OffscreenRenderer& renderer, Integrator integrator,
     const std::string kind = name;
     if (kind == "emissive") {
       f.world.SetMesh("/emitter", Panel(0.5F, 1.5F, -0.5F, 0.5F, -2), {});
-      Material emitter; emitter.ior = 1; emitter.base_color = {0, 0, 0}; emitter.emission = radiance;
+      Material emitter; Lotus::Preview(emitter).ior = 1; Lotus::Preview(emitter).base_color = {0, 0, 0}; Lotus::Preview(emitter).emission = radiance;
       f.world.SetMaterial("/emitter", emitter); f.world.BindMaterial("/emitter", "/emitter");
       factor = PanelIntegral(false);
     } else if (kind == "environment") {
@@ -1100,14 +1100,14 @@ void Lighting(OffscreenRenderer& renderer, Integrator integrator,
     Save(initial, prefix + kind + "-initial");
     Save(mis, prefix + kind + "-mis");
     for (int c = 0; c < 3; ++c) {
-      const double expected = Diffuse().base_color[c] *
+      const double expected = Lotus::Preview(Diffuse()).base_color[c] *
           (radiance[c] * factor + (mixed ? 0.25 * std::pow(0.5, c) / kPi : 0.0));
       const double tolerance = expected * 0.02 + 0.0001;
       Near(mean[c], expected, tolerance, "initial-only independent lighting integral");
       Near(baseline[c], expected, tolerance, "NEE/MIS independent lighting integral");
       Near(mean[c], baseline[c], tolerance, "initial-only versus converged NEE/MIS");
     }
-    std::cout << name << ": expected_R=" << Diffuse().base_color[0] * radiance[0] * factor
+    std::cout << name << ": expected_R=" << Lotus::Preview(Diffuse()).base_color[0] * radiance[0] * factor
               << " initial_R=" << mean[0] << " mis_R=" << baseline[0]
               << " initial_ms=" << initial.restir.initial_gpu_ms << '\n';
     extraction = std::move(f.extraction);
@@ -1156,7 +1156,7 @@ void BsdfPartition(OffscreenRenderer& renderer, Integrator integrator) {
             for (unsigned j = 0; j < 2; ++j) {
               const double probability = j ? 0.75 : 0.25;
               const double radiance = (j ? 3 : 1) * std::pow(2.0, c);
-              expected += Diffuse().base_color[c] * radiance *
+              expected += Lotus::Preview(Diffuse()).base_color[c] * radiance *
                   (16 * cosine2 / (16 * cosine2 + probability * probability));
             }
             if (std::abs(rgba[c] - expected) > 2e-5)
@@ -1191,7 +1191,7 @@ void GlossyFurnace(OffscreenRenderer& renderer, Integrator integrator) {
   }
   Fixture f(renderer, integrator);
   PlaneWorld(f.world, 100);
-  Material metal; metal.base_color = reflectance; metal.metallic = 1; metal.roughness = 0.08F;
+  Material metal; Lotus::Preview(metal).base_color = reflectance; Lotus::Preview(metal).metallic = 1; Lotus::Preview(metal).roughness = 0.08F;
   f.world.SetMaterial("/diffuse", metal);
   f.settings.restir_candidates = 1;
   Light light; light.shape = LightShape::Distant; light.angle = 360; light.radiance = {1, 3, 2};
@@ -1355,7 +1355,7 @@ void Overflow(OffscreenRenderer& renderer, Integrator integrator) {
 
 void TemporalOverflow(OffscreenRenderer& renderer, Integrator integrator) {
   Fixture f(renderer, integrator, 4); PlaneWorld(f.world);
-  auto material = Diffuse(); material.base_color = {1, 1, 1};
+  auto material = Diffuse(); Lotus::Preview(material).base_color = {1, 1, 1};
   f.world.SetMaterial("/diffuse", material);
   Light light; light.shape = LightShape::Distant; light.angle = 0;
   light.radiance.fill(1.6e38F); f.world.SetLight("/light", light);

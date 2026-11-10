@@ -56,27 +56,39 @@ public struct TextureInputRecord {
 static const uint kConstantInput = 0;
 static const uint kTextureLookup = 1;
 static const uint kFallbackLookup = 2;
-static const uint kBaseColorInput = 0;
-static const uint kRoughnessInput = 1;
-static const uint kMetallicInput = 2;
-static const uint kEmissionInput = 3;
-static const uint kNormalInput = 4;
-static const uint kOpacityInput = 5;
-static const uint kSpecularInput = 6;
+// Texture-input slots (kOpacitySlot and the rest in material.hpp). The
+// geometry's are the same in every model.
+static const uint kOpacitySlot = 0;
+static const uint kNormalSlot = 1;
+static const uint kPreviewBaseColorSlot = 2;
+static const uint kPreviewRoughnessSlot = 3;
+static const uint kPreviewMetallicSlot = 4;
+static const uint kPreviewEmissionSlot = 5;
+static const uint kPreviewSpecularColorSlot = 6;
+// ShadingModel, and UsdPreviewSurface's flags (gpu_scene.hpp).
+static const uint kUsdPreviewSurface = 0;
+static const uint kMaterialFlagShift = 8;
+static const uint kPreviewSpecularWorkflow = 1;
+static const uint kPreviewThinWalled = 2;
 
 // Mirrors GpuMaterialRecord in gpu_scene.hpp: one entry of the material
-// table, the Lotus material IR.
+// table, the Lotus material IR (docs/design/MATERIAL_IR_V2.md section 5).
 public struct MaterialRecord {
-  public float4 base_color_roughness;
-  public float4 emission_metallic;
-  public float4 texcoord_fallback;
-  public float4 normal;
-  // Opacity, opacity threshold, the thin-walled flag.
-  public float4 opacity;
-  public float4 specular_ior;
-  // Transmission colour, then transmission.
-  public float4 transmission;
-  public TextureInputRecord inputs[7];
+  // The model in the low byte, its flags above.
+  public uint model_flags;
+  // The first of the material's lookups in the binding table.
+  public uint lookup_base;
+  // The slots with a lookup: bits 0-31, then 32-63.
+  public uint textured_low;
+  public uint textured_high;
+  // The texture coordinates without a set, opacity, opacity threshold.
+  public float4 geometry_coverage;
+  // The tangent-space normal.
+  public float4 geometry_normal;
+  // The model's constants. UsdPreviewSurface: base colour and roughness,
+  // emission and metallic, specular colour and ior, transmission colour
+  // and transmission.
+  public float4 parameters[5];
 };
 
 // Mirrors GpuLightRecord in gpu_scene.hpp: one emissive triangle of the
@@ -211,6 +223,8 @@ public struct PathConstants {
   // Whether a camera sample that misses shows the environment image instead
   // of `background`.
   public uint environment_background;
+  // The material binding table: the lookups that MaterialInput finds.
+  public TextureInputRecord* material_bindings;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -260,10 +274,18 @@ public struct SurfaceHit {
   public float3 shading_normal;
   // The triangle's world-space area.
   public float area;
-  // The material's inputs at the hit, after texture lookups.
+  // The model's own inputs at the hit, after texture lookups, which the
+  // debug outputs show.
   public float3 base_color;
   public float roughness;
   public float metallic;
+  // The surface summary that consumers other than the BSDF read, whatever
+  // the model (docs/design/MATERIAL_IR_V2.md section 6.2): the colour the
+  // diffuse and transmitted light carry, and the dominant specular lobe's
+  // roughness and share of the reflection.
+  public float3 albedo;
+  public float specular_roughness;
+  public float specular_share;
   public SurfaceBsdf bsdf;
   public Spectrum emission;
 };
@@ -283,12 +305,44 @@ float4 Lookup(TextureInputRecord input, float2 st) {
   return texel * input.scale + input.bias;
 }
 
+uint MaterialModel(MaterialRecord material) {
+  return material.model_flags & ((1u << kMaterialFlagShift) - 1u);
+}
+
+bool MaterialFlag(MaterialRecord material, uint flag) {
+  return ((material.model_flags >> kMaterialFlagShift) & flag) != 0;
+}
+
+// Whether any of the slots in a mask below 32 has a lookup.
+bool Textured(MaterialRecord material, uint slots) {
+  return (material.textured_low & slots) != 0;
+}
+
+// Slot `slot`'s lookup, or a constant input when it has none: a bit in the
+// textured mask is a binding, found by counting the set bits below it.
+TextureInputRecord MaterialInput(MaterialRecord material, uint slot) {
+  const uint bit = 1u << (slot & 31u);
+  const bool textured = slot < 32
+      ? (material.textured_low & bit) != 0
+      : (material.textured_high & bit) != 0;
+  if (!textured) {
+    TextureInputRecord constant = {};
+    constant.mode = kConstantInput;
+    return constant;
+  }
+  const uint below = slot < 32
+      ? countbits(material.textured_low & (bit - 1u))
+      : countbits(material.textured_low) +
+            countbits(material.textured_high & (bit - 1u));
+  return path_constants.material_bindings[material.lookup_base + below];
+}
+
 // The texture coordinates at a hit: the instance's set interpolated with the
 // barycentrics, or the material's fallback.
 float2 HitTexcoords(InstanceRecord instance, MaterialRecord material,
     Hit hit) {
   if (instance.texcoords == 0) {
-    return material.texcoord_fallback.xy;
+    return material.geometry_coverage.xy;
   }
   const uint corner = hit.primitive * 3;
   const float2 t0 = ((float2*)instance.texcoords)[corner];
@@ -317,14 +371,15 @@ float3 HitColor(InstanceRecord instance, Hit hit) {
 float Coverage(Hit hit) {
   const InstanceRecord instance = path_constants.instances[hit.instance];
   const MaterialRecord material = path_constants.materials[instance.material_slot];
-  float opacity = material.opacity.x;
-  const TextureInputRecord input = material.inputs[kOpacityInput];
-  if (input.mode != kConstantInput) {
+  float opacity = material.geometry_coverage.z;
+  if (Textured(material, 1u << kOpacitySlot)) {
+    const TextureInputRecord input = MaterialInput(material, kOpacitySlot);
     opacity = Lookup(input, HitTexcoords(instance, material, hit))[input.channel];
     // Lookup arithmetic can overflow even with finite float texels.
     opacity = isfinite(opacity) ? saturate(opacity) : 0.0;
   }
-  if (material.opacity.y > 0.0) return opacity >= material.opacity.y ? 1.0 : 0.0;
+  const float threshold = material.geometry_coverage.w;
+  if (threshold > 0.0) return opacity >= threshold ? 1.0 : 0.0;
   return opacity;
 }
 
@@ -483,13 +538,22 @@ float TriangleArea(float3 p0, float3 p1, float3 p2) {
   return 0.5 * length(cross(p1 - p0, p2 - p0));
 }
 
-// The material's emission at texture coordinates `st`.
-float3 Emission(MaterialRecord material, float2 st) {
-  const TextureInputRecord input = material.inputs[kEmissionInput];
-  if (input.mode == kConstantInput) {
-    return material.emission_metallic.xyz;
+// A UsdPreviewSurface material's emission at texture coordinates `st`.
+float3 PreviewEmission(MaterialRecord material, float2 st) {
+  if (!Textured(material, 1u << kPreviewEmissionSlot)) {
+    return material.parameters[1].xyz;
   }
-  return max(Lookup(input, st).xyz, 0.0);
+  return max(Lookup(MaterialInput(material, kPreviewEmissionSlot), st).xyz, 0.0);
+}
+
+// The material's emission at texture coordinates `st`. The GPU scene holds
+// no model but UsdPreviewSurface until the others have parameters.
+float3 Emission(MaterialRecord material, float2 st) {
+  switch (MaterialModel(material)) {
+  case kUsdPreviewSurface:
+  default:
+    return PreviewEmission(material, st);
+  }
 }
 
 // A direction next event estimation chose towards a light.
@@ -1070,6 +1134,86 @@ public Spectrum CrossedLights(float3 origin, float3 direction, float distance,
   return sum;
 }
 
+// Evaluates a UsdPreviewSurface material at a hit whose geometry `surface`
+// already holds: its inputs, the mapped shading normal, the BSDF, the
+// emission and the surface summary. `normal` is the triangle's unit winding
+// normal and the edges are its world-space edges from the first corner.
+void EvaluatePreview(MaterialRecord material, InstanceRecord instance,
+    Hit hit, float3 edge1, float3 edge2, float3 normal, float3 direction,
+    inout SurfaceHit surface) {
+  surface.base_color = instance.colors != 0
+                           ? saturate(HitColor(instance, hit))
+                           : material.parameters[0].xyz;
+  surface.roughness = material.parameters[0].w;
+  surface.metallic = material.parameters[1].w;
+  float3 emission = material.parameters[1].xyz;
+  float3 tangent_normal = material.geometry_normal.xyz;
+  float3 specular = material.parameters[2].xyz;
+  // A texture lookup replaces its input's constant, clamped into the
+  // input's range.
+  if (Textured(material, (1u << kNormalSlot) | (1u << kPreviewBaseColorSlot) |
+          (1u << kPreviewRoughnessSlot) | (1u << kPreviewMetallicSlot) |
+          (1u << kPreviewEmissionSlot) | (1u << kPreviewSpecularColorSlot))) {
+    const float2 st = HitTexcoords(instance, material, hit);
+    TextureInputRecord input = MaterialInput(material, kPreviewBaseColorSlot);
+    if (input.mode != kConstantInput) {
+      surface.base_color = saturate(Lookup(input, st).xyz);
+    }
+    input = MaterialInput(material, kPreviewRoughnessSlot);
+    if (input.mode != kConstantInput) {
+      surface.roughness = saturate(Lookup(input, st)[input.channel]);
+    }
+    input = MaterialInput(material, kPreviewMetallicSlot);
+    if (input.mode != kConstantInput) {
+      surface.metallic = saturate(Lookup(input, st)[input.channel]);
+    }
+    emission = PreviewEmission(material, st);
+    input = MaterialInput(material, kNormalSlot);
+    if (input.mode != kConstantInput) {
+      tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
+    }
+    input = MaterialInput(material, kPreviewSpecularColorSlot);
+    if (input.mode != kConstantInput) {
+      const float3 value = Lookup(input, st).xyz;
+      specular = all(isfinite(value)) ? saturate(value) : material.parameters[2].xyz;
+    }
+  }
+  // Preserve the constant-material reference path exactly, including the
+  // interpolated normal's rounding, when the input is the identity.
+  if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
+    surface.shading_normal = MappedNormal(tangent_normal,
+        TangentFrame(instance, MaterialInput(material, kNormalSlot), hit,
+            edge1, edge2, surface.shading_normal),
+        surface.normal, direction);
+  }
+  // The solid's outward normal is the winding normal of its object-space
+  // triangle, which a mirroring transform reverses in world space.
+  bool entering = true;
+  const float transmission = material.parameters[3].w;
+  if (transmission > 0.0) {
+    const float3 c0 = mul(instance.world_from_object, float4(1.0, 0.0, 0.0, 0.0)).xyz;
+    const float3 c1 = mul(instance.world_from_object, float4(0.0, 1.0, 0.0, 0.0)).xyz;
+    const float3 c2 = mul(instance.world_from_object, float4(0.0, 0.0, 1.0, 0.0)).xyz;
+    const float3 outward = dot(c0, cross(c1, c2)) < 0.0 ? -normal : normal;
+    entering = dot(outward, direction) < 0.0;
+  }
+  surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
+      surface.roughness, surface.metallic, material.parameters[2].w,
+      MaterialFlag(material, kPreviewSpecularWorkflow),
+      SpectrumFromRgb(specular), transmission,
+      SpectrumFromRgb(material.parameters[3].xyz),
+      MaterialFlag(material, kPreviewThinWalled), entering);
+  surface.emission = SpectrumFromRgb(emission);
+  // Transmitted light is tinted by the transmission colour, not the base
+  // colour, so the transmitted share carries that.
+  surface.albedo = surface.bsdf.transmission > 0.0
+      ? lerp(surface.base_color, SpectrumToRgb(surface.bsdf.transmission_color),
+            surface.bsdf.transmission)
+      : surface.base_color;
+  surface.specular_roughness = surface.roughness;
+  surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
+}
+
 // Surface hit reconstruction from the instance record and the geometry and
 // material it addresses. Interpolating the world-space corners keeps the
 // position on the triangle's plane.
@@ -1099,70 +1243,13 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   }
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
-  surface.base_color = instance.colors != 0
-                           ? saturate(HitColor(instance, hit))
-                           : material.base_color_roughness.xyz;
-  surface.roughness = material.base_color_roughness.w;
-  surface.metallic = material.emission_metallic.w;
-  float3 emission = material.emission_metallic.xyz;
-  float3 tangent_normal = material.normal.xyz;
-  float3 specular = material.specular_ior.xyz;
-  // A texture lookup replaces its input's constant, clamped into the
-  // input's range.
-  if (material.inputs[kBaseColorInput].mode != kConstantInput ||
-      material.inputs[kRoughnessInput].mode != kConstantInput ||
-      material.inputs[kMetallicInput].mode != kConstantInput ||
-      material.inputs[kEmissionInput].mode != kConstantInput ||
-      material.inputs[kNormalInput].mode != kConstantInput ||
-      material.inputs[kSpecularInput].mode != kConstantInput) {
-    const float2 st = HitTexcoords(instance, material, hit);
-    TextureInputRecord input = material.inputs[kBaseColorInput];
-    if (input.mode != kConstantInput) {
-      surface.base_color = saturate(Lookup(input, st).xyz);
-    }
-    input = material.inputs[kRoughnessInput];
-    if (input.mode != kConstantInput) {
-      surface.roughness = saturate(Lookup(input, st)[input.channel]);
-    }
-    input = material.inputs[kMetallicInput];
-    if (input.mode != kConstantInput) {
-      surface.metallic = saturate(Lookup(input, st)[input.channel]);
-    }
-    emission = Emission(material, st);
-    input = material.inputs[kNormalInput];
-    if (input.mode != kConstantInput) {
-      tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
-    }
-    input = material.inputs[kSpecularInput];
-    if (input.mode != kConstantInput) {
-      const float3 value = Lookup(input, st).xyz;
-      specular = all(isfinite(value)) ? saturate(value) : material.specular_ior.xyz;
-    }
+  switch (MaterialModel(material)) {
+  case kUsdPreviewSurface:
+  default:
+    EvaluatePreview(material, instance, hit, p1 - p0, p2 - p0, normal,
+        direction, surface);
+    break;
   }
-  // Preserve the constant-material reference path exactly, including the
-  // interpolated normal's rounding, when the input is the identity.
-  if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
-    surface.shading_normal = MappedNormal(tangent_normal,
-        TangentFrame(instance, material.inputs[kNormalInput], hit, p1 - p0,
-            p2 - p0, surface.shading_normal),
-        surface.normal, direction);
-  }
-  // The solid's outward normal is the winding normal of its object-space
-  // triangle, which a mirroring transform reverses in world space.
-  bool entering = true;
-  if (material.transmission.w > 0.0) {
-    const float3 c0 = mul(instance.world_from_object, float4(1.0, 0.0, 0.0, 0.0)).xyz;
-    const float3 c1 = mul(instance.world_from_object, float4(0.0, 1.0, 0.0, 0.0)).xyz;
-    const float3 c2 = mul(instance.world_from_object, float4(0.0, 0.0, 1.0, 0.0)).xyz;
-    const float3 outward = dot(c0, cross(c1, c2)) < 0.0 ? -normal : normal;
-    entering = dot(outward, direction) < 0.0;
-  }
-  surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
-      surface.roughness, surface.metallic, material.specular_ior.w,
-      material.normal.w != 0.0, SpectrumFromRgb(specular),
-      material.transmission.w, SpectrumFromRgb(material.transmission.xyz),
-      material.opacity.z != 0.0, entering);
-  surface.emission = SpectrumFromRgb(emission);
   return surface;
 }
 

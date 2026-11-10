@@ -191,12 +191,12 @@ void Correspondence() {
   world.BindMaterial("/mesh", "/material");
   placement = Lotus::FindTemporalPlacement(Next(), "/mesh");
   Check(placement && !placement->material_unchanged, "binding change retained material history");
-  material.roughness = 0.25F;
+  Lotus::Preview(material).roughness = 0.25F;
   world.SetMaterial("/material", material);
   Check(!Lotus::FindTemporalPlacement(Next(), "/mesh")->material_unchanged,
       "material value change retained history");
-  material.base_color_texture = Lotus::TextureInput{};
-  material.base_color_texture->texture = "/texture";
+  Lotus::Preview(material).base_color_texture = Lotus::TextureInput{};
+  Lotus::Preview(material).base_color_texture->texture = "/texture";
   world.SetMaterial("/material", material);
   (void)Next();
   Lotus::Texture texture{1, 1, Lotus::TextureFormat::Rgba8Unorm, {64, 64, 64, 255}};
@@ -407,8 +407,8 @@ void WindowsAndIdentities() {
       "display-window change retained history");
 
   Material material;
-  material.base_color_texture = TextureInput{};
-  material.base_color_texture->texture = "/used";
+  Lotus::Preview(material).base_color_texture = TextureInput{};
+  Lotus::Preview(material).base_color_texture->texture = "/used";
   world.SetMaterial("/bound", material);
   world.BindMaterial("/mesh", "/bound");
   ++settings.frame_index;

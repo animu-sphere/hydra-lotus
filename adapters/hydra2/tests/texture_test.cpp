@@ -113,8 +113,8 @@ void TranslatorCases() {
   albedo.scale = {0.5F, 1.0F, 1.0F, 1.0F};
   albedo.bias = {0.0F, 0.125F, 0.0F, 0.0F};
   albedo.fallback = {1.0F, 0.0F, 1.0F, 1.0F};
-  Check(material.base_color_texture == albedo &&
-            material.base_color == Lotus::Material{}.base_color,
+  Check(Lotus::Preview(material).base_color_texture == albedo &&
+            Lotus::Preview(material).base_color == Lotus::PreviewSurface{}.base_color,
       "the diffuse lookup was not translated");
   // An unresolved asset keeps its authored path; useMetadata is black. The
   // colour space UsdImaging hands over as colorSpace:file may be a linear
@@ -123,14 +123,14 @@ void TranslatorCases() {
   orm.texture = HdLotusTextureKey("orm.png", TfToken("raw"));
   orm.channel = 1;
   orm.wrap_t = Lotus::TextureWrap::Clamp;
-  Check(material.roughness_texture == orm,
+  Check(Lotus::Preview(material).roughness_texture == orm,
       "the roughness lookup of a single channel was not translated");
-  Check(material.texcoords == "uv" &&
-            material.texcoord_fallback == std::array<float, 2>{0.5F, 0.25F},
+  Check(material.geometry.texcoords == "uv" &&
+            material.geometry.texcoord_fallback == std::array<float, 2>{0.5F, 0.25F},
       "the primvar reader did not give the texture coordinates");
   // A colour output cannot drive a scalar, and a lookup with other texture
   // coordinates than the first is not translated.
-  Check(!material.metallic_texture && !material.emission_texture &&
+  Check(!Lotus::Preview(material).metallic_texture && !Lotus::Preview(material).emission_texture &&
             translation.connected_inputs ==
                 std::vector<TfToken>{TfToken("emissiveColor"), TfToken("metallic")},
       "untranslatable lookups were not reported as connected inputs");
@@ -146,9 +146,9 @@ void TranslatorCases() {
   network.relationships.push_back({SdfPath("/Material/Fileless"), TfToken("a"),
       surface, TfToken("roughness")});
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.roughness_texture &&
-            translation.material.roughness_texture->channel == 3 &&
-            translation.material.roughness_texture->texture ==
+  Check(Lotus::Preview(translation.material).roughness_texture &&
+            Lotus::Preview(translation.material).roughness_texture->channel == 3 &&
+            Lotus::Preview(translation.material).roughness_texture->texture ==
                 HdLotusTextureKey("", TfToken("auto")) &&
             translation.textures.size() == 1,
       "a texture without a file did not become a lookup of no image");
@@ -159,22 +159,22 @@ void TranslatorCases() {
   auto& parameters = network.nodes.back().parameters;
   parameters[TfToken("normal")] = VtValue(GfVec3f(-2, 0.25F, 3));
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.normal == std::array<float, 3>{-1, 0.25F, 1},
+  Check(translation.material.geometry.normal == std::array<float, 3>{-1, 0.25F, 1},
       "the tangent normal constant lost its sign or range");
   parameters[TfToken("normal")] = VtValue(GfVec3f(0,
       std::numeric_limits<float>::quiet_NaN(), 1));
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.normal == Lotus::Material{}.normal,
+  Check(translation.material.geometry.normal == Lotus::MaterialGeometry{}.normal,
       "a non-finite tangent normal did not keep the default");
   connect("/Material/Albedo", "rgb", surface, "normal");
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.normal_texture == albedo &&
+  Check(translation.material.geometry.normal_texture == albedo &&
             translation.textures.size() == 1,
       "the normal lookup was not translated or decoded its shared image twice");
   network.relationships.back() = {SdfPath("/Material/Albedo"), TfToken("g"),
       surface, TfToken("normal")};
   translation = HdLotusTranslateMaterial(map);
-  Check(!translation.material.normal_texture &&
+  Check(!translation.material.geometry.normal_texture &&
             std::find(translation.connected_inputs.begin(),
                 translation.connected_inputs.end(), TfToken("normal")) !=
                 translation.connected_inputs.end(),
@@ -183,39 +183,39 @@ void TranslatorCases() {
   parameters[TfToken("opacity")] = VtValue(-0.5F);
   parameters[TfToken("opacityThreshold")] = VtValue(1.5F);
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.opacity == 0 && translation.material.opacity_threshold == 1,
+  Check(translation.material.geometry.opacity == 0 && translation.material.geometry.opacity_threshold == 1,
       "opacity constants were not clamped");
   parameters[TfToken("opacity")] = VtValue(std::numeric_limits<float>::quiet_NaN());
   parameters[TfToken("opacityThreshold")] = VtValue(std::numeric_limits<float>::infinity());
   translation = HdLotusTranslateMaterial(map);
-  Check(translation.material.opacity == 1 && translation.material.opacity_threshold == 0,
+  Check(translation.material.geometry.opacity == 1 && translation.material.geometry.opacity_threshold == 0,
       "non-finite opacity constants did not keep defaults");
   network.relationships.push_back({SdfPath("/Material/Albedo"), TfToken("a"), surface, TfToken("opacity")});
   translation = HdLotusTranslateMaterial(map);
   albedo.channel = 3;
-  Check(translation.material.opacity_texture == albedo && translation.textures.size() == 1,
+  Check(translation.material.geometry.opacity_texture == albedo && translation.textures.size() == 1,
       "an alpha lookup was not translated or its shared image was duplicated");
   network.relationships.back().inputName = TfToken("rgb");
   translation = HdLotusTranslateMaterial(map);
-  Check(!translation.material.opacity_texture && translation.material.opacity == 1,
+  Check(!translation.material.geometry.opacity_texture && translation.material.geometry.opacity == 1,
       "a colour connection was accepted as scalar opacity");
   parameters[TfToken("useSpecularWorkflow")] = VtValue(1);
   connect("/Material/Albedo", "rgb", surface, "specularColor");
   translation = HdLotusTranslateMaterial(map);
   albedo.channel = 0;
-  Check(translation.material.use_specular_workflow &&
-            translation.material.specular_color_texture == albedo &&
+  Check(Lotus::Preview(translation.material).use_specular_workflow &&
+            Lotus::Preview(translation.material).specular_color_texture == albedo &&
             translation.textures.size() == 1,
       "specular RGB was not translated or duplicated its shared image");
   network.relationships.back().inputName = TfToken("g");
   translation = HdLotusTranslateMaterial(map);
-  Check(!translation.material.specular_color_texture &&
+  Check(!Lotus::Preview(translation.material).specular_color_texture &&
             std::find(translation.connected_inputs.begin(), translation.connected_inputs.end(), TfToken("specularColor")) != translation.connected_inputs.end(),
       "a scalar specular colour connection was not reported");
   parameters[TfToken("useSpecularWorkflow")] = VtValue(0);
   network.relationships.back().inputName = TfToken("rgb");
   translation = HdLotusTranslateMaterial(map);
-  Check(!translation.material.specular_color_texture,
+  Check(!Lotus::Preview(translation.material).specular_color_texture,
       "metallic workflow translated an unused specular colour texture");
 }
 
@@ -595,12 +595,12 @@ int main(int argc, char** argv) try {
 
   const Lotus::FrameSnapshot first = sync();
   const Lotus::Material& painted = first.scene->materials.at("/Looks/Painted");
-  Check(painted.base_color_texture && painted.roughness_texture &&
-            painted.emission_texture && !painted.metallic_texture &&
-            painted.texcoords == "st" &&
-            painted.base_color_texture->wrap_s == Lotus::TextureWrap::Clamp &&
-            painted.roughness_texture->channel == 1 &&
-            painted.emission_texture->fallback ==
+  Check(Lotus::Preview(painted).base_color_texture && Lotus::Preview(painted).roughness_texture &&
+            Lotus::Preview(painted).emission_texture && !Lotus::Preview(painted).metallic_texture &&
+            painted.geometry.texcoords == "st" &&
+            Lotus::Preview(painted).base_color_texture->wrap_s == Lotus::TextureWrap::Clamp &&
+            Lotus::Preview(painted).roughness_texture->channel == 1 &&
+            Lotus::Preview(painted).emission_texture->fallback ==
                 std::array<float, 4>{0.25F, 0.5F, 1.0F, 1.0F},
       "the Painted material's lookups differ from the stage's");
   // The 8-bit RGB image is sRGB under auto and linear under raw; either way
@@ -631,13 +631,13 @@ int main(int argc, char** argv) try {
             gray->texels == std::vector<std::uint8_t>{64, 64, 64, 255, 192,
                                 192, 192, 255},
       "the one-channel image was not expanded to grey");
-  Check(painted.base_color_texture->texture.ends_with("rgb.png|auto") &&
-            first.scene->textures.contains(painted.base_color_texture->texture) &&
-            !first.scene->textures.contains(painted.emission_texture->texture),
+  Check(Lotus::Preview(painted).base_color_texture->texture.ends_with("rgb.png|auto") &&
+            first.scene->textures.contains(Lotus::Preview(painted).base_color_texture->texture) &&
+            !first.scene->textures.contains(Lotus::Preview(painted).emission_texture->texture),
       "the lookups do not name the scene's textures");
   const Lotus::Material& plain = first.scene->materials.at("/Looks/Gray");
-  Check(plain.texcoords.empty() &&
-            plain.texcoord_fallback == std::array<float, 2>{0.25F, 0.75F},
+  Check(plain.geometry.texcoords.empty() &&
+            plain.geometry.texcoord_fallback == std::array<float, 2>{0.25F, 0.75F},
       "a constant st did not become the texture-coordinate fallback");
 
   // st is face-varying and indexed, map1 per vertex; both reach every
@@ -688,7 +688,7 @@ int main(int argc, char** argv) try {
       .GetAttribute(TfToken("inputs:wrapS"))
       .Set(TfToken("repeat"));
   const Lotus::FrameSnapshot wrapped = sync();
-  Check(wrapped.scene->materials.at("/Looks/Painted").base_color_texture->wrap_s ==
+  Check(Lotus::Preview(wrapped.scene->materials.at("/Looks/Painted")).base_color_texture->wrap_s ==
                 Lotus::TextureWrap::Repeat &&
             Find(wrapped, "rgb.png", "auto") == albedo,
       "a wrap edit was lost or decoded its image again");
@@ -719,15 +719,15 @@ int main(int argc, char** argv) try {
   const auto specular_input = painted_surface.CreateAttribute(TfToken("inputs:specularColor"), SdfValueTypeNames->Color3f);
   specular_input.SetConnections({SdfPath("/Looks/Painted/Albedo.outputs:rgb")});
   const auto specular = sync();
-  Check(specular.scene->materials.at("/Looks/Painted").use_specular_workflow &&
-            specular.scene->materials.at("/Looks/Painted").specular_color_texture ==
-                specular.scene->materials.at("/Looks/Painted").base_color_texture &&
+  Check(Lotus::Preview(specular.scene->materials.at("/Looks/Painted")).use_specular_workflow &&
+            Lotus::Preview(specular.scene->materials.at("/Looks/Painted")).specular_color_texture ==
+                Lotus::Preview(specular.scene->materials.at("/Looks/Painted")).base_color_texture &&
             Find(specular, "gray.png", "auto") == Find(refiled, "gray.png", "auto") &&
             specular.scene->meshes.at("/Quad").geometry == moved.scene->meshes.at("/Quad").geometry,
       "a specular connection did not reuse its image/UVs or changed geometry");
   workflow.Set(0);
   const auto metal_workflow = sync();
-  Check(!metal_workflow.scene->materials.at("/Looks/Painted").specular_color_texture &&
+  Check(!Lotus::Preview(metal_workflow.scene->materials.at("/Looks/Painted")).specular_color_texture &&
             Find(metal_workflow, "gray.png", "auto") == Find(specular, "gray.png", "auto"),
       "an unused specular lookup was retained or its shared image released");
 
@@ -745,9 +745,9 @@ int main(int argc, char** argv) try {
   const auto mapped_normal = sync();
   const auto normal_image = Find(mapped_normal, "normal.png", "raw");
   const auto& mirror = mapped_normal.scene->materials.at("/Looks/Mirror");
-  Check(mirror.normal_texture && mirror.texcoords == "st" &&
-            mirror.normal_texture->scale == std::array<float, 4>{2, 2, 2, 1} &&
-            mirror.normal_texture->bias == std::array<float, 4>{-1, -1, -1, 0} &&
+  Check(mirror.geometry.normal_texture && mirror.geometry.texcoords == "st" &&
+            mirror.geometry.normal_texture->scale == std::array<float, 4>{2, 2, 2, 1} &&
+            mirror.geometry.normal_texture->bias == std::array<float, 4>{-1, -1, -1, 0} &&
             normal_image && normal_image->format == Lotus::TextureFormat::Rgba8Unorm &&
             normal_image->texels == std::vector<std::uint8_t>{191, 128, 238, 255} &&
             mapped_normal.scene->textures.size() == 1,
@@ -797,7 +797,7 @@ int main(int argc, char** argv) try {
       .GetAttribute(TfToken("inputs:normal"))
       .ClearConnections();
   const auto disconnected = sync();
-  Check(!disconnected.scene->materials.at("/Looks/Mirror").normal_texture &&
+  Check(!disconnected.scene->materials.at("/Looks/Mirror").geometry.normal_texture &&
             disconnected.scene->textures.empty(),
       "disconnecting the normal input kept its image");
   expect_normal_radiance({1, 1, 1});
@@ -807,8 +807,8 @@ int main(int argc, char** argv) try {
   const auto masked = sync();
   const auto alpha_image = Find(masked, "alpha.png", "auto");
   const auto& cutout = masked.scene->materials.at("/Looks/Cutout");
-  Check(cutout.opacity_texture && cutout.opacity_texture->channel == 3 &&
-            cutout.texcoords == "st" && cutout.opacity_threshold == 0.5F && alpha_image,
+  Check(cutout.geometry.opacity_texture && cutout.geometry.opacity_texture->channel == 3 &&
+            cutout.geometry.texcoords == "st" && cutout.geometry.opacity_threshold == 0.5F && alpha_image,
       "the stage alpha lookup and threshold did not reach the IR");
   const auto expect_mask = [&](int mode) {
     if (!gpu) return;
@@ -834,7 +834,7 @@ int main(int argc, char** argv) try {
   const auto opacity_surface = stage->GetPrimAtPath(SdfPath("/Looks/Cutout/Surface"));
   opacity_surface.GetAttribute(TfToken("inputs:opacityThreshold")).Set(0.25F);
   const auto threshold_edited = sync();
-  Check(threshold_edited.scene->materials.at("/Looks/Cutout").opacity_threshold == 0.25F &&
+  Check(threshold_edited.scene->materials.at("/Looks/Cutout").geometry.opacity_threshold == 0.25F &&
             Find(threshold_edited, "alpha-reversed.png", "auto") == Find(alpha_edited, "alpha-reversed.png", "auto"),
       "a threshold edit did not keep its image");
   opacity_surface.GetAttribute(TfToken("inputs:opacityThreshold")).Set(0.5F);
@@ -847,7 +847,7 @@ int main(int argc, char** argv) try {
   opacity_attribute.ClearConnections();
   opacity_attribute.Set(1.0F);
   const auto opaque_again = sync();
-  Check(!opaque_again.scene->materials.at("/Looks/Cutout").opacity_texture &&
+  Check(!opaque_again.scene->materials.at("/Looks/Cutout").geometry.opacity_texture &&
             opaque_again.scene->textures.empty() &&
             opaque_again.scene->meshes.at("/Quad").geometry == masked.scene->meshes.at("/Quad").geometry,
       "disconnecting alpha changed geometry or kept a lookup");

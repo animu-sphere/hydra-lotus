@@ -18,9 +18,10 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    (§10.2, §10.4, §10.5) are settled as the tasks that need them start.
 2. **LOTUS-MATERIALX-01.** Material IR v2: the
    [design](../design/MATERIAL_IR_V2.md) is accepted, settling contract
-   §10.1, §10.3 and §10.6. Render `UsdPreviewSurface` through it with its
-   fixtures and committed references unchanged
-   ([acceptance](../design/MATERIAL_IR_V2.md#9-acceptance-for-lotus-materialx-01)).
+   §10.1, §10.3 and §10.6. Done: `UsdPreviewSurface` renders through the
+   tagged material and the 128-byte GPU record with every committed
+   reference byte-identical
+   ([report](../reports/2026-11-11-material-ir-v2.md)).
 3. **LOTUS-MATERIALX-02.** Write the BSDF API contract and move both
    integrators onto it, with consistency and PDF-normalization tests.
 4. **LOTUS-MATERIALX-03.** Add layer and mix composition, with consistency,

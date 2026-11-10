@@ -205,19 +205,16 @@ std::string MirrorKey(const std::string& key) {
 }
 
 Lotus::Material MirrorKeys(Lotus::Material material) {
-  for (auto* input : {&material.base_color_texture, &material.roughness_texture,
-           &material.metallic_texture, &material.emission_texture,
-           &material.normal_texture, &material.opacity_texture,
-           &material.specular_color_texture})
+  for (auto* input : Lotus::PreviewTextureInputs(material))
     if (*input) (*input)->texture = MirrorKey((*input)->texture);
   return material;
 }
 
 // What a mismatched material's lookups name, for the failure message.
 std::string Lookups(const Lotus::Material& material) {
-  std::string text = "texcoords '" + material.texcoords + "'";
-  const char* names[] = {"base colour", "roughness", "metallic", "emission",
-      "normal", "opacity", "specular colour"};
+  std::string text = "texcoords '" + material.geometry.texcoords + "'";
+  const char* names[] = {"opacity", "normal", "base colour", "roughness",
+      "metallic", "emission", "specular colour"};
   const auto inputs = Lotus::TextureInputs(material);
   for (std::size_t i = 0; i < inputs.size(); ++i)
     if (*inputs[i])

@@ -60,7 +60,7 @@ inline constexpr std::uint32_t kTextureLookup = 1;
 inline constexpr std::uint32_t kFallbackLookup = 2;
 
 // One material input's texture lookup. Its mirror is `TextureInputRecord`
-// in shaders/path_trace.slang.
+// in shaders/common/scene.slang.
 struct GpuTextureInputRecord {
   // The texture table slot a kTextureLookup samples.
   std::uint32_t texture;
@@ -79,24 +79,33 @@ struct GpuTextureInputRecord {
 };
 static_assert(sizeof(GpuTextureInputRecord) == 96);
 
+// GpuMaterialRecord::model_flags: the ShadingModel in the low byte, the
+// model's flags above it.
+inline constexpr std::uint32_t kMaterialFlagShift = 8;
+// UsdPreviewSurface's flags.
+inline constexpr std::uint32_t kPreviewSpecularWorkflow = 1U;
+inline constexpr std::uint32_t kPreviewThinWalled = 2U;
+
 // One material table element: the material IR as the scene pass evaluates
-// it. Its mirror is `MaterialRecord` in shaders/path_trace.slang. The inputs
-// are in TextureInputs order.
+// it (docs/design/MATERIAL_IR_V2.md section 5). Its mirror is
+// `MaterialRecord` in shaders/common/scene.slang. Texture lookups live in the
+// binding table that follows the records: slot k of a material with a set
+// bit k in `textured` reads binding lookup_base + (set bits below k).
 struct GpuMaterialRecord {
-  float base_color_roughness[4];
-  float emission_metallic[4];
-  // The texture coordinates without a set, then two unused floats.
-  float texcoord_fallback[4];
-  float normal[4];
-  // Opacity, opacity threshold, the thin-walled flag, then an unused float.
-  float opacity[4];
-  // Specular F0 RGB and ior; workflow flag uses normal.w.
-  float specular_ior[4];
-  // Transmission colour RGB and transmission.
-  float transmission[4];
-  GpuTextureInputRecord inputs[kMaterialTextureInputs];
+  std::uint32_t model_flags;
+  std::uint32_t lookup_base;
+  // The slots with a lookup (bits 0-31, then 32-63).
+  std::uint32_t textured[2];
+  // The texture coordinates without a set, opacity, opacity threshold.
+  float geometry_coverage[4];
+  // The tangent-space normal, then an unused float.
+  float geometry_normal[4];
+  // The model's constants in its word order, zero beyond them. For
+  // UsdPreviewSurface: base colour and roughness, emission and metallic,
+  // specular colour and ior, transmission colour and transmission.
+  float parameters[5][4];
 };
-static_assert(sizeof(GpuMaterialRecord) == 784);
+static_assert(sizeof(GpuMaterialRecord) == 128);
 
 // One light table element: an emissive triangle, chosen by the alias
 // method. Its mirror is `LightRecord` in shaders/common/scene.slang. The
@@ -274,6 +283,12 @@ public:
   [[nodiscard]] VkDeviceAddress MaterialAddress() const {
     return materials_.address;
   }
+  // The material binding table's device address: it follows the records.
+  [[nodiscard]] VkDeviceAddress MaterialBindingAddress() const {
+    return materials_.address == 0
+               ? 0
+               : materials_.address + material_count_ * sizeof(GpuMaterialRecord);
+  }
   // The light table's per-instance offsets and entries, under the same
   // conditions; the offsets cover every instance record.
   [[nodiscard]] VkDeviceAddress LightOffsetAddress() const {
@@ -416,6 +431,8 @@ private:
   bool materials_current_ = false;
   DeviceBuffer materials_;
   std::uint32_t material_count_ = 0;
+  // Texture lookups in the binding table that follows the records.
+  std::uint32_t material_binding_count_ = 0;
   // One more than the highest material slot an instance uses.
   std::uint32_t materials_used_ = 0;
   // The last instance plan, from which the light table is built.
