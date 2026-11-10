@@ -54,10 +54,10 @@ translate (04), and any model's lobes (05–08).
 
 ## 3. Versions (contract §10.3)
 
-The basis for features, defaults and comparisons is what the
-[lookdev lock](../../strata.openstrata-cy2026-windows-x86_64-py313-lookdev.lock)
-installs: **MaterialX 1.39.5** (`1.39.x` in the lock), with its default node
-definitions:
+The basis for features, defaults and comparisons is what the CY2026
+`lookdev` runtime installs (its generated lock resolves `1.39.x`; CI pins
+the runtime in [`openstrata.ci.yaml`](../../openstrata.ci.yaml)):
+**MaterialX 1.39.5**, with its default node definitions:
 
 | Model | Node definition | Version |
 | --- | --- | --- |
