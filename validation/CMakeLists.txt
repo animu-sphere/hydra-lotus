@@ -94,6 +94,9 @@ if(LOTUS_ENABLE_VULKAN)
       -o "${_lotus_bsdf_probe}"
     DEPENDS bsdf-probe.slang
       "${_lotus_shader_root}/bsdf/bsdf.slang"
+      "${_lotus_shader_root}/bsdf/lobes.slang"
+      "${_lotus_shader_root}/bsdf/albedo.slang"
+      "${_lotus_shader_root}/bsdf/composed.slang"
       "${_lotus_shader_root}/common/spectrum.slang"
       "${_lotus_shader_root}/sampling/sampling.slang"
     VERBATIM)
@@ -105,10 +108,18 @@ if(LOTUS_ENABLE_VULKAN)
   else()
     target_compile_options(lotus-bsdf-probe PRIVATE -w)
   endif()
+  find_package(Threads REQUIRED)
+  # The composed closures' albedo tables (docs/design/LAYERED_BSDF.md
+  # section 5.6) are committed data: lotus-bsdf-tables regenerates
+  # bsdf-albedo-tables.inc from the lobes, and lotus-bsdf-test checks that
+  # it still matches them.
+  add_executable(lotus-bsdf-tables bsdf-tables.cpp)
+  target_link_libraries(lotus-bsdf-tables PRIVATE lotus-bsdf-probe
+    Lotus::Warnings Threads::Threads)
+  target_compile_features(lotus-bsdf-tables PRIVATE cxx_std_20)
   add_executable(lotus-bsdf-test bsdf-test.cpp)
   target_link_libraries(lotus-bsdf-test PRIVATE lotus-bsdf-probe Lotus::Warnings)
   target_compile_features(lotus-bsdf-test PRIVATE cxx_std_20)
-  find_package(Threads REQUIRED)
   target_link_libraries(lotus-bsdf-test PRIVATE Threads::Threads)
   add_test(NAME lotus-renderer-bsdf COMMAND lotus-bsdf-test)
   lotus_test_tier(fast lotus-renderer-bsdf)

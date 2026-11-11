@@ -17,7 +17,7 @@ import common.spectrum;
 
 // Roughness 0 is a near-mirror: below this alpha, GGX sampling and
 // evaluation lose float precision.
-static const float kMinAlpha = 1.0e-3;
+public static const float kMinAlpha = 1.0e-3;
 
 // The closure's model tag: the hit's ShadingModel (gpu_scene.hpp).
 public static const uint kPreviewSurfaceClosure = 0;
@@ -135,7 +135,7 @@ float SpecularProbability(PreviewClosure bsdf, float3 wo) {
 // arriving at cos_theta from its normal, with relative index eta = eta_t /
 // eta_i (Pharr et al., Physically Based Rendering, 4th edition, section
 // 9.3): 1 beyond the critical angle.
-float FresnelDielectric(float cos_theta, float eta) {
+public float FresnelDielectric(float cos_theta, float eta) {
   cos_theta = saturate(cos_theta);
   const float sin2_t = (1.0 - cos_theta * cos_theta) / (eta * eta);
   if (sin2_t >= 1.0) return 1.0;
@@ -155,21 +155,21 @@ float InterfaceReflectance(PreviewClosure bsdf, float cos_theta) {
 }
 
 // The isotropic GGX normal distribution.
-float GgxD(float3 h, float alpha) {
+public float GgxD(float3 h, float alpha) {
   const float alpha2 = alpha * alpha;
   const float denominator = h.z * h.z * (alpha2 - 1.0) + 1.0;
   return alpha2 / (kPi * denominator * denominator);
 }
 
 // Smith's Lambda for GGX.
-float GgxLambda(float3 w, float alpha) {
+public float GgxLambda(float3 w, float alpha) {
   const float tan2 = max(0.0, 1.0 - w.z * w.z) / (w.z * w.z);
   return 0.5 * (sqrt(1.0 + alpha * alpha * tan2) - 1.0);
 }
 
 // A visible normal for `wo`, by spherical caps (Dupuy and Benyoub,
 // "Sampling Visible GGX Normals with Spherical Caps", 2023).
-float3 SampleGgxVisibleNormal(float3 wo, float alpha, float2 u) {
+public float3 SampleGgxVisibleNormal(float3 wo, float alpha, float2 u) {
   const float3 wo_std = normalize(float3(wo.xy * alpha, wo.z));
   const float phi = 2.0 * kPi * u.x;
   const float z = (1.0 - u.y) * (1.0 + wo_std.z) - wo_std.z;

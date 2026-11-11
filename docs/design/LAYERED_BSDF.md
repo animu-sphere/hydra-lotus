@@ -12,7 +12,8 @@ owner: hydra-lotus
 > left to this task (§10.2), and the energy, reciprocity and consistency
 > tests that hold the composition. It changes no rendered image: no shading
 > model uses the composition until LOTUS-MATERIALX-05. "Today" below
-> describes `main` after LOTUS-MATERIALX-02.
+> describes `main` after LOTUS-MATERIALX-02. §11 records the changes
+> implementation made, accepted 2026-11-12.
 
 ## 1. Scope
 
@@ -185,7 +186,9 @@ dielectric reuses the
 ([BSDF API §5.5](BSDF_API.md#55-transmission-and-transport-mode)):
 radiance mode, `1/η²` across a solid's interface, delta below the alpha
 floor or when index-matched. A `generalized_schlick_bsdf` with an exponent
-other than 5 is not represented; its model task diagnoses it.
+other than 5 is not represented; its model task diagnoses it. The
+dielectric's tint scales what it reflects and transmits but not the albedo
+a layer above sees (§11.3).
 
 The preview closure's private lobe functions are not rewritten onto these
 lobes. They differ in Fresnel form, compensation and composition, and
@@ -289,10 +292,14 @@ same data on the GPU and in the CPU test:
   pull request.
 - **Resolution** is the smallest that keeps interpolation error below
   `1e-3` absolute at every probe point between grid nodes (§7);
-  32 × 32 for the 2D tables is the starting point.
-- **Storage.** On the GPU, one read-only storage buffer with linear
-  interpolation in the shader, bound by LOTUS-MATERIALX-05 when a model
-  first reads it. Not `static const` arrays in Slang: dynamically indexed
+  32 × 32 for the 2D tables is the starting point. As implemented: `E1`
+  and `Eschlick` 32 × 32, `Edielectric` 48 cosines × 32 alphas × 16
+  indices per sheet, over relative indices 1.01 to 3, with Catmull-Rom
+  interpolation (§11.1). `E1`, `Eschlick` and the entering sheet meet
+  `1e-3`; the thin-wall and leaving sheets do not everywhere (§11.2).
+- **Storage.** On the GPU, one read-only storage buffer, interpolated in
+  the shader (§11.1), bound by LOTUS-MATERIALX-05 when a model first reads
+  it. Not `static const` arrays in Slang: dynamically indexed
   constant arrays can be copied into per-invocation memory by the SPIR-V
   compiler. In the CPU test, the probe binds the same data.
 
@@ -394,3 +401,36 @@ Accepted as written, 2026-11-11:
    construction (§5.6, §6).
 4. A selection floor of 0.05 (§5.5), as the preview closure's specular
    probability clamp uses today.
+
+## 11. Changes found in implementation
+
+LOTUS-MATERIALX-03's implementation departs from the text above where
+measurement showed it could not hold as written. They were accepted in
+review, 2026-11-12, and supersede the text they amend; the
+[report](../reports/2026-11-12-layered-bsdf.md#changes-to-the-contract)
+gives the measurements.
+
+1. **Cubic interpolation.** §5.6 named linear interpolation. Linearly
+   interpolated, `E1` still missed `1e-3` at 64 × 48 nodes (`1.8e-3`),
+   where the dielectric table would hold about 150,000 floats, because the
+   albedos vary over widths that scale with alpha, the cosine and
+   `sqrt(η − 1)` together. Catmull-Rom splines along every axis reach it at
+   32 × 32. The cost is the number of reads per lookup, 16 for a 2D table
+   and 64 for the dielectric's, paid when a closure is built, not per
+   evaluation. The axes are `log v + k v` in the cosine, alpha and
+   `η − 1`, logarithmic where the features scale and close to linear
+   elsewhere.
+2. **Two sheets above `1e-3`.** The thin-wall sheet reaches `1.2e-3` in
+   the corner of index 1.01 and small alpha. The leaving sheet keeps the
+   critical angle on a node, so no interpolation crosses total internal
+   reflection, but just inside the critical angle at small alpha its
+   error reaches `1.1e-2`. `lotus-bsdf-test` holds them to the measured
+   maxima, `1.2e-3` and `1.2e-2`. The leaving sheet is read only for a
+   reflecting dielectric layer seen from inside its solid; the model tasks
+   decide whether that case needs more.
+3. **The dielectric's tint and the layer.** §4.1 says `E_top` is the
+   albedo of the top lobe as implemented. For a tinted `GgxDielectric` the
+   implementation leaves the tint out of `E_top`, as MaterialX's
+   `dielectric_bsdf` leaves it out of a layer's throughput: the tint
+   absorbs, and a tinted coat does not let more light reach the base. An
+   untinted top is unaffected, which includes every furnace test.
