@@ -323,12 +323,14 @@ The delivery's acceptance:
 ## 10. Decisions for the design review
 
 Settled in a design review when implementation starts. §10.1, §10.3 and
-§10.6 are settled by the [material IR v2 design](MATERIAL_IR_V2.md).
+§10.6 are settled by the [material IR v2 design](MATERIAL_IR_V2.md), and
+§10.2 by the [layered BSDF contract](LAYERED_BSDF.md).
 
 1. **IR v2 granularity:** per-model structures, and how texture expressions
    are held. *Settled:* [tagged models and one affine lookup per input](MATERIAL_IR_V2.md#4-cpu-representation-contract-101).
 2. **Layering approximation:** agreement with the target specification, and
-   the treatment of multiple scattering.
+   the treatment of multiple scattering. *Settled:*
+   [albedo scaling toward the viewer, with compensated reflection lobes](LAYERED_BSDF.md#4-the-layering-approximation-contract-102).
 3. **MaterialX version:** the specification fixed as the basis for
    features, defaults and implementation comparisons. *Settled:*
    [MaterialX 1.39.5 and its node definitions](MATERIAL_IR_V2.md#3-versions-contract-103).

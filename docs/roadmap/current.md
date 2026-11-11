@@ -15,7 +15,7 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
 1. **Contract review.** Done: the
    [contract](../design/MATERIALX_SHADING_MODELS.md) is accepted. Its
    remaining [design-review decisions](../design/MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)
-   (§10.2, §10.4, §10.5) are settled as the tasks that need them start.
+   (§10.4, §10.5) are settled as the tasks that need them start.
 2. **LOTUS-MATERIALX-01.** Material IR v2: the
    [design](../design/MATERIAL_IR_V2.md) is accepted, settling contract
    §10.1, §10.3 and §10.6. Done: `UsdPreviewSurface` renders through the
@@ -28,7 +28,9 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    sphere, `lotus-bsdf-test` checks them on the CPU in the `fast` tier,
    and every committed reference is byte-identical
    ([report](../reports/2026-11-11-bsdf-api.md)).
-4. **LOTUS-MATERIALX-03.** Add layer and mix composition, with consistency,
+4. **LOTUS-MATERIALX-03.** Layer and mix composition: the
+   [contract](../design/LAYERED_BSDF.md) is accepted, settling contract
+   §10.2. Then the lobes, operations and albedo tables, with consistency,
    white-furnace and reciprocity tests.
 5. **LOTUS-MATERIALX-04.** Translate the
    [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support)

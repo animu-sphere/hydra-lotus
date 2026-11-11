@@ -35,6 +35,7 @@ and the document is a bug. When a summary disagrees with
 | MaterialX glTF PBR, Standard Surface and OpenPBR: material IR v2, the BSDF API and layering | [design/MATERIALX_SHADING_MODELS.md](design/MATERIALX_SHADING_MODELS.md) |
 | Material IR v2: CPU models, GPU record and bindings, dispatch | [design/MATERIAL_IR_V2.md](design/MATERIAL_IR_V2.md) |
 | The BSDF API: Evaluate, Pdf and Sample, their measures and consistency tests | [design/BSDF_API.md](design/BSDF_API.md) |
+| Layered BSDFs: mix, layer, albedo tables, furnace and reciprocity tests | [design/LAYERED_BSDF.md](design/LAYERED_BSDF.md) |
 | What this repository owns, what it consumes from whom, what it does not own | [design/INTEGRATION_SCOPE_POLICY.md](design/INTEGRATION_SCOPE_POLICY.md) |
 | Targets, names, directories, dependency directions, build intents, install tree | [architecture/PROJECT_LAYOUT.md](architecture/PROJECT_LAYOUT.md) |
 | Implemented capabilities; measured platforms and runtimes | [reference/](reference/README.md) |
