@@ -21,6 +21,17 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 - The fixed benchmarks' JSON records `scene.materials` and
   `scene.material_bytes`.
 
+### Added
+
+- Layered BSDFs ([contract](docs/design/LAYERED_BSDF.md), LOTUS-MATERIALX-03):
+  `Lambert`, `GgxSchlick` and `GgxDielectric` lobes with their own normals,
+  composed by `mix`, `add`, `multiply` and `layer` with albedo scaling
+  toward the viewer, Turquin multiple-scattering compensation on GGX
+  reflection, path-length attenuation and one-choice lobe sampling. The
+  directional albedo tables are generated from the lobes by
+  `lotus-bsdf-tables` and checked by `lotus-bsdf-test`. No shading model
+  uses the composition yet; rendered images are unchanged.
+
 ## [0.9.0] - 2026-11-09
 
 The Interactive Quality release completes the v0.9.0 milestone. An

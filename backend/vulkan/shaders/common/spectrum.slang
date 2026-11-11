@@ -62,6 +62,20 @@ public Spectrum operator/(Spectrum spectrum, float divisor) {
   return SpectrumFromRgb(spectrum.rgb / divisor);
 }
 
+public Spectrum operator-(Spectrum left, Spectrum right) {
+  return SpectrumFromRgb(left.rgb - right.rgb);
+}
+
+// Each component clamped to [0, 1].
+public Spectrum SpectrumSaturate(Spectrum spectrum) {
+  return SpectrumFromRgb(saturate(spectrum.rgb));
+}
+
+// Each component raised to `exponent`: a transmittance over a path length.
+public Spectrum SpectrumPow(Spectrum spectrum, float exponent) {
+  return SpectrumFromRgb(pow(spectrum.rgb, float3(exponent)));
+}
+
 public float MaxComponent(Spectrum spectrum) {
   return max(spectrum.rgb.x, max(spectrum.rgb.y, spectrum.rgb.z));
 }

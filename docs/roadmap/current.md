@@ -30,8 +30,12 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    ([report](../reports/2026-11-11-bsdf-api.md)).
 4. **LOTUS-MATERIALX-03.** Layer and mix composition: the
    [contract](../design/LAYERED_BSDF.md) is accepted, settling contract
-   §10.2. Then the lobes, operations and albedo tables, with consistency,
-   white-furnace and reciprocity tests.
+   §10.2. Done: the lobes, operations and albedo tables exist in shader
+   modules the CPU probe compiles, `lotus-bsdf-test` passes the furnace,
+   energy, reciprocity, structure and table assertions, and no rendered
+   image changes ([report](../reports/2026-11-12-layered-bsdf.md)), with
+   three accepted changes to the contract's text
+   ([§11](../design/LAYERED_BSDF.md#11-changes-found-in-implementation)).
 5. **LOTUS-MATERIALX-04.** Translate the
    [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support)
    and diagnose everything else. It may start beside 01–03.

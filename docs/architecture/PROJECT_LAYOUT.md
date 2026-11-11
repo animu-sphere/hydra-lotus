@@ -105,8 +105,14 @@ owns the JSON metrics and their limits.
 `lotus-bsdf-test` (`LOTUS_ENABLE_VULKAN` only, not installed) runs the
 real `bsdf.slang` on the CPU: `slangc -target cpp` compiles
 `validation/bsdf-probe.slang`, which exports the
-[BSDF API](../design/BSDF_API.md#7-tests)'s functions, and the generated
-C++ links into the test without the project's warning set.
+[BSDF API](../design/BSDF_API.md#7-tests)'s functions and the
+[composed closures'](../design/LAYERED_BSDF.md#7-tests), and the generated
+C++ links into the test without the project's warning set. The composed
+closures' albedo tables are committed data,
+`validation/bsdf-albedo-tables.inc`: `lotus-bsdf-tables` (not installed)
+regenerates them from the lobes through the same probe, and
+`lotus-bsdf-tables --check` compares every node and cell centre with a
+fresh quadrature.
 
 The same Hydra runtime translates reservoir settings and final diagnostic
 AOVs. The uninstalled `lotus-hydra2-restir-test` exercises synthetic contracts
