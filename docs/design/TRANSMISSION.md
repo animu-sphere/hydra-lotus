@@ -15,7 +15,9 @@ owner: hydra-lotus
 > and [path tracing contract](../reference/SCENE.md#path-tracing); where it
 > is silent they hold unchanged. The implemented behaviour is documented in
 > the [scene reference](../reference/SCENE.md), which owns it. One clause
-> changed in implementation: §5's `BsdfPdf` covers reflection only.
+> changed in implementation: §5's `BsdfPdf` covered reflection only. The
+> [BSDF API](BSDF_API.md) (LOTUS-MATERIALX-02) since defines the BSDF's
+> measures over the whole sphere; §5 and §6 point there.
 
 ## 1. Scope
 
@@ -176,14 +178,16 @@ check's bitwise reproduction are unaffected.
   `tint · G2 / G1 / η²` for a rough refraction, 1 and `tint / η²` for the
   smooth ones, and the thin wall's without `η²`; the densities cancel
   analytically, as they do today for a pure metal.
-- `BsdfPdf` is the non-delta reflection lobes' mixture density: `P_t`
-  times the transmitted share's rough reflection density
-  `F · D_vis / (4 wo·h)`, plus `(1 − P_t)` times the existing mixture.
-  `BsdfEvalCos` likewise covers reflection only. Delta lobes have no value
-  or density. The refraction density `(1 − F) · D_vis · |wi·h| /
-  (wi·h + wo·h / η)²` is never read, since every transmission event's
-  light is unweighted (§6), so neither function evaluates refraction; its
-  sampling weight above is derived from it.
+- The BSDF's value and density are the [BSDF API](BSDF_API.md#5-measures)'s,
+  over the whole sphere: `BsdfEvaluate` and `BsdfPdf` include the rough
+  refraction, value `tint · (1 − F) · D · G2 · |wi·h| · |wo·h| /
+  (wo.z · (wi·h + wo·h / η)²) / η²` in radiance mode and density
+  `(1 − F) · D_vis · |wi·h| / (wi·h + wo·h / η)²`, each times `P_t`, and a
+  rough thin wall's mirrored reflection without `1/η²`. Delta lobes have
+  no value or density. The weights above are component ratios of these.
+  No integrator reads the refraction's value or density, since every
+  transmission event's light is unweighted (§6); `lotus-bsdf-test` holds
+  them to the sampler.
 
 - Each transmission event counts as a scattering event towards
   `max_bounces` and Russian roulette, so a solid consumes at least two.
@@ -193,8 +197,10 @@ check's bitwise reproduction are unaffected.
 Next event estimation at a transmissive surface samples the light table as
 today, on the incoming side only. A light point below the geometric surface
 still contributes nothing: a shadow ray cannot follow a refracted
-direction. Its BSDF value and MIS density are those of the non-delta
-reflection lobes, the transmitted share's rough reflection included.
+direction, and neither does one below the shading normal: next event
+estimation asks for the [reflection side](BSDF_API.md#61-sides), whose
+BSDF value and MIS density are those of the non-delta reflection lobes,
+the transmitted share's rough reflection included.
 
 Light found by a sampled direction is weighed as today, except after a
 **delta event or any transmission event**. There next event estimation

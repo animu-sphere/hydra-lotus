@@ -102,6 +102,12 @@ autocorrelation against independent finite-sequence definitions. The
 [reservoir comparison contract](../reference/RESTIR.md#headless-reservoir-comparison)
 owns the JSON metrics and their limits.
 
+`lotus-bsdf-test` (`LOTUS_ENABLE_VULKAN` only, not installed) runs the
+real `bsdf.slang` on the CPU: `slangc -target cpp` compiles
+`validation/bsdf-probe.slang`, which exports the
+[BSDF API](../design/BSDF_API.md#7-tests)'s functions, and the generated
+C++ links into the test without the project's warning set.
+
 The same Hydra runtime translates reservoir settings and final diagnostic
 AOVs. The uninstalled `lotus-hydra2-restir-test` exercises synthetic contracts
 and moving UsdImaging stages; GPU mode explains unavailable capabilities.

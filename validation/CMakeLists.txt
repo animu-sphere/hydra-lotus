@@ -79,6 +79,41 @@ target_link_libraries(lotus-restir-statistics-test PRIVATE Lotus::Warnings)
 target_compile_features(lotus-restir-statistics-test PRIVATE cxx_std_20)
 add_test(NAME lotus-renderer-restir-statistics COMMAND lotus-restir-statistics-test)
 
+# The BSDF API's consistency tests (docs/design/BSDF_API.md section 7) run
+# the real bsdf.slang on the CPU: slangc compiles the probe module and the
+# modules it imports to C++, prelude included, so no Vulkan device is
+# needed. Every Vulkan-enabled build has slangc.
+if(LOTUS_ENABLE_VULKAN)
+  set(_lotus_shader_root "${PROJECT_SOURCE_DIR}/backend/vulkan/shaders")
+  set(_lotus_bsdf_probe "${CMAKE_CURRENT_BINARY_DIR}/bsdf-probe.cpp")
+  add_custom_command(
+    OUTPUT "${_lotus_bsdf_probe}"
+    COMMAND "${LOTUS_SLANGC_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/bsdf-probe.slang"
+      -I "${_lotus_shader_root}" -target cpp -warnings-as-errors all
+      -o "${_lotus_bsdf_probe}"
+    DEPENDS bsdf-probe.slang
+      "${_lotus_shader_root}/bsdf/bsdf.slang"
+      "${_lotus_shader_root}/common/spectrum.slang"
+      "${_lotus_shader_root}/sampling/sampling.slang"
+    VERBATIM)
+  # Generated code: compiled without the project's warning set.
+  add_library(lotus-bsdf-probe OBJECT "${_lotus_bsdf_probe}")
+  target_compile_features(lotus-bsdf-probe PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(lotus-bsdf-probe PRIVATE /w)
+  else()
+    target_compile_options(lotus-bsdf-probe PRIVATE -w)
+  endif()
+  add_executable(lotus-bsdf-test bsdf-test.cpp)
+  target_link_libraries(lotus-bsdf-test PRIVATE lotus-bsdf-probe Lotus::Warnings)
+  target_compile_features(lotus-bsdf-test PRIVATE cxx_std_20)
+  find_package(Threads REQUIRED)
+  target_link_libraries(lotus-bsdf-test PRIVATE Threads::Threads)
+  add_test(NAME lotus-renderer-bsdf COMMAND lotus-bsdf-test)
+  lotus_test_tier(fast lotus-renderer-bsdf)
+endif()
+
 add_executable(lotus-temporal-gpu-test temporal-gpu-test.cpp)
 target_link_libraries(lotus-temporal-gpu-test PRIVATE Lotus::Vulkan Lotus::Warnings)
 if(LOTUS_ENABLE_VULKAN)

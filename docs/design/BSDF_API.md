@@ -5,7 +5,8 @@ owner: hydra-lotus
 
 # BSDF API
 
-> Status: **accepted**, 2026-11-11. This is LOTUS-MATERIALX-02's contract,
+> Status: **accepted**, 2026-11-11, and
+> [implemented](../reports/2026-11-11-bsdf-api.md). This is LOTUS-MATERIALX-02's contract,
 > written before any code as the
 > [shading-model contract](MATERIALX_SHADING_MODELS.md#34-one-bsdf-api-per-model-composition)
 > requires: the `Evaluate`, `Sample` and `Pdf` functions every shading
@@ -15,6 +16,8 @@ owner: hydra-lotus
 > elsewhere that contract holds. It also takes the reservoir-packing
 > decision the [material IR v2 design](MATERIAL_IR_V2.md#63-what-stays-for-lotus-materialx-02)
 > left here. "Today" below describes `main` after LOTUS-MATERIALX-01.
+> Two clauses changed in implementation: the sample record is named
+> `BsdfSampleResult` (§3), and the layered lobes are never delta (§5.4).
 
 ## 1. Scope
 
@@ -57,7 +60,7 @@ Every closure provides three functions in the shading frame (§4):
 ```text
 Spectrum   BsdfEvaluate(BsdfClosure closure, float3 wo, float3 wi)
 float      BsdfPdf     (BsdfClosure closure, float3 wo, float3 wi)
-bool       BsdfSample  (BsdfClosure closure, float3 wo, float3 u, out BsdfSample sample)
+bool       BsdfSample  (BsdfClosure closure, float3 wo, float3 u, out BsdfSampleResult sample)
 ```
 
 The contract's `Evaluate(material, context, wi, wo)` maps onto these as
@@ -68,7 +71,7 @@ only the closure and the two directions. The argument order stays
 `(wo, wi)`, as today.
 
 ```text
-struct BsdfSample {
+struct BsdfSampleResult {
   float3   wi;           // the sampled direction, shading frame
   Spectrum weight;       // §5.3
   float    pdf;          // §5.2: solid-angle density, 0 for a delta sample
@@ -88,6 +91,10 @@ decided for the material evaluators.
 
 The old names (`BsdfEvalCos`, `SampleBsdf`, `SurfaceBsdf` as the
 integrators' type) are removed, not kept as aliases: every caller moves.
+The sample record is `BsdfSampleResult`, not `BsdfSample`: Slang does not
+let a type and a function share a name. The preview closure's type is
+`PreviewClosure`, built by `MakePreviewClosure` and wrapped by
+`MakeBsdfClosure`.
 
 ## 4. Frame and directions
 
@@ -167,8 +174,10 @@ would have carried counting as absorbed. Otherwise:
 
 ### 5.4 Delta components
 
-A component is a Dirac delta when its roughness is below the alpha floor
-(`kMinAlpha`) or its interface is index-matched. It appears only through
+A dielectric interface is a Dirac delta when its roughness is below the
+alpha floor (`kMinAlpha`) or it is index-matched. The preview closure's
+layered lobes are not: their GGX alpha is clamped at the floor, a
+near-mirror with a value and a density, as before this task. It appears only through
 `BsdfSample`, with `delta` set and `pdf` 0; `BsdfEvaluate` and `BsdfPdf`
 never include it. A closure may mix delta and non-delta components; the
 non-delta ones keep their value and density, and the delta selection
@@ -243,7 +252,8 @@ the named fallback if the measured memory is unacceptable.
 
 ### 7.1 Harness
 
-A `fast`-tier executable, `lotus-bsdf-test`, runs the **real shader
+A `fast`-tier executable, `lotus-bsdf-test` (the ctest
+`lotus-renderer-bsdf`), runs the **real shader
 source on the CPU**: `slangc -target cpp` compiles a test module that
 imports `bsdf.slang` and exports probe functions, and the generated C++,
 with the Slang prelude the Vulkan SDK installs, builds into the test. It

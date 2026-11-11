@@ -23,9 +23,11 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    reference byte-identical
    ([report](../reports/2026-11-11-material-ir-v2.md)).
 3. **LOTUS-MATERIALX-02.** The BSDF API: the
-   [contract](../design/BSDF_API.md) is accepted. Next:
-   move both integrators onto it, with consistency and PDF-normalization
-   tests ([acceptance](../design/BSDF_API.md#9-acceptance-for-lotus-materialx-02)).
+   [contract](../design/BSDF_API.md) is accepted. Done: both integrators
+   call `BsdfEvaluate`, `BsdfPdf` and `BsdfSample`, which cover the whole
+   sphere, `lotus-bsdf-test` checks them on the CPU in the `fast` tier,
+   and every committed reference is byte-identical
+   ([report](../reports/2026-11-11-bsdf-api.md)).
 4. **LOTUS-MATERIALX-03.** Add layer and mix composition, with consistency,
    white-furnace and reciprocity tests.
 5. **LOTUS-MATERIALX-04.** Translate the

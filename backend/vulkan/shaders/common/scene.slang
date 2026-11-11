@@ -286,7 +286,8 @@ public struct SurfaceHit {
   public float3 albedo;
   public float specular_roughness;
   public float specular_share;
-  public SurfaceBsdf bsdf;
+  // The closure of the hit's shading model (docs/design/BSDF_API.md).
+  public BsdfClosure bsdf;
   public Spectrum emission;
 };
 
@@ -1197,18 +1198,20 @@ void EvaluatePreview(MaterialRecord material, InstanceRecord instance,
     const float3 outward = dot(c0, cross(c1, c2)) < 0.0 ? -normal : normal;
     entering = dot(outward, direction) < 0.0;
   }
-  surface.bsdf = MakeSurfaceBsdf(SpectrumFromRgb(surface.base_color),
+  const PreviewClosure closure = MakePreviewClosure(
+      SpectrumFromRgb(surface.base_color),
       surface.roughness, surface.metallic, material.parameters[2].w,
       MaterialFlag(material, kPreviewSpecularWorkflow),
       SpectrumFromRgb(specular), transmission,
       SpectrumFromRgb(material.parameters[3].xyz),
       MaterialFlag(material, kPreviewThinWalled), entering);
+  surface.bsdf = MakeBsdfClosure(closure);
   surface.emission = SpectrumFromRgb(emission);
   // Transmitted light is tinted by the transmission colour, not the base
   // colour, so the transmitted share carries that.
-  surface.albedo = surface.bsdf.transmission > 0.0
-      ? lerp(surface.base_color, SpectrumToRgb(surface.bsdf.transmission_color),
-            surface.bsdf.transmission)
+  surface.albedo = closure.transmission > 0.0
+      ? lerp(surface.base_color, SpectrumToRgb(closure.transmission_color),
+            closure.transmission)
       : surface.base_color;
   surface.specular_roughness = surface.roughness;
   surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
