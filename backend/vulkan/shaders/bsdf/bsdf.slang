@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// The reference path tracer's surface BSDF (design policy section 17): a
-// Fresnel-attenuated Lambert base and a GGX reflection lobe, and a share of
-// dielectric interface that reflects and transmits (docs/design/
-// TRANSMISSION.md). Directions are in the shading frame, z along the normal
-// facing the outgoing direction, and point away from the surface.
+// The BSDF API (docs/design/BSDF_API.md): the closure a shading model builds
+// at a hit, and the three functions every integrator calls on it,
+// BsdfEvaluate, BsdfPdf and BsdfSample. Directions are in the shading frame,
+// z along the shading normal facing the outgoing direction `wo`, and point
+// away from the surface; wi.z > 0 is reflection and wi.z < 0 transmission.
+// Every function is in radiance mode.
+//
+// One closure is implemented, UsdPreviewSurface's (design policy section
+// 17): a Fresnel-attenuated Lambert base and a GGX reflection lobe, and a
+// share of dielectric interface that reflects and transmits (docs/design/
+// TRANSMISSION.md).
 module bsdf;
 
 import sampling.sampling;
@@ -13,7 +19,23 @@ import common.spectrum;
 // evaluation lose float precision.
 static const float kMinAlpha = 1.0e-3;
 
-public struct SurfaceBsdf {
+// The closure's model tag: the hit's ShadingModel (gpu_scene.hpp).
+public static const uint kPreviewSurfaceClosure = 0;
+
+// UsdPreviewSurface's closure.
+//
+// Its layered lobes' GGX alpha is clamped at kMinAlpha rather than made a
+// delta, so they are never delta; the interface is a delta below the floor
+// or when index-matched (`smooth`).
+//
+// BsdfSample's weights (BSDF_API.md section 5.3): without transmission, the
+// mixture ratio BsdfEvaluate / BsdfPdf, with D and the lobe selection
+// cancelled analytically for a pure metal. With transmission, component
+// ratios: the layered lobes' own ratio, which their selection probability
+// cancels, and the interface's G2 / G1 times its tint and, refracting into
+// a solid, 1 / eta^2, from which D, the Fresnel split and the share's
+// selection probability cancel.
+public struct PreviewClosure {
   // Lambert albedo, and the metal's reflectance at normal incidence.
   public Spectrum base_color;
   // GGX alpha: roughness squared.
@@ -41,11 +63,11 @@ public struct SurfaceBsdf {
 
 // `entering`: the outgoing direction lies outside the solid the surface
 // bounds, so light arriving along it enters the solid.
-public SurfaceBsdf MakeSurfaceBsdf(Spectrum base_color, float roughness,
+public PreviewClosure MakePreviewClosure(Spectrum base_color, float roughness,
     float metallic, float ior, bool specular_workflow, Spectrum specular,
     float transmission, Spectrum transmission_color, bool thin_walled,
     bool entering) {
-  SurfaceBsdf bsdf;
+  PreviewClosure bsdf;
   bsdf.base_color = base_color;
   bsdf.alpha = max(roughness * roughness, kMinAlpha);
   bsdf.metallic = specular_workflow ? 0.0 : metallic;
@@ -72,6 +94,20 @@ public SurfaceBsdf MakeSurfaceBsdf(Spectrum base_color, float roughness,
   return bsdf;
 }
 
+// The closure of a hit, whatever its shading model: the model tag and that
+// model's data. The functions below dispatch on the tag.
+public struct BsdfClosure {
+  public uint model;
+  public PreviewClosure preview;
+};
+
+public BsdfClosure MakeBsdfClosure(PreviewClosure preview) {
+  BsdfClosure closure;
+  closure.model = kPreviewSurfaceClosure;
+  closure.preview = preview;
+  return closure;
+}
+
 // Schlick's Fresnel approximation.
 Spectrum FresnelSchlick(Spectrum f0, float f90, float cos_theta) {
   const float weight = pow(saturate(1.0 - cos_theta), 5.0);
@@ -81,13 +117,13 @@ Spectrum FresnelSchlick(Spectrum f0, float f90, float cos_theta) {
 // A reciprocal, single-scattering coat: light crosses the dielectric on
 // entry and exit. Internal diffuse reflection and GGX multiple scattering
 // are not compensated. Index-matched materials recover uncoated Lambert.
-Spectrum DielectricTransmission(SurfaceBsdf bsdf, float cos_theta) {
+Spectrum DielectricTransmission(PreviewClosure bsdf, float cos_theta) {
   const Spectrum fresnel = FresnelSchlick(bsdf.dielectric_f0,
       bsdf.dielectric_f90, cos_theta);
   return SpectrumConstant(1.0) + fresnel * -1.0;
 }
 
-float SpecularProbability(SurfaceBsdf bsdf, float3 wo) {
+float SpecularProbability(PreviewClosure bsdf, float3 wo) {
   if (bsdf.metallic == 1.0) return 1.0;
   if (bsdf.dielectric_f90 == 0.0) return bsdf.metallic;
   const float dielectric = clamp(MaxComponent(FresnelSchlick(
@@ -113,7 +149,7 @@ float FresnelDielectric(float cos_theta, float eta) {
 // The share of light the interface reflects about a normal at cos_theta from
 // the outgoing direction; it transmits the rest. A thin wall sums the
 // interreflections inside it, 2R / (1 + R) (Pharr et al., section 9.5).
-float InterfaceReflectance(SurfaceBsdf bsdf, float cos_theta) {
+float InterfaceReflectance(PreviewClosure bsdf, float cos_theta) {
   const float r = FresnelDielectric(cos_theta, bsdf.eta);
   return bsdf.thin_walled ? 2.0 * r / (1.0 + r) : r;
 }
@@ -145,7 +181,7 @@ float3 SampleGgxVisibleNormal(float3 wo, float alpha, float2 u) {
 
 // GGX reflection's f * cos(theta_i), with the height-correlated Smith
 // masking-shadowing term.
-Spectrum GgxEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+Spectrum GgxEvalCos(PreviewClosure bsdf, float3 wo, float3 wi) {
   const float3 h = normalize(wo + wi);
   const float g2 = 1.0 /
       (1.0 + GgxLambda(wo, bsdf.alpha) + GgxLambda(wi, bsdf.alpha));
@@ -154,21 +190,21 @@ Spectrum GgxEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
 }
 
 // The solid-angle density of visible-normal sampling followed by reflection.
-float GgxPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+float GgxPdf(PreviewClosure bsdf, float3 wo, float3 wi) {
   const float3 h = normalize(wo + wi);
   const float g1 = 1.0 / (1.0 + GgxLambda(wo, bsdf.alpha));
   return GgxD(h, bsdf.alpha) * g1 / (4.0 * wo.z);
 }
 
 // G2 / G1 for a visible normal sampled for `wo` that sends light along `wi`.
-float SmithRatio(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+float SmithRatio(PreviewClosure bsdf, float3 wo, float3 wi) {
   const float lambda_o = GgxLambda(wo, bsdf.alpha);
   return (1.0 + lambda_o) / (1.0 + lambda_o + GgxLambda(wi, bsdf.alpha));
 }
 
 // f * cos(theta_i) of the layered lobes. Zero unless both directions are
 // above the surface.
-Spectrum LayeredEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+Spectrum LayeredEvalCos(PreviewClosure bsdf, float3 wo, float3 wi) {
   if (wo.z <= 0.0 || wi.z <= 0.0) {
     return SpectrumConstant(0.0);
   }
@@ -183,7 +219,7 @@ Spectrum LayeredEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
 
 // The solid-angle density with which the layered lobes are sampled: their
 // densities weighted by their selection probabilities.
-float LayeredPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+float LayeredPdf(PreviewClosure bsdf, float3 wo, float3 wi) {
   if (wo.z <= 0.0 || wi.z <= 0.0) {
     return 0.0;
   }
@@ -197,7 +233,7 @@ float LayeredPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
 
 // The transmitted share's rough reflection, f * cos(theta_i), for both
 // directions above the surface.
-float InterfaceReflectionEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+float InterfaceReflectionEvalCos(PreviewClosure bsdf, float3 wo, float3 wi) {
   const float3 h = normalize(wo + wi);
   const float g2 = 1.0 /
       (1.0 + GgxLambda(wo, bsdf.alpha) + GgxLambda(wi, bsdf.alpha));
@@ -205,11 +241,10 @@ float InterfaceReflectionEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
          (4.0 * wo.z);
 }
 
-// f * cos(theta_i) of the surface's reflection: the layered lobes and the
-// transmitted share's rough reflection. Zero unless both directions are
-// above the surface. Delta lobes and transmission have no value here; the
-// light that reaches a path through them is found by sampling alone.
-public Spectrum BsdfEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+// The reflection side, wi.z >= 0: the layered lobes and the transmitted
+// share's rough reflection. Zero unless both directions are above the
+// surface.
+Spectrum PreviewReflectionEvaluate(PreviewClosure bsdf, float3 wo, float3 wi) {
   const Spectrum layered = LayeredEvalCos(bsdf, wo, wi);
   if (bsdf.transmission == 0.0) {
     return layered;
@@ -222,10 +257,7 @@ public Spectrum BsdfEvalCos(SurfaceBsdf bsdf, float3 wo, float3 wi) {
   return value;
 }
 
-// The solid-angle density with which SampleBsdf chooses a reflected `wi`:
-// the non-delta reflection lobes' densities weighted by their selection
-// probabilities.
-public float BsdfPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
+float PreviewReflectionPdf(PreviewClosure bsdf, float3 wo, float3 wi) {
   const float layered = LayeredPdf(bsdf, wo, wi);
   if (bsdf.transmission == 0.0) {
     return layered;
@@ -239,15 +271,111 @@ public float BsdfPdf(SurfaceBsdf bsdf, float3 wo, float3 wi) {
   return pdf;
 }
 
-public struct BsdfSample {
+// The rough interface's transmission toward wi.z < 0, as its share's
+// f * |cos(theta_i)| (value) and the density with which BsdfSample chooses
+// it (pdf), selection probabilities included. A thin wall transmits along
+// the reflection mirrored through the tangent plane; a solid refracts about
+// the generalized half vector (Walter et al., "Microfacet Models for
+// Refraction through Rough Surfaces", 2007), and radiance scales by
+// 1 / eta^2 across it. Both are zero for a smooth interface, whose
+// transmission is a delta.
+struct InterfaceTransmission {
+  float value;
+  float pdf;
+};
+
+InterfaceTransmission PreviewTransmission(PreviewClosure bsdf, float3 wo,
+    float3 wi) {
+  InterfaceTransmission result;
+  result.value = 0.0;
+  result.pdf = 0.0;
+  if (bsdf.transmission == 0.0 || bsdf.smooth || !(wo.z > 0.0) ||
+      !(wi.z < 0.0)) {
+    return result;
+  }
+  if (bsdf.thin_walled) {
+    const float3 reflected = float3(wi.xy, -wi.z);
+    const float3 h = normalize(wo + reflected);
+    const float share =
+        bsdf.transmission * (1.0 - InterfaceReflectance(bsdf, dot(wo, h)));
+    const float g2 = 1.0 /
+        (1.0 + GgxLambda(wo, bsdf.alpha) + GgxLambda(reflected, bsdf.alpha));
+    result.value = share * GgxD(h, bsdf.alpha) * g2 / (4.0 * wo.z);
+    result.pdf = share * GgxPdf(bsdf, wo, reflected);
+    return result;
+  }
+  float3 h = normalize(wo + bsdf.eta * wi);
+  if (h.z < 0.0) {
+    h = -h;
+  }
+  const float cos_oh = dot(wo, h);
+  const float cos_ih = dot(wi, h);
+  // Only microfacets that face wo and that wi leaves through refract.
+  if (!(cos_oh > 0.0) || !(cos_ih < 0.0)) {
+    return result;
+  }
+  const float denominator = cos_ih + cos_oh / bsdf.eta;
+  const float jacobian = -cos_ih / (denominator * denominator);
+  const float share = bsdf.transmission *
+      (1.0 - InterfaceReflectance(bsdf, cos_oh));
+  const float d = GgxD(h, bsdf.alpha);
+  const float lambda_o = GgxLambda(wo, bsdf.alpha);
+  const float g1 = 1.0 / (1.0 + lambda_o);
+  const float g2 = 1.0 / (1.0 + lambda_o + GgxLambda(wi, bsdf.alpha));
+  // The visible-normal density times the Jacobian from h to wi.
+  result.pdf = share * (g1 * cos_oh * d / wo.z) * jacobian;
+  result.value = share * (g2 * cos_oh * d / wo.z) * jacobian /
+      (bsdf.eta * bsdf.eta);
+  return result;
+}
+
+Spectrum PreviewEvaluate(PreviewClosure bsdf, float3 wo, float3 wi) {
+  if (wi.z < 0.0) {
+    return bsdf.transmission_color * PreviewTransmission(bsdf, wo, wi).value;
+  }
+  return PreviewReflectionEvaluate(bsdf, wo, wi);
+}
+
+float PreviewPdf(PreviewClosure bsdf, float3 wo, float3 wi) {
+  if (wi.z < 0.0) {
+    return PreviewTransmission(bsdf, wo, wi).pdf;
+  }
+  return PreviewReflectionPdf(bsdf, wo, wi);
+}
+
+// f(wo, wi) * |cos(theta_i)| of the closure's non-delta components, over
+// the whole sphere (BSDF_API.md section 5.1).
+public Spectrum BsdfEvaluate(BsdfClosure closure, float3 wo, float3 wi) {
+  switch (closure.model) {
+  case kPreviewSurfaceClosure:
+  default:
+    return PreviewEvaluate(closure.preview, wo, wi);
+  }
+}
+
+// The solid-angle density with which BsdfSample returns `wi` as a non-delta
+// sample, every selection probability included (BSDF_API.md section 5.2).
+// Its integral over the sphere is the probability that a sample is
+// non-delta and succeeds.
+public float BsdfPdf(BsdfClosure closure, float3 wo, float3 wi) {
+  switch (closure.model) {
+  case kPreviewSurfaceClosure:
+  default:
+    return PreviewPdf(closure.preview, wo, wi);
+  }
+}
+
+public struct BsdfSampleResult {
+  // The sampled direction, shading frame.
   public float3 wi;
-  // f * cos(theta_i) / pdf.
+  // An unbiased one-sample estimate of f * |cos(theta_i)| / p: the mixture
+  // ratio or a component ratio, as the closure documents.
   public Spectrum weight;
-  // BsdfPdf(wi) for a non-delta reflection, else 0.
+  // BsdfPdf(wo, wi) for a non-delta sample, 0 for a delta sample.
   public float pdf;
   // Along a Dirac delta.
   public bool delta;
-  // Below the surface, through the interface.
+  // wi.z < 0: through the surface.
   public bool transmitted;
 };
 
@@ -256,8 +384,8 @@ public struct BsdfSample {
 // reflectance and transmits otherwise (u.z). Each weight is the share's
 // f * cos(theta_i) over its density, from which D and the selection
 // probabilities cancel.
-bool SampleInterface(SurfaceBsdf bsdf, float3 wo, float3 u,
-    inout BsdfSample sample) {
+bool SampleInterface(PreviewClosure bsdf, float3 wo, float3 u,
+    inout BsdfSampleResult sample) {
   const float3 h = bsdf.smooth ? float3(0.0, 0.0, 1.0)
                                : SampleGgxVisibleNormal(wo, bsdf.alpha, u.xy);
   const float cos_oh = dot(wo, h);
@@ -276,7 +404,7 @@ bool SampleInterface(SurfaceBsdf bsdf, float3 wo, float3 u,
       return false;
     }
     sample.weight = SpectrumConstant(SmithRatio(bsdf, wo, reflected));
-    sample.pdf = BsdfPdf(bsdf, wo, reflected);
+    sample.pdf = PreviewReflectionPdf(bsdf, wo, reflected);
     return sample.pdf > 0.0 && IsFinite(sample.weight);
   }
   sample.transmitted = true;
@@ -289,6 +417,9 @@ bool SampleInterface(SurfaceBsdf bsdf, float3 wo, float3 u,
     sample.wi = float3(reflected.xy, -reflected.z);
     sample.weight = bsdf.transmission_color *
         (bsdf.smooth ? 1.0 : SmithRatio(bsdf, wo, reflected));
+    if (!bsdf.smooth) {
+      sample.pdf = PreviewTransmission(bsdf, wo, sample.wi).pdf;
+    }
     return IsFinite(sample.weight);
   }
   // Refraction about h by Snell's law; total internal reflection always
@@ -306,6 +437,9 @@ bool SampleInterface(SurfaceBsdf bsdf, float3 wo, float3 u,
   sample.weight = bsdf.transmission_color *
       ((bsdf.smooth ? 1.0 : SmithRatio(bsdf, wo, sample.wi)) /
        (bsdf.eta * bsdf.eta));
+  if (!bsdf.smooth) {
+    sample.pdf = PreviewTransmission(bsdf, wo, sample.wi).pdf;
+  }
   return IsFinite(sample.weight);
 }
 
@@ -313,8 +447,8 @@ bool SampleInterface(SurfaceBsdf bsdf, float3 wo, float3 u,
 // layered lobes with u.z rescaled. Among those, chooses GGX using the view
 // Fresnel and metal fraction (u.z), then a direction from it (u.xy).
 // Returns false when no direction on the chosen side results.
-public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
-    out BsdfSample sample) {
+bool PreviewSample(PreviewClosure bsdf, float3 wo, float3 u,
+    out BsdfSampleResult sample) {
   sample.wi = float3(0.0);
   sample.weight = SpectrumConstant(0.0);
   sample.pdf = 0.0;
@@ -343,8 +477,9 @@ public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
   // The layered lobes' own estimate: their share's weight cancels its
   // selection probability. Weighing against light sampling takes the
   // density of every lobe that could have chosen wi.
-  sample.pdf = bsdf.transmission > 0.0 ? BsdfPdf(bsdf, wo, sample.wi)
-                                       : layered_pdf;
+  sample.pdf = bsdf.transmission > 0.0
+      ? PreviewReflectionPdf(bsdf, wo, sample.wi)
+      : layered_pdf;
   sample.weight = LayeredEvalCos(bsdf, wo, sample.wi) / layered_pdf;
   // For a pure GGX surface D cancels analytically. Avoid dividing two
   // independently rounded, very large densities at near-mirror roughness.
@@ -355,4 +490,16 @@ public bool SampleBsdf(SurfaceBsdf bsdf, float3 wo, float3 u,
         ((1.0 + lambda_o) / (1.0 + lambda_o + GgxLambda(sample.wi, bsdf.alpha)));
   }
   return IsFinite(sample.weight);
+}
+
+// Samples a direction from three uniform numbers in [0, 1) (BSDF_API.md
+// section 5.3). Returns false when the procedure produces no direction:
+// the path ends, its energy absorbed.
+public bool BsdfSample(BsdfClosure closure, float3 wo, float3 u,
+    out BsdfSampleResult sample) {
+  switch (closure.model) {
+  case kPreviewSurfaceClosure:
+  default:
+    return PreviewSample(closure.preview, wo, u, sample);
+  }
 }

@@ -254,6 +254,25 @@ so the temporal outputs do not change.
 re-evaluates the material is LOTUS-MATERIALX-02's decision, made with the
 closure's size known.
 
+**Decided** by the [BSDF API](BSDF_API.md#63-reservoir-targets-and-the-stored-surface):
+reuse stores the closure. The packing rule:
+
+- `RestirSurface` holds the source surface's geometry (origin and view
+  depth, geometric and shading normals, `wo`) and the closure's
+  reflection-side fields, packed per model by `StoreClosure` and read back
+  by `LoadClosure` in `restir.slang`.
+- The preview closure (`PreviewClosure`) keeps the 128-byte packing:
+  `dielectric_f90`, the transmitted share (negated for a thin wall) and
+  the relative index (negated when smooth) in the normals' and `wo`'s `w`
+  lanes, then base colour and alpha, dielectric F0 and metallic, and F0
+  and F90. Its transmission colour is not stored: targets are
+  reflection-side.
+- With one model no tag is stored. The task that adds a second model
+  (LOTUS-MATERIALX-05) adds the tag and grows the record to the largest
+  implemented model's packed closure, reporting the growth; a projected
+  preview-like closure is the named fallback if LOTUS-MATERIALX-10
+  measures the memory as unacceptable.
+
 ## 7. Host-side consumers
 
 - **Validation.** `ValidateMaterial` checks the geometry fields and then

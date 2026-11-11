@@ -87,8 +87,13 @@ Spectrum ShadowedLight(SurfaceHit surface, ShadingFrame basis, float3 wo,
       dot(sample.direction, surface.normal) <= 0.0) {
     return SpectrumConstant(0.0);
   }
+  // Nor does light below the shading normal: no estimator connects through
+  // a transmissive surface (docs/design/BSDF_API.md section 6.1).
   const float3 wi = basis.ToLocal(sample.direction);
-  const Spectrum f = BsdfEvalCos(surface.bsdf, wo, wi);
+  if (wi.z <= 0.0) {
+    return SpectrumConstant(0.0);
+  }
+  const Spectrum f = BsdfEvaluate(surface.bsdf, wo, wi);
   if (MaxComponent(f) <= 0.0) {
     return SpectrumConstant(0.0);
   }
@@ -196,8 +201,8 @@ public bool ScatterPath(inout PathState path, Hit hit) {
   u.x = NextRandom(path.rngState);
   u.y = NextRandom(path.rngState);
   u.z = NextRandom(path.rngState);
-  BsdfSample sample;
-  if (!SampleBsdf(surface.bsdf, wo, u, sample)) {
+  BsdfSampleResult sample;
+  if (!BsdfSample(surface.bsdf, wo, u, sample)) {
     return false;
   }
   const float3 wi = normalize(basis.ToWorld(sample.wi));

@@ -34,6 +34,10 @@ struct RestirReuse {
 // 128-byte exact jittered source surface: its target function for support
 // evaluation. Written once per frame by the temporal pass; the spatial pass
 // reads it and its output shares it, so it is stored apart from the records.
+// It stores the closure, packed per model, not the hit to re-evaluate
+// (docs/design/BSDF_API.md section 6.3). Only the preview closure exists,
+// so no model tag is stored; its reflection-side fields fill the w
+// components and the last three vectors.
 struct RestirSurface {
   float4 origin;
   float4 normal; // w: dielectric_f90
@@ -50,6 +54,46 @@ struct RestirSurface {
 [[vk::binding(22, 0)]] RWStructuredBuffer<RestirSurface> reservoir_surfaces;
 [[vk::binding(23, 0)]] StructuredBuffer<RestirSurface> previous_surfaces;
 
+// ReSTIR's targets and weights are the reflection side's (docs/design/
+// BSDF_API.md section 6.1): no light reaches a surface from below its
+// shading normal.
+Spectrum ReflectionEvaluate(BsdfClosure closure, float3 wo, float3 wi) {
+  return wi.z > 0.0 ? BsdfEvaluate(closure, wo, wi) : SpectrumConstant(0.0);
+}
+
+float ReflectionPdf(BsdfClosure closure, float3 wo, float3 wi) {
+  return wi.z > 0.0 ? BsdfPdf(closure, wo, wi) : 0.0;
+}
+
+// The closure's reflection-side fields, packed into a stored surface.
+void StoreClosure(BsdfClosure closure, inout RestirSurface surface) {
+  const PreviewClosure bsdf = closure.preview;
+  surface.normal.w = bsdf.dielectric_f90;
+  surface.shading_normal.w = bsdf.thin_walled ? -bsdf.transmission : bsdf.transmission;
+  surface.outgoing.w = bsdf.smooth ? -bsdf.eta : bsdf.eta;
+  surface.base_alpha = float4(SpectrumToRgb(bsdf.base_color), bsdf.alpha);
+  surface.dielectric_metallic = float4(SpectrumToRgb(bsdf.dielectric_f0), bsdf.metallic);
+  surface.fresnel = float4(SpectrumToRgb(bsdf.f0), bsdf.f90);
+}
+
+BsdfClosure LoadClosure(RestirSurface source) {
+  PreviewClosure bsdf;
+  bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
+  bsdf.alpha = source.base_alpha.w;
+  bsdf.metallic = source.dielectric_metallic.w;
+  bsdf.dielectric_f0 = SpectrumFromRgb(source.dielectric_metallic.xyz);
+  bsdf.dielectric_f90 = source.normal.w;
+  bsdf.f0 = SpectrumFromRgb(source.fresnel.xyz);
+  bsdf.f90 = source.fresnel.w;
+  // Targets are reflection-side, which the transmission colour never tints.
+  bsdf.transmission = abs(source.shading_normal.w);
+  bsdf.transmission_color = SpectrumConstant(1.0);
+  bsdf.eta = abs(source.outgoing.w);
+  bsdf.thin_walled = source.shading_normal.w < 0.0;
+  bsdf.smooth = source.outgoing.w < 0.0;
+  return MakeBsdfClosure(bsdf);
+}
+
 // f in the light's unit-square parameter measure. Reconstruction embeds the
 // power selection p; its Jacobian is p / sample.pdf (area or solid angle).
 // Candidate proposal q is separate and appears only in streaming weights.
@@ -58,7 +102,7 @@ Spectrum CandidateContribution(SurfaceHit surface, ShadingFrame basis,
     float3 wo, LightSample sample, float selection) {
   if (!(sample.pdf > 0.0) || dot(sample.direction, surface.normal) <= 0.0)
     return SpectrumConstant(0.0);
-  return BsdfEvalCos(surface.bsdf, wo, basis.ToLocal(sample.direction)) *
+  return ReflectionEvaluate(surface.bsdf, wo, basis.ToLocal(sample.direction)) *
       sample.radiance * (selection / sample.pdf);
 }
 
@@ -151,29 +195,16 @@ public Spectrum InitialDirectLight(uint pixel, SurfaceHit surface, ShadingFrame 
   // Targets, support correction and diagnostic RGB remain unpartitioned.
   const float weight = sample.delta ? 1.0 : PowerHeuristic(
       ReservoirPartitionPdf(selected.reservoir.sample, sample, origin),
-      BsdfPdf(surface.bsdf, wo, basis.ToLocal(sample.direction)));
+      ReflectionPdf(surface.bsdf, wo, basis.ToLocal(sample.direction)));
   return SpectrumFromRgb(selected.contribution.xyz) * weight;
 }
 
 Spectrum HistoryContribution(RestirSurface source, uint light, LightSample sample) {
-  SurfaceBsdf bsdf;
-  bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
-  bsdf.alpha = source.base_alpha.w;
-  bsdf.metallic = source.dielectric_metallic.w;
-  bsdf.dielectric_f0 = SpectrumFromRgb(source.dielectric_metallic.xyz);
-  bsdf.dielectric_f90 = source.normal.w;
-  bsdf.f0 = SpectrumFromRgb(source.fresnel.xyz);
-  bsdf.f90 = source.fresnel.w;
-  // Targets are reflection-side, which the transmission colour never tints.
-  bsdf.transmission = abs(source.shading_normal.w);
-  bsdf.transmission_color = SpectrumConstant(1.0);
-  bsdf.eta = abs(source.outgoing.w);
-  bsdf.thin_walled = source.shading_normal.w < 0.0;
-  bsdf.smooth = source.outgoing.w < 0.0;
+  const BsdfClosure bsdf = LoadClosure(source);
   if (!(sample.pdf > 0.0) || dot(sample.direction, source.normal.xyz) <= 0.0)
     return SpectrumConstant(0.0);
   const ShadingFrame basis = MakeShadingFrame(source.shading_normal.xyz);
-  return BsdfEvalCos(bsdf, source.outgoing.xyz, basis.ToLocal(sample.direction)) *
+  return ReflectionEvaluate(bsdf, source.outgoing.xyz, basis.ToLocal(sample.direction)) *
       sample.radiance * (path_constants.lights[light].pdf / sample.pdf);
 }
 
@@ -230,14 +261,10 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     const float3 wo = basis.ToLocal(-ray.Direction);
     const float3 origin = OffsetRayOrigin(surface.position, surface.normal);
     receiver.origin = float4(origin, CurrentViewDepth(surface.position));
-    receiver.normal = float4(surface.normal, surface.bsdf.dielectric_f90);
-    receiver.shading_normal = float4(surface.shading_normal,
-        surface.bsdf.thin_walled ? -surface.bsdf.transmission : surface.bsdf.transmission);
-    receiver.outgoing = float4(wo, surface.bsdf.smooth ? -surface.bsdf.eta : surface.bsdf.eta);
-
-    receiver.base_alpha = float4(SpectrumToRgb(surface.bsdf.base_color), surface.bsdf.alpha);
-    receiver.dielectric_metallic = float4(SpectrumToRgb(surface.bsdf.dielectric_f0), surface.bsdf.metallic);
-    receiver.fresnel = float4(SpectrumToRgb(surface.bsdf.f0), surface.bsdf.f90);
+    receiver.normal = float4(surface.normal, 0.0);
+    receiver.shading_normal = float4(surface.shading_normal, 0.0);
+    receiver.outgoing = float4(wo, 0.0);
+    StoreClosure(surface.bsdf, receiver);
     TemporalInstanceIdentity(hit.instance, receiver.instance_id, receiver.material_id);
     uint previous_index;
     if (path_constants.restir_history != 0 && (result.pixel.flags & 2) == 0 &&

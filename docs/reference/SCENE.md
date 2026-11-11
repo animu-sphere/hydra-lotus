@@ -778,7 +778,11 @@ of compute kernels. Both call the same transport steps
   ([light sampling](#light-sampling)). Under BSDF sampling, the same event
   adds each parallel light, which no sampled direction can find, through a
   shadow ray of its own, drawing no random numbers.
-- **BSDF.** A dielectric GGX coat over Lambert, blended with the existing
+- **BSDF.** Every closure provides `BsdfEvaluate`, `BsdfPdf` and
+  `BsdfSample`, whose measures, sample weights and random-number use the
+  [BSDF API](../design/BSDF_API.md) defines; `lotus-bsdf-test` checks them
+  on the CPU. `UsdPreviewSurface`'s closure is a dielectric GGX coat over
+  Lambert, blended with the existing
   GGX metal by `metallic`. Dielectric F0 is `((ior - 1)/(ior + 1))²`;
   `ior = 1` removes the interface and recovers uncoated Lambert. In the
   specular workflow, explicit `specular_color` supplies F0 and metallic and
@@ -816,10 +820,12 @@ of compute kernels. Both call the same transport steps
   path exactly. Within the interface, reflection has the probability of
   its reflectance. Its weights are `G2/G1`, times the tint for a
   transmission and divided by `η²` for a solid's; the smooth ones omit
-  `G2/G1`. BSDF evaluation and its density, which next event estimation
-  and MIS read, cover reflection only: the layered lobes and the
-  interface's rough reflection. A rough interface loses its microfacets'
-  multiple scattering uncompensated.
+  `G2/G1`. BSDF evaluation and its density cover the whole sphere, rough
+  refraction and a rough wall's transmission included, in the measures
+  of the [BSDF API](../design/BSDF_API.md#5-measures); next event
+  estimation, MIS and ReSTIR's targets ask for the reflection side only:
+  the layered lobes and the interface's rough reflection. A rough
+  interface loses its microfacets' multiple scattering uncompensated.
   [Measured verification](../reports/2026-10-29-dielectric-transmission.md).
 - **Environment.** A scattered ray that escapes adds the throughput times
   the environment radiance: the constant's plus the environment image's
