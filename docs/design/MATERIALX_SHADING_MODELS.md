@@ -324,7 +324,8 @@ The delivery's acceptance:
 
 Settled in a design review when implementation starts. §10.1, §10.3 and
 §10.6 are settled by the [material IR v2 design](MATERIAL_IR_V2.md), and
-§10.2 by the [layered BSDF contract](LAYERED_BSDF.md).
+§10.2 by the [layered BSDF contract](LAYERED_BSDF.md), and §10.4 by the
+[translation contract](MATERIALX_TRANSLATION.md).
 
 1. **IR v2 granularity:** per-model structures, and how texture expressions
    are held. *Settled:* [tagged models and one affine lookup per input](MATERIAL_IR_V2.md#4-cpu-representation-contract-101).
@@ -335,7 +336,8 @@ Settled in a design review when implementation starts. §10.1, §10.3 and
    features, defaults and implementation comparisons. *Settled:*
    [MaterialX 1.39.5 and its node definitions](MATERIAL_IR_V2.md#3-versions-contract-103).
 4. **Input paths:** how a Hydra network and a MaterialX document are each
-   handled.
+   handled. *Settled:*
+   [the Hydra network is the one path](MATERIALX_TRANSLATION.md#3-input-paths-contract-104).
 5. **Feature boundary:** how much of Standard Surface's and OpenPBR's
    subsurface, thin film and volume enters this delivery.
 6. **GPU strategy:** switch dispatch or shader specialization, with the cost
