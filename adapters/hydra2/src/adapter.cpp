@@ -1374,6 +1374,60 @@ private:
   Primvars primvars_;
 };
 
+// Warns of everything a translation did not represent exactly
+// (docs/design/MATERIALX_TRANSLATION.md section 6.2): a line per outcome
+// naming the inputs it befell, then a line per input with the node at which
+// translation stopped.
+void WarnMaterial(const SdfPath& id, const HdLotusMaterialTranslation& translation) {
+  using Kind = HdLotusMaterialDiagnosticKind;
+  const auto inputs = [&](std::initializer_list<Kind> kinds) {
+    std::string list;
+    for (const HdLotusMaterialDiagnostic& diagnostic : translation.diagnostics) {
+      if (std::find(kinds.begin(), kinds.end(), diagnostic.kind) != kinds.end()) {
+        list += (list.empty() ? "" : ", ") + diagnostic.input.GetString();
+      }
+    }
+    return list;
+  };
+  for (const HdLotusMaterialDiagnostic& diagnostic : translation.diagnostics) {
+    if (diagnostic.kind == Kind::UnsupportedSurface) {
+      TF_WARN("Lotus uses the default material for %s: %s", id.GetText(),
+          diagnostic.detail.c_str());
+    } else if (diagnostic.kind == Kind::UnsupportedTerminal) {
+      TF_WARN("Lotus renders the surface of %s only: %s (%s, %s)", id.GetText(),
+          diagnostic.detail.c_str(), diagnostic.node.GetText(),
+          diagnostic.node_type.GetText());
+    }
+  }
+  if (const std::string list = inputs(
+          {Kind::UnsupportedNode, Kind::UnsupportedGraph, Kind::UnsupportedValue});
+      !list.empty()) {
+    TF_WARN("Lotus uses the defaults of %s inputs whose shader graph it "
+            "does not translate: %s",
+        id.GetText(), list.c_str());
+  }
+  if (const std::string list = inputs({Kind::UnrepresentedInput}); !list.empty()) {
+    TF_WARN("Lotus ignores %s inputs its material cannot represent: %s",
+        id.GetText(), list.c_str());
+  }
+  if (const std::string list = inputs({Kind::UnknownInput}); !list.empty()) {
+    TF_WARN("Lotus ignores %s inputs its surface's definition does not name: %s",
+        id.GetText(), list.c_str());
+  }
+  if (const std::string list = inputs({Kind::Substituted}); !list.empty()) {
+    TF_WARN("Lotus translates %s inputs with a substitution: %s", id.GetText(),
+        list.c_str());
+  }
+  for (const HdLotusMaterialDiagnostic& diagnostic : translation.diagnostics) {
+    if (!diagnostic.input.IsEmpty()) {
+      TF_WARN("Lotus material %s input %s: %s at %s (%s): %s", id.GetText(),
+          diagnostic.input.GetText(), HdLotusMaterialDiagnosticKindName(diagnostic.kind),
+          diagnostic.node.GetText(), diagnostic.node_type.GetText(),
+          diagnostic.detail.c_str());
+    }
+  }
+}
+
 // Translates its Hydra material network into the material IR, keyed by its
 // path, whenever the network changes. Meshes bound to the path follow it.
 class HdLotusMaterial final : public HdMaterial {
@@ -1402,27 +1456,7 @@ public:
           resource.IsHolding<HdMaterialNetworkMap>()
               ? resource.UncheckedGet<HdMaterialNetworkMap>()
               : HdMaterialNetworkMap{});
-      if (!translation.unsupported.empty()) {
-        TF_WARN("Lotus uses the default material for %s: %s",
-            GetId().GetText(), translation.unsupported.c_str());
-      }
-      if (!translation.connected_inputs.empty()) {
-        std::string inputs;
-        for (const TfToken& input : translation.connected_inputs) {
-          inputs += (inputs.empty() ? "" : ", ") + input.GetString();
-        }
-        TF_WARN("Lotus uses the defaults of %s inputs whose shader graph it "
-                "does not translate: %s",
-            GetId().GetText(), inputs.c_str());
-      }
-      if (!translation.unrepresented_inputs.empty()) {
-        std::string inputs;
-        for (const TfToken& input : translation.unrepresented_inputs) {
-          inputs += (inputs.empty() ? "" : ", ") + input.GetString();
-        }
-        TF_WARN("Lotus ignores %s inputs its material cannot represent: %s",
-            GetId().GetText(), inputs.c_str());
-      }
+      WarnMaterial(GetId(), translation);
       state_->SyncMaterial(GetId(), translation);
     }
     *dirty_bits = Clean;

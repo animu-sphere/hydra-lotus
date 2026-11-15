@@ -35,6 +35,10 @@ lotus_add_hydra_test(NAME render-pass SOURCES render_pass_test.cpp
   LIBRARIES ${_runtime} Lotus::Vulkan usdGeom ${_stage})
 lotus_add_hydra_test(NAME material SOURCES material_test.cpp
   LIBRARIES ${_runtime} Lotus::Vulkan ${_stage})
+lotus_add_hydra_test(NAME material-graph SOURCES material_graph_test.cpp
+  LIBRARIES ${_runtime} sdr ${_stage})
+target_compile_definitions(lotus-hydra2-material-graph-test PRIVATE
+  LOTUS_MATERIAL_FIXTURES_DIRECTORY="${PROJECT_SOURCE_DIR}/validation/materials")
 lotus_add_hydra_test(NAME normals SOURCES normals_test.cpp
   LIBRARIES ${_runtime} usdGeom ${_stage})
 lotus_add_hydra_test(NAME texture SOURCES texture_test.cpp
@@ -126,6 +130,8 @@ add_test(NAME lotus-renderer-hydra-analytic-lights-gpu
   COMMAND lotus-hydra2-analytic-light-test --gpu)
 add_test(NAME lotus-renderer-hydra-material
   COMMAND lotus-hydra2-material-test)
+add_test(NAME lotus-renderer-hydra-material-graph
+  COMMAND lotus-hydra2-material-graph-test)
 add_test(NAME lotus-renderer-hydra-material-gpu
   COMMAND lotus-hydra2-material-test --gpu)
 add_test(NAME lotus-renderer-hydra-material-fixtures

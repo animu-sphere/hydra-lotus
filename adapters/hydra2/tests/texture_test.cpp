@@ -31,6 +31,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -57,6 +58,20 @@ HdMaterialNode Node(const char* path, const char* identifier,
   node.identifier = TfToken(identifier);
   node.parameters = std::move(parameters);
   return node;
+}
+
+// The surface inputs a translation diagnosed, in order: those of `kinds`,
+// or all of them.
+std::vector<TfToken> Diagnosed(const HdLotusMaterialTranslation& translation,
+    std::initializer_list<HdLotusMaterialDiagnosticKind> kinds = {}) {
+  std::vector<TfToken> inputs;
+  for (const HdLotusMaterialDiagnostic& diagnostic : translation.diagnostics) {
+    if (kinds.size() == 0 ||
+        std::find(kinds.begin(), kinds.end(), diagnostic.kind) != kinds.end()) {
+      inputs.push_back(diagnostic.input);
+    }
+  }
+  return inputs;
 }
 
 void TranslatorCases() {
@@ -103,7 +118,8 @@ void TranslatorCases() {
   map.terminals.push_back(surface);
   HdLotusMaterialTranslation translation = HdLotusTranslateMaterial(map);
   const Lotus::Material& material = translation.material;
-  Check(translation.unsupported.empty(), "the network was unsupported");
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedSurface}).empty(),
+      "the network was unsupported");
 
   // A connection wins over the authored constant.
   Lotus::TextureInput albedo;
@@ -131,7 +147,7 @@ void TranslatorCases() {
   // A colour output cannot drive a scalar, and a lookup with other texture
   // coordinates than the first is not translated.
   Check(!Lotus::Preview(material).metallic_texture && !Lotus::Preview(material).emission_texture &&
-            translation.connected_inputs ==
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedGraph}) ==
                 std::vector<TfToken>{TfToken("emissiveColor"), TfToken("metallic")},
       "untranslatable lookups were not reported as connected inputs");
   Check(translation.textures ==
@@ -175,9 +191,7 @@ void TranslatorCases() {
       surface, TfToken("normal")};
   translation = HdLotusTranslateMaterial(map);
   Check(!translation.material.geometry.normal_texture &&
-            std::find(translation.connected_inputs.begin(),
-                translation.connected_inputs.end(), TfToken("normal")) !=
-                translation.connected_inputs.end(),
+            Diagnosed(translation).back() == TfToken("normal"),
       "a scalar normal connection was not reported as untranslated");
 
   parameters[TfToken("opacity")] = VtValue(-0.5F);
@@ -210,7 +224,7 @@ void TranslatorCases() {
   network.relationships.back().inputName = TfToken("g");
   translation = HdLotusTranslateMaterial(map);
   Check(!Lotus::Preview(translation.material).specular_color_texture &&
-            std::find(translation.connected_inputs.begin(), translation.connected_inputs.end(), TfToken("specularColor")) != translation.connected_inputs.end(),
+            Diagnosed(translation).back() == TfToken("specularColor"),
       "a scalar specular colour connection was not reported");
   parameters[TfToken("useSpecularWorkflow")] = VtValue(0);
   network.relationships.back().inputName = TfToken("rgb");

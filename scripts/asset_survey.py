@@ -41,6 +41,13 @@ WARNINGS = [
     ("no surface terminal", re.compile(r"default material for .*: the material has no surface terminal")),
     ("unsupported surface", re.compile(r"default material for ")),
     ("untranslated connection", re.compile(r"uses the defaults of .* inputs whose shader graph")),
+    ("unrepresented input", re.compile(r"ignores .* inputs its material cannot represent")),
+    ("unknown input", re.compile(r"inputs its surface's definition does not name")),
+    ("substituted input", re.compile(r"translates .* inputs with a substitution")),
+    ("terminal not rendered", re.compile(r"renders the surface of .* only: (.*) \(")),
+    # One line per diagnosed input: its kind, the node's identifier and the rule.
+    ("material diagnostic",
+     re.compile(r"Lotus material \S+ input \S+: ([a-z ]+) at \S* \((\S*)\): (.*)")),
     ("GeomSubset bindings ignored", re.compile(r"ignores the GeomSubset material bindings")),
     ("texture unreadable", re.compile(r"cannot read the texture")),
     ("mesh rejected", re.compile(r"Lotus rejected mesh .*: (.*)")),
@@ -83,6 +90,8 @@ def classify_log(text):
             if name == "untranslated connection":
                 for item in message.rsplit(": ", 1)[-1].split(", "):
                     details[f"input {item.strip()}"] += 1
+            elif name == "material diagnostic":
+                details[f"{match[1]}: {match[2]}: {match[3].strip()}"] += 1
             elif match.groups():
                 details[f"{name}: {match[1].strip()}"] += 1
             break

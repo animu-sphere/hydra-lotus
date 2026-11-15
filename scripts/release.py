@@ -45,6 +45,8 @@ REQUIRED = {
     "bin/reference/material-subsets-v1-variance.pfm",
     "bin/reference/material-primvars-v1-mean.pfm",
     "bin/reference/material-primvars-v1-variance.pfm",
+    "bin/reference/material-graphs-v1-mean.pfm",
+    "bin/reference/material-graphs-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",

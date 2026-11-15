@@ -15,6 +15,15 @@ class AssetSurveyTest(unittest.TestCase):
             PREFIX + "Lotus uses the default material for /A: the material has no surface terminal",
             PREFIX + "Lotus uses the default material for /B: the surface shader is not UsdPreviewSurface",
             PREFIX + "Lotus uses the defaults of /C inputs whose shader graph it does not translate: diffuseColor, normal",
+            PREFIX + "Lotus material /C input normal: unsupported node at /C/If "
+                     "(ND_ifgreater_float): the node table does not hold ND_ifgreater_float",
+            PREFIX + "Lotus ignores /C inputs its material cannot represent: coat",
+            PREFIX + "Lotus material /C input coat: unrepresented input at /C/Surface "
+                     "(ND_standard_surface_surfaceshader): the material has no such lobe",
+            PREFIX + "Lotus translates /C inputs with a substitution: opacity",
+            PREFIX + "Lotus ignores /C inputs its surface's definition does not name: tint",
+            PREFIX + "Lotus renders the surface of /C only: the displacement terminal is not "
+                     "rendered (/C/Height, ND_displacement_float)",
             PREFIX + "Lotus rejected mesh /D: face vertex index is out of range",
             PREFIX + "Lotus ignores the displayColor of /E: only constant interpolation is supported",
             PREFIX + "Lotus ignores the GeomSubset material bindings of /F: the mesh's own binding covers every face",
@@ -25,9 +34,16 @@ class AssetSurveyTest(unittest.TestCase):
         self.assertEqual(result["warnings"], {
             "no surface terminal": 1, "unsupported surface": 1,
             "untranslated connection": 1, "mesh rejected": 1,
+            "material diagnostic": 2, "unrepresented input": 1, "substituted input": 1,
+            "unknown input": 1, "terminal not rendered": 1,
             "displayColor ignored": 1, "GeomSubset bindings ignored": 1, "not Lotus": 1})
         self.assertEqual(result["details"]["input diffuseColor"], 1)
         self.assertEqual(result["details"]["input normal"], 1)
+        self.assertEqual(result["details"][
+            "unsupported node: ND_ifgreater_float: "
+            "the node table does not hold ND_ifgreater_float"], 1)
+        self.assertEqual(result["details"][
+            "terminal not rendered: the displacement terminal is not rendered"], 1)
         self.assertEqual(result["details"]["mesh rejected: face vertex index is out of range"], 1)
 
     def test_records_paths_relative_to_root(self):

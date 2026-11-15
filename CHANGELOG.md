@@ -20,9 +20,30 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   first. Rendered images are unchanged.
 - The fixed benchmarks' JSON records `scene.materials` and
   `scene.material_bytes`.
+- The Hydra material translator reports through a list of structured
+  diagnostics (kind, input, node and rule) instead of `unsupported`,
+  `connected_inputs` and `unrepresented_inputs`, and the adapter's material
+  warnings name the node at which a translation stopped. An image or a
+  constant in a colour space other than linear Rec.709 or `srgb_texture`, a
+  connected displacement or volume terminal, an authored Standard Surface
+  input its definition does not name, a non-finite or mistyped value, a
+  `closest` or `cubic` filter and `constant` addressing with a non-zero
+  default now warn; none of their pixels change. A float or vector image's
+  colour space is ignored, as MaterialX ignores it.
 
 ### Added
 
+- MaterialX graph translation
+  ([contract](docs/design/MATERIALX_TRANSLATION.md), LOTUS-MATERIALX-04): a
+  Standard Surface input reads a node graph that folds exactly into a
+  constant or one lookup with a per-channel scale and bias: constants,
+  conversions, channel separation and combination, sums, products, mixes
+  and inversions with constants, `ND_tiledimage` tiling, `ND_place2d` and
+  coordinate arithmetic, and glTF's `ND_gltf_image`, `ND_gltf_colorimage`
+  and `ND_gltf_normalmap`; an sRGB constant is decoded. Anything else
+  keeps the input's default and is diagnosed. The `material-graphs-v1`
+  fixture and CTest `lotus-renderer-hydra-material-graph` check it. Existing
+  rendered images are unchanged.
 - Layered BSDFs ([contract](docs/design/LAYERED_BSDF.md), LOTUS-MATERIALX-03):
   `Lambert`, `GgxSchlick` and `GgxDielectric` lobes with their own normals,
   composed by `mix`, `add`, `multiply` and `layer` with albedo scaling

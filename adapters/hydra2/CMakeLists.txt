@@ -21,6 +21,7 @@ endif()
 # The co-built runtime is implementation detail of the module. It is not an
 # independently packaged OpenStrata plugin bundle or renderer SDK component.
 add_library(lotus-hydra2-runtime STATIC src/adapter.cpp
+  src/material_graph.cpp
   src/material_translator.cpp)
 target_include_directories(lotus-hydra2-runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src")

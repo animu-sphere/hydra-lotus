@@ -1313,7 +1313,7 @@ void SetMaterialMtlx(Lotus::RenderWorld& world) {
       {"Tiled", StandardTextured(Periodic("palette.png", "sRGB"))},
       // An image without a file is its default.
       {"Fileless", Standard({0.2F, 0.6F, 0.9F})},
-      // ND_multiply is not read: base_color keeps its default.
+      // A power of a lookup is not folded: base_color keeps its default.
       {"Untranslated", Standard()},
   };
   for (const auto& [name, material] : looks) world.SetMaterial(root + "/Looks/" + name, material);
@@ -1378,6 +1378,188 @@ void SetMaterialMtlx(Lotus::RenderWorld& world) {
     placed.world_from_object[13] = kRows[i / 5];
     world.SetMesh(mesh, object.geometry, placed);
     world.BindMaterial(mesh, root + "/Looks/" + object.material);
+  }
+}
+
+namespace {
+
+// MaterialX's srgb_texture decoding, in double precision as the adapter
+// folds a constant.
+double SrgbToLinear(double value) {
+  return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+}
+
+// ND_place2d's map of (s, t). ND_rotate2d turns (x, y) by `degrees` into
+// (c x + s y, -s x + c y). Order 0 divides by the scale, rotates and
+// subtracts the offset, about the pivot; order 1 subtracts the offset,
+// rotates and divides by the scale.
+St Place2d(const std::array<double, 2>& pivot, const std::array<double, 2>& scale,
+    double degrees, const std::array<double, 2>& offset, int order) {
+  const double c = std::cos(degrees * (kPi / 180.0)), s = std::sin(degrees * (kPi / 180.0));
+  St m{};
+  if (order == 0) {
+    m[0] = c / scale[0], m[1] = s / scale[1];
+    m[3] = -s / scale[0], m[4] = c / scale[1];
+    m[2] = -(m[0] * pivot[0] + m[1] * pivot[1]) - offset[0] + pivot[0];
+    m[5] = -(m[3] * pivot[0] + m[4] * pivot[1]) - offset[1] + pivot[1];
+  } else {
+    m[0] = c / scale[0], m[1] = s / scale[0];
+    m[3] = -s / scale[1], m[4] = c / scale[1];
+    const double x = -pivot[0] - offset[0], y = -pivot[1] - offset[1];
+    m[2] = (c * x + s * y) / scale[0] + pivot[0];
+    m[5] = (-s * x + c * y) / scale[1] + pivot[1];
+  }
+  return m;
+}
+
+// ND_gltf_image's placement: ND_place2d about (0, 1) in order 0, with the
+// scale inverted, the rotation negated and the offset negated in s.
+St GltfPlace(const std::array<double, 2>& scale, double degrees,
+    const std::array<double, 2>& offset) {
+  return Place2d({0.0, 1.0}, {1.0 / scale[0], 1.0 / scale[1]}, -degrees,
+      {-offset[0], offset[1]}, 0);
+}
+
+// The placement the fixture's ND_place2d and ND_gltf_image cards share, as
+// their USD file's floats hold it.
+constexpr std::array<double, 2> kPlacedScale{2.0, 1.0};
+constexpr std::array<double, 2> kPlacedOffset{0.1F, 0.2F};
+constexpr double kPlacedDegrees = 30.0;
+
+// As a translator that turned glTF's rotation the other way would place it.
+void ReversedGltfRotation(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialGraphs/Looks/GltfRotated";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  Lotus::Preview(material).base_color_texture->st_transform =
+      Float(GltfPlace(kPlacedScale, -kPlacedDegrees, kPlacedOffset));
+  world.SetMaterial(key, material);
+}
+
+} // namespace
+
+void SetMaterialGraphs(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialGraphs";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/palette.png|raw", Image(4, kUnorm, Palette));
+  world.SetTexture("textures/rgba.png|raw", Image(4, kUnorm, Rgba));
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+
+  constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
+  const Lotus::TextureInput palette = Periodic("palette.png", "sRGB");
+  // The sRGB constant, decoded; the linear one is authored as these values.
+  constexpr std::array<float, 3> kOrange{0.8F, 0.4F, 0.2F};
+  std::array<float, 3> decoded{};
+  for (std::size_t c = 0; c < 3; ++c) {
+    decoded[c] = static_cast<float>(SrgbToLinear(kOrange[c]));
+  }
+  // ND_separate3's second and third outputs.
+  Lotus::Material separate = Standard(kCopper);
+  Lotus::Preview(separate).roughness_texture = Channel(Periodic("rgba.png", "raw"), 1);
+  Lotus::Preview(separate).metallic_texture = Channel(Periodic("rgba.png", "raw"), 2);
+  separate.geometry.texcoords = "st";
+  // ND_gltf_colorimage reads a colour-4 image, whose default is transparent
+  // black, times its colour.
+  Lotus::TextureInput tinted = palette;
+  tinted.scale = {1.0F, 0.5F, 0.25F, 1.0F};
+  tinted.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  Lotus::TextureInput half = palette;
+  half.scale = {0.5F, 0.5F, 0.5F, 1.0F};
+  half.fallback = {0.0F, 0.0F, 0.0F, 1.0F};
+  Lotus::TextureInput lifted = half;
+  lifted.bias = {0.1F, 0.1F, 0.1F, 0.0F};
+  lifted.fallback = {0.1F, 0.1F, 0.1F, 1.0F};
+  // uv x uvtiling - uvoffset.
+  Lotus::TextureInput tiled = palette;
+  tiled.st_transform = {2.0F, 0.0F, -0.25F, 0.0F, 3.0F, -0.5F};
+  Lotus::TextureInput srt = palette;
+  srt.st_transform = Float(Place2d({0.5, 0.5}, kPlacedScale, kPlacedDegrees, kPlacedOffset, 0));
+  Lotus::TextureInput trs = palette;
+  trs.st_transform = Float(Place2d({0.5, 0.5}, kPlacedScale, kPlacedDegrees, kPlacedOffset, 1));
+  Lotus::TextureInput gltf = palette;
+  gltf.st_transform = Float(GltfPlace(kPlacedScale, kPlacedDegrees, kPlacedOffset));
+  // st x (2, 2) + (0.25, 0).
+  Lotus::TextureInput math = palette;
+  math.st_transform = {2.0F, 0.0F, 0.25F, 0.0F, 2.0F, 0.0F};
+  // amount - in, with the default amount of 1.
+  Lotus::TextureInput inverted = palette;
+  inverted.scale = {-1.0F, -1.0F, -1.0F, 1.0F};
+  inverted.bias = {1.0F, 1.0F, 1.0F, 0.0F};
+  inverted.fallback = {1.0F, 1.0F, 1.0F, 1.0F};
+  // Red halved before the channels are combined again.
+  Lotus::TextureInput combined = palette;
+  combined.scale = {0.5F, 1.0F, 1.0F, 1.0F};
+  // A mix weight of 0 leaves the background: the lookup, scaled by nothing.
+  Lotus::TextureInput background = palette;
+  background.scale = {0.0F, 0.0F, 0.0F, 1.0F};
+  background.bias = {0.2F, 0.6F, 0.9F, 0.0F};
+  background.fallback = {0.2F, 0.6F, 0.9F, 1.0F};
+  // ((0.2, 0.3, 0.4) + 0.1) squared, folded in double precision.
+  constexpr std::array<float, 3> kTerm{0.2F, 0.3F, 0.4F};
+  std::array<float, 3> folded{};
+  for (std::size_t c = 0; c < 3; ++c) {
+    folded[c] = static_cast<float>(std::pow(double{kTerm[c]} + double{0.1F}, 2.0));
+  }
+  // A colour-4 image's three channels as the colour, its fourth as
+  // roughness.
+  Lotus::TextureInput rgba = Periodic("rgba.png", "raw");
+  rgba.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  Lotus::Material alpha = StandardTextured(rgba);
+  Lotus::Preview(alpha).roughness_texture = Channel(rgba, 3);
+
+  // ND_gltf_normalmap's default is the flat normal, where ND_image's is
+  // black: the two differ only without their image.
+  Lotus::Material gltf_normal = StandardBumpy(1.0F);
+  gltf_normal.geometry.normal_texture->fallback = {0.0F, 0.0F, 1.0F, 1.0F};
+
+  const std::array<std::pair<const char*, Lotus::Material>, 25> looks{{
+      {"SrgbConstant", Standard(decoded)},
+      {"LinearConstant", Standard(decoded)},
+      {"SrgbImage", StandardTextured(palette)},
+      {"RawImage", StandardTextured(Periodic("palette.png", "raw"))},
+      {"Separate", separate},
+      {"ColorImage", StandardTextured(tinted)},
+      {"Multiply", StandardTextured(half)},
+      {"Mix", StandardTextured(half)},
+      {"Weighted", StandardTextured(half)},
+      {"Add", StandardTextured(lifted)},
+      {"Tiled", StandardTextured(tiled)},
+      {"PlaceSrt", StandardTextured(srt)},
+      {"PlaceTrs", StandardTextured(trs)},
+      {"GltfRotated", StandardTextured(gltf)},
+      {"CoordinateMath", StandardTextured(math)},
+      {"GltfNormal", gltf_normal},
+      {"NormalMap", StandardBumpy(1.0F)},
+      {"Invert", StandardTextured(inverted)},
+      {"Combine", StandardTextured(combined)},
+      // A clamp to the input's own range: the image as it is.
+      {"Clamp", StandardTextured(palette)},
+      {"MixDefault", StandardTextured(background)},
+      // The default (0.5, 0.5, 0.5) times glTF's factor (0.4, 1, 1.6).
+      {"Fileless", Standard({0.5F * 0.4F, 0.5F, 0.5F * 1.6F})},
+      {"Folded", Standard(folded)},
+      {"Alpha", alpha},
+      // Two lookups under one node are not folded: base_color keeps its
+      // default.
+      {"Diagnosed", Standard()},
+  }};
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < looks.size(); ++i) {
+    const std::string name = looks[i].first;
+    world.SetMaterial(root + "/Looks/" + name, looks[i].second);
+    const std::string mesh = root + "/Objects/" + name;
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = 0.7F;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, mapped, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + name);
   }
 }
 
@@ -1870,6 +2052,8 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the partial card's subset binding ignored", IgnoredSubset},
       {"material-primvars-v1", "/MaterialPrimvars", 160, SetMaterialPrimvars,
           "the vertex colours' red and blue swapped", SwappedColors},
+      {"material-graphs-v1", "/MaterialGraphs", 160, SetMaterialGraphs,
+          "the glTF image's rotation reversed", ReversedGltfRotation},
   };
   return kFixtures;
 }
