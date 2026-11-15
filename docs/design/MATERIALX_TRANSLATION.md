@@ -12,7 +12,10 @@ owner: hydra-lotus
 > [shading-model contract](MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)'s
 > input paths (§10.4). It adds no shading model and changes no committed
 > reference: the models' own inputs arrive with LOTUS-MATERIALX-05, 07 and
-> 08. The [scene reference](../reference/SCENE.md#materials) owns the
+> 08. It is implemented
+> ([report](../reports/2026-11-15-materialx-graph-translation.md)), with
+> [changes found in implementation](#11-changes-found-in-implementation)
+> accepted in review. The [scene reference](../reference/SCENE.md#materials) owns the
 > implemented behaviour. "Today" below describes `main` after
 > LOTUS-MATERIALX-03.
 
@@ -343,3 +346,35 @@ Accepted as proposed, 2026-11-15.
    survey assets, only toon-style Standard Surface graphs that multiply
    two images use the first three, and those need the expression program
    regardless.
+
+## 11. Changes found in implementation
+
+LOTUS-MATERIALX-04's implementation departs from or sharpens the text above
+in these points. They were accepted in review, 2026-11-15, and supersede
+the text they amend; the
+[report](../reports/2026-11-15-materialx-graph-translation.md#changes-to-the-contract)
+gives the evidence.
+
+1. **`material-mtlx-v1`'s USD file changes by one node.** §7 and §9.5 keep
+   the fixture unchanged, but its Untranslated card was an
+   `ND_multiply_color3FA` of an image, which §5.2 now folds. The card's
+   node is `ND_power_color3FA`, which does not fold, so the card, the
+   mirror and the reference images stay byte-identical.
+2. **Versions are not read through Sdr.** §7's definitions test compares
+   every input, type and default through `SdrRegistry`, but Sdr carries no
+   version for a MaterialX definition. The test reads the three surfaces'
+   versions from the documents Sdr resolves their nodes to.
+3. **`ND_gltf_colorimage` fixes its order and addressing.** Its library
+   graph passes operation order 0 and periodic addressing to its image
+   whatever the node's own inputs say; §5.3's rule follows the graph. And
+   §7's normal-map pair is one lookup apart from its fallback:
+   `ND_gltf_normalmap`'s `default` is the flat normal, `ND_image`'s black.
+4. **OpenUSD's names for the two colour spaces.** Beside §5.5's table,
+   `lin_rec709_scene` is raw and `srgb_rec709_scene` is sRGB.
+5. **Smaller points.** §6.2's summary line groups `UnsupportedNode`,
+   `UnsupportedGraph` and `UnsupportedValue`, whose outcome is one. §5.2's
+   clamp is `base_color`'s or `emission_color`'s own only under a weight of
+   1, since the IR clamps the product. A coloured `opacity` is
+   `Substituted` by its mean. A connected `mix` weight that folds to a
+   constant is a constant. An authored input that a node's definition does
+   not name is `UnsupportedValue`.

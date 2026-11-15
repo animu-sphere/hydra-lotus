@@ -1031,12 +1031,50 @@ MTLX_INPUT_TYPES = {
     "ND_convert_vector3_color3": {"in": "float3"},
     "ND_normalmap_vector2": {"in": "float3", "scale": "float2"},
     "ND_multiply_color3FA": {"in1": "color3f", "in2": "float"},
+    "ND_power_color3FA": {"in1": "color3f", "in2": "float"},
+    "ND_image_color4": {"file": "asset"},
+    "ND_gltf_colorimage": {"color": "color4f", "file": "asset"},
+    "ND_gltf_image_color3_color3_1_0": {
+        "default": "color3f", "factor": "color3f", "file": "asset", "offset": "float2",
+        "rotate": "float", "scale": "float2"},
+    "ND_gltf_normalmap_vector3_1_0": {"file": "asset"},
+    "ND_texcoord_vector2": {},
+    "ND_place2d_vector2": {"offset": "float2", "operationorder": "int", "pivot": "float2",
+                           "rotate": "float", "scale": "float2", "texcoord": "float2"},
+    "ND_multiply_vector2": {"in1": "float2", "in2": "float2"},
+    "ND_add_vector2": {"in1": "float2", "in2": "float2"},
+    "ND_normalmap_float": {"in": "float3"},
+    "ND_separate3_vector3": {"in": "float3"},
+    "ND_separate3_color3": {"in": "color3f"},
+    "ND_combine3_color3": {"in1": "float", "in2": "float", "in3": "float"},
+    "ND_multiply_float": {"in1": "float", "in2": "float"},
+    "ND_multiply_color3": {"in1": "color3f", "in2": "color3f"},
+    "ND_add_color3": {"in1": "color3f", "in2": "color3f"},
+    "ND_add_color3FA": {"in1": "color3f", "in2": "float"},
+    "ND_mix_color3": {"bg": "color3f", "fg": "color3f", "mix": "float"},
+    "ND_invert_color3": {"in": "color3f"},
+    "ND_clamp_color3": {"in": "color3f"},
+    "ND_convert_color4_color3": {"in": "color4f"},
+    "ND_extract_color4": {"in": "color4f", "index": "int"},
 }
+MTLX_INPUT_TYPES["ND_tiledimage_color3"]["uvoffset"] = "float2"
 MTLX_OUTPUT_TYPES = {
     "ND_image_color3": "color3f", "ND_image_float": "float", "ND_image_vector3": "float3",
     "ND_tiledimage_color3": "color3f", "ND_geompropvalue_vector2": "float2",
     "ND_extract_vector3": "float", "ND_convert_vector3_color3": "color3f",
     "ND_normalmap_vector2": "float3", "ND_multiply_color3FA": "color3f",
+    "ND_power_color3FA": "color3f", "ND_image_color4": "color4f",
+    "ND_gltf_colorimage": (("outa", "float"), ("outcolor", "color3f")),
+    "ND_gltf_image_color3_color3_1_0": "color3f", "ND_gltf_normalmap_vector3_1_0": "float3",
+    "ND_texcoord_vector2": "float2", "ND_place2d_vector2": "float2",
+    "ND_multiply_vector2": "float2", "ND_add_vector2": "float2",
+    "ND_normalmap_float": "float3",
+    "ND_separate3_vector3": (("outx", "float"), ("outy", "float"), ("outz", "float")),
+    "ND_separate3_color3": (("outb", "float"), ("outg", "float"), ("outr", "float")),
+    "ND_combine3_color3": "color3f", "ND_multiply_float": "float",
+    "ND_multiply_color3": "color3f", "ND_add_color3": "color3f", "ND_add_color3FA": "color3f",
+    "ND_mix_color3": "color3f", "ND_invert_color3": "color3f", "ND_clamp_color3": "color3f",
+    "ND_convert_color4_color3": "color3f", "ND_extract_color4": "float",
 }
 OUT = "out"
 
@@ -1053,10 +1091,11 @@ def image(kind, file=None, space=None, **inputs):
     return (f"ND_image_{kind}", authored)
 
 
-def mtlx(surface, preview=None, **nodes):
+def mtlx(surface, preview=None, spaces=None, **nodes):
     """A material: its Standard Surface inputs, the UsdPreviewSurface inputs
-    of a universal surface beside it, and its other MaterialX nodes."""
-    return {"surface": surface, "preview": preview, "nodes": nodes}
+    of a universal surface beside it, the colour spaces of the surface inputs
+    authored in one (`spaces`), and its other MaterialX nodes."""
+    return {"surface": surface, "preview": preview, "spaces": spaces or {}, "nodes": nodes}
 
 
 SRGB_PALETTE = image("color3", "palette.png", "srgb_texture")
@@ -1117,30 +1156,34 @@ MTLX_LOOKS = [
                                                    "colorSpace": "srgb_texture",
                                                    "uvtiling": (1, 1)}))),
     ("Fileless", mtlx(PALETTE_LOOKUP, Image=image("color3", default=(0.2, 0.6, 0.9)))),
-    # A node the translator does not read: the input keeps its default.
-    ("Untranslated", mtlx({"base_color": output("Multiply", OUT)},
-                          Multiply=("ND_multiply_color3FA",
-                                    {"in1": output("Image", OUT), "in2": 0.5}),
+    # A graph the translator does not fold, a power of a lookup: the input
+    # keeps its default.
+    ("Untranslated", mtlx({"base_color": output("Power", OUT)},
+                          Power=("ND_power_color3FA",
+                                 {"in1": output("Image", OUT), "in2": 0.5}),
                           Image=SRGB_PALETTE)),
 ]
 
 
 def mtlx_shader(material, name, kind, inputs, outputs):
     """A MaterialX Shader prim's lines, inputs in name order, an image's
-    file with its colour space, then `outputs` (name, type) pairs."""
+    file with its colour space (`colorSpace`) and another input with its own
+    (`colorSpace:<input>`), then `outputs` (name, type) pairs."""
     lines = [f'            def Shader "{name}"', "            {",
              f'                uniform token info:id = "{kind}"']
     for key in sorted(inputs):
-        if key == "colorSpace":
+        if key.startswith("colorSpace"):
             continue
         authored = inputs[key]
+        space = inputs.get("colorSpace" if key == "file" else f"colorSpace:{key}")
         prefix = f"{MTLX_INPUT_TYPES[kind][key]} inputs:{key}"
         if isinstance(authored, tuple) and authored and authored[0] == "connect":
             lines.append(f"                {prefix}.connect = "
                          f"<{material}/{authored[1]}.outputs:{authored[2]}>")
-        elif key == "file" and "colorSpace" in inputs:
-            lines += [f"                {prefix} = @{authored}@ (",
-                      f'                    colorSpace = "{inputs["colorSpace"]}"',
+        elif space is not None:
+            lines += [f"                {prefix} = "
+                      f"{value(MTLX_INPUT_TYPES[kind][key], authored)} (",
+                      f'                    colorSpace = "{space}"',
                       "                )"]
         else:
             lines.append(f"                {prefix} = "
@@ -1166,11 +1209,16 @@ def mtlx_looks(root, materials):
             lines += [""] + shader(path, "Preview", "UsdPreviewSurface", material["preview"])
             lines += ["                token outputs:surface", "            }"]
         lines += [""] + mtlx_shader(path, "Surface", "ND_standard_surface_surfaceshader",
-                                    material["surface"], [("out", "token")])
+                                    {**material["surface"],
+                                     **{f"colorSpace:{key}": space
+                                        for key, space in material["spaces"].items()}},
+                                    [("out", "token")])
         for node in sorted(material["nodes"]):
             kind, inputs = material["nodes"][node]
+            outputs = MTLX_OUTPUT_TYPES[kind]
             lines += [""] + mtlx_shader(path, node, kind, inputs,
-                                        [("out", MTLX_OUTPUT_TYPES[kind])])
+                                        [("out", outputs)] if isinstance(outputs, str)
+                                        else outputs)
         lines.append("        }")
         if index + 1 < len(materials):
             lines.append("")
@@ -1235,6 +1283,156 @@ def materialx():
 # material-transmission-v1's materials, every one a Standard Surface whose
 # transmission is a constant unless named otherwise.
 AMBER = (0.9, 0.45, 0.15)
+
+def float32(value):
+    """`value` rounded to single precision, as a USD float attribute holds
+    it."""
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def srgb_to_linear(value):
+    """MaterialX's srgb_texture decoding of a single-precision component."""
+    value = float32(value)
+    return float32(value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4)
+
+
+COPPER = (0.95, 0.64, 0.54)
+GREY_CARD = {"base_color": (0.7, 0.7, 0.7), "specular_roughness": 0.4}
+SRGB_ORANGE = (0.8, 0.4, 0.2)
+PALETTE_FILE = {"file": "./textures/palette.png", "colorSpace": "srgb_texture"}
+HALF = ("ND_multiply_color3FA", {"in1": output("Image", OUT), "in2": 0.5})
+# One placement, through ND_place2d in both orders and through glTF's.
+PLACED = {"scale": (2, 1), "rotate": 30, "offset": (0.1, 0.2)}
+
+
+def placed(order):
+    return mtlx(PALETTE_LOOKUP,
+                Image=image("color3", "palette.png", "srgb_texture",
+                            texcoord=output("Place", OUT)),
+                Place=("ND_place2d_vector2",
+                       {"texcoord": output("Coords", OUT), "pivot": (0.5, 0.5),
+                        "operationorder": order, **PLACED}),
+                Coords=("ND_texcoord_vector2", {}))
+
+
+# material-graphs-v1's materials (docs/design/MATERIALX_TRANSLATION.md
+# section 7), a row of five to each subject: colour spaces and channels;
+# arithmetic; coordinates; normals and more arithmetic; defaults, constant
+# folding and a graph that is diagnosed.
+GRAPH_LOOKS = [
+    ("SrgbConstant", mtlx({"base_color": SRGB_ORANGE},
+                          spaces={"base_color": "srgb_texture"})),
+    ("LinearConstant", mtlx({"base_color": tuple(srgb_to_linear(c) for c in SRGB_ORANGE)})),
+    ("SrgbImage", mtlx(PALETTE_LOOKUP, Image=SRGB_PALETTE)),
+    ("RawImage", mtlx(PALETTE_LOOKUP, Image=image("color3", "palette.png"))),
+    ("Separate", mtlx({"base_color": COPPER, "metalness": output("Split", "outz"),
+                       "specular_roughness": output("Split", "outy")},
+                      Split=("ND_separate3_vector3", {"in": output("Orm", OUT)}),
+                      Orm=image("vector3", "rgba.png"))),
+
+    ("ColorImage", mtlx({"base_color": output("Image", "outcolor")},
+                        Image=("ND_gltf_colorimage",
+                               {**PALETTE_FILE, "color": (1, 0.5, 0.25, 1)}))),
+    # The same half-bright image three ways.
+    ("Multiply", mtlx({"base_color": output("Half", OUT)}, Half=HALF, Image=SRGB_PALETTE)),
+    ("Mix", mtlx({"base_color": output("Half", OUT)},
+                 Half=("ND_mix_color3", {"fg": output("Image", OUT), "bg": (0, 0, 0),
+                                         "mix": 0.5}),
+                 Image=SRGB_PALETTE)),
+    ("Weighted", mtlx({"base": 0.5, **PALETTE_LOOKUP}, Image=SRGB_PALETTE)),
+    ("Add", mtlx({"base_color": output("Lifted", OUT)},
+                 Lifted=("ND_add_color3FA", {"in1": output("Half", OUT), "in2": 0.1}),
+                 Half=HALF, Image=SRGB_PALETTE)),
+
+    ("Tiled", mtlx(PALETTE_LOOKUP,
+                   Image=("ND_tiledimage_color3",
+                          {**PALETTE_FILE, "uvtiling": (2, 3), "uvoffset": (0.25, 0.5)}))),
+    ("PlaceSrt", placed(0)),
+    ("PlaceTrs", placed(1)),
+    ("GltfRotated", mtlx(PALETTE_LOOKUP,
+                         Image=("ND_gltf_image_color3_color3_1_0",
+                                {**PALETTE_FILE, **PLACED}))),
+    ("CoordinateMath", mtlx(PALETTE_LOOKUP,
+                            Image=image("color3", "palette.png", "srgb_texture",
+                                        texcoord=output("Shifted", OUT)),
+                            Shifted=("ND_add_vector2",
+                                     {"in1": output("Scaled", OUT), "in2": (0.25, 0)}),
+                            Scaled=("ND_multiply_vector2",
+                                    {"in1": output("Coords", OUT), "in2": (2, 2)}),
+                            Coords=("ND_geompropvalue_vector2", {"geomprop": "st"}))),
+
+    # The same normal map two ways.
+    ("GltfNormal", mtlx({**GREY_CARD, "normal": output("Normal", OUT)},
+                        Normal=("ND_gltf_normalmap_vector3_1_0",
+                                {"file": "./textures/tilts.png"}))),
+    ("NormalMap", mtlx({**GREY_CARD, "normal": output("Normal", OUT)},
+                       Normal=("ND_normalmap_float", {"in": output("Bumps", OUT)}),
+                       Bumps=image("vector3", "tilts.png"))),
+    ("Invert", mtlx({"base_color": output("Negative", OUT)},
+                    Negative=("ND_invert_color3", {"in": output("Image", OUT)}),
+                    Image=SRGB_PALETTE)),
+    ("Combine", mtlx({"base_color": output("Joined", OUT)},
+                     Joined=("ND_combine3_color3",
+                             {"in1": output("Dim", OUT), "in2": output("Split", "outg"),
+                              "in3": output("Split", "outb")}),
+                     Dim=("ND_multiply_float", {"in1": output("Split", "outr"), "in2": 0.5}),
+                     Split=("ND_separate3_color3", {"in": output("Image", OUT)}),
+                     Image=SRGB_PALETTE)),
+    # A clamp to the input's own range changes nothing: SrgbImage again.
+    ("Clamp", mtlx({"base_color": output("Clamped", OUT)},
+                   Clamped=("ND_clamp_color3", {"in": output("Image", OUT)}),
+                   Image=SRGB_PALETTE)),
+
+    # An unconnected mix weight is 0: the background.
+    ("MixDefault", mtlx({"base_color": output("Mixed", OUT)},
+                        Mixed=("ND_mix_color3", {"fg": output("Image", OUT),
+                                                 "bg": (0.2, 0.6, 0.9)}),
+                        Image=SRGB_PALETTE)),
+    # An image without a file is its default, here times glTF's factor.
+    ("Fileless", mtlx({"base_color": output("Image", OUT)},
+                      Image=("ND_gltf_image_color3_color3_1_0",
+                             {"default": (0.5, 0.5, 0.5), "factor": (0.4, 1, 1.6)}))),
+    ("Folded", mtlx({"base_color": output("Squared", OUT)},
+                    Squared=("ND_power_color3FA", {"in1": output("Sum", OUT), "in2": 2}),
+                    Sum=("ND_add_color3", {"in1": (0.2, 0.3, 0.4), "in2": (0.1, 0.1, 0.1)}))),
+    ("Alpha", mtlx({"base_color": output("Rgb", OUT), "specular_roughness": output("A", OUT)},
+                   Rgb=("ND_convert_color4_color3", {"in": output("Image", OUT)}),
+                   A=("ND_extract_color4", {"in": output("Image", OUT), "index": 3}),
+                   Image=image("color4", "rgba.png"))),
+    # Two lookups under one node do not fold: the input keeps its default.
+    ("Diagnosed", mtlx({"base_color": output("Product", OUT)},
+                       Product=("ND_multiply_color3",
+                                {"in1": output("Image", OUT), "in2": output("Other", OUT)}),
+                       Image=SRGB_PALETTE, Other=image("color3", "palette.png"))),
+]
+
+
+def graphs():
+    unit_st = primvar("st", UNIT)
+    lines = header("MaterialGraphs", "SetMaterialGraphs", CARD_CLASS)
+    lines += mtlx_looks("MaterialGraphs", GRAPH_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for index, (name, _) in enumerate(GRAPH_LOOKS):
+        x, y = CARD_COLUMNS[index % 5], CARD_ROWS[index // 5]
+        lines += [
+            f'        def Mesh "{name}" (',
+            '            prepend apiSchemas = ["MaterialBindingAPI"]',
+            "            prepend inherits = </_Card>",
+            "        )",
+            "        {",
+            f"            rel material:binding = </MaterialGraphs/Looks/{name}>",
+            *unit_st,
+            "            float3 xformOp:scale = (0.7, 0.7, 0.7)",
+            f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+            '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+            "        }",
+        ]
+        if index + 1 < len(GRAPH_LOOKS):
+            lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
 TRANSMISSION_LOOKS = [
     ("Smooth", mtlx({"transmission": 1, "specular_roughness": 0})),
     ("Rough", mtlx({"transmission": 1, "specular_roughness": 0.35})),
@@ -1587,6 +1785,7 @@ FIXTURES = {
     "material-emission-v1.usda": emission,
     "material-alpha-v1.usda": alpha,
     "material-mtlx-v1.usda": materialx,
+    "material-graphs-v1.usda": graphs,
     "material-transmission-v1.usda": transmission,
     "material-transforms-v1.usda": transforms,
     "material-subsets-v1.usda": subsets,

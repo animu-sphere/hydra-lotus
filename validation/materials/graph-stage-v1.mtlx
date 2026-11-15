@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!-- SPDX-License-Identifier: Apache-2.0
+     The document graph-stage-v1.usda references: the same material as that
+     stage's UsdShade network (docs/design/MATERIALX_TRANSLATION.md section 7). -->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_graph">
+    <texcoord name="coords" type="vector2" />
+    <place2d name="place" type="vector2">
+      <input name="texcoord" type="vector2" nodename="coords" />
+      <input name="scale" type="vector2" value="2, 1" />
+      <input name="rotate" type="float" value="30" />
+    </place2d>
+    <image name="image" type="color3">
+      <input name="file" type="filename" value="textures/palette.png" colorspace="srgb_texture" />
+      <input name="texcoord" type="vector2" nodename="place" />
+    </image>
+    <multiply name="half" type="color3">
+      <input name="in1" type="color3" nodename="image" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <image name="orm" type="vector3">
+      <input name="file" type="filename" value="textures/rgba.png" />
+    </image>
+    <extract name="rough" type="float">
+      <input name="in" type="vector3" nodename="orm" />
+      <input name="index" type="integer" value="1" />
+    </extract>
+    <output name="base_color" type="color3" nodename="half" />
+    <output name="roughness" type="float" nodename="rough" />
+  </nodegraph>
+  <standard_surface name="SR_graph" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_graph" output="base_color" />
+    <input name="specular_roughness" type="float" nodegraph="NG_graph" output="roughness" />
+    <input name="emission" type="float" value="1" />
+    <input name="emission_color" type="color3" value="0.8, 0.4, 0.2" colorspace="srgb_texture" />
+  </standard_surface>
+  <surfacematerial name="Graph" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_graph" />
+  </surfacematerial>
+</materialx>

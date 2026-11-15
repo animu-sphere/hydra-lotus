@@ -75,7 +75,7 @@ void SetMaterialAlpha(Lotus::RenderWorld& world);
 // images, a weighted image, extracted channels and a converted emission map;
 // periodic, clamp, mirror and constant address modes and a named coordinate
 // set; then normal maps, an identity tiled image, an image without a file
-// and a node the translator does not read.
+// and a graph the translator does not fold.
 void SetMaterialMtlx(Lotus::RenderWorld& world);
 
 // Replaces the world's camera and scene with material-transmission-v1: three
@@ -119,6 +119,21 @@ void SetMaterialSubsets(Lotus::RenderWorld& world);
 // constant displayOpacity with and without a colour, and a vertex
 // displayOpacity, which is not read.
 void SetMaterialPrimvars(Lotus::RenderWorld& world);
+
+// Replaces the world's camera and scene with material-graphs-v1: a 5x5 grid
+// of cards under material-basics-v1's camera, lights and backdrop, every
+// material a MaterialX Standard Surface behind a node graph
+// (docs/design/MATERIALX_TRANSLATION.md section 7). Rows from the top: an
+// sRGB constant and the same colour authored linear, sRGB and raw images and
+// separated channels; ND_gltf_colorimage with a colour, the same half-bright
+// image by a product, a mix and the base weight, and a sum; a tiled image,
+// ND_place2d in both operation orders, a rotated ND_gltf_image and
+// arithmetic on coordinates; the same normal map through ND_gltf_normalmap
+// and ND_normalmap, an inversion, recombined channels and a clamp that
+// changes nothing; then an unconnected mix weight, an image without a file,
+// folded constants, a colour-4 image's alpha and two lookups under one node,
+// which keep the input's default.
+void SetMaterialGraphs(Lotus::RenderWorld& world);
 
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.

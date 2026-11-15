@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// The UsdPreviewSurface material fixtures (LOTUS-MATERIAL-01) through
+// The material fixtures (LOTUS-MATERIAL-01, LOTUS-MATERIALX-04) through
 // UsdImaging. CPU mode syncs each committed fixture's USD file into the Lotus
 // render delegate and requires its scene snapshot to be the headless mirror
 // in adapters/common/material_fixtures.cpp: the same materials, bindings,
@@ -305,6 +305,29 @@ std::size_t ExpectMirror(const Lotus::FrameSnapshot& stage,
   return inexact;
 }
 
+// material-graphs-v1's materials that say one thing in two ways translate to
+// one material (docs/design/MATERIALX_TRANSLATION.md section 7), so the
+// fixture does not rest on its mirror and reference alone.
+void ExpectGraphPairs(const Lotus::LotusScene& scene) {
+  const auto look = [&](const char* name) -> const Lotus::Material& {
+    return scene.materials.at(std::string("/MaterialGraphs/Looks/") + name);
+  };
+  for (const auto& [first, second] :
+      {std::pair{"SrgbConstant", "LinearConstant"}, std::pair{"Multiply", "Mix"},
+          std::pair{"Multiply", "Weighted"}, std::pair{"Clamp", "SrgbImage"}}) {
+    Check(look(first) == look(second), std::string("material-graphs-v1: ") + first +
+                                           " and " + second + " translate differently");
+  }
+  // ND_gltf_normalmap and ND_normalmap differ only in the value without
+  // their image: the flat normal, and ND_image's black.
+  Lotus::Material gltf = look("GltfNormal");
+  Check(gltf.geometry.normal_texture && look("NormalMap").geometry.normal_texture,
+      "material-graphs-v1: a normal map is no lookup");
+  gltf.geometry.normal_texture->fallback = look("NormalMap").geometry.normal_texture->fallback;
+  Check(gltf == look("NormalMap"),
+      "material-graphs-v1: GltfNormal and NormalMap translate differently");
+}
+
 // The backend's deterministic image of the mirror, rendered in one call by a
 // renderer of its own as the headless check renders it, RGB with rows from
 // the top.
@@ -383,8 +406,9 @@ int main(int argc, char** argv) try {
       session.Render();
       Lotus::RenderWorld world;
       fixture.set(world);
-      const std::size_t inexact =
-          ExpectMirror(session.Delegate().GetFrameSnapshot(), world.Commit());
+      const Lotus::FrameSnapshot snapshot = session.Delegate().GetFrameSnapshot();
+      const std::size_t inexact = ExpectMirror(snapshot, world.Commit());
+      if (stem == "material-graphs-v1") ExpectGraphPairs(*snapshot.scene);
       std::cout << stem << " extracts to its mirror; " << inexact
                 << " transform, camera, position or normal sets differ by rounding\n";
       continue;

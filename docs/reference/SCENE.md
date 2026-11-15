@@ -958,7 +958,7 @@ The reference path tracer's images are of one fixed scene, rendered by
 ### Material fixtures
 
 LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures and the MaterialX fixtures
-of LOTUS-MTLX-01 and LOTUS-TRANSMISSION-01 are committed USD files in
+of LOTUS-MTLX-01, LOTUS-TRANSMISSION-01 and LOTUS-MATERIALX-04 are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
 USD files and the images in `validation/materials/textures/`: 8-bit PNG
@@ -1100,12 +1100,37 @@ coordinates, `st`, under the default periodic address modes unless stated.
 | Constants on cards | Emissive, Opacity, Clamped, Lobes, Precedence | black with `emission` 2 times `emission_color` (1, 0.6, 0.2); teal with grey `opacity` 0.5, stochastic coverage; `base` 1.5 times (1, 0.5, −0.25), `metalness` −1 and `specular_roughness` 1.5, which translate to (1, 0.75, 0), 0 and 1; teal with `coat` 1, `sheen` 0.5 and `subsurface` 1, which are ignored and warn; blue (0.1, 0.2, 0.8) beside a red universal `UsdPreviewSurface`, which the MaterialX surface overrides |
 | Images | Srgb, Raw, WeightedImage, Channels, EmissionMap | the palette under `srgb_texture`; the palette without a colour space, raw; the sRGB palette under `base` 0.5, a lookup scaled by 0.5; copper with `metalness` from `ND_extract_vector3` index 2 of `rgba.png` and `specular_roughness` from `ramp.png`, both raw; black with `emission` 1 times `ND_convert_vector3_color3` of the raw palette |
 | Coordinates | Periodic, Clamp, Mirror, Constant, Named | the sRGB palette over `st` from −0.5 to 1.5 under the default periodic, `clamp`, `mirror` and `constant` address modes, the last with a transparent black border; the palette at `ND_geompropvalue_vector2` `uv1`, `st` turned a quarter |
-| Normals and graphs | NormalMap, NormalScale, Tiled, Fileless, Untranslated | `ND_normalmap_vector2` of `tilts.png` on a sphere with `st` longitude by latitude times (4, 2), scale 2 and bias −1; the same map on a card at `scale` (0.5, 0.5), x and y scale 1 and bias −0.5; `ND_tiledimage_color3` with `uvtiling` (1, 1), Srgb's lookup; an `ND_image_color3` without a file whose `default` (0.2, 0.6, 0.9) is a constant; `ND_multiply_color3FA` of the sRGB palette, which keeps the default and warns |
+| Normals and graphs | NormalMap, NormalScale, Tiled, Fileless, Untranslated | `ND_normalmap_vector2` of `tilts.png` on a sphere with `st` longitude by latitude times (4, 2), scale 2 and bias −1; the same map on a card at `scale` (0.5, 0.5), x and y scale 1 and bias −0.5; `ND_tiledimage_color3` with `uvtiling` (1, 1), Srgb's lookup; an `ND_image_color3` without a file whose `default` (0.2, 0.6, 0.9) is a constant; `ND_power_color3FA` of the sRGB palette, a graph that does not fold, which keeps the default and warns |
 
 Its negative control ignores WeightedImage's base weight, as a translator
 reading only `base_color` would; it changes one card. Its Lobes card
 authored `transmission` 1 until transmission was translated; `subsurface`
-replaced it, so that the card and the images stay as they were.
+replaced it, so that the card and the images stay as they were. Its
+Untranslated card multiplied the palette by 0.5 until
+[graphs were folded](#materialx-node-graphs); a power replaced the product
+for the same reason.
+
+**`material-graphs-v1`** covers the
+[MaterialX graph translation](../design/MATERIALX_TRANSLATION.md#7-tests) at
+160×160 under the same camera, lights and backdrop, on a 5×5 grid of cards
+with `st` over the unit square. Every material is a Standard Surface whose
+inputs a node graph drives; the palette is `palette.png` under
+`srgb_texture` unless stated.
+
+| Row | Objects | Authored graph and expected translation |
+| --- | --- | --- |
+| Colour space and channels | SrgbConstant, LinearConstant, SrgbImage, RawImage, Separate | `base_color` (0.8, 0.4, 0.2) authored in `srgb_texture`, decoded when folded; the decoded colour authored linear, the same material; the palette under `srgb_texture`; the palette without a colour space, raw; copper with `specular_roughness` and `metalness` from `ND_separate3_vector3`'s `outy` and `outz` of `rgba.png` |
+| Arithmetic | ColorImage, Multiply, Mix, Weighted, Add | `ND_gltf_colorimage`'s `outcolor` with `color` (1, 0.5, 0.25, 1), a lookup scaled per channel; `ND_multiply_color3FA` by 0.5; `ND_mix_color3` of the palette over black at 0.5; `base` 0.5 times the palette — one material three ways; `ND_add_color3FA` of the halved palette and 0.1, scale 0.5 and bias 0.1 |
+| Coordinates | Tiled, PlaceSrt, PlaceTrs, GltfRotated, CoordinateMath | `ND_tiledimage_color3` with `uvtiling` (2, 3) and `uvoffset` (0.25, 0.5); the palette at `ND_place2d_vector2` about (0.5, 0.5) with scale (2, 1), rotation 30 and offset (0.1, 0.2) in operation order 0, then 1; `ND_gltf_image_color3` with the same scale, rotation and offset; the palette at `ND_geompropvalue_vector2` `st` times (2, 2) plus (0.25, 0) |
+| Normals and arithmetic | GltfNormal, NormalMap, Invert, Combine, Clamp | `ND_gltf_normalmap` of `tilts.png`; `ND_normalmap_float` of the same image, the same lookup but for its value without the image; `ND_invert_color3`, scale −1 and bias 1; `ND_combine3_color3` of the palette's separated channels with red halved; `ND_clamp_color3` to [0, 1], which is `base_color`'s own range, so SrgbImage's material |
+| Defaults and diagnostics | MixDefault, Fileless, Folded, Alpha, Diagnosed | `ND_mix_color3` of the palette over (0.2, 0.6, 0.9) with no `mix`, the background; an `ND_gltf_image_color3` without a file, its `default` 0.5 grey times `factor` (0.4, 1, 1.6); `ND_power_color3FA` of a constant sum, folded to a constant; a colour-4 `rgba.png` through `ND_convert_color4_color3` with `specular_roughness` from `ND_extract_color4` index 3; `ND_multiply_color3` of two images, which keeps the default and warns |
+
+The Hydra test also compares the materials that say one thing in two ways
+with each other: SrgbConstant and LinearConstant; Multiply, Mix and
+Weighted; Clamp and SrgbImage; and GltfNormal and NormalMap apart from
+their fallback. Its negative control turns GltfRotated's rotation the other
+way, as a translator that did not negate glTF's rotation would; it changes
+one card.
 
 **`material-transmission-v1`** covers the
 [transmission contract](../design/TRANSMISSION.md) at 160×160 under the
@@ -2160,9 +2185,9 @@ material without lookups names none, so a constant normal there always
 takes the normal-only tangent frame, even on a mesh with `st`. An input
 driven by anything else (another node type, a colour output on a scalar or
 a scalar output on a colour, a connected `UsdTransform2d` parameter, or a
-second texture-coordinate source) takes its default and is reported as
-connected; the adapter warns, naming the material and those inputs, whenever
-it translates the material.
+second texture-coordinate source) takes its default and raises an
+`UnsupportedGraph` [diagnostic](#material-diagnostics) naming the node the
+connection reads.
 A `UsdTransform2d` between the reader and the texture becomes the lookup's
 `st_transform`: `in * scale * rotate + translation`, with the rotation
 counter-clockwise in degrees, composed along a chain and from a constant `in`
@@ -2176,7 +2201,7 @@ returns its fallback. A surface shader other than these and the
 [Standard Surface](#materialx-standard-surface), or a network without a
 surface, warns and leaves the default material.
 Texture-driven `ior` and `opacityThreshold`, which the specification makes
-interface-only, are reported as untranslated connections. `opacityMode`,
+interface-only, are diagnosed the same way. `opacityMode`,
 `clearcoat`, `clearcoatRoughness`, `occlusion` and `displacement` are not
 read.
 
@@ -2199,39 +2224,127 @@ and translates these inputs:
 | `transmission_color` | `transmission_color` | where `transmission` is positive, a constant with each component clamped to [0, 1] |
 | `thin_walled` | `thin_walled` | as authored |
 
-A product takes a lookup on one side only, whose scale, bias and fallback
-the other side's constant multiplies; a scalar lookup cannot weight a
-colour. Inputs are constants or graphs of these nodes:
+`base` × `base_color` and `emission` × `emission_color` are products like
+any other the [graph reader](#materialx-node-graphs) folds: a lookup on one
+side only, and no scalar lookup over a colour.
+
+The reader names every input of the definition
+([contract §6.3](../design/MATERIALX_TRANSLATION.md#63-authored-inputs-the-table-does-not-name)).
+Beside those above:
+
+| Inputs | Outcome |
+| --- | --- |
+| `coat`, `diffuse_roughness`, `sheen`, `specular_anisotropy`, `subsurface`, `thin_film_thickness` | Not represented when non-zero or a lookup: `UnrepresentedInput` |
+| `specular` other than 0 or 1; `specular_color` other than white where `specular` is not 0 (a metal's edge tint included) | `UnrepresentedInput` |
+| A lookup on `specular_IOR`, `transmission`, `transmission_color` or `opacity` | `UnrepresentedInput`; the input keeps its default |
+| An authored constant `normal`, which is in world space | `UnrepresentedInput` |
+| A coloured constant `opacity` | Read as its mean: `Substituted` |
+| Where the material transmits: `specular` 0, whose reflection remains; a positive `transmission_depth`, under which the colour is absorption at that depth and translates to white; `transmission_scatter`, `transmission_scatter_anisotropy`, `transmission_dispersion`, `transmission_extra_roughness` | `UnrepresentedInput` |
+| `transmission_color` and the medium's inputs without `transmission`; `emission_color` without `emission` | Without effect |
+| `specular_rotation`, `tangent`; `subsurface_*`, `sheen_*`, `coat_*` and `thin_film_IOR` | Without effect while their lobe's weight is 0; that weight's diagnostic stands for them otherwise |
+| A parameter or connection the definition does not name | `UnknownInput` |
+
+Other MaterialX surfaces, OpenPBR's included, raise `UnsupportedSurface`
+and leave the default material.
+
+#### MaterialX node graphs
+
+A Standard Surface input reads an authored constant or a MaterialX node
+graph (`adapters/hydra2/src/material_graph.*`,
+[contract](../design/MATERIALX_TRANSLATION.md)). A graph translates when it
+folds exactly into a constant, or into one lookup of one image with a scale
+and a bias per channel, a channel choice and a coordinate transform — the
+IR's [texture input](#materials-and-environment). Anything else leaves the
+input at its node definition's default with a
+[diagnostic](#material-diagnostics); a graph is never approximated.
+Constants fold in double precision and are stored as floats. The translator
+links no MaterialX library: a compound node has a rule of its own, equal to
+its MaterialX 1.39.5 library graph.
+
+Identifiers are MaterialX 1.39.5's; `*` stands for `float`, `color3`,
+`color4`, `vector2`, `vector3` and `vector4`, with the `FA` forms that take
+a scalar second operand.
 
 | Node | Translation |
 | --- | --- |
-| `ND_image_*`, `ND_tiledimage_*` | a lookup of `file` with the key `<resolved path>|<colour space>`: `sRGB` when the file's colour space is an `srgb_*` one, otherwise `raw`; `uaddressmode` and `vaddressmode` `periodic` (the default) repeat, and `clamp`, `mirror` and `constant` (transparent black) map to the IR's; `default` is the fallback; the coordinates are `texcoord`'s, the `st` set when it is unconnected. Without a file, the node is its `default` constant. A tiled image translates only untiled: `uvtiling` (1, 1), `uvoffset` (0, 0) and no real-world sizes |
+| `ND_constant_*`, `ND_dot_*` | the value; `ND_dot` passes its input through |
+| `ND_convert_*` | a scalar constant spreads to every component; a narrower type keeps the first components and a wider one gains 0, and 1 in the fourth; a lookup converts only between three- and four-component types, its fourth component then 1 |
+| `ND_extract_*`, `ND_separate2_*`, `ND_separate3_*`, `ND_separate4_*` | a constant's component or a lookup's channel, at a constant `index` or by the output's name (`outx`…`outw`, `outr`…`outa`) |
+| `ND_combine2_*`, `ND_combine3_*`, `ND_combine4_*` | constants; or channels 0, 1, 2 (and 3) of one lookup in order, each with its own scale and bias |
+| `ND_add_*`, `ND_subtract_*` | constants fold; with one lookup, the constant moves the bias, and a lookup that is subtracted has its scale negated |
+| `ND_multiply_*`, `ND_divide_*` | constants fold; a constant scales a lookup's scale, bias and fallback; a lookup divides only by a constant without a zero component |
+| `ND_invert_*` | `amount` − `in`, with a constant `amount` |
+| `ND_mix_*` | `bg` (1 − `mix`) + `fg` `mix` with a constant `mix`, a lookup on one side; an unconnected `mix` is 0 |
+| `ND_clamp_*` | constants fold; a lookup's clamp passes only as the last node before a surface input whose own range lies inside [`low`, `high`] (under a weight of 1, for `base_color` and `emission_color`), where it changes nothing |
+| `ND_min_*`, `ND_max_*`, `ND_power_*`, `ND_absval_*`, `ND_sqrt_*`, `ND_floor_*`, `ND_ceil_*` | constants fold; of a lookup, not translated |
+| `ND_image_*` | a lookup of `file` with the key `<resolved path>|<colour space>`; `uaddressmode` and `vaddressmode` `periodic` (the default) repeat, and `clamp`, `mirror` and `constant` (transparent black) map to the IR's; `default` is the fallback; the coordinates are `texcoord`'s, the `st` set when it is unconnected, or a constant point. Without a file, the node is its `default` constant |
+| `ND_tiledimage_*` | the same, periodic, at `texcoord` × `uvtiling` − `uvoffset`; real-world sizes other than (1, 1) are not translated |
+| `ND_gltf_image_*` | an image at `ND_place2d` with the node's `pivot`, the inverse of its `scale`, its `rotate` negated and its `offset` negated in u, in its `operationorder`; times `factor` |
+| `ND_gltf_colorimage` | the colour-4 `ND_gltf_image` in order 0 with periodic addressing, whatever the node's own `operationorder` and address modes say, as its library graph does; times `color` and a constant `geomcolor`; `outcolor` is its RGB and `outa` its fourth channel |
+| `ND_gltf_normalmap_vector3_1_0` | the vector-3 `ND_gltf_image` under `ND_normalmap` with scale 1; its `default` is the flat normal |
 | `ND_texcoord_vector2` | the `st` set for index 0; other indices are not translated |
 | `ND_geompropvalue_vector2` | the `geomprop` set, with `default` as its fallback |
-| `ND_extract_*` | a constant's component, or a lookup's channel `index` |
-| `ND_convert_*` | a scalar constant spreads to every component; a lookup converts only between three- and four-component types |
-| `ND_normalmap*` | the image's unsigned tangent-space normal signed by scale 2 and bias −1, with x and y times `scale` (a float or a vector2); only in tangent space, with its default frame inputs |
+| `ND_place2d_vector2` | an affine map composed into the lookup's `st_transform`: about `pivot`, divide by `scale`, rotate and subtract `offset` (order 0), or subtract, rotate and divide (order 1), from constant parameters |
+| `ND_rotate2d_vector2`; `ND_add_vector2`, `ND_subtract_vector2`, `ND_multiply_vector2`, `ND_divide_vector2` on coordinates | composed into `st_transform` with the other side constant; `ND_rotate2d` turns (x, y) into (c x + s y, −s x + c y) |
+| `ND_normalmap_float`, `ND_normalmap_vector2` | the image's unsigned tangent-space normal signed by scale 2 and bias −1, with x and y times a constant `scale`; only with its default frame inputs, and only on a normal input |
 
-Other nodes, and the cases these rules exclude, leave the input's default
-and are reported as connected inputs, as above. The IR cannot represent
-`coat`, `diffuse_roughness`, `sheen`, `specular_anisotropy`, `subsurface`
-or `thin_film_thickness` when non-zero or driven by a graph,
-`specular` other than 0 or 1, a `specular_color` other than white where
-`specular` is not 0 (a metal's edge tint included), a coloured `opacity` or
-an authored constant `normal`, which is in world space. Nor can it
-represent a graph-driven `transmission`, `transmission_color` or
-`thin_walled`, which keep their defaults (0, white and false), and, where
-the material transmits, `specular` 0, whose reflection remains, a
-positive `transmission_depth`, under which the colour is absorption at that
-depth and translates to white, a non-black `transmission_scatter`, or a
-non-zero `transmission_scatter_anisotropy`, `transmission_dispersion` or
-`transmission_extra_roughness`, which are ignored. The translation ignores
-them, and the adapter warns, naming the material and those inputs,
-whenever it translates the material. Their other dependent inputs
-(`coat_color` and so on) are not read. `constant`
+Two lookups under one node, a scalar lookup spread over several
+components, a connected `index` or string, an input of another type than
+its connection, and an authored input a node's definition does not name do
+not translate. A material still has one texture-coordinate set, its first
+lookup's; each lookup has its own transform.
 
-addressing is exact only where `default` is zero. Other MaterialX surfaces,
-OpenPBR's included, warn and leave the default material.
+Colour spaces follow the working space, linear Rec.709. On a colour image's
+`file`, and on a constant colour, no colour space and `lin_rec709`, `raw`,
+`data` and `none` are raw; `srgb_texture` decodes, by the texture's sRGB
+format or on the CPU when a constant folds; OpenUSD's names for the same
+two spaces, `lin_rec709_scene` and `srgb_rec709_scene`, read the same; and
+any other space is read as raw with a `Substituted` diagnostic. A float or
+vector image has no colour space. UsdImaging hands a colour space over as
+`colorSpace:<input>` beside the parameter.
+
+`filtertype` `closest` and `cubic` are read as linear, and `constant`
+addressing with a non-zero `default` reads black outside the image, each
+with a `Substituted` diagnostic. An image `layer` and a `framerange` are
+not translated.
+
+The translator holds each node's inputs, types and defaults, and each
+compound node's rule.
+CTest `lotus-renderer-hydra-material-graph` fixes, without a device: every
+row above and every exclusion's diagnostic from hand-built networks; each
+compound node against its library graph transcribed into primitive nodes;
+every held definition against the runtime's through `SdrRegistry`, and the
+three surface definitions' versions against
+[the pinned ones](../design/MATERIAL_IR_V2.md#3-versions-contract-103);
+every Standard Surface input as translated, diagnosed or without effect;
+and `validation/materials/graph-stage-v1.usda`, whose UsdShade network and
+referenced `.mtlx` document translate to one material.
+
+#### Material diagnostics
+
+A translation records everything it did not represent exactly as a list of
+`HdLotusMaterialDiagnostic`: a kind, the surface input affected, the path
+and identifier of the node at which translation stopped, and the rule in
+one clause. **A translation without diagnostics is complete**: every
+authored input, connection and terminal was read and is represented
+exactly.
+
+| Kind | Result in the image |
+| --- | --- |
+| `UnsupportedSurface` | the default material |
+| `UnsupportedTerminal` | the surface renders; a connected displacement or volume terminal does nothing |
+| `UnsupportedNode`, `UnsupportedGraph`, `UnsupportedValue` | the input takes its node definition's default |
+| `UnrepresentedInput`, `UnknownInput` | the input is ignored |
+| `Substituted` | the stated substitute |
+
+One input raises one diagnostic: the node nearest the surface at which
+folding stopped, or, when the graph folds, the first substitution made in
+it. Hydra offers no way to fail a material's load, so the strongest outcome
+is the default material with a warning. Whenever it translates a material
+the adapter warns: a line per outcome naming the inputs it befell (the
+three `Unsupported` graph kinds share one), then a line per input with its
+kind, node and rule. [`asset_survey.py`](../../scripts/asset_survey.py)
+classifies these lines.
 
 A mesh without a material binding uses its constant `displayColor` as
 linear RGB base colour, with components clamped to [0, 1], a non-constant

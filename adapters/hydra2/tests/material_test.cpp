@@ -28,7 +28,9 @@
 
 #include <lotus/vulkan_backend.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -255,6 +257,20 @@ std::vector<TfToken> Tokens(std::initializer_list<const char*> names) {
   return tokens;
 }
 
+// The surface inputs a translation diagnosed, in order: those of `kinds`,
+// or all of them.
+std::vector<TfToken> Diagnosed(const HdLotusMaterialTranslation& translation,
+    std::initializer_list<HdLotusMaterialDiagnosticKind> kinds = {}) {
+  std::vector<TfToken> inputs;
+  for (const HdLotusMaterialDiagnostic& diagnostic : translation.diagnostics) {
+    if (kinds.size() == 0 ||
+        std::find(kinds.begin(), kinds.end(), diagnostic.kind) != kinds.end()) {
+      inputs.push_back(diagnostic.input);
+    }
+  }
+  return inputs;
+}
+
 void MaterialXCases() {
   // Standard Surface's defaults, then constants: base and emission weights
   // scale their colours, and specular 0 removes the dielectric interface.
@@ -263,8 +279,7 @@ void MaterialXCases() {
   Lotus::Material expected;
   Lotus::Preview(expected).base_color = {0.8F, 0.8F, 0.8F};
   Lotus::Preview(expected).roughness = 0.2F;
-  Check(translation.unsupported.empty() && translation.connected_inputs.empty() &&
-            translation.unrepresented_inputs.empty(),
+  Check(translation.diagnostics.empty(),
       "an empty standard surface reported a problem");
   Expect("standard surface defaults", translation.material, expected);
 
@@ -280,17 +295,17 @@ void MaterialXCases() {
   expected = MakeMaterial({0.4F, 0.2F, 0.1F}, 1.0F, 0.75F, {2.0F, 1.0F, 0.0F}, 2.0F);
   expected.geometry.opacity = 0.25F;
   Expect("standard surface constants", translation.material, expected);
-  Check(translation.unrepresented_inputs.empty(),
-      "represented constants were reported");
+  Check(translation.diagnostics.empty(), "represented constants were reported");
 
   translation = HdLotusTranslateMaterial(StandardSurface(
       {{TfToken("specular"), VtValue(0.0F)},
           {TfToken("specular_color"), VtValue(GfVec3f(0.5F))},
           {TfToken("specular_IOR"), VtValue(2.0F)}}));
-  Check(Lotus::Preview(translation.material).ior == 1.0F && translation.unrepresented_inputs.empty(),
+  Check(Lotus::Preview(translation.material).ior == 1.0F && translation.diagnostics.empty(),
       "specular 0 did not remove the dielectric interface");
 
-  // Inputs the IR cannot represent are named, in a fixed order.
+  // Inputs the IR cannot represent are named, in a fixed order; a coloured
+  // opacity is substituted by its mean.
   translation = HdLotusTranslateMaterial(StandardSurface(
       {{TfToken("specular"), VtValue(0.5F)},
           {TfToken("specular_color"), VtValue(GfVec3f(1.0F, 0.9F, 0.8F))},
@@ -299,8 +314,10 @@ void MaterialXCases() {
           {TfToken("sheen"), VtValue(0.0F)},
           {TfToken("opacity"), VtValue(GfVec3f(1.0F, 0.5F, 0.0F))},
           {TfToken("normal"), VtValue(GfVec3f(0.0F, 1.0F, 0.0F))}}));
-  Check(translation.unrepresented_inputs ==
-            Tokens({"specular", "specular_color", "opacity", "normal", "coat"}),
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnrepresentedInput}) ==
+                Tokens({"specular", "specular_color", "normal", "coat"}) &&
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::Substituted}) == Tokens({"opacity"}) &&
+            translation.diagnostics.size() == 5,
       "unrepresented inputs were not reported");
   Check(translation.material.geometry.opacity == 0.5F,
       "a coloured opacity did not use its mean");
@@ -317,7 +334,7 @@ void MaterialXCases() {
   Lotus::Preview(expected).transmission_color = {0.9F, 0.5F, 0.0F};
   Lotus::Preview(expected).thin_walled = true;
   Expect("standard surface transmission", translation.material, expected);
-  Check(translation.unrepresented_inputs.empty(),
+  Check(translation.diagnostics.empty(),
       "represented transmission inputs were reported");
 
   // specular 0 keeps specular_IOR to refract with; a positive depth leaves
@@ -338,9 +355,10 @@ void MaterialXCases() {
             Lotus::Preview(translation.material).transmission_color == std::array<float, 3>{1, 1, 1},
       "transmission with specular 0 and a depth translated as " +
           Describe(translation.material));
-  Check(translation.unrepresented_inputs ==
-            Tokens({"transmission_depth", "transmission_scatter",
-                "transmission_dispersion", "specular"}),
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnrepresentedInput}) ==
+                Tokens({"transmission_depth", "transmission_scatter",
+                    "transmission_dispersion", "specular"}) &&
+            translation.diagnostics.size() == 4,
       "the medium's unrepresented inputs were not reported");
 
   // Graphs leave transmission inputs at their defaults.
@@ -349,8 +367,9 @@ void MaterialXCases() {
           {{TfToken("file"), VtValue(SdfAssetPath("weight.png"))}}}},
       {{"Weight", "out", "Surface", "transmission"}}));
   Check(Lotus::Preview(translation.material).transmission == 0.0F &&
-            translation.unrepresented_inputs == Tokens({"transmission"}) &&
-            translation.textures.empty(),
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnrepresentedInput}) ==
+                Tokens({"transmission"}) &&
+            translation.diagnostics.size() == 1 && translation.textures.empty(),
       "a transmission graph was not left at 0");
   translation = HdLotusTranslateMaterial(StandardSurface(
       {{TfToken("transmission"), VtValue(1.0F)}},
@@ -362,8 +381,10 @@ void MaterialXCases() {
   Check(Lotus::Preview(translation.material).transmission == 1.0F &&
             Lotus::Preview(translation.material).transmission_color == std::array<float, 3>{1, 1, 1} &&
             !Lotus::Preview(translation.material).thin_walled &&
-            translation.unrepresented_inputs ==
-                Tokens({"thin_walled", "transmission_color"}),
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedNode}) == Tokens({"thin_walled"}) &&
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnrepresentedInput}) ==
+                Tokens({"transmission_color"}) &&
+            translation.diagnostics.size() == 2,
       "transmission colour and thin-wall graphs were not left at their defaults");
 
   // Graphs: an sRGB colour image weighted by base, a raw scalar image, an
@@ -375,7 +396,7 @@ void MaterialXCases() {
   translation = HdLotusTranslateMaterial(StandardSurface(
       {{TfToken("base"), VtValue(0.5F)}, {TfToken("emission"), VtValue(2.0F)}},
       {{"Colour", "ND_image_color3", srgb},
-          {"Rough", "ND_tiledimage_float",
+          {"Rough", "ND_image_float",
               {{TfToken("file"), VtValue(SdfAssetPath("rough.png"))},
                   {TfToken("uaddressmode"), VtValue(std::string("clamp"))},
                   {TfToken("vaddressmode"), VtValue(std::string("mirror"))}}},
@@ -433,21 +454,20 @@ void MaterialXCases() {
             Lotus::Preview(translation.material).emission_texture == glow &&
             translation.material.geometry.normal_texture == normal,
       "the graph's lookups differ");
-  Check(translation.connected_inputs.empty() &&
-            translation.unrepresented_inputs == Tokens({"coat"}) &&
+  Check(Diagnosed(translation) == Tokens({"coat"}) &&
+            translation.diagnostics.front().kind == HdLotusMaterialDiagnosticKind::UnrepresentedInput &&
             translation.textures.size() == 4,
-      "the graph reported " + std::to_string(translation.connected_inputs.size()) +
-          " untranslated and " +
-          std::to_string(translation.unrepresented_inputs.size()) +
-          " unrepresented inputs and " +
-          std::to_string(translation.textures.size()) + " textures");
+      "the graph reported " + std::to_string(translation.diagnostics.size()) +
+          " diagnostics and " + std::to_string(translation.textures.size()) +
+          " textures");
 
-  // Untranslated graphs keep their defaults: an unknown node, a tiled image,
-  // a second coordinate set, a scalar lookup spread over a colour and a
-  // normal that is no normal map.
+  // Untranslated graphs keep their defaults: an unknown node, a second
+  // coordinate set, a scalar lookup spread over a colour and a normal that
+  // is no normal map. A tiled image is a lookup under its tiling
+  // (material_graph_test.cpp checks the node table).
   translation = HdLotusTranslateMaterial(StandardSurface({},
       {{"Colour", "ND_image_color3", srgb},
-          {"Multiply", "ND_multiply_float", {}},
+          {"Multiply", "ND_ifgreater_float", {}},
           {"Tiled", "ND_tiledimage_float",
               {{TfToken("file"), VtValue(SdfAssetPath("rough.png"))},
                   {TfToken("uvtiling"), VtValue(GfVec2f(2.0F))}}},
@@ -466,11 +486,18 @@ void MaterialXCases() {
           {"Second", "out", "Surface", "metalness"},
           {"Weight", "out", "Surface", "emission"},
           {"Bumps", "out", "Surface", "normal"}}));
-  Check(translation.connected_inputs ==
-            Tokens({"emission", "metalness", "specular_roughness",
-                "specular_IOR", "normal"}),
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedGraph}) ==
+                Tokens({"emission", "metalness", "normal"}) &&
+            Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedNode}) == Tokens({"specular_IOR"}) &&
+            translation.diagnostics.size() == 4 &&
+            translation.diagnostics[2].node == SdfPath("/Material/Multiply") &&
+            translation.diagnostics[2].node_type == TfToken("ND_ifgreater_float"),
       "untranslated graphs were not reported");
-  Check(Lotus::Preview(translation.material).metallic == 0 && Lotus::Preview(translation.material).roughness == 0.2F &&
+  Check(Lotus::Preview(translation.material).metallic == 0 &&
+            Lotus::Preview(translation.material).roughness_texture &&
+            Lotus::Preview(translation.material).roughness_texture->st_transform ==
+                std::array<float, 6>{2.0F, 0.0F, 0.0F, 0.0F, 2.0F, 0.0F} &&
+            Lotus::Preview(translation.material).ior == 1.5F &&
             !Lotus::Preview(translation.material).metallic_texture &&
             !Lotus::Preview(translation.material).emission_texture &&
             Lotus::Preview(translation.material).base_color_texture,
@@ -480,7 +507,7 @@ void MaterialXCases() {
   translation = HdLotusTranslateMaterial(
       Surface(TfToken("ND_UsdPreviewSurface_surfaceshader"),
           {{TfToken("diffuseColor"), VtValue(GfVec3f(0.5F))}}));
-  Check(translation.unsupported.empty() &&
+  Check(translation.diagnostics.empty() &&
             Lotus::Preview(translation.material).base_color == std::array<float, 3>{0.5F, 0.5F, 0.5F},
       "the MaterialX UsdPreviewSurface was not read");
   Check(HdLotusMaterialRenderContexts() == Tokens({"mtlx"}),
@@ -491,14 +518,18 @@ void TranslatorCases() {
   const TfToken preview("UsdPreviewSurface");
   HdLotusMaterialTranslation translation =
       HdLotusTranslateMaterial(HdMaterialNetworkMap{});
-  Check(!translation.unsupported.empty() &&
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedSurface}).size() == 1 &&
             translation.material == Lotus::Material{},
       "an empty network was not reported as unsupported");
 
   translation = HdLotusTranslateMaterial(
       Surface(TfToken("ND_open_pbr_surface_surfaceshader"), {}));
-  Check(translation.unsupported.find("ND_open_pbr_surface_surfaceshader") !=
-            std::string::npos,
+  Check(translation.diagnostics.size() == 1 &&
+            translation.diagnostics.front().kind == HdLotusMaterialDiagnosticKind::UnsupportedSurface &&
+            translation.diagnostics.front().node_type ==
+                TfToken("ND_open_pbr_surface_surfaceshader") &&
+            translation.diagnostics.front().detail.find(
+                "ND_open_pbr_surface_surfaceshader") != std::string::npos,
       "an unsupported surface shader was not named");
 
   constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
@@ -530,7 +561,7 @@ void TranslatorCases() {
           {TfToken("emissiveColor"), VtValue(GfVec3d(1e39, -2.0, 0.25))},
           {TfToken("roughness"), VtValue(kInfinity)},
           {TfToken("metallic"), VtValue(0.5)}}));
-  Check(translation.unsupported.empty(), "UsdPreviewSurface was unsupported");
+  Check(translation.diagnostics.empty(), "UsdPreviewSurface was unsupported");
   Expect("non-finite and double values", translation.material,
       MakeMaterial({0.18F, 0.18F, 0.18F}, 0.5F, 0.5F,
           {3.4e38F, 0.0F, 0.25F}));
@@ -561,8 +592,8 @@ void TranslatorCases() {
   Lotus::Preview(lookup).base_color_texture =
       Lotus::TextureInput{HdLotusTextureKey("", TfToken("auto"))};
   Expect("connected inputs", translation.material, lookup);
-  Check(translation.connected_inputs == std::vector<TfToken>{
-                                           TfToken("roughness")} &&
+  Check(Diagnosed(translation, {HdLotusMaterialDiagnosticKind::UnsupportedGraph}) == Tokens({"roughness"}) &&
+            translation.diagnostics.front().node == SdfPath("/Material/Texture") &&
             translation.textures.empty(),
       "the untranslated connection was not reported");
 

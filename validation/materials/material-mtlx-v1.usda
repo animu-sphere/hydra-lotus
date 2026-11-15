@@ -538,7 +538,7 @@ def Xform "MaterialMtlx"
             def Shader "Surface"
             {
                 uniform token info:id = "ND_standard_surface_surfaceshader"
-                color3f inputs:base_color.connect = </MaterialMtlx/Looks/Untranslated/Multiply.outputs:out>
+                color3f inputs:base_color.connect = </MaterialMtlx/Looks/Untranslated/Power.outputs:out>
                 token outputs:out
             }
 
@@ -551,9 +551,9 @@ def Xform "MaterialMtlx"
                 color3f outputs:out
             }
 
-            def Shader "Multiply"
+            def Shader "Power"
             {
-                uniform token info:id = "ND_multiply_color3FA"
+                uniform token info:id = "ND_power_color3FA"
                 color3f inputs:in1.connect = </MaterialMtlx/Looks/Untranslated/Image.outputs:out>
                 float inputs:in2 = 0.5
                 color3f outputs:out

@@ -40,8 +40,16 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support)
    and diagnose everything else. Its
    [contract](../design/MATERIALX_TRANSLATION.md) is accepted, settling
-   contract §10.4. Implementation is next.
+   contract §10.4. Done: graphs fold into a constant or one lookup,
+   everything else raises a structured diagnostic, the held definitions
+   are the pinned runtime's, `material-graphs-v1` is committed and every
+   existing reference is unchanged
+   ([report](../reports/2026-11-15-materialx-graph-translation.md)), with
+   five accepted changes to the contract's text
+   ([§11](../design/MATERIALX_TRANSLATION.md#11-changes-found-in-implementation)).
 6. **LOTUS-MATERIALX-05.** glTF PBR core, the smallest end-to-end slice.
+   Next. The [node inventory](../reports/2026-11-15-materialx-graph-translation.md#gltf-sample-assets)
+   of the glTF sample assets names what its graphs meet.
 7. **LOTUS-MATERIALX-06 and 07.** glTF PBR's P1 extensions, and Standard
    Surface with its own composition.
 8. **LOTUS-MATERIALX-08.** OpenPBR, fuzz over coat over base.
