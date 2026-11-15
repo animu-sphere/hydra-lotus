@@ -15,7 +15,7 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
 1. **Contract review.** Done: the
    [contract](../design/MATERIALX_SHADING_MODELS.md) is accepted. Its
    remaining [design-review decisions](../design/MATERIALX_SHADING_MODELS.md#10-decisions-for-the-design-review)
-   (§10.4, §10.5) are settled as the tasks that need them start.
+   (§10.5) are settled as the tasks that need them start.
 2. **LOTUS-MATERIALX-01.** Material IR v2: the
    [design](../design/MATERIAL_IR_V2.md) is accepted, settling contract
    §10.1, §10.3 and §10.6. Done: `UsdPreviewSurface` renders through the
@@ -38,7 +38,9 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    ([§11](../design/LAYERED_BSDF.md#11-changes-found-in-implementation)).
 5. **LOTUS-MATERIALX-04.** Translate the
    [supported node subset](../design/MATERIALX_SHADING_MODELS.md#5-boundary-of-materialx-graph-support)
-   and diagnose everything else. It may start beside 01–03.
+   and diagnose everything else. Its
+   [contract](../design/MATERIALX_TRANSLATION.md) is accepted, settling
+   contract §10.4. Implementation is next.
 6. **LOTUS-MATERIALX-05.** glTF PBR core, the smallest end-to-end slice.
 7. **LOTUS-MATERIALX-06 and 07.** glTF PBR's P1 extensions, and Standard
    Surface with its own composition.
