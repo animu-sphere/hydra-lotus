@@ -213,8 +213,10 @@ Lotus::Material MirrorKeys(Lotus::Material material) {
 // What a mismatched material's lookups name, for the failure message.
 std::string Lookups(const Lotus::Material& material) {
   std::string text = "texcoords '" + material.geometry.texcoords + "'";
-  const char* names[] = {"opacity", "normal", "base colour", "roughness",
-      "metallic", "emission", "specular colour"};
+  // By slot; a model names its own from 2, so these are labels only.
+  static constexpr std::array<const char*, Lotus::kMaterialTextureInputs> names{
+      "opacity", "normal", "slot 2", "slot 3", "slot 4", "slot 5", "slot 6",
+      "slot 7", "slot 8", "slot 9", "slot 10", "slot 11", "slot 12", "slot 13"};
   const auto inputs = Lotus::TextureInputs(material);
   for (std::size_t i = 0; i < inputs.size(); ++i)
     if (*inputs[i])
