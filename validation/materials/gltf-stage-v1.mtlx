@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!-- SPDX-License-Identifier: Apache-2.0
+     The document gltf-stage-v1.usda references: the same glTF PBR material
+     as that stage's UsdShade network (docs/design/GLTF_PBR.md section 8.2). -->
+<materialx version="1.39" colorspace="lin_rec709">
+  <nodegraph name="NG_gltf">
+    <image name="image" type="color3">
+      <input name="file" type="filename" value="textures/palette.png" colorspace="srgb_texture" />
+    </image>
+    <multiply name="half" type="color3">
+      <input name="in1" type="color3" nodename="image" />
+      <input name="in2" type="float" value="0.5" />
+    </multiply>
+    <image name="orm" type="vector3">
+      <input name="file" type="filename" value="textures/rgba.png" />
+    </image>
+    <extract name="rough" type="float">
+      <input name="in" type="vector3" nodename="orm" />
+      <input name="index" type="integer" value="1" />
+    </extract>
+    <extract name="metal" type="float">
+      <input name="in" type="vector3" nodename="orm" />
+      <input name="index" type="integer" value="2" />
+    </extract>
+    <output name="base_color" type="color3" nodename="half" />
+    <output name="roughness" type="float" nodename="rough" />
+    <output name="metallic" type="float" nodename="metal" />
+  </nodegraph>
+  <gltf_pbr name="SR_gltf" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_gltf" output="base_color" />
+    <input name="roughness" type="float" nodegraph="NG_gltf" output="roughness" />
+    <input name="metallic" type="float" nodegraph="NG_gltf" output="metallic" />
+    <input name="emissive" type="color3" value="0.8, 0.4, 0.2" colorspace="srgb_texture" />
+    <input name="emissive_strength" type="float" value="2" />
+    <input name="alpha" type="float" value="0.6" />
+    <input name="alpha_mode" type="integer" value="1" />
+    <input name="alpha_cutoff" type="float" value="0.25" />
+  </gltf_pbr>
+  <surfacematerial name="Gltf" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_gltf" />
+  </surfacematerial>
+</materialx>

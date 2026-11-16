@@ -46,6 +46,7 @@ validation:
     - renderer.path.environment
     - renderer.material.fixtures
     - renderer.material.transmission
+    - renderer.path.gltf_furnace
     - renderer.validation.messages
     - renderer.render_product.color
     - renderer.render_product.depth

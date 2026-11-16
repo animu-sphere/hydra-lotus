@@ -13,8 +13,8 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   (LOTUS-MATERIALX-01): `Lotus::Material` holds a `MaterialGeometry` shared
   by every shading model and a tagged `surface` whose only model with
   parameters is `UsdPreviewSurface` (`PreviewSurface`, through `Preview()`).
-  The `GltfPbr`, `StandardSurface` and `OpenPbr` tags are reserved and
-  rejected until their tasks. The GPU material record shrinks from 784 to
+  The `StandardSurface` and `OpenPbr` tags are reserved and rejected until
+  their tasks. The GPU material record shrinks from 784 to
   128 bytes, with texture lookups in a binding table that holds only the
   inputs a material textures; texture-input slots now put opacity and normal
   first. Rendered images are unchanged.
@@ -32,6 +32,20 @@ version will have a record in [docs/releases/](docs/releases/README.md).
   colour space is ignored, as MaterialX ignores it.
 
 ### Added
+
+- MaterialX's glTF PBR surface, its core (LOTUS-MATERIALX-05,
+  [contract](docs/design/GLTF_PBR.md)): `Lotus::GltfPbr` holds base colour,
+  metallic, roughness, emissive and its strength, and the Hydra translator
+  reads `ND_gltf_pbr_surfaceshader`, mapping glTF's alpha modes onto
+  coverage and diagnosing the inputs the model does not represent. It is
+  shaded by its own closure, built from the composed closure's lobes with
+  multiple scattering compensation, under both integrators and in
+  reservoir reuse. The GPU scene uploads the directional albedo tables
+  once (303 KB), and the stored reservoir surface grows from 128 to 144
+  bytes a pixel for the closure's model tag. New: the fixture
+  `material-gltf-v1`, the headless check `renderer.path.gltf_furnace`, the
+  benchmark workload `cornell-gltf-v1`, and glTF PBR's closure in
+  `lotus-bsdf-test`. Every existing reference image is unchanged.
 
 - MaterialX graph translation
   ([contract](docs/design/MATERIALX_TRANSLATION.md), LOTUS-MATERIALX-04): a

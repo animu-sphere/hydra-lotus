@@ -85,7 +85,10 @@ that model's data, one value per hit whatever the model. With one model it
 is the preview closure; how several models share one value (a field per
 model, or one payload sized to the largest) is decided by the first task
 that adds a second model, LOTUS-MATERIALX-05, by measuring register use in
-the wavefront shading kernel. The functions dispatch on the tag with a
+the wavefront shading kernel. **Decided** by
+[glTF PBR §6.2](GLTF_PBR.md#62-bsdfclosure-with-two-representations): a
+field per representation, the preview closure and the composed closure
+every MaterialX model builds. The functions dispatch on the tag with a
 `switch`, as the [IR v2 design](MATERIAL_IR_V2.md#61-switch-dispatch-one-kernel)
 decided for the material evaluators.
 
@@ -236,7 +239,9 @@ surface's geometry and the closure's reflection-side data, packed per
 model. The preview closure keeps today's 128-byte packing. A model whose
 packed closure does not fit grows the record to the largest implemented
 model; its task reports the growth, and LOTUS-MATERIALX-10 measures the
-memory at the fixed benchmarks.
+memory at the fixed benchmarks. With glTF PBR the record is 144 bytes: a
+model tag, and that model's seven floats
+([glTF PBR §6.4](GLTF_PBR.md#64-the-stored-reservoir-surface)).
 
 Re-evaluating the material from a stored hit was rejected. The temporal
 pass reads surfaces of the previous frame, whose geometry and material

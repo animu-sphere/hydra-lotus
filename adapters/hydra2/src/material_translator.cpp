@@ -76,6 +76,20 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (mtlx)
     ((mtlxPreviewSurface, "ND_UsdPreviewSurface_surfaceshader"))
     ((standardSurface, "ND_standard_surface_surfaceshader"))
+    ((gltfPbr, "ND_gltf_pbr_surfaceshader"))
+    (emissive)
+    (emissive_strength)
+    (alpha)
+    (alpha_mode)
+    (alpha_cutoff)
+    (sheen_color)
+    (clearcoat)
+    (iridescence)
+    (anisotropy_strength)
+    (thickness)
+    (attenuation_distance)
+    (attenuation_color)
+    (dispersion)
     ((texcoordVector2, "ND_texcoord_vector2"))
     ((geompropvalueVector2, "ND_geompropvalue_vector2"))
     (base)
@@ -242,52 +256,19 @@ void Report(HdLotusMaterialTranslation& translation,
   translation.diagnostics.push_back(std::move(diagnostic));
 }
 
-// Translates an ND_standard_surface_surfaceshader node
-// (docs/design/MATERIALX_TRANSLATION.md section 6.3). Every input of the
-// definition is translated, reported as unrepresented, or without effect:
-// the inputs of a lobe the material lacks do nothing while the lobe's weight
-// is 0, and the weight's diagnostic stands for them otherwise.
-class StandardSurfaceReader {
+// What the MaterialX surface readers share (docs/design/
+// MATERIALX_TRANSLATION.md section 6.3): reading an input of the surface's
+// definition through the graph reader, placing a lookup in the material,
+// the normal input, and the inputs the definition does not name.
+class MaterialXReader {
 public:
-  StandardSurfaceReader(const HdMaterialNetwork2& network, const SdfPath& path,
+  MaterialXReader(const HdMaterialNetwork2& network, const SdfPath& path,
       const HdMaterialNode2& node, const Graph::NodeDef& def,
       HdLotusMaterialTranslation& translation)
       : path_(path), node_(node), def_(def), translation_(translation), graph_(network) {
   }
 
-  void Translate() {
-    Lotus::Material& material = translation_.material;
-    Lotus::PreviewSurface& preview = Lotus::Preview(material);
-    constexpr double kLargest = 3.4e38;
-    // Standard Surface's defaults where the IR's differ.
-    preview.base_color = {0.8F, 0.8F, 0.8F};
-    preview.roughness = 0.2F;
-
-    Color(Tokens->base, Tokens->base_color, preview.base_color,
-        preview.base_color_texture, 0.0, 1.0);
-    Color(Tokens->emission, Tokens->emission_color, preview.emission,
-        preview.emission_texture, 0.0, kLargest);
-    Scalar(Tokens->metalness, preview.metallic, &preview.metallic_texture,
-        0.0, 1.0);
-    Scalar(Tokens->specular_roughness, preview.roughness,
-        &preview.roughness_texture, 0.0, 1.0);
-    Scalar(Tokens->specular_IOR, preview.ior, nullptr, 1.0, kLargest);
-    Transmission();
-    Specular();
-    Opacity();
-    Normal();
-    for (const TfToken& lobe : {Tokens->coat, Tokens->diffuse_roughness,
-             Tokens->sheen, Tokens->specular_anisotropy, Tokens->subsurface,
-             Tokens->thin_film_thickness}) {
-      const Graph::Reading weight = Get(lobe);
-      if (weight.value.IsLookup() || weight.value.constant[0] != 0.0) {
-        Diagnose(Kind::UnrepresentedInput, lobe, weight, "the material has no such lobe");
-      }
-    }
-    UnknownInputs();
-  }
-
-private:
+protected:
   // The input as the graph reader reads it, with its diagnostic reported.
   // A normal map reaches only the normal input.
   Graph::Reading Get(const TfToken& input,
@@ -352,37 +333,6 @@ private:
     return lookup;
   }
 
-  // A colour times its scalar weight, as base and emission are. A product
-  // the IR cannot hold leaves the input that stops it at its default.
-  void Color(const TfToken& weight, const TfToken& color, std::array<float, 3>& value,
-      std::optional<Lotus::TextureInput>& lookup, double low, double high) {
-    const Graph::Reading scale = Get(weight);
-    // A clamp on the colour is the input's own only under a weight of 1.
-    const bool unit = scale.value.IsConstant() && scale.value.constant[0] == 1.0;
-    const Graph::Reading tint = Get(color,
-        unit ? std::optional<Graph::Range>(Graph::Range{low, high}) : std::nullopt);
-    std::string why;
-    Graph::Value product = Graph::Product(tint.value, scale.value, why);
-    if (product.kind == Graph::Value::Kind::Failed) {
-      // Two lookups, or a scalar lookup over a colour: the weight's.
-      Diagnose(Kind::UnsupportedGraph, weight, scale,
-          why + ": " + weight.GetString() + " times " + color.GetString());
-      product = Graph::Product(tint.value, Default(weight), why);
-    }
-    if (product.IsLookup()) {
-      const bool from_color = tint.value.IsLookup();
-      if (const auto placed = Lookup(from_color ? color : weight,
-              from_color ? tint : scale, product, true)) {
-        lookup = placed;
-        return;
-      }
-      product = Graph::Product(Default(color), Default(weight), why);
-    }
-    for (std::size_t c = 0; c < 3; ++c) {
-      value[c] = static_cast<float>(std::clamp(product.constant[c], low, high));
-    }
-  }
-
   void Scalar(const TfToken& input, float& value,
       std::optional<Lotus::TextureInput>* lookup, double low, double high) {
     const Graph::Reading reading = Get(input, Graph::Range{low, high});
@@ -420,6 +370,136 @@ private:
     }
     if (differs) {
       Diagnose(Kind::UnrepresentedInput, input, reading, detail);
+    }
+  }
+
+  // A normal map, or the constant of one without an image; an authored
+  // world-space normal is not represented.
+  void Normal() {
+    Lotus::Material& material = translation_.material;
+    if (Connection(node_, Tokens->normal) == nullptr) {
+      if (Parameter(node_, Tokens->normal) != nullptr) {
+        Report(translation_, {Kind::UnrepresentedInput, Tokens->normal, path_,
+                                 node_.nodeTypeId,
+                                 "a constant normal: only a normal map is read"});
+      }
+      return;
+    }
+    const Graph::Reading reading = Get(Tokens->normal);
+    if (reading.failed) {
+      return;
+    }
+    if (!reading.value.normal_map) {
+      Diagnose(Kind::UnsupportedGraph, Tokens->normal, reading,
+          "a normal that is not a normal map");
+      return;
+    }
+    if (reading.value.IsLookup()) {
+      if (const auto placed = Lookup(Tokens->normal, reading, reading.value, true)) {
+        material.geometry.normal_texture = placed;
+      }
+      return;
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      material.geometry.normal[c] =
+          static_cast<float>(std::clamp(reading.value.constant[c], -1.0, 1.0));
+    }
+  }
+
+  // Authored parameters and connections the definition does not name. A
+  // parameter with a colon is Hydra's note about another (colorSpace:file).
+  void UnknownInputs() {
+    for (const auto& [name, value] : node_.parameters) {
+      if (name.GetString().find(':') == std::string::npos && def_.Find(name) == nullptr) {
+        Report(translation_, {Kind::UnknownInput, name, path_, node_.nodeTypeId,
+                                 "the definition names no such input"});
+      }
+    }
+    for (const auto& [name, connections] : node_.inputConnections) {
+      if (def_.Find(name) == nullptr) {
+        Report(translation_, {Kind::UnknownInput, name, path_, node_.nodeTypeId,
+                                 "the definition names no such input"});
+      }
+    }
+  }
+
+  const SdfPath& path_;
+  const HdMaterialNode2& node_;
+  const Graph::NodeDef& def_;
+  HdLotusMaterialTranslation& translation_;
+  Graph::GraphReader graph_;
+};
+
+// Translates an ND_standard_surface_surfaceshader node
+// (docs/design/MATERIALX_TRANSLATION.md section 6.3). Every input of the
+// definition is translated, reported as unrepresented, or without effect:
+// the inputs of a lobe the material lacks do nothing while the lobe's weight
+// is 0, and the weight's diagnostic stands for them otherwise.
+class StandardSurfaceReader : public MaterialXReader {
+public:
+  using MaterialXReader::MaterialXReader;
+
+  void Translate() {
+    Lotus::Material& material = translation_.material;
+    Lotus::PreviewSurface& preview = Lotus::Preview(material);
+    constexpr double kLargest = 3.4e38;
+    // Standard Surface's defaults where the IR's differ.
+    preview.base_color = {0.8F, 0.8F, 0.8F};
+    preview.roughness = 0.2F;
+
+    Color(Tokens->base, Tokens->base_color, preview.base_color,
+        preview.base_color_texture, 0.0, 1.0);
+    Color(Tokens->emission, Tokens->emission_color, preview.emission,
+        preview.emission_texture, 0.0, kLargest);
+    Scalar(Tokens->metalness, preview.metallic, &preview.metallic_texture,
+        0.0, 1.0);
+    Scalar(Tokens->specular_roughness, preview.roughness,
+        &preview.roughness_texture, 0.0, 1.0);
+    Scalar(Tokens->specular_IOR, preview.ior, nullptr, 1.0, kLargest);
+    Transmission();
+    Specular();
+    Opacity();
+    Normal();
+    for (const TfToken& lobe : {Tokens->coat, Tokens->diffuse_roughness,
+             Tokens->sheen, Tokens->specular_anisotropy, Tokens->subsurface,
+             Tokens->thin_film_thickness}) {
+      const Graph::Reading weight = Get(lobe);
+      if (weight.value.IsLookup() || weight.value.constant[0] != 0.0) {
+        Diagnose(Kind::UnrepresentedInput, lobe, weight, "the material has no such lobe");
+      }
+    }
+    UnknownInputs();
+  }
+
+private:
+  // A colour times its scalar weight, as base and emission are. A product
+  // the IR cannot hold leaves the input that stops it at its default.
+  void Color(const TfToken& weight, const TfToken& color, std::array<float, 3>& value,
+      std::optional<Lotus::TextureInput>& lookup, double low, double high) {
+    const Graph::Reading scale = Get(weight);
+    // A clamp on the colour is the input's own only under a weight of 1.
+    const bool unit = scale.value.IsConstant() && scale.value.constant[0] == 1.0;
+    const Graph::Reading tint = Get(color,
+        unit ? std::optional<Graph::Range>(Graph::Range{low, high}) : std::nullopt);
+    std::string why;
+    Graph::Value product = Graph::Product(tint.value, scale.value, why);
+    if (product.kind == Graph::Value::Kind::Failed) {
+      // Two lookups, or a scalar lookup over a colour: the weight's.
+      Diagnose(Kind::UnsupportedGraph, weight, scale,
+          why + ": " + weight.GetString() + " times " + color.GetString());
+      product = Graph::Product(tint.value, Default(weight), why);
+    }
+    if (product.IsLookup()) {
+      const bool from_color = tint.value.IsLookup();
+      if (const auto placed = Lookup(from_color ? color : weight,
+              from_color ? tint : scale, product, true)) {
+        lookup = placed;
+        return;
+      }
+      product = Graph::Product(Default(color), Default(weight), why);
+    }
+    for (std::size_t c = 0; c < 3; ++c) {
+      value[c] = static_cast<float>(std::clamp(product.constant[c], low, high));
     }
   }
 
@@ -504,62 +584,137 @@ private:
     translation_.material.geometry.opacity =
         static_cast<float>(std::clamp((r + g + b) / 3.0, 0.0, 1.0));
   }
+};
 
-  // A normal map, or the constant of one without an image; an authored
-  // world-space normal is not represented.
-  void Normal() {
-    Lotus::Material& material = translation_.material;
-    if (Connection(node_, Tokens->normal) == nullptr) {
-      if (Parameter(node_, Tokens->normal) != nullptr) {
-        Report(translation_, {Kind::UnrepresentedInput, Tokens->normal, path_,
-                                 node_.nodeTypeId,
-                                 "a constant normal: only a normal map is read"});
-      }
-      return;
+// Translates an ND_gltf_pbr_surfaceshader node into the glTF PBR model
+// (docs/design/GLTF_PBR.md section 5). Every input of the definition is
+// translated, reported as unrepresented, or without effect: occlusion in a
+// path tracer, alpha under OPAQUE, and the inputs of an extension the
+// material lacks while the extension's weight is at its default.
+class GltfPbrReader : public MaterialXReader {
+public:
+  using MaterialXReader::MaterialXReader;
+
+  void Translate() {
+    Lotus::GltfPbr& gltf =
+        translation_.material.surface.emplace<Lotus::GltfPbr>();
+    constexpr double kLargest = 3.4e38;
+    Color(Tokens->base_color, gltf.base_color, 0.0, 1.0);
+    Scalar(Tokens->metallic, gltf.metallic.value, &gltf.metallic.texture, 0.0,
+        1.0);
+    Scalar(Tokens->roughness, gltf.roughness.value, &gltf.roughness.texture,
+        0.0, 1.0);
+    Color(Tokens->emissive, gltf.emissive, 0.0, kLargest);
+    if (const auto strength = ConstantOnly(Tokens->emissive_strength)) {
+      gltf.emissive_strength =
+          static_cast<float>(std::clamp(strength->constant[0], 0.0, kLargest));
     }
-    const Graph::Reading reading = Get(Tokens->normal);
-    if (reading.failed) {
-      return;
+    Normal();
+    Alpha();
+    // The extensions' weights; their other inputs do nothing without them.
+    Neutral(Tokens->transmission, 0.0, "the material has no transmission");
+    Neutral(Tokens->sheen_color, 0.0, "the material has no sheen");
+    Neutral(Tokens->clearcoat, 0.0, "the material has no clearcoat");
+    Neutral(Tokens->iridescence, 0.0, "the material has no thin film");
+    Neutral(Tokens->anisotropy_strength, 0.0,
+        "the material's lobes are isotropic");
+    Neutral(Tokens->specular, 1.0, "a specular weight other than 1");
+    Neutral(Tokens->specular_color, 1.0, "a specular tint");
+    Neutral(Tokens->ior, 1.5, "the dielectric's index is the definition's 1.5");
+    // The definition's own graph reads none of these; glTF gives them a
+    // meaning, so they are not dropped in silence.
+    Neutral(Tokens->thickness, 0.0, "the material encloses no medium");
+    Neutral(Tokens->attenuation_color, 1.0, "the material encloses no medium");
+    Neutral(Tokens->dispersion, 0.0, "the material has no dispersion");
+    if (Connection(node_, Tokens->attenuation_distance) != nullptr ||
+        Parameter(node_, Tokens->attenuation_distance) != nullptr) {
+      Report(translation_, {Kind::UnrepresentedInput,
+                               Tokens->attenuation_distance, path_,
+                               node_.nodeTypeId,
+                               "the material encloses no medium"});
     }
-    if (!reading.value.normal_map) {
-      Diagnose(Kind::UnsupportedGraph, Tokens->normal, reading,
-          "a normal that is not a normal map");
-      return;
-    }
+    UnknownInputs();
+  }
+
+private:
+  // A colour input: a constant clamped into [low, high], or a lookup. A
+  // graph the IR cannot hold leaves the definition's default.
+  void Color(const TfToken& input,
+      Lotus::MaterialInput<std::array<float, 3>>& value, double low,
+      double high) {
+    const Graph::Reading reading = Get(input, Graph::Range{low, high});
     if (reading.value.IsLookup()) {
-      if (const auto placed = Lookup(Tokens->normal, reading, reading.value, true)) {
-        material.geometry.normal_texture = placed;
+      if (const auto placed = Lookup(input, reading, reading.value, true)) {
+        value.texture = placed;
       }
       return;
     }
     for (std::size_t c = 0; c < 3; ++c) {
-      material.geometry.normal[c] =
-          static_cast<float>(std::clamp(reading.value.constant[c], -1.0, 1.0));
+      value.value[c] =
+          static_cast<float>(std::clamp(reading.value.constant[c], low, high));
     }
   }
 
-  // Authored parameters and connections the definition does not name. A
-  // parameter with a colon is Hydra's note about another (colorSpace:file).
-  void UnknownInputs() {
-    for (const auto& [name, value] : node_.parameters) {
-      if (name.GetString().find(':') == std::string::npos && def_.Find(name) == nullptr) {
-        Report(translation_, {Kind::UnknownInput, name, path_, node_.nodeTypeId,
-                                 "the definition names no such input"});
-      }
+  // A uniform input's authored number, or its definition's default; nothing,
+  // reported, for a connection or a value that is no number.
+  std::optional<double> Uniform(const TfToken& input) {
+    if (Connection(node_, input) != nullptr) {
+      Report(translation_, {Kind::UnsupportedValue, input, path_,
+                               node_.nodeTypeId,
+                               "input " + input.GetString() +
+                                   " is uniform: a connection is not read"});
+      return std::nullopt;
     }
-    for (const auto& [name, connections] : node_.inputConnections) {
-      if (def_.Find(name) == nullptr) {
-        Report(translation_, {Kind::UnknownInput, name, path_, node_.nodeTypeId,
-                                 "the definition names no such input"});
-      }
+    const VtValue* authored = Parameter(node_, input);
+    if (authored == nullptr) {
+      return def_.Find(input)->value[0];
     }
+    const auto read = ReadScalar(*authored);
+    if (!read || !std::isfinite(*read)) {
+      Report(translation_, {Kind::UnsupportedValue, input, path_,
+                               node_.nodeTypeId,
+                               "input " + input.GetString() +
+                                   " holds no finite number"});
+      return std::nullopt;
+    }
+    return read;
   }
 
-  const SdfPath& path_;
-  const HdMaterialNode2& node_;
-  const Graph::NodeDef& def_;
-  HdLotusMaterialTranslation& translation_;
-  Graph::GraphReader graph_;
+  // glTF's alpha is coverage (docs/design/GLTF_PBR.md section 5.3): none
+  // under OPAQUE, where alpha is not read; alpha against the cutoff under
+  // MASK; stochastic under BLEND. A cutoff the IR's threshold cannot state
+  // is the constant it amounts to.
+  void Alpha() {
+    Lotus::MaterialGeometry& geometry = translation_.material.geometry;
+    const auto mode = Uniform(Tokens->alpha_mode);
+    if (!mode) {
+      return;
+    }
+    if (*mode != 0.0 && *mode != 1.0 && *mode != 2.0) {
+      Report(translation_, {Kind::UnsupportedValue, Tokens->alpha_mode, path_,
+                               node_.nodeTypeId,
+                               "an alpha_mode that is none of 0, 1 and 2"});
+      return;
+    }
+    if (*mode == 0.0) {
+      return;
+    }
+    if (*mode == 1.0) {
+      const auto cutoff = Uniform(Tokens->alpha_cutoff);
+      if (!cutoff || !(*cutoff > 0.0)) {
+        // Every alpha passes a cutoff of 0.
+        return;
+      }
+      if (*cutoff > 1.0) {
+        // No alpha passes.
+        geometry.opacity = 0.0F;
+        return;
+      }
+      geometry.opacity_threshold = static_cast<float>(*cutoff);
+    }
+    Scalar(Tokens->alpha, geometry.opacity, &geometry.opacity_texture, 0.0,
+        1.0);
+  }
 };
 
 class SurfaceReader {
@@ -872,12 +1027,19 @@ HdLotusMaterialTranslation HdLotusTranslateMaterial(
         .Translate();
     return translation;
   }
+  if (node->second.nodeTypeId == Tokens->gltfPbr) {
+    GltfPbrReader(converted, node->first, node->second,
+        *Graph::FindNodeDef(Tokens->gltfPbr), translation)
+        .Translate();
+    return translation;
+  }
   if (node->second.nodeTypeId != Tokens->UsdPreviewSurface &&
       node->second.nodeTypeId != Tokens->mtlxPreviewSurface) {
     return unsupported(node->first, node->second.nodeTypeId,
         "the surface shader is " + node->second.nodeTypeId.GetString() +
-            ", neither UsdPreviewSurface nor "
-            "ND_standard_surface_surfaceshader");
+            ", none of UsdPreviewSurface, "
+            "ND_standard_surface_surfaceshader and "
+            "ND_gltf_pbr_surfaceshader");
   }
 
   SurfaceReader surface(converted, node->second, translation);

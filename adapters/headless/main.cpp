@@ -182,10 +182,10 @@ bool MaterialMatches(const Lotus::GpuMaterialContents& gpu,
     const Lotus::GpuSceneContents& contents) {
   Lotus::Material expected = material;
   expected.geometry.texcoords.clear();
-  const auto inputs = Lotus::PreviewTextureInputs(expected);
+  const auto inputs = Lotus::MutableTextureInputs(expected);
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const std::uint32_t slot = gpu.texture_slots[index];
-    if (!inputs[index]->has_value()) {
+    if (inputs[index] == nullptr || !inputs[index]->has_value()) {
       if (slot != Lotus::kNoTextureSlot)
         return false;
       continue;
@@ -262,7 +262,8 @@ bool SceneMatches(const Lotus::GpuSceneContents& contents,
       std::vector<std::vector<std::array<float, 3>>> colors;
       std::uint32_t color_set = Lotus::kNoColors;
       for (const auto& [name, values] : mesh.geometry->colors) {
-        if (name == material.geometry.base_color_primvar && !Lotus::Preview(material).base_color_texture)
+        const auto* preview = std::get_if<Lotus::PreviewSurface>(&material.surface);
+        if (name == material.geometry.base_color_primvar && preview != nullptr && !preview->base_color_texture)
           color_set = static_cast<std::uint32_t>(colors.size());
         colors.push_back(values);
       }
@@ -1625,6 +1626,97 @@ std::string BsdfFailure(PathScenes& scenes) {
         return name + ": " + failure;
     }
   }
+  return {};
+}
+
+// A white furnace for MaterialX's glTF PBR (docs/design/GLTF_PBR.md section
+// 8.4): a white plane under a white constant environment, seen by an
+// orthographic camera at one angle, reflects the environment whatever its
+// metallic and roughness, since the compensated metal and the compensated
+// dielectric over a white diffuse lobe both reflect everything. No reflected
+// ray meets the plane again, so each pixel's mean is the closure's albedo:
+// 1 within five standard errors and the albedo tables' error. It crosses the
+// GPU table binding, the scene pass and both integrators with a known
+// answer.
+std::string GltfFurnaceFailure(PathScenes& scenes) {
+  constexpr std::uint32_t kSamples = 32;
+  // lotus-bsdf-test's bound on a compensated lobe's furnace.
+  constexpr double kTableError = 5.0e-3;
+  Lotus::RenderWorld& world = scenes.World();
+  Lotus::Camera ortho = BootstrapCamera();
+  ortho.projection = Lotus::IdentityMatrix();
+  ortho.projection[10] = -2.0F / 9.0F;
+  ortho.projection[14] = -11.0F / 9.0F;
+  world.SetCamera(ortho);
+  world.SetEnvironment({1.0F, 1.0F, 1.0F});
+  Lotus::MeshGeometry plane;
+  plane.positions = {{{-16, -16, 0}}, {{16, -16, 0}}, {{16, 16, 0}}, {{-16, 16, 0}}};
+  plane.triangles = {{{0, 1, 2}}, {{0, 2, 3}}};
+  plane.source_faces = {0, 0};
+  double worst = 0.0;
+  for (const auto integrator :
+      {Lotus::Integrator::Reference, Lotus::Integrator::Wavefront}) {
+    for (const auto sampling : {Lotus::LightSampling::Bsdf, Lotus::LightSampling::Mis}) {
+      scenes.SetIntegrator(integrator);
+      scenes.SetLightSampling(sampling);
+      for (const float cos_view : {1.0F, 0.5F, 0.125F}) {
+        Lotus::MeshInstance tilted;
+        tilted.world_from_object[5] = cos_view;
+        tilted.world_from_object[6] = std::sqrt(1 - cos_view * cos_view);
+        tilted.world_from_object[9] = -tilted.world_from_object[6];
+        tilted.world_from_object[10] = cos_view;
+        world.SetMesh("/plane", plane, tilted);
+        for (const float metallic : {0.0F, 1.0F}) {
+          for (const float roughness : {0.2F, 1.0F}) {
+            Lotus::Material material;
+            Lotus::GltfPbr& gltf = material.surface.emplace<Lotus::GltfPbr>();
+            gltf.metallic.value = metallic;
+            gltf.roughness.value = roughness;
+            Paint(world, "/plane", material);
+            Lotus::GpuFrameEvidence frame;
+            if (auto failure = scenes.Render({}, frame, kSamples); !failure.empty())
+              return failure;
+            const std::vector<float> values = ColorValues(frame.color);
+            Rgb sum{};
+            Rgb squares{};
+            double pixels = 0;
+            for (std::size_t pixel = 0; pixel * 4 < values.size(); ++pixel) {
+              if (values[pixel * 4 + 3] != 1.0F) continue;
+              pixels += 1;
+              for (int c = 0; c < 3; ++c) {
+                const double value = values[pixel * 4 + c];
+                if (!std::isfinite(value)) return "non-finite radiance in the furnace";
+                sum[c] += value;
+                squares[c] += value * value;
+              }
+            }
+            if (pixels < 2) return "no pixel's samples all hit";
+            for (int c = 0; c < 3; ++c) {
+              const double mean = sum[c] / pixels;
+              const double variance =
+                  std::max(0.0, (squares[c] - pixels * mean * mean) / (pixels - 1));
+              const double tolerance = 5.0 * std::sqrt(variance / pixels) + kTableError;
+              worst = std::max(worst, std::abs(mean - 1.0));
+              if (std::abs(mean - 1.0) > tolerance) {
+                std::ostringstream text;
+                text << (integrator == Lotus::Integrator::Wavefront ? "wavefront" : "reference")
+                     << (sampling == Lotus::LightSampling::Mis ? " NEE/MIS" : " BSDF")
+                     << " metallic " << metallic << " roughness " << roughness
+                     << " cos " << cos_view << ": mean " << mean
+                     << " instead of 1 +- " << tolerance << " in channel " << c;
+                return text.str();
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  std::ostringstream line;
+  line << std::fixed << std::setprecision(4)
+       << "48 white glTF PBR planes under both integrators and light samplings: "
+          "max |mean - 1| " << worst;
+  scenes.Summarize(line.str());
   return {};
 }
 
@@ -5862,6 +5954,12 @@ int main(int argc, char** argv) {
         light_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
         return failure;
       });
+      run("renderer.path.gltf_furnace", [&](PathScenes& furnace_scenes) {
+        std::string failure = GltfFurnaceFailure(furnace_scenes);
+        furnace_scenes.SetIntegrator(Lotus::Integrator::Reference);
+        furnace_scenes.SetLightSampling(Lotus::LightSampling::Bsdf);
+        return failure;
+      });
       run("renderer.material.fixtures", [&](PathScenes& material_scenes) {
         std::string failure =
             MaterialFixturesFailure(material_scenes, reference_directory, images);
@@ -5890,6 +5988,7 @@ int main(int argc, char** argv) {
       checks.push_back({"renderer.path.light_sampling", "skip", ray_query.detail});
       checks.push_back({"renderer.path.analytic_lights", "skip", ray_query.detail});
       checks.push_back({"renderer.path.environment", "skip", ray_query.detail});
+      checks.push_back({"renderer.path.gltf_furnace", "skip", ray_query.detail});
       checks.push_back({"renderer.material.fixtures", "skip", ray_query.detail});
       checks.push_back({"renderer.material.transmission", "skip", ray_query.detail});
     }
@@ -5909,6 +6008,7 @@ int main(int argc, char** argv) {
     checks.push_back({"renderer.path.light_sampling", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.analytic_lights", Status(setup_status), setup_error});
     checks.push_back({"renderer.path.environment", Status(setup_status), setup_error});
+    checks.push_back({"renderer.path.gltf_furnace", Status(setup_status), setup_error});
     checks.push_back({"renderer.material.fixtures", Status(setup_status), setup_error});
     checks.push_back({"renderer.material.transmission", Status(setup_status), setup_error});
   }

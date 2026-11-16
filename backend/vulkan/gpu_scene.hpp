@@ -336,6 +336,12 @@ public:
   [[nodiscard]] VkDeviceAddress EnvironmentAddress() const {
     return environment_lit_ ? environment_buffer_.address : 0;
   }
+  // The composed closures' directional albedo tables (docs/design/
+  // LAYERED_BSDF.md section 5.6), uploaded once: their device address, zero
+  // without acceleration structures.
+  [[nodiscard]] VkDeviceAddress AlbedoTableAddress() const {
+    return albedo_tables_.address;
+  }
   // The probability with which the light table chooses the environment
   // image, 0 without its entry.
   [[nodiscard]] float EnvironmentSelection() const {
@@ -396,6 +402,7 @@ private:
       VkDeviceSize size, AccelerationStructure& structure,
       std::string& detail);
   void DestroyAccelerationStructure(AccelerationStructure& structure);
+  bool UploadAlbedoTables(std::string& detail);
   bool EnsureStaging(VkDeviceSize size, std::string& detail);
   bool EnsureScratch(VkDeviceSize size, std::string& detail);
   bool Flush(const DeviceBuffer& buffer, std::string& detail);
@@ -458,6 +465,8 @@ private:
   bool environment_lit_ = false;
   double environment_mean_ = 0.0;
   float environment_selection_ = 0.0F;
+  // Renderer data, not scene data: written by Initialize and never again.
+  DeviceBuffer albedo_tables_;
   DeviceBuffer staging_;
   DeviceBuffer readback_;
 

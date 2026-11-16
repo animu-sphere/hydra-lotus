@@ -103,7 +103,8 @@ struct Link {
 };
 
 HdMaterialNetworkMap Network(Parameters surface, const std::vector<Node>& nodes = {},
-    const std::vector<Link>& links = {}) {
+    const std::vector<Link>& links = {},
+    const char* surface_id = "ND_standard_surface_surfaceshader") {
   HdMaterialNetworkMap map;
   HdMaterialNetwork& network = map.map[HdMaterialTerminalTokens->surface];
   for (const Node& node : nodes) {
@@ -115,7 +116,7 @@ HdMaterialNetworkMap Network(Parameters surface, const std::vector<Node>& nodes 
   }
   HdMaterialNode terminal;
   terminal.path = SdfPath("/Material/Surface");
-  terminal.identifier = TfToken("ND_standard_surface_surfaceshader");
+  terminal.identifier = TfToken(surface_id);
   terminal.parameters = std::move(surface);
   network.nodes.push_back(terminal);
   for (const Link& link : links) {
@@ -129,6 +130,13 @@ HdMaterialNetworkMap Network(Parameters surface, const std::vector<Node>& nodes 
 HdLotusMaterialTranslation Translate(Parameters surface, const std::vector<Node>& nodes = {},
     const std::vector<Link>& links = {}) {
   return HdLotusTranslateMaterial(Network(std::move(surface), nodes, links));
+}
+
+// The same with MaterialX's glTF PBR as the surface.
+HdLotusMaterialTranslation TranslateGltf(Parameters surface,
+    const std::vector<Node>& nodes = {}, const std::vector<Link>& links = {}) {
+  return HdLotusTranslateMaterial(
+      Network(std::move(surface), nodes, links, "ND_gltf_pbr_surfaceshader"));
 }
 
 std::string Describe(const HdLotusMaterialTranslation& translation) {
@@ -1099,6 +1107,257 @@ void Completeness() {
   Diagnosed("an unknown connection", t, Kind::UnknownInput, "diffuse_color", "Surface");
 }
 
+// MaterialX's glTF PBR surface (docs/design/GLTF_PBR.md section 5): its
+// input table, alpha modes, the networks usd-gltf-plugins authors, and every
+// input of the definition as translated, diagnosed or without effect.
+void GltfPbr() {
+  const auto gltf = [](const HdLotusMaterialTranslation& translation)
+      -> const Lotus::GltfPbr& {
+    Check(translation.material.Model() == Lotus::ShadingModel::GltfPbr,
+        "a glTF PBR surface translates to another model");
+    return Lotus::Gltf(translation.material);
+  };
+  // The definition's defaults: a rough white metal, opaque.
+  const HdLotusMaterialTranslation defaults = TranslateGltf({});
+  Clean("glTF PBR's defaults", defaults);
+  Lotus::Material expected;
+  expected.surface.emplace<Lotus::GltfPbr>();
+  Check(defaults.material == expected, "glTF PBR's defaults are not the definition's");
+  Check(gltf(defaults).base_color.value == std::array<float, 3>{1.0F, 1.0F, 1.0F} &&
+            gltf(defaults).metallic.value == 1.0F && gltf(defaults).roughness.value == 1.0F,
+      "the IR's glTF PBR defaults are not a rough white metal");
+
+  // Constants, clamped into their ranges.
+  HdLotusMaterialTranslation t = TranslateGltf(P({{"base_color", V3(0.2F, 0.4F, 0.6F)},
+      {"metallic", F(0.25F)}, {"roughness", F(0.75F)}, {"emissive", V3(2.0F, 1.0F, 0.5F)},
+      {"emissive_strength", F(3.0F)}}));
+  Clean("glTF PBR constants", t);
+  ExpectValues("base_color", gltf(t).base_color.value, {0.2F, 0.4F, 0.6F});
+  ExpectValues("emissive", gltf(t).emissive.value, {2.0F, 1.0F, 0.5F});
+  Check(gltf(t).metallic.value == 0.25F && gltf(t).roughness.value == 0.75F &&
+            gltf(t).emissive_strength == 3.0F,
+      "glTF PBR's scalar constants are not as authored");
+  t = TranslateGltf(P({{"base_color", V3(1.25F, 0.5F, -0.25F)}, {"metallic", F(-1.0F)},
+      {"roughness", F(1.5F)}, {"emissive", V3(-1.0F, 0.5F, 4.0F)},
+      {"emissive_strength", F(-2.0F)}}));
+  Clean("glTF PBR clamped constants", t);
+  ExpectValues("clamped base_color", gltf(t).base_color.value, {1.0F, 0.5F, 0.0F});
+  ExpectValues("clamped emissive", gltf(t).emissive.value, {0.0F, 0.5F, 4.0F});
+  Check(gltf(t).metallic.value == 0.0F && gltf(t).roughness.value == 1.0F &&
+            gltf(t).emissive_strength == 0.0F,
+      "glTF PBR's scalar constants are not clamped");
+  t = TranslateGltf({}, {kScalar}, {{"Scalar", "out", "Surface", "emissive_strength"}});
+  Diagnosed("a connected emissive_strength", t, Kind::UnrepresentedInput,
+      "emissive_strength", "Scalar");
+
+  // Alpha: OPAQUE reads none, MASK compares it with the cutoff, BLEND is
+  // stochastic coverage.
+  const auto coverage = [&](const char* what, Parameters surface, float opacity,
+                            float threshold) {
+    const HdLotusMaterialTranslation alpha = TranslateGltf(std::move(surface));
+    Clean(what, alpha);
+    Check(alpha.material.geometry.opacity == opacity &&
+              alpha.material.geometry.opacity_threshold == threshold &&
+              !alpha.material.geometry.opacity_texture,
+        std::string(what) + ": opacity " +
+            std::to_string(alpha.material.geometry.opacity) + " threshold " +
+            std::to_string(alpha.material.geometry.opacity_threshold));
+  };
+  coverage("OPAQUE", P({{"alpha", F(0.3F)}}), 1.0F, 0.0F);
+  coverage("OPAQUE with a cutoff", P({{"alpha", F(0.3F)}, {"alpha_cutoff", F(0.9F)}}),
+      1.0F, 0.0F);
+  coverage("MASK", P({{"alpha", F(0.7F)}, {"alpha_mode", I(1)}}), 0.7F, 0.5F);
+  coverage("MASK with a cutoff",
+      P({{"alpha", F(0.7F)}, {"alpha_mode", I(1)}, {"alpha_cutoff", F(0.25F)}}), 0.7F, 0.25F);
+  coverage("MASK at a cutoff of 0",
+      P({{"alpha", F(0.2F)}, {"alpha_mode", I(1)}, {"alpha_cutoff", F(0.0F)}}), 1.0F, 0.0F);
+  coverage("MASK at a cutoff above 1",
+      P({{"alpha", F(1.0F)}, {"alpha_mode", I(1)}, {"alpha_cutoff", F(1.5F)}}), 0.0F, 0.0F);
+  coverage("BLEND", P({{"alpha", F(0.4F)}, {"alpha_mode", I(2)}}), 0.4F, 0.0F);
+  coverage("BLEND clamped", P({{"alpha", F(1.5F)}, {"alpha_mode", I(2)}}), 1.0F, 0.0F);
+  t = TranslateGltf(P({{"alpha", F(0.4F)}, {"alpha_mode", I(3)}}));
+  Diagnosed("an alpha_mode of 3", t, Kind::UnsupportedValue, "alpha_mode", "Surface");
+  Check(t.material.geometry.opacity == 1.0F, "an unknown alpha_mode is not opaque");
+  t = TranslateGltf(P({{"alpha", F(0.4F)}}), {kScalar},
+      {{"Scalar", "out", "Surface", "alpha_mode"}});
+  Diagnosed("a connected alpha_mode", t, Kind::UnsupportedValue, "alpha_mode", "Surface");
+  Check(t.material.geometry.opacity == 1.0F, "a connected alpha_mode is not opaque");
+  t = TranslateGltf(P({{"alpha", F(0.4F)}, {"alpha_mode", I(1)}}), {kScalar},
+      {{"Scalar", "out", "Surface", "alpha_cutoff"}});
+  Diagnosed("a connected alpha_cutoff", t, Kind::UnsupportedValue, "alpha_cutoff",
+      "Surface");
+  Check(t.material.geometry.opacity == 1.0F, "a connected alpha_cutoff is not opaque");
+
+  // The normal input: a normal map, never an authored world-space constant.
+  t = TranslateGltf(P({{"normal", V3(0.0F, 1.0F, 0.0F)}}));
+  Diagnosed("a constant normal", t, Kind::UnrepresentedInput, "normal", "Surface");
+  t = TranslateGltf({},
+      {{"Normal", "ND_gltf_normalmap_vector3_1_0", P({{"file", File("bumps.png")}})}},
+      {{"Normal", "out", "Surface", "normal"}});
+  Clean("ND_gltf_normalmap on glTF PBR", t);
+  Check(t.material.geometry.normal_texture.has_value(),
+      "ND_gltf_normalmap on glTF PBR is no lookup");
+
+  // The networks usd-gltf-plugins authors: a colour-4 base colour image
+  // whose alpha is the coverage, times a factor; a vector-4 image packing
+  // roughness in green and metallic in blue; a vector-4 normal map; an sRGB
+  // emissive image; all at coordinates under KHR_texture_transform.
+  const std::vector<Node> plugin{
+      {"Coords", "ND_geompropvalue_vector2", P({{"geomprop", S("st")}})},
+      {"Scaled", "ND_multiply_vector2", P({{"in2", V2(2.0F, 3.0F)}})},
+      {"Turned", "ND_rotate2d_vector2", P({{"amount", F(30.0F)}})},
+      {"Moved", "ND_add_vector2", P({{"in2", V2(0.25F, 0.5F)}})},
+      {"Base", "ND_image_color4",
+          {{TfToken("file"), File("base.png")},
+              {TfToken("colorSpace:file"), VtValue(TfToken("srgb_texture"))}}},
+      {"BaseRgb", "ND_convert_color4_color3", {}},
+      {"BaseTint", "ND_multiply_color3", P({{"in2", V3(1.0F, 0.5F, 0.25F)}})},
+      {"BaseAlpha", "ND_extract_color4", P({{"index", I(3)}})},
+      {"AlphaFactor", "ND_multiply_float", P({{"in2", F(0.5F)}})},
+      {"Orm", "ND_image_vector4", P({{"file", File("orm.png")}})},
+      {"Roughness", "ND_extract_vector4", P({{"index", I(1)}})},
+      {"Metallic", "ND_extract_vector4", P({{"index", I(2)}})},
+      {"Bumps", "ND_image_vector4", P({{"file", File("bumps.png")}})},
+      {"BumpsXyz", "ND_convert_vector4_vector3", {}},
+      {"Normal", "ND_normalmap_float", {}},
+      {"Glow", "ND_image_color4",
+          {{TfToken("file"), File("glow.png")},
+              {TfToken("colorSpace:file"), VtValue(TfToken("srgb_texture"))}}},
+      {"GlowRgb", "ND_convert_color4_color3", {}}};
+  std::vector<Link> wires{{"Coords", "out", "Scaled", "in1"},
+      {"Scaled", "out", "Turned", "in"}, {"Turned", "out", "Moved", "in1"},
+      {"Base", "out", "BaseRgb", "in"}, {"BaseRgb", "out", "BaseTint", "in1"},
+      {"BaseTint", "out", "Surface", "base_color"}, {"Base", "out", "BaseAlpha", "in"},
+      {"BaseAlpha", "out", "AlphaFactor", "in1"}, {"AlphaFactor", "out", "Surface", "alpha"},
+      {"Orm", "out", "Roughness", "in"}, {"Roughness", "out", "Surface", "roughness"},
+      {"Orm", "out", "Metallic", "in"}, {"Metallic", "out", "Surface", "metallic"},
+      {"Bumps", "out", "BumpsXyz", "in"}, {"BumpsXyz", "out", "Normal", "in"},
+      {"Normal", "out", "Surface", "normal"}, {"Glow", "out", "GlowRgb", "in"},
+      {"GlowRgb", "out", "Surface", "emissive"}};
+  for (const char* image : {"Base", "Orm", "Bumps", "Glow"}) {
+    wires.push_back({"Moved", "out", image, "texcoord"});
+  }
+  t = TranslateGltf(P({{"alpha_mode", I(2)}, {"emissive_strength", F(2.0F)}}), plugin, wires);
+  Clean("the plugin's glTF network", t);
+  const Lotus::GltfPbr& authored = gltf(t);
+  Check(authored.base_color.texture && authored.metallic.texture &&
+            authored.roughness.texture && authored.emissive.texture &&
+            t.material.geometry.normal_texture && t.material.geometry.opacity_texture,
+      "the plugin's glTF network leaves an input without its lookup");
+  Check(t.material.geometry.texcoords == "st", "the plugin's glTF network reads another set");
+  const Lotus::TextureInput& base = *authored.base_color.texture;
+  Check(base.texture == HdLotusTextureKey("base.png", TfToken("sRGB")) &&
+            base.scale[0] == 1.0F && base.scale[1] == 0.5F && base.scale[2] == 0.25F &&
+            base.st_transform != Lotus::TextureInput{}.st_transform,
+      "the plugin's base colour is " + Describe(base));
+  Check(t.material.geometry.opacity_texture->channel == 3 &&
+            t.material.geometry.opacity_texture->scale[3] == 0.5F &&
+            t.material.geometry.opacity_texture->st_transform == base.st_transform,
+      "the plugin's alpha is " + Describe(*t.material.geometry.opacity_texture));
+  Check(authored.roughness.texture->channel == 1 && authored.metallic.texture->channel == 2 &&
+            authored.roughness.texture->texture ==
+                HdLotusTextureKey("orm.png", TfToken("raw")),
+      "the plugin's packed image is " + Describe(*authored.roughness.texture));
+  Check(authored.emissive.texture->texture == HdLotusTextureKey("glow.png", TfToken("sRGB")) &&
+            authored.emissive_strength == 2.0F,
+      "the plugin's emissive is " + Describe(*authored.emissive.texture));
+  // Vertex colour is not translated: the node is reported, and the input
+  // keeps its default.
+  t = TranslateGltf({},
+      {{"Color", "ND_geompropvalue_color3", P({{"geomprop", S("displayColor")}})},
+          {"Tint", "ND_multiply_color3", P({{"in2", V3(1.0F, 0.5F, 0.25F)}})}},
+      {{"Color", "out", "Tint", "in1"}, {"Tint", "out", "Surface", "base_color"}});
+  Diagnosed("a vertex colour", t, Kind::UnsupportedNode, "base_color", "Color");
+  ExpectValues("base_color under a vertex colour", gltf(t).base_color.value,
+      {1.0F, 1.0F, 1.0F});
+  // Occlusion does nothing in a path tracer: its graph is not read, even at
+  // a second coordinate set.
+  t = TranslateGltf({},
+      {kColour, {"Uv1", "ND_geompropvalue_vector2", P({{"geomprop", S("uv1")}})},
+          {"Ao", "ND_image_float", P({{"file", File("ao.png")}})}},
+      {{"Image", "out", "Surface", "base_color"}, {"Uv1", "out", "Ao", "texcoord"},
+          {"Ao", "out", "Surface", "occlusion"}});
+  Clean("occlusion at a second coordinate set", t);
+
+  // Every input of the definition, authored alone with a value other than
+  // its default.
+  const HdLotusNodeDefinition* surface = nullptr;
+  for (const HdLotusNodeDefinition& definition : HdLotusMaterialNodeDefinitions()) {
+    if (definition.identifier == TfToken("ND_gltf_pbr_surfaceshader")) surface = &definition;
+  }
+  Check(surface != nullptr && surface->inputs.size() == 29,
+      "the translator holds no glTF PBR definition of 29 inputs");
+  // alpha_mode alone is MASK at the default cutoff, over an alpha of 1.
+  const std::set<std::string> translated{"base_color", "metallic", "roughness", "emissive",
+      "emissive_strength", "alpha_mode"};
+  const std::set<std::string> unrepresented{"transmission", "specular", "specular_color",
+      "ior", "sheen_color", "clearcoat", "iridescence", "anisotropy_strength", "thickness",
+      "attenuation_distance", "attenuation_color", "dispersion", "normal"};
+  // Inputs that do nothing alone, and what turns them on; occlusion never
+  // does anything.
+  const std::map<std::string, std::string> governed{{"occlusion", ""},
+      {"tangent", "anisotropy_strength"}, {"alpha", "alpha_mode"},
+      {"alpha_cutoff", "alpha_mode"},
+      {"iridescence_ior", "iridescence"}, {"iridescence_thickness", "iridescence"},
+      {"sheen_roughness", "sheen_color"}, {"clearcoat_roughness", "clearcoat"},
+      {"clearcoat_normal", "clearcoat"}, {"anisotropy_rotation", "anisotropy_strength"}};
+  const auto value = [](const HdLotusNodeInputDefinition& input) {
+    // MASK, under which alpha and its cutoff both show.
+    if (input.type == TfToken("integer")) return I(1);
+    if (input.type == TfToken("float")) return F(0.375F);
+    return V3(0.375F, 0.375F, 0.375F);
+  };
+  Parameters everything;
+  for (const HdLotusNodeInputDefinition& input : surface->inputs) {
+    const std::string name = input.name.GetString();
+    everything[input.name] = value(input);
+    const HdLotusMaterialTranslation alone = TranslateGltf({{input.name, value(input)}});
+    const bool changed = !(alone.material == defaults.material);
+    if (translated.contains(name)) {
+      Check(changed && alone.diagnostics.empty(),
+          name + " is not translated: " + Describe(alone));
+    } else if (unrepresented.contains(name)) {
+      Check(!changed && alone.diagnostics.size() == 1 &&
+                alone.diagnostics.front().input == input.name &&
+                alone.diagnostics.front().kind == Kind::UnrepresentedInput,
+          name + " is not reported as unrepresented: " + Describe(alone));
+    } else {
+      const auto governor = governed.find(name);
+      Check(governor != governed.end(), name + " is in none of the test's tables");
+      Check(!changed && alone.diagnostics.empty(),
+          name + " has an effect alone: " + Describe(alone));
+      if (governor->second.empty()) continue;
+      const HdLotusNodeInputDefinition* weight = nullptr;
+      for (const HdLotusNodeInputDefinition& candidate : surface->inputs) {
+        if (candidate.name.GetString() == governor->second) weight = &candidate;
+      }
+      Check(weight != nullptr, name + "'s governor is not an input");
+      const HdLotusMaterialTranslation off = TranslateGltf({{weight->name, value(*weight)}});
+      const HdLotusMaterialTranslation on = TranslateGltf(
+          {{weight->name, value(*weight)}, {input.name, value(input)}});
+      const bool diagnosed = std::any_of(on.diagnostics.begin(), on.diagnostics.end(),
+          [&](const HdLotusMaterialDiagnostic& diagnostic) {
+            return diagnostic.input == weight->name || diagnostic.input == input.name;
+          });
+      Check(diagnosed || !(on.material == off.material),
+          name + " is neither translated nor diagnosed under " + governor->second);
+    }
+  }
+  Check(translated.size() + unrepresented.size() + governed.size() == surface->inputs.size(),
+      "the test's glTF PBR tables do not cover the definition");
+  const HdLotusMaterialTranslation all = TranslateGltf(everything);
+  std::set<TfToken> seen;
+  for (const HdLotusMaterialDiagnostic& diagnostic : all.diagnostics) {
+    Check(seen.insert(diagnostic.input).second,
+        diagnostic.input.GetString() + " is diagnosed twice: " + Describe(all));
+  }
+  Check(seen.size() == unrepresented.size(),
+      "everything at once raises " + std::to_string(seen.size()) + " diagnostics: " +
+          Describe(all));
+  t = TranslateGltf(P({{"baseColor", V3(1.0F, 0.0F, 0.0F)}}));
+  Diagnosed("an unknown glTF PBR parameter", t, Kind::UnknownInput, "baseColor", "Surface");
+}
+
 // A value's components, whatever numeric type holds it.
 std::optional<std::vector<double>> Components(const VtValue& value) {
   if (value.IsHolding<float>()) return std::vector<double>{value.UncheckedGet<float>()};
@@ -1240,10 +1499,10 @@ private:
   HdRenderPassStateSharedPtr state_;
 };
 
-// A committed stage's UsdShade network and the .mtlx document it references
-// reach the translator as the same network (contract section 3).
-void StageRoundTrip() {
-  const std::filesystem::path file = kFixtures / "graph-stage-v1.usda";
+// The materials a committed stage extracts to, by path.
+std::map<std::string, Lotus::Material> StageMaterials(
+    const std::filesystem::path& name) {
+  const std::filesystem::path file = name.is_absolute() ? name : kFixtures / name;
   const UsdStageRefPtr stage = UsdStage::Open(file.string());
   Check(stage != nullptr, "could not open " + file.string());
   HdLotusRenderDelegate delegate;
@@ -1262,7 +1521,13 @@ void StageRoundTrip() {
   scene_indices.stageSceneIndex->ApplyPendingUpdates();
   engine.Execute(index.get(), &tasks);
   const Lotus::FrameSnapshot snapshot = delegate.GetFrameSnapshot();
-  const auto& materials = snapshot.scene->materials;
+  return {snapshot.scene->materials.begin(), snapshot.scene->materials.end()};
+}
+
+// A committed stage's UsdShade network and the .mtlx document it references
+// reach the translator as the same network (contract section 3).
+void StageRoundTrip() {
+  const auto materials = StageMaterials("graph-stage-v1.usda");
   std::string keys;
   for (const auto& [key, material] : materials) keys += " " + key;
   const auto authored = materials.find("/GraphStage/Looks/Authored");
@@ -1295,6 +1560,48 @@ void StageRoundTrip() {
           " against " + Describe(base));
 }
 
+// The same for MaterialX's glTF PBR (docs/design/GLTF_PBR.md section 8.2).
+void GltfStageRoundTrip() {
+  const auto materials = StageMaterials("gltf-stage-v1.usda");
+  std::string keys;
+  for (const auto& [key, material] : materials) keys += " " + key;
+  const auto authored = materials.find("/GltfStage/Looks/Authored");
+  const auto referenced = materials.find("/GltfStage/Looks/Referenced");
+  Check(authored != materials.end() && referenced != materials.end(),
+      "the glTF stage's materials are" + keys);
+  Check(authored->second.Model() == Lotus::ShadingModel::GltfPbr,
+      "the authored glTF material has another model");
+  // What both say: half of an sRGB image, packed roughness and metallic, an
+  // emissive colour authored in sRGB with a strength, and MASK at 0.25.
+  const Lotus::GltfPbr& surface = Lotus::Gltf(authored->second);
+  Check(surface.base_color.texture && surface.roughness.texture && surface.metallic.texture,
+      "the authored glTF material has no lookups");
+  const Lotus::TextureInput& base = *surface.base_color.texture;
+  Check(base.texture.ends_with("palette.png|sRGB") &&
+            base.scale == std::array<float, 4>{0.5F, 0.5F, 0.5F, 1.0F},
+      "the authored glTF base colour is " + Describe(base));
+  Check(surface.roughness.texture->texture.ends_with("rgba.png|raw") &&
+            surface.roughness.texture->channel == 1 && surface.metallic.texture->channel == 2,
+      "the authored glTF roughness is " + Describe(*surface.roughness.texture));
+  ExpectValues("the authored glTF emissive", surface.emissive.value,
+      {Fold(std::pow((double{0.8F} + 0.055) / 1.055, 2.4)),
+          Fold(std::pow((double{0.4F} + 0.055) / 1.055, 2.4)),
+          Fold(std::pow((double{0.2F} + 0.055) / 1.055, 2.4))});
+  Check(surface.emissive_strength == 2.0F, "the authored glTF emissive strength is lost");
+  Check(authored->second.geometry.opacity == 0.6F &&
+            authored->second.geometry.opacity_threshold == 0.25F,
+      "the authored glTF alpha is " + std::to_string(authored->second.geometry.opacity) +
+          " at " + std::to_string(authored->second.geometry.opacity_threshold));
+  Check(referenced->second == authored->second,
+      "the referenced glTF .mtlx document translates differently: opacity " +
+          std::to_string(referenced->second.geometry.opacity) + " at " +
+          std::to_string(referenced->second.geometry.opacity_threshold) + ", " +
+          (referenced->second.Model() == Lotus::ShadingModel::GltfPbr &&
+                      Lotus::Gltf(referenced->second).base_color.texture
+                  ? Describe(*Lotus::Gltf(referenced->second).base_color.texture)
+                  : std::string("no base colour lookup")));
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -1306,8 +1613,10 @@ int main(int argc, char** argv) try {
   Diagnostics();
   CompoundEquivalence();
   Completeness();
+  GltfPbr();
   Definitions(dump);
   StageRoundTrip();
+  GltfStageRoundTrip();
   std::cout << "the MaterialX graph translation holds\n";
   return 0;
 } catch (const std::exception& error) {

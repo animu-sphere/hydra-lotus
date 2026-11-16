@@ -1021,6 +1021,15 @@ MTLX_INPUT_TYPES = {
         "thin_walled": "bool", "transmission": "float", "transmission_color": "color3f",
         "transmission_depth": "float", "transmission_dispersion": "float",
         "transmission_scatter": "color3f"},
+    "ND_gltf_pbr_surfaceshader": {
+        "alpha": "float", "alpha_cutoff": "float", "alpha_mode": "int",
+        "base_color": "color3f", "clearcoat": "float", "emissive": "color3f",
+        "emissive_strength": "float", "ior": "float", "metallic": "float",
+        "normal": "float3", "roughness": "float", "specular": "float",
+        "transmission": "float"},
+    "ND_image_vector4": {"file": "asset"},
+    "ND_extract_vector4": {"in": "float4", "index": "int"},
+    "ND_geompropvalue_color3": {"geomprop": "string"},
     "ND_image_color3": {"default": "color3f", "file": "asset", "texcoord": "float2",
                         "uaddressmode": "string", "vaddressmode": "string"},
     "ND_image_float": {"file": "asset"},
@@ -1033,7 +1042,8 @@ MTLX_INPUT_TYPES = {
     "ND_multiply_color3FA": {"in1": "color3f", "in2": "float"},
     "ND_power_color3FA": {"in1": "color3f", "in2": "float"},
     "ND_image_color4": {"file": "asset"},
-    "ND_gltf_colorimage": {"color": "color4f", "file": "asset"},
+    "ND_gltf_colorimage": {"color": "color4f", "file": "asset", "offset": "float2",
+                           "rotate": "float", "scale": "float2"},
     "ND_gltf_image_color3_color3_1_0": {
         "default": "color3f", "factor": "color3f", "file": "asset", "offset": "float2",
         "rotate": "float", "scale": "float2"},
@@ -1059,6 +1069,8 @@ MTLX_INPUT_TYPES = {
 }
 MTLX_INPUT_TYPES["ND_tiledimage_color3"]["uvoffset"] = "float2"
 MTLX_OUTPUT_TYPES = {
+    "ND_image_vector4": "float4", "ND_extract_vector4": "float",
+    "ND_geompropvalue_color3": "color3f",
     "ND_image_color3": "color3f", "ND_image_float": "float", "ND_image_vector3": "float3",
     "ND_tiledimage_color3": "color3f", "ND_geompropvalue_vector2": "float2",
     "ND_extract_vector3": "float", "ND_convert_vector3_color3": "color3f",
@@ -1208,7 +1220,8 @@ def mtlx_looks(root, materials):
                          f"<{path}/Preview.outputs:surface>")
             lines += [""] + shader(path, "Preview", "UsdPreviewSurface", material["preview"])
             lines += ["                token outputs:surface", "            }"]
-        lines += [""] + mtlx_shader(path, "Surface", "ND_standard_surface_surfaceshader",
+        lines += [""] + mtlx_shader(path, "Surface",
+                                    material.get("kind", "ND_standard_surface_surfaceshader"),
                                     {**material["surface"],
                                      **{f"colorSpace:{key}": space
                                         for key, space in material["spaces"].items()}},
@@ -1428,6 +1441,127 @@ def graphs():
             "        }",
         ]
         if index + 1 < len(GRAPH_LOOKS):
+            lines.append("")
+    lines += ["    }", "}", ""]
+    return "\n".join(lines)
+
+
+def gltf(surface, spaces=None, **nodes):
+    """A material whose surface is MaterialX's glTF PBR."""
+    return {**mtlx(surface, None, spaces, **nodes), "kind": "ND_gltf_pbr_surfaceshader"}
+
+
+# A glTF base colour texture as usd-gltf-plugins authors it: a colour-4
+# image, its colour and, for a factor, a product.
+GLTF_PALETTE = {"Image": image("color4", "palette.png", "srgb_texture"),
+                "Rgb": ("ND_convert_color4_color3", {"in": output("Image", OUT)})}
+GLTF_DIELECTRIC = {"metallic": 0, "roughness": 0.6}
+GLTF_FACTOR = (1, 0.5, 0.25)
+GLTF_GREY = {"base_color": (0.7, 0.7, 0.7), "metallic": 0, "roughness": 0.4}
+GLTF_TEAL = {"base_color": TEAL, "metallic": 0, "roughness": 0.5}
+GLTF_RED = {"base_color": (0.8, 0.2, 0.1), "metallic": 0, "roughness": 0.5}
+GLTF_CUTOUT = {"Image": image("color4", "cutout.png", "srgb_texture"),
+               "Rgb": ("ND_convert_color4_color3", {"in": output("Image", OUT)}),
+               "A": ("ND_extract_color4", {"in": output("Image", OUT), "index": 3})}
+# material-gltf-v1's materials (docs/design/GLTF_PBR.md section 8.3), a row
+# of five to each subject: constants; textures; normals and emission; alpha;
+# then an unlit material and inputs the model does not represent.
+GLTF_LOOKS = [
+    ("Defaults", gltf({})),
+    ("Dielectric", gltf(GLTF_RED)),
+    ("Glossy", gltf({"base_color": (0.5, 0.5, 0.5), "metallic": 0, "roughness": 0.1})),
+    ("Metal", gltf({"base_color": COPPER, "metallic": 1, "roughness": 0.3})),
+    ("Mixed", gltf({"base_color": (0.9, 0.6, 0.2), "metallic": 0.5, "roughness": 0.3})),
+
+    ("Image", gltf({**GLTF_DIELECTRIC, "base_color": output("Rgb", OUT)}, **GLTF_PALETTE)),
+    # The same tinted image in the plugin's nodes and in glTF's own.
+    ("Factor", gltf({**GLTF_DIELECTRIC, "base_color": output("Tint", OUT)},
+                    Tint=("ND_multiply_color3", {"in1": output("Rgb", OUT),
+                                                 "in2": GLTF_FACTOR}),
+                    **GLTF_PALETTE)),
+    ("ColorImage", gltf({**GLTF_DIELECTRIC, "base_color": output("Image", "outcolor")},
+                        Image=("ND_gltf_colorimage",
+                               {**PALETTE_FILE, "color": (*GLTF_FACTOR, 1)}))),
+    # Roughness from green and metallic from blue of one image.
+    ("Packed", gltf({"base_color": COPPER, "metallic": output("Metallic", OUT),
+                     "roughness": output("Roughness", OUT)},
+                    Metallic=("ND_extract_vector4", {"in": output("Orm", OUT), "index": 2}),
+                    Roughness=("ND_extract_vector4", {"in": output("Orm", OUT), "index": 1}),
+                    Orm=image("vector4", "rgba.png"))),
+    ("Rotated", gltf({**GLTF_DIELECTRIC, "base_color": output("Image", "outcolor")},
+                     Image=("ND_gltf_colorimage", {**PALETTE_FILE, **PLACED}))),
+
+    # The same normal map two ways, and on a metal.
+    ("GltfNormal", gltf({**GLTF_GREY, "normal": output("Normal", OUT)},
+                        Normal=("ND_gltf_normalmap_vector3_1_0",
+                                {"file": "./textures/tilts.png"}))),
+    ("NormalMap", gltf({**GLTF_GREY, "normal": output("Normal", OUT)},
+                       Normal=("ND_normalmap_float", {"in": output("Bumps", OUT)}),
+                       Bumps=image("vector3", "tilts.png"))),
+    ("NormalMetal", gltf({"base_color": COPPER, "metallic": 1, "roughness": 0.25,
+                          "normal": output("Normal", OUT)},
+                         Normal=("ND_gltf_normalmap_vector3_1_0",
+                                 {"file": "./textures/tilts.png"}))),
+    ("Emissive", gltf({**GLTF_GREY, "emissive": WARM})),
+    ("EmissiveMap", gltf({**GLTF_GREY, "emissive": output("Image", OUT),
+                          "emissive_strength": 2},
+                         Image=SRGB_PALETTE)),
+
+    # OPAQUE does not read its alpha.
+    ("Opaque", gltf({**GLTF_TEAL, "alpha": 0.3})),
+    ("Mask", gltf({**GLTF_DIELECTRIC, "base_color": output("Rgb", OUT),
+                   "alpha": output("A", OUT), "alpha_mode": 1}, **GLTF_CUTOUT)),
+    # Every alpha passes a cutoff of 0, and none one above 1.
+    ("MaskZero", gltf({**GLTF_TEAL, "alpha": 0.2, "alpha_mode": 1, "alpha_cutoff": 0})),
+    ("MaskAll", gltf({**GLTF_TEAL, "alpha_mode": 1, "alpha_cutoff": 1.5})),
+    ("Blend", gltf({**GLTF_DIELECTRIC, "base_color": output("Rgb", OUT),
+                    "alpha": output("A", OUT), "alpha_mode": 2}, **GLTF_CUTOUT)),
+
+    # Inputs the model does not represent leave the rest of the material.
+    ("Clearcoat", gltf({**GLTF_RED, "clearcoat": 1})),
+    ("Transmission", gltf({**GLTF_RED, "transmission": 1})),
+    # As the plugin authors KHR_materials_unlit; specular 0 is not
+    # represented, so the default specular lobe stays.
+    ("Unlit", gltf({"base_color": (0, 0, 0), "metallic": 0, "roughness": 1,
+                    "specular": 0, "emissive": TEAL})),
+    ("Ior", gltf({**GLTF_RED, "ior": 1.8})),
+    # Vertex colour is not translated: base_color keeps its default.
+    ("VertexColor", gltf({**GLTF_DIELECTRIC, "base_color": output("Tint", OUT)},
+                         Tint=("ND_multiply_color3", {"in1": output("Color", OUT),
+                                                      "in2": GLTF_FACTOR}),
+                         Color=("ND_geompropvalue_color3", {"geomprop": "displayColor"}))),
+]
+
+
+def gltf_pbr():
+    unit_st = primvar("st", UNIT)
+    sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
+    smooth = normal_attribute("normals", sphere(COARSE_SEGMENTS, COARSE_RINGS)[0])
+    spheres = {"Defaults", "Dielectric", "Glossy", "Metal", "Mixed", "NormalMetal"}
+    lines = header("MaterialGltf", "SetMaterialGltf", sphere_class() + CARD_CLASS)
+    lines += mtlx_looks("MaterialGltf", GLTF_LOOKS)
+    lines += ["", '    def Scope "Objects"', "    {"]
+    for index, (name, _) in enumerate(GLTF_LOOKS):
+        x, y = CARD_COLUMNS[index % 5], CARD_ROWS[index // 5]
+        if name == "NormalMetal":
+            extra = smooth + primvar("st", latlong((4, 2)))
+        else:
+            extra = smooth if name in spheres else unit_st
+        scale = sphere_scale if name in spheres else card_scale
+        lines += [
+            f'        def Mesh "{name}" (',
+            '            prepend apiSchemas = ["MaterialBindingAPI"]',
+            f"            prepend inherits = </{'_Sphere' if name in spheres else '_Card'}>",
+            "        )",
+            "        {",
+            f"            rel material:binding = </MaterialGltf/Looks/{name}>",
+            *extra,
+            f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
+            f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
+            '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
+            "        }",
+        ]
+        if index + 1 < len(GLTF_LOOKS):
             lines.append("")
     lines += ["    }", "}", ""]
     return "\n".join(lines)
@@ -1786,6 +1920,7 @@ FIXTURES = {
     "material-alpha-v1.usda": alpha,
     "material-mtlx-v1.usda": materialx,
     "material-graphs-v1.usda": graphs,
+    "material-gltf-v1.usda": gltf_pbr,
     "material-transmission-v1.usda": transmission,
     "material-transforms-v1.usda": transforms,
     "material-subsets-v1.usda": subsets,

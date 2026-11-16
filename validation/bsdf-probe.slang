@@ -77,10 +77,10 @@ static const int kOpScale = 6;       // rgb: the range on top
 static const int kOpAttenuate = 7;   // transmittance rgb, normal xyz, eta: the range on top
 static const int kOpAdd = 8;         // pops two ranges
 
-ComposedClosure ProbeComposed(float* program, float* table_data, float3 wo) {
+ComposedBuilder ProbeBuilder(float* program, float* table_data, float3 wo) {
   ProbeTables tables;
   tables.data = table_data;
-  ComposedClosure closure = ComposedEmpty();
+  ComposedBuilder closure = ComposedBegin();
   uint2 stack[8];
   uint depth = 0;
   int at = 0;
@@ -138,8 +138,11 @@ ComposedClosure ProbeComposed(float* program, float* table_data, float3 wo) {
       break;
     }
   }
-  ComposedFinalize(closure, wo);
   return closure;
+}
+
+ComposedClosure ProbeComposed(float* program, float* table_data, float3 wo) {
+  return ComposedFinalize(ProbeBuilder(program, table_data, wo), wo);
 }
 
 // result: ComposedEvaluate's RGB, then ComposedPdf.
@@ -168,9 +171,59 @@ __extern_cpp export int LotusProbeComposedSample(float* program, float* tables,
 // result: the whole closure's albedo toward wo as a layer above it sees it.
 __extern_cpp export void LotusProbeComposedAlbedo(float* program,
     float* tables, float* wo, float* result) {
-  const ComposedClosure closure = ProbeComposed(program, tables, Load3(wo));
-  Store3(SpectrumToRgb(ComposedAlbedo(closure, 0, closure.count, Load3(wo))),
-      result);
+  const ComposedBuilder builder = ProbeBuilder(program, tables, Load3(wo));
+  Store3(SpectrumToRgb(ComposedAlbedo(builder, 0, builder.closure.count,
+      Load3(wo))), result);
+}
+
+// --- glTF PBR (docs/design/GLTF_PBR.md section 8.1) --------------------------
+
+// m: base colour rgb, roughness, metallic. The closure the scene pass builds
+// at a hit, through the BSDF API's dispatch.
+BsdfClosure ProbeGltf(float* m, float* table_data, float3 wo) {
+  ProbeTables tables;
+  tables.data = table_data;
+  return MakeBsdfClosure(kGltfPbrClosure, MakeGltfPbrClosure(
+      MakeGltfPbrTerms(SpectrumFromRgb(Load3(m)), m[3], m[4], wo, tables),
+      wo));
+}
+
+// The same closure as a stored reservoir surface rebuilds it: from the
+// terms read back from the closure, without a table.
+BsdfClosure ProbeGltfStored(float* m, float* table_data, float3 wo) {
+  ProbeTables tables;
+  tables.data = table_data;
+  const BsdfClosure built = ProbeGltf(m, table_data, wo);
+  return MakeBsdfClosure(kGltfPbrClosure, MakeGltfPbrClosure(
+      GltfPbrTermsOf(built.composed, wo, tables), wo));
+}
+
+// result: BsdfEvaluate's RGB, then BsdfPdf.
+__extern_cpp export void LotusProbeGltfEvaluate(float* material, float* tables,
+    float* wo, float* wi, int stored, float* result) {
+  const float3 o = Load3(wo);
+  BsdfClosure closure;
+  if (stored != 0) {
+    closure = ProbeGltfStored(material, tables, o);
+  } else {
+    closure = ProbeGltf(material, tables, o);
+  }
+  Store3(SpectrumToRgb(BsdfEvaluate(closure, o, Load3(wi))), result);
+  result[3] = BsdfPdf(closure, o, Load3(wi));
+}
+
+// result: as LotusProbeSample's. Returns 1 on success.
+__extern_cpp export int LotusProbeGltfSample(float* material, float* tables,
+    float* wo, float* u, float* result) {
+  BsdfSampleResult sample;
+  const bool success = BsdfSample(ProbeGltf(material, tables, Load3(wo)),
+      Load3(wo), Load3(u), sample);
+  Store3(sample.wi, result);
+  Store3(SpectrumToRgb(sample.weight), result + 3);
+  result[6] = sample.pdf;
+  result[7] = sample.delta ? 1.0 : 0.0;
+  result[8] = sample.transmitted ? 1.0 : 0.0;
+  return success ? 1 : 0;
 }
 
 // result: the data's size, then each table's offset and node counts.

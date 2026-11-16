@@ -25,6 +25,9 @@ if(LOTUS_ENABLE_VULKAN)
   endif()
   target_sources(lotus-render-vulkan PRIVATE gpu_scene.cpp gpu_memory.cpp
     presentation.cpp)
+  # gpu_scene.cpp embeds the composed closures' albedo tables.
+  set_property(SOURCE gpu_scene.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/bsdf-albedo-tables.inc")
   target_link_libraries(lotus-render-vulkan PRIVATE Vulkan::Vulkan)
   target_compile_definitions(lotus-render-vulkan PRIVATE LOTUS_HAS_VULKAN=1)
   add_subdirectory(shaders)

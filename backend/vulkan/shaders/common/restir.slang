@@ -35,9 +35,11 @@ struct RestirReuse {
 // evaluation. Written once per frame by the temporal pass; the spatial pass
 // reads it and its output shares it, so it is stored apart from the records.
 // It stores the closure, packed per model, not the hit to re-evaluate
-// (docs/design/BSDF_API.md section 6.3). Only the preview closure exists,
-// so no model tag is stored; its reflection-side fields fill the w
-// components and the last three vectors.
+// (docs/design/BSDF_API.md section 6.3, docs/design/GLTF_PBR.md section
+// 6.4). The preview closure's reflection-side fields fill the w components
+// and the three vectors after `outgoing`; `model` holds the tag and, for
+// glTF PBR, its two table values, with base colour and alpha in
+// `base_alpha` and metallic in `dielectric_metallic`.
 struct RestirSurface {
   float4 origin;
   float4 normal; // w: dielectric_f90
@@ -48,6 +50,8 @@ struct RestirSurface {
   float4 base_alpha;
   float4 dielectric_metallic;
   float4 fresnel;
+  // x: the closure's model. glTF PBR: y E1, z the Schlick share.
+  float4 model;
   uint64_t instance_id;
   uint64_t material_id;
 };
@@ -65,8 +69,20 @@ float ReflectionPdf(BsdfClosure closure, float3 wo, float3 wi) {
   return wi.z > 0.0 ? BsdfPdf(closure, wo, wi) : 0.0;
 }
 
-// The closure's reflection-side fields, packed into a stored surface.
+// The closure's reflection-side fields, packed into a stored surface whose
+// `outgoing` is already set.
 void StoreClosure(BsdfClosure closure, inout RestirSurface surface) {
+  surface.model = float4(float(closure.model), 0.0, 0.0, 0.0);
+  if (closure.model == kGltfPbrClosure) {
+    SceneAlbedoTables tables;
+    const GltfPbrTerms terms =
+        GltfPbrTermsOf(closure.composed, surface.outgoing.xyz, tables);
+    surface.base_alpha = float4(SpectrumToRgb(terms.base_color), terms.alpha);
+    surface.dielectric_metallic = float4(0.0, 0.0, 0.0, terms.metallic);
+    surface.fresnel = float4(0.0);
+    surface.model.yz = float2(terms.e1, terms.share);
+    return;
+  }
   const PreviewClosure bsdf = closure.preview;
   surface.normal.w = bsdf.dielectric_f90;
   surface.shading_normal.w = bsdf.thin_walled ? -bsdf.transmission : bsdf.transmission;
@@ -77,6 +93,16 @@ void StoreClosure(BsdfClosure closure, inout RestirSurface surface) {
 }
 
 BsdfClosure LoadClosure(RestirSurface source) {
+  if (uint(source.model.x) == kGltfPbrClosure) {
+    GltfPbrTerms terms;
+    terms.base_color = SpectrumFromRgb(source.base_alpha.xyz);
+    terms.alpha = source.base_alpha.w;
+    terms.metallic = source.dielectric_metallic.w;
+    terms.e1 = source.model.y;
+    terms.share = source.model.z;
+    return MakeBsdfClosure(kGltfPbrClosure,
+        MakeGltfPbrClosure(terms, source.outgoing.xyz));
+  }
   PreviewClosure bsdf;
   bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
   bsdf.alpha = source.base_alpha.w;

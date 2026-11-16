@@ -65,8 +65,13 @@ static const uint kPreviewRoughnessSlot = 3;
 static const uint kPreviewMetallicSlot = 4;
 static const uint kPreviewEmissionSlot = 5;
 static const uint kPreviewSpecularColorSlot = 6;
+static const uint kGltfBaseColorSlot = 2;
+static const uint kGltfMetallicSlot = 3;
+static const uint kGltfRoughnessSlot = 4;
+static const uint kGltfEmissiveSlot = 5;
 // ShadingModel, and UsdPreviewSurface's flags (gpu_scene.hpp).
 static const uint kUsdPreviewSurface = 0;
+static const uint kGltfPbr = 1;
 static const uint kMaterialFlagShift = 8;
 static const uint kPreviewSpecularWorkflow = 1;
 static const uint kPreviewThinWalled = 2;
@@ -87,7 +92,8 @@ public struct MaterialRecord {
   public float4 geometry_normal;
   // The model's constants. UsdPreviewSurface: base colour and roughness,
   // emission and metallic, specular colour and ior, transmission colour
-  // and transmission.
+  // and transmission. glTF PBR: base colour and roughness, emissive and
+  // metallic, emissive strength.
   public float4 parameters[5];
 };
 
@@ -225,6 +231,8 @@ public struct PathConstants {
   public uint environment_background;
   // The material binding table: the lookups that MaterialInput finds.
   public TextureInputRecord* material_bindings;
+  // The composed closures' directional albedo tables (albedo.slang).
+  public float* albedo_tables;
 };
 public static const uint kBsdfSampling = 0;
 public static const uint kMisLightSampling = 1;
@@ -539,6 +547,14 @@ float TriangleArea(float3 p0, float3 p1, float3 p2) {
   return 0.5 * length(cross(p1 - p0, p2 - p0));
 }
 
+// The albedo tables as the scene passes read them: the GPU scene's buffer
+// (docs/design/GLTF_PBR.md section 6.3).
+public struct SceneAlbedoTables : IAlbedoTables {
+  public float Fetch(uint index) {
+    return path_constants.albedo_tables[index];
+  }
+};
+
 // A UsdPreviewSurface material's emission at texture coordinates `st`.
 float3 PreviewEmission(MaterialRecord material, float2 st) {
   if (!Textured(material, 1u << kPreviewEmissionSlot)) {
@@ -547,10 +563,23 @@ float3 PreviewEmission(MaterialRecord material, float2 st) {
   return max(Lookup(MaterialInput(material, kPreviewEmissionSlot), st).xyz, 0.0);
 }
 
+// A glTF PBR material's emission at texture coordinates `st`: emissive
+// times its strength.
+float3 GltfEmission(MaterialRecord material, float2 st) {
+  const float strength = material.parameters[2].x;
+  if (!Textured(material, 1u << kGltfEmissiveSlot)) {
+    return material.parameters[1].xyz * strength;
+  }
+  return max(Lookup(MaterialInput(material, kGltfEmissiveSlot), st).xyz, 0.0) *
+      strength;
+}
+
 // The material's emission at texture coordinates `st`. The GPU scene holds
-// no model but UsdPreviewSurface until the others have parameters.
+// no model but these until the others have parameters.
 float3 Emission(MaterialRecord material, float2 st) {
   switch (MaterialModel(material)) {
+  case kGltfPbr:
+    return GltfEmission(material, st);
   case kUsdPreviewSurface:
   default:
     return PreviewEmission(material, st);
@@ -1217,6 +1246,62 @@ void EvaluatePreview(MaterialRecord material, InstanceRecord instance,
   surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
 }
 
+// Evaluates a glTF PBR material at a hit, as EvaluatePreview does a
+// UsdPreviewSurface one (docs/design/GLTF_PBR.md sections 6 and 7).
+void EvaluateGltfPbr(MaterialRecord material, InstanceRecord instance,
+    Hit hit, float3 edge1, float3 edge2, float3 direction,
+    inout SurfaceHit surface) {
+  surface.base_color = material.parameters[0].xyz;
+  surface.roughness = material.parameters[0].w;
+  surface.metallic = material.parameters[1].w;
+  float3 emission = material.parameters[1].xyz * material.parameters[2].x;
+  float3 tangent_normal = material.geometry_normal.xyz;
+  // A texture lookup replaces its input's constant, clamped into the
+  // input's range.
+  if (Textured(material, (1u << kNormalSlot) | (1u << kGltfBaseColorSlot) |
+          (1u << kGltfMetallicSlot) | (1u << kGltfRoughnessSlot) |
+          (1u << kGltfEmissiveSlot))) {
+    const float2 st = HitTexcoords(instance, material, hit);
+    TextureInputRecord input = MaterialInput(material, kGltfBaseColorSlot);
+    if (input.mode != kConstantInput) {
+      surface.base_color = saturate(Lookup(input, st).xyz);
+    }
+    input = MaterialInput(material, kGltfRoughnessSlot);
+    if (input.mode != kConstantInput) {
+      surface.roughness = saturate(Lookup(input, st)[input.channel]);
+    }
+    input = MaterialInput(material, kGltfMetallicSlot);
+    if (input.mode != kConstantInput) {
+      surface.metallic = saturate(Lookup(input, st)[input.channel]);
+    }
+    emission = GltfEmission(material, st);
+    input = MaterialInput(material, kNormalSlot);
+    if (input.mode != kConstantInput) {
+      tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
+    }
+  }
+  if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
+    surface.shading_normal = MappedNormal(tangent_normal,
+        TangentFrame(instance, MaterialInput(material, kNormalSlot), hit,
+            edge1, edge2, surface.shading_normal),
+        surface.normal, direction);
+  }
+  // The closure's outgoing direction in the shading frame: only its cosine
+  // counts until a lobe is anisotropic or has a normal of its own.
+  const float cos_o = dot(surface.shading_normal, -direction);
+  const float3 wo = float3(sqrt(max(1.0 - cos_o * cos_o, 0.0)), 0.0, cos_o);
+  SceneAlbedoTables tables;
+  const GltfPbrTerms terms = MakeGltfPbrTerms(
+      SpectrumFromRgb(surface.base_color), surface.roughness,
+      surface.metallic, wo, tables);
+  surface.bsdf = MakeBsdfClosure(kGltfPbrClosure,
+      MakeGltfPbrClosure(terms, wo));
+  surface.emission = SpectrumFromRgb(emission);
+  surface.albedo = surface.base_color;
+  surface.specular_roughness = surface.roughness;
+  surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
+}
+
 // Surface hit reconstruction from the instance record and the geometry and
 // material it addresses. Interpolating the world-space corners keeps the
 // position on the triangle's plane.
@@ -1247,6 +1332,10 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
   switch (MaterialModel(material)) {
+  case kGltfPbr:
+    EvaluateGltfPbr(material, instance, hit, p1 - p0, p2 - p0, direction,
+        surface);
+    break;
   case kUsdPreviewSurface:
   default:
     EvaluatePreview(material, instance, hit, p1 - p0, p2 - p0, normal,

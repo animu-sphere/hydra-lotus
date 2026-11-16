@@ -101,6 +101,25 @@ Workload MakeWorkload(std::string_view id, const std::filesystem::path& assets) 
     work.edit_mesh = "/cornell/back";
     return work;
   }
+  if (id == "cornell-gltf-v1") {
+    // cornell-v1 with every material MaterialX's glTF PBR of the same base
+    // colour, roughness and emission: what the second shading model costs
+    // beside the first on one scene.
+    const auto materials = work.world.Commit().scene->materials;
+    for (const auto& [key, material] : materials) {
+      const Lotus::PreviewSurface& preview = Lotus::Preview(material);
+      Lotus::Material converted;
+      converted.geometry = material.geometry;
+      Lotus::GltfPbr& gltf = converted.surface.emplace<Lotus::GltfPbr>();
+      gltf.base_color.value = preview.base_color;
+      gltf.roughness.value = preview.roughness;
+      gltf.metallic.value = preview.metallic;
+      gltf.emissive.value = preview.emission;
+      work.world.SetMaterial(key, converted);
+    }
+    work.edit_mesh = "/cornell/back";
+    return work;
+  }
   if (id == "many-lights-v1") {
     work.world.RemoveMesh("/cornell/light");
     work.world.RemoveMaterial("/materials/light");

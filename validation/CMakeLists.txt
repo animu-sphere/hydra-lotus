@@ -91,9 +91,14 @@ if(LOTUS_ENABLE_VULKAN)
     COMMAND "${LOTUS_SLANGC_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/bsdf-probe.slang"
       -I "${_lotus_shader_root}" -target cpp -warnings-as-errors all
+      # The deepest stack the tests compose; the scene passes carry the
+      # implemented models' (composed.slang).
+      -DLOTUS_MAX_LOBES=6 -DLOTUS_COMPOSED_FULL=1
       -o "${_lotus_bsdf_probe}"
     DEPENDS bsdf-probe.slang
       "${_lotus_shader_root}/bsdf/bsdf.slang"
+      "${_lotus_shader_root}/bsdf/preview.slang"
+      "${_lotus_shader_root}/bsdf/gltf_pbr.slang"
       "${_lotus_shader_root}/bsdf/lobes.slang"
       "${_lotus_shader_root}/bsdf/albedo.slang"
       "${_lotus_shader_root}/bsdf/composed.slang"
@@ -111,8 +116,8 @@ if(LOTUS_ENABLE_VULKAN)
   find_package(Threads REQUIRED)
   # The composed closures' albedo tables (docs/design/LAYERED_BSDF.md
   # section 5.6) are committed data: lotus-bsdf-tables regenerates
-  # bsdf-albedo-tables.inc from the lobes, and lotus-bsdf-test checks that
-  # it still matches them.
+  # backend/vulkan/bsdf-albedo-tables.inc, which the GPU scene uploads,
+  # from the lobes, and lotus-bsdf-test checks that it still matches them.
   add_executable(lotus-bsdf-tables bsdf-tables.cpp)
   target_link_libraries(lotus-bsdf-tables PRIVATE lotus-bsdf-probe
     Lotus::Warnings Threads::Threads)
@@ -120,6 +125,8 @@ if(LOTUS_ENABLE_VULKAN)
   add_executable(lotus-bsdf-test bsdf-test.cpp)
   target_link_libraries(lotus-bsdf-test PRIVATE lotus-bsdf-probe Lotus::Warnings)
   target_compile_features(lotus-bsdf-test PRIVATE cxx_std_20)
+  target_include_directories(lotus-bsdf-test PRIVATE
+    "${PROJECT_SOURCE_DIR}/backend/vulkan")
   target_link_libraries(lotus-bsdf-test PRIVATE Threads::Threads)
   add_test(NAME lotus-renderer-bsdf COMMAND lotus-bsdf-test)
   lotus_test_tier(fast lotus-renderer-bsdf)

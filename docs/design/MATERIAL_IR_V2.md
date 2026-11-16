@@ -82,7 +82,7 @@ enum class ShadingModel : std::uint32_t {
 };
 
 struct PreviewSurface { /* today's fields, names unchanged */ };
-struct GltfPbr { /* LOTUS-MATERIALX-05 */ };
+struct GltfPbr { /* glTF PBR core: GLTF_PBR.md section 4 */ };
 struct StandardSurface { /* LOTUS-MATERIALX-07 */ };
 struct OpenPbr { /* LOTUS-MATERIALX-08 */ };
 
@@ -271,7 +271,9 @@ reuse stores the closure. The packing rule:
   (LOTUS-MATERIALX-05) adds the tag and grows the record to the largest
   implemented model's packed closure, reporting the growth; a projected
   preview-like closure is the named fallback if LOTUS-MATERIALX-10
-  measures the memory as unacceptable.
+  measures the memory as unacceptable. **Done** by
+  [glTF PBR §6.4](GLTF_PBR.md#64-the-stored-reservoir-surface): 144 bytes,
+  one `float4` more for the tag and glTF PBR's table values.
 
 ## 7. Host-side consumers
 

@@ -11,10 +11,12 @@
 namespace LotusHeadless {
 
 // Versioned procedural fixtures shared with the viewport. The first six
-// retain the original benchmark's order and geometry.
-inline constexpr std::array<std::string_view, 7> kWorkloadIds{
+// retain the original benchmark's order and geometry; the others run only
+// when named.
+inline constexpr std::array<std::string_view, 8> kWorkloadIds{
     "cornell-v1", "textured-v1", "instanced-v1", "geometry-v1",
-    "lights-v1", "environment-v1", "many-lights-v1"};
+    "lights-v1", "environment-v1", "many-lights-v1", "cornell-gltf-v1"};
+inline constexpr std::size_t kDefaultWorkloads = 6;
 
 inline bool KnownWorkload(std::string_view id) {
   for (const auto known : kWorkloadIds) if (known == id) return true;

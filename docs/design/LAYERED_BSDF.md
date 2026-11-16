@@ -222,7 +222,11 @@ keeps its weights with the `wo` it was built for.
 (OpenPBR's fuzz, coat, specular, metal, transmission and diffuse make six).
 Its register cost in the wavefront kernel is LOTUS-MATERIALX-05's
 measurement, with [BSDF API §3](BSDF_API.md#3-the-functions)'s
-representation question.
+representation question. **Measured**
+([glTF PBR §6.2](GLTF_PBR.md#62-bsdfclosure-with-two-representations)):
+the scene passes carry the largest list an implemented model builds, three
+lobes with glTF PBR, and leave out the lobe kinds and operations no
+implemented model uses; the CPU probe compiles six lobes and everything.
 
 ### 5.3 Normals
 
@@ -299,7 +303,8 @@ same data on the GPU and in the CPU test:
   `1e-3`; the thin-wall and leaving sheets do not everywhere (§11.2).
 - **Storage.** On the GPU, one read-only storage buffer, interpolated in
   the shader (§11.1), bound by LOTUS-MATERIALX-05 when a model first reads
-  it. Not `static const` arrays in Slang: dynamically indexed
+  it ([glTF PBR §6.3](GLTF_PBR.md#63-albedo-tables-on-the-gpu): uploaded
+  once, read through its device address). Not `static const` arrays in Slang: dynamically indexed
   constant arrays can be copied into per-invocation memory by the SPIR-V
   compiler. In the CPU test, the probe binds the same data.
 
