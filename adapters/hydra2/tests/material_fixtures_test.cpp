@@ -441,17 +441,23 @@ int main(int argc, char** argv) try {
     Check(stage != nullptr, "could not open " + file.string());
 
     if (!gpu) {
+      // Each step is flushed, so that a crash names the fixture and the
+      // step it happened in.
+      std::cout << stem << ": extracting" << std::endl;
       Session session(fixture, stage, {}, false);
       session.Render();
+      std::cout << stem << ": building the mirror" << std::endl;
       Lotus::RenderWorld world;
       fixture.set(world);
+      std::cout << stem << ": comparing" << std::endl;
       const Lotus::FrameSnapshot snapshot = session.Delegate().GetFrameSnapshot();
       const std::size_t inexact = ExpectMirror(snapshot, world.Commit());
       if (stem == "material-graphs-v1") ExpectGraphPairs(*snapshot.scene);
       if (stem == "material-gltf-v1") ExpectGltfPairs(*snapshot.scene);
       if (stem == "material-gltf-extensions-v1") ExpectGltfExtensionPairs(*snapshot.scene);
       std::cout << stem << " extracts to its mirror; " << inexact
-                << " transform, camera, position or normal sets differ by rounding\n";
+                << " transform, camera, position or normal sets differ by rounding"
+                << std::endl;
       continue;
     }
 

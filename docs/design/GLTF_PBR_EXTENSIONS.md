@@ -8,7 +8,7 @@ owner: hydra-lotus
 > Status: **accepted**, 2026-11-16, as written, and
 > [implemented](../reports/2026-11-17-gltf-pbr-extensions.md) with the
 > [changes found in implementation](#11-changes-found-in-implementation),
-> which await review. This is
+> accepted 2026-11-17. This is
 > LOTUS-MATERIALX-06's contract, written before any code: the
 > [P1 features](MATERIALX_SHADING_MODELS.md#phase-a--foundation-and-gltf-pbr)
 > of MaterialX's glTF PBR surface — index of refraction, specular weight
@@ -533,7 +533,8 @@ Accepted as written, 2026-11-16:
 ## 11. Changes found in implementation
 
 LOTUS-MATERIALX-06's implementation departs from the text above in these
-points, which await review; the
+points. They were accepted in review, 2026-11-17, and supersede the text
+they amend; the
 [report](../reports/2026-11-17-gltf-pbr-extensions.md#changes-to-the-contract)
 gives the measurements.
 

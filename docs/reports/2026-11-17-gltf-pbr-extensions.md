@@ -13,8 +13,8 @@ inputs, `material-gltf-extensions-v1` is committed with references under
 both integrators and agrees between Hydra and headless, and every reference
 that holds no glTF material is unchanged
 ([acceptance](../design/GLTF_PBR_EXTENSIONS.md#9-acceptance-for-lotus-materialx-06)).
-Seven [changes found in implementation](#changes-to-the-contract) await
-review.
+Seven [changes found in implementation](#changes-to-the-contract) were
+accepted in review, 2026-11-17.
 
 ## What changed
 
@@ -100,7 +100,7 @@ the stored reservoir surface from 144 to 160: temporal reuse from 640 to
 
 Listed in the
 [contract](../design/GLTF_PBR_EXTENSIONS.md#11-changes-found-in-implementation),
-awaiting review.
+accepted in review, 2026-11-17.
 
 1. **The sheen is normalized where its albedo exceeds 1.** The lobe's
    quadrature gives 5.59 at the smallest cosine and roughness of the
