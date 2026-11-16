@@ -31,15 +31,16 @@ struct RestirReuse {
 [[vk::binding(19, 0)]] RWStructuredBuffer<RestirReuse> spatial_reservoirs;
 [[vk::binding(20, 0)]] RWStructuredBuffer<uint4> spatial_sources;
 
-// 128-byte exact jittered source surface: its target function for support
+// 160-byte exact jittered source surface: its target function for support
 // evaluation. Written once per frame by the temporal pass; the spatial pass
 // reads it and its output shares it, so it is stored apart from the records.
 // It stores the closure, packed per model, not the hit to re-evaluate
 // (docs/design/BSDF_API.md section 6.3, docs/design/GLTF_PBR.md section
 // 6.4). The preview closure's reflection-side fields fill the w components
-// and the three vectors after `outgoing`; `model` holds the tag and, for
-// glTF PBR, its two table values, with base colour and alpha in
-// `base_alpha` and metallic in `dielectric_metallic`.
+// and the three vectors after `outgoing`; `model` holds the tag. A glTF
+// PBR surface keeps its closure's terms (gltf_pbr.slang's PackGltfPbrTerms,
+// docs/design/GLTF_PBR_EXTENSIONS.md section 6.7) in the same lanes and in
+// `extension`.
 struct RestirSurface {
   float4 origin;
   float4 normal; // w: dielectric_f90
@@ -50,8 +51,10 @@ struct RestirSurface {
   float4 base_alpha;
   float4 dielectric_metallic;
   float4 fresnel;
-  // x: the closure's model. glTF PBR: y E1, z the Schlick share.
+  // x: the closure's model.
   float4 model;
+  // glTF PBR's terms beyond the lanes above.
+  float4 extension;
   uint64_t instance_id;
   uint64_t material_id;
 };
@@ -70,17 +73,25 @@ float ReflectionPdf(BsdfClosure closure, float3 wo, float3 wi) {
 }
 
 // The closure's reflection-side fields, packed into a stored surface whose
-// `outgoing` is already set.
-void StoreClosure(BsdfClosure closure, inout RestirSurface surface) {
+// `outgoing` is already set. glTF PBR's 22 terms fill the lanes the preview
+// packing uses and `extension`.
+void StoreClosure(SurfaceHit hit, inout RestirSurface surface) {
+  const BsdfClosure closure = hit.bsdf;
   surface.model = float4(float(closure.model), 0.0, 0.0, 0.0);
+  surface.extension = float4(0.0);
   if (closure.model == kGltfPbrClosure) {
-    SceneAlbedoTables tables;
-    const GltfPbrTerms terms =
-        GltfPbrTermsOf(closure.composed, surface.outgoing.xyz, tables);
-    surface.base_alpha = float4(SpectrumToRgb(terms.base_color), terms.alpha);
-    surface.dielectric_metallic = float4(0.0, 0.0, 0.0, terms.metallic);
-    surface.fresnel = float4(0.0);
-    surface.model.yz = float2(terms.e1, terms.share);
+    float lanes[kGltfPbrLanes];
+    PackGltfPbrTerms(hit.gltf, lanes);
+    surface.base_alpha = float4(lanes[0], lanes[1], lanes[2], lanes[3]);
+    surface.dielectric_metallic =
+        float4(lanes[7], lanes[8], lanes[9], lanes[4]);
+    surface.model.yz = float2(lanes[5], lanes[6]);
+    surface.model.w = lanes[10];
+    surface.normal.w = lanes[11];
+    surface.shading_normal.w = lanes[12];
+    surface.outgoing.w = lanes[13];
+    surface.fresnel = float4(lanes[14], lanes[15], lanes[16], lanes[20]);
+    surface.extension = float4(lanes[17], lanes[18], lanes[19], lanes[21]);
     return;
   }
   const PreviewClosure bsdf = closure.preview;
@@ -94,14 +105,31 @@ void StoreClosure(BsdfClosure closure, inout RestirSurface surface) {
 
 BsdfClosure LoadClosure(RestirSurface source) {
   if (uint(source.model.x) == kGltfPbrClosure) {
-    GltfPbrTerms terms;
-    terms.base_color = SpectrumFromRgb(source.base_alpha.xyz);
-    terms.alpha = source.base_alpha.w;
-    terms.metallic = source.dielectric_metallic.w;
-    terms.e1 = source.model.y;
-    terms.share = source.model.z;
+    float lanes[kGltfPbrLanes];
+    lanes[0] = source.base_alpha.x;
+    lanes[1] = source.base_alpha.y;
+    lanes[2] = source.base_alpha.z;
+    lanes[3] = source.base_alpha.w;
+    lanes[4] = source.dielectric_metallic.w;
+    lanes[5] = source.model.y;
+    lanes[6] = source.model.z;
+    lanes[7] = source.dielectric_metallic.x;
+    lanes[8] = source.dielectric_metallic.y;
+    lanes[9] = source.dielectric_metallic.z;
+    lanes[10] = source.model.w;
+    lanes[11] = source.normal.w;
+    lanes[12] = source.shading_normal.w;
+    lanes[13] = source.outgoing.w;
+    lanes[14] = source.fresnel.x;
+    lanes[15] = source.fresnel.y;
+    lanes[16] = source.fresnel.z;
+    lanes[17] = source.extension.x;
+    lanes[18] = source.extension.y;
+    lanes[19] = source.extension.z;
+    lanes[20] = source.fresnel.w;
+    lanes[21] = source.extension.w;
     return MakeBsdfClosure(kGltfPbrClosure,
-        MakeGltfPbrClosure(terms, source.outgoing.xyz));
+        MakeGltfPbrClosure(UnpackGltfPbrTerms(lanes), source.outgoing.xyz));
   }
   PreviewClosure bsdf;
   bsdf.base_color = SpectrumFromRgb(source.base_alpha.xyz);
@@ -290,7 +318,7 @@ public void WriteTemporalReservoir(uint2 pixel, RayDesc ray, inout uint camera_r
     receiver.normal = float4(surface.normal, 0.0);
     receiver.shading_normal = float4(surface.shading_normal, 0.0);
     receiver.outgoing = float4(wo, 0.0);
-    StoreClosure(surface.bsdf, receiver);
+    StoreClosure(surface, receiver);
     TemporalInstanceIdentity(hit.instance, receiver.instance_id, receiver.material_id);
     uint previous_index;
     if (path_constants.restir_history != 0 && (result.pixel.flags & 2) == 0 &&

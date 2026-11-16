@@ -812,23 +812,25 @@ the resolved `RestirPixel`, explicit `normalization`, `supporting_candidates`,
 `temporal_row_pitch` is `width * sizeof(RestirReusePixel)`. `history_available`
 means a compatible preceding frame exists, not that every pixel accepted it.
 
-Private GPU history stores the 64-byte records apart from the 144-byte
+Private GPU history stores the 64-byte records apart from the 160-byte
 source shading data (exact jittered origin and view depth, normals, outgoing
 direction, the closure and identities). The closure is packed per shading
-model behind a model tag ([glTF PBR §6.4](../design/GLTF_PBR.md#64-the-stored-reservoir-surface)):
+model behind a model tag ([glTF PBR §6.4](../design/GLTF_PBR.md#64-the-stored-reservoir-surface),
+[extensions §6.7](../design/GLTF_PBR_EXTENSIONS.md#67-the-stored-reservoir-surface)):
 `UsdPreviewSurface`'s evaluated BSDF, with a transmitting surface's
 transmitted share, negated for a thin wall, and its relative index, negated
-when smooth, in two otherwise unused lanes; and glTF PBR's base colour,
-alpha, metallic and its two albedo-table values at the stored outgoing
-direction, from which its lobes are rebuilt without reading a table. Targets
+when smooth, in two otherwise unused lanes; and glTF PBR's 22 terms — its
+inputs reduced to what its lobes read, the coat's normal by two components,
+and every albedo-table value at the stored outgoing direction — from which
+its lobes are rebuilt without reading a table. Targets
 are reflection-side, and a fully delta surface keeps empty reservoirs
 ([transmission contract](../design/TRANSMISSION.md#8-reservoirs-and-temporal-inputs)). The temporal pass writes each
 frame's surfaces once into a current/previous pair; spatial reuse reads them
 and its output shares them, and they are never read back
 ([evidence](../reports/2026-10-26-reservoir-history-split.md)). Two record
 buffers, their two-frame readback mirror and the surface pair add
-544 bytes/pixel; with initial storage/mirror, fresh capacity totals
-640 bytes/pixel when frames read back, and 464 device bytes when they do not:
+576 bytes/pixel; with initial storage/mirror, fresh capacity totals
+672 bytes/pixel when frames read back, and 496 device bytes when they do not:
 mirrors are allocated only by the first frame with `read_back`. Allocated
 capacity remains retained across smaller targets and mode switches and is
 included in `reservoir_bytes`. Shared temporal buffers are reported separately.
@@ -923,7 +925,7 @@ selected spatial source. The source-index diagnostic records all participants.
 
 The immutable input records and their readback add 128 bytes/pixel; source-index
 storage and readback add 32. With initial, two-frame history and surface allocations,
-fresh spatial capacity totals 800 bytes/pixel when frames read back (544
+fresh spatial capacity totals 832 bytes/pixel when frames read back (576
 without the mirrors), excluding shared temporal metadata. Capacities remain retained after smaller targets and mode switches.
 `spatial_gpu_ms` times only the spatial pass, including target/support evaluation
 and selected visibility, excluding readback. `temporal_gpu_ms` still includes

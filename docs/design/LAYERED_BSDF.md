@@ -224,9 +224,12 @@ Its register cost in the wavefront kernel is LOTUS-MATERIALX-05's
 measurement, with [BSDF API §3](BSDF_API.md#3-the-functions)'s
 representation question. **Measured**
 ([glTF PBR §6.2](GLTF_PBR.md#62-bsdfclosure-with-two-representations)):
-the scene passes carry the largest list an implemented model builds, three
-lobes with glTF PBR, and leave out the lobe kinds and operations no
-implemented model uses; the CPU probe compiles six lobes and everything.
+the scene passes carry the largest list an implemented model builds, six
+lobes with glTF PBR's extensions
+([§6.6](GLTF_PBR_EXTENSIONS.md#66-what-the-scene-passes-compile)), and
+leave out the dielectric's refraction, thin wall and delta paths and
+attenuation, which no implemented model uses; the CPU probe compiles
+everything.
 
 ### 5.3 Normals
 

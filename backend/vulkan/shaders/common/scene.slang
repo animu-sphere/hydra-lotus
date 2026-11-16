@@ -69,6 +69,14 @@ static const uint kGltfBaseColorSlot = 2;
 static const uint kGltfMetallicSlot = 3;
 static const uint kGltfRoughnessSlot = 4;
 static const uint kGltfEmissiveSlot = 5;
+static const uint kGltfSpecularSlot = 6;
+static const uint kGltfSpecularColorSlot = 7;
+static const uint kGltfTransmissionSlot = 8;
+static const uint kGltfClearcoatSlot = 9;
+static const uint kGltfClearcoatRoughnessSlot = 10;
+static const uint kGltfClearcoatNormalSlot = 11;
+static const uint kGltfSheenColorSlot = 12;
+static const uint kGltfSheenRoughnessSlot = 13;
 // ShadingModel, and UsdPreviewSurface's flags (gpu_scene.hpp).
 static const uint kUsdPreviewSurface = 0;
 static const uint kGltfPbr = 1;
@@ -92,9 +100,11 @@ public struct MaterialRecord {
   public float4 geometry_normal;
   // The model's constants. UsdPreviewSurface: base colour and roughness,
   // emission and metallic, specular colour and ior, transmission colour
-  // and transmission. glTF PBR: base colour and roughness, emissive and
-  // metallic, emissive strength.
-  public float4 parameters[5];
+  // and transmission. glTF PBR: base colour and roughness; emissive and
+  // metallic; emissive strength, the dielectric's reflectance at normal
+  // incidence, specular and transmission; specular colour and clearcoat;
+  // sheen colour and roughness; clearcoat roughness and ior.
+  public float4 parameters[6];
 };
 
 // Mirrors GpuLightRecord in gpu_scene.hpp: one emissive triangle of the
@@ -296,6 +306,9 @@ public struct SurfaceHit {
   public float specular_share;
   // The closure of the hit's shading model (docs/design/BSDF_API.md).
   public BsdfClosure bsdf;
+  // What a glTF PBR hit's closure was built from, which a stored reservoir
+  // surface keeps (docs/design/GLTF_PBR_EXTENSIONS.md section 6.7).
+  public GltfPbrTerms gltf;
   public Spectrum emission;
 };
 
@@ -1246,8 +1259,23 @@ void EvaluatePreview(MaterialRecord material, InstanceRecord instance,
   surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
 }
 
+// A scalar glTF PBR input in [0, 1]: its lookup's channel where the slot is
+// textured, its constant otherwise.
+float GltfScalar(MaterialRecord material, uint slot, float2 st,
+    float constant) {
+  if (!Textured(material, 1u << slot)) {
+    return constant;
+  }
+  const TextureInputRecord input = MaterialInput(material, slot);
+  if (input.mode == kConstantInput) {
+    return constant;
+  }
+  return saturate(Lookup(input, st)[input.channel]);
+}
+
 // Evaluates a glTF PBR material at a hit, as EvaluatePreview does a
-// UsdPreviewSurface one (docs/design/GLTF_PBR.md sections 6 and 7).
+// UsdPreviewSurface one (docs/design/GLTF_PBR.md sections 6 and 7,
+// GLTF_PBR_EXTENSIONS.md section 6).
 void EvaluateGltfPbr(MaterialRecord material, InstanceRecord instance,
     Hit hit, float3 edge1, float3 edge2, float3 direction,
     inout SurfaceHit surface) {
@@ -1256,6 +1284,19 @@ void EvaluateGltfPbr(MaterialRecord material, InstanceRecord instance,
   surface.metallic = material.parameters[1].w;
   float3 emission = material.parameters[1].xyz * material.parameters[2].x;
   float3 tangent_normal = material.geometry_normal.xyz;
+  // The extensions' inputs.
+  const float dielectric_f0 = material.parameters[2].y;
+  float specular = material.parameters[2].z;
+  float transmission = material.parameters[2].w;
+  float3 specular_color = material.parameters[3].xyz;
+  float clearcoat = material.parameters[3].w;
+  float3 sheen_color = material.parameters[4].xyz;
+  float sheen_roughness = material.parameters[4].w;
+  float clearcoat_roughness = material.parameters[5].x;
+  // The coat lies about the mesh's shading normal unless it has a map of
+  // its own; the base's map does not move it.
+  const float3 mesh_normal = surface.shading_normal;
+  float3 coat_tangent_normal = float3(0.0, 0.0, 1.0);
   // A texture lookup replaces its input's constant, clamped into the
   // input's range.
   if (Textured(material, (1u << kNormalSlot) | (1u << kGltfBaseColorSlot) |
@@ -1280,26 +1321,85 @@ void EvaluateGltfPbr(MaterialRecord material, InstanceRecord instance,
       tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
     }
   }
+  if (Textured(material, (1u << kGltfSpecularSlot) |
+          (1u << kGltfSpecularColorSlot) | (1u << kGltfTransmissionSlot) |
+          (1u << kGltfClearcoatSlot) | (1u << kGltfClearcoatRoughnessSlot) |
+          (1u << kGltfClearcoatNormalSlot) | (1u << kGltfSheenColorSlot) |
+          (1u << kGltfSheenRoughnessSlot))) {
+    const float2 st = HitTexcoords(instance, material, hit);
+    specular = GltfScalar(material, kGltfSpecularSlot, st, specular);
+    transmission =
+        GltfScalar(material, kGltfTransmissionSlot, st, transmission);
+    clearcoat = GltfScalar(material, kGltfClearcoatSlot, st, clearcoat);
+    clearcoat_roughness = GltfScalar(material, kGltfClearcoatRoughnessSlot, st,
+        clearcoat_roughness);
+    sheen_roughness =
+        GltfScalar(material, kGltfSheenRoughnessSlot, st, sheen_roughness);
+    TextureInputRecord input = MaterialInput(material, kGltfSpecularColorSlot);
+    if (Textured(material, 1u << kGltfSpecularColorSlot) &&
+        input.mode != kConstantInput) {
+      specular_color = max(Lookup(input, st).xyz, 0.0);
+    }
+    input = MaterialInput(material, kGltfSheenColorSlot);
+    if (Textured(material, 1u << kGltfSheenColorSlot) &&
+        input.mode != kConstantInput) {
+      sheen_color = saturate(Lookup(input, st).xyz);
+    }
+    input = MaterialInput(material, kGltfClearcoatNormalSlot);
+    if (Textured(material, 1u << kGltfClearcoatNormalSlot) &&
+        input.mode != kConstantInput) {
+      coat_tangent_normal = clamp(Lookup(input, st).xyz, -1.0, 1.0);
+    }
+  }
   if (any(tangent_normal != float3(0.0, 0.0, 1.0))) {
     surface.shading_normal = MappedNormal(tangent_normal,
         TangentFrame(instance, MaterialInput(material, kNormalSlot), hit,
             edge1, edge2, surface.shading_normal),
         surface.normal, direction);
   }
-  // The closure's outgoing direction in the shading frame: only its cosine
-  // counts until a lobe is anisotropic or has a normal of its own.
+  // The closure's outgoing direction in the shading frame. Without a coat
+  // only its cosine counts: no lobe is anisotropic or has a normal of its
+  // own.
   const float cos_o = dot(surface.shading_normal, -direction);
-  const float3 wo = float3(sqrt(max(1.0 - cos_o * cos_o, 0.0)), 0.0, cos_o);
-  SceneAlbedoTables tables;
-  const GltfPbrTerms terms = MakeGltfPbrTerms(
+  float3 wo = float3(sqrt(max(1.0 - cos_o * cos_o, 0.0)), 0.0, cos_o);
+  GltfPbrInputs inputs = MakeGltfPbrInputs(
       SpectrumFromRgb(surface.base_color), surface.roughness,
-      surface.metallic, wo, tables);
+      surface.metallic);
+  inputs.dielectric_f0 = dielectric_f0;
+  inputs.specular = specular;
+  inputs.specular_color = SpectrumFromRgb(specular_color);
+  inputs.transmission = transmission;
+  inputs.clearcoat = clearcoat;
+  inputs.clearcoat_roughness = clearcoat_roughness;
+  inputs.sheen_color = SpectrumFromRgb(sheen_color);
+  inputs.sheen_roughness = sheen_roughness;
+  if (clearcoat > 0.0) {
+    // The coat's normal in the frame the integrators evaluate the closure
+    // in, which is a function of the shading normal alone.
+    float3 coat_normal = mesh_normal;
+    if (any(coat_tangent_normal != float3(0.0, 0.0, 1.0))) {
+      coat_normal = MappedNormal(coat_tangent_normal,
+          TangentFrame(instance,
+              MaterialInput(material, kGltfClearcoatNormalSlot), hit, edge1,
+              edge2, mesh_normal),
+          surface.normal, direction);
+    }
+    const ShadingFrame basis = MakeShadingFrame(surface.shading_normal);
+    wo.xy = basis.ToLocal(-direction).xy;
+    inputs.clearcoat_normal = normalize(basis.ToLocal(coat_normal));
+  }
+  SceneAlbedoTables tables;
+  surface.gltf = MakeGltfPbrTerms(inputs, wo, tables);
   surface.bsdf = MakeBsdfClosure(kGltfPbrClosure,
-      MakeGltfPbrClosure(terms, wo));
+      MakeGltfPbrClosure(surface.gltf, wo));
   surface.emission = SpectrumFromRgb(emission);
   surface.albedo = surface.base_color;
   surface.specular_roughness = surface.roughness;
-  surface.specular_share = surface.metallic + 0.04 * (1.0 - surface.metallic);
+  // The base's principal lobe: the metal, and the dielectric's reflectance
+  // at normal incidence.
+  const float3 f0 = SpectrumToRgb(surface.gltf.f0);
+  surface.specular_share = surface.metallic +
+      max(f0.x, max(f0.y, f0.z)) * (1.0 - surface.metallic);
 }
 
 // Surface hit reconstruction from the instance record and the geometry and
@@ -1331,6 +1431,9 @@ public SurfaceHit ReconstructHit(Hit hit, float3 direction) {
   }
   const MaterialRecord material =
       path_constants.materials[instance.material_slot];
+  SceneAlbedoTables no_tables;
+  surface.gltf = MakeGltfPbrTerms(MakeGltfPbrInputs(SpectrumConstant(0.0),
+      1.0, 0.0), float3(0.0, 0.0, -1.0), no_tables);
   switch (MaterialModel(material)) {
   case kGltfPbr:
     EvaluateGltfPbr(material, instance, hit, p1 - p0, p2 - p0, direction,

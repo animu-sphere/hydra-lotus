@@ -141,8 +141,8 @@ void SpatialArithmetic(OffscreenRenderer& renderer, Integrator integrator,
       const auto actual = f.Temporal({}, temporal);
       Check(actual.restir.spatial.size() == 4096 && actual.restir.spatial_sources.size() == 4096 &&
           actual.restir.spatial_row_pitch == 64 * sizeof(RestirReusePixel), "spatial debug extent");
-      // Temporal's 640 plus the spatial input and sources with their mirrors.
-      Check(actual.restir.reservoir_bytes == 800 * 4096, "spatial memory accounting");
+      // Temporal's 672 plus the spatial input and sources with their mirrors.
+      Check(actual.restir.reservoir_bytes == 832 * 4096, "spatial memory accounting");
       if (actual.restir.timestamp_available)
         Check(actual.restir.spatial_gpu_ms > 0, "spatial timestamp missing");
       Check(actual.restir.history_available == (temporal && frame != 0), "spatial temporal availability");
@@ -452,7 +452,7 @@ void TemporalArithmetic(OffscreenRenderer& renderer, Integrator integrator) {
         actual.restir.history_available == (frame != 0), "temporal reservoir publication");
     // Initial 48 + 48, two 64-byte histories and their mirror, two 128-byte
     // surfaces without one.
-    Check(actual.restir.reservoir_bytes == 640 * 4096, "temporal reservoir memory accounting");
+    Check(actual.restir.reservoir_bytes == 672 * 4096, "temporal reservoir memory accounting");
     if (actual.restir.timestamp_available)
       Check(actual.restir.temporal_gpu_ms > 0, "temporal reservoir timestamp");
     if (frame != 0)

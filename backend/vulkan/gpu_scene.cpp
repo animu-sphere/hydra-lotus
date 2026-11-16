@@ -861,7 +861,23 @@ bool ValidGltfPbr(const GltfPbr& material) {
          ValidTextureInput(material.base_color.texture, true) &&
          ValidTextureInput(material.roughness.texture, false) &&
          ValidTextureInput(material.metallic.texture, false) &&
-         ValidTextureInput(material.emissive.texture, true);
+         ValidTextureInput(material.emissive.texture, true) &&
+         std::isfinite(material.ior) && material.ior >= 1.0F &&
+         unit(material.specular.value) &&
+         ValidRadiance(material.specular_color.value) &&
+         unit(material.transmission.value) && unit(material.clearcoat.value) &&
+         unit(material.clearcoat_roughness.value) &&
+         std::all_of(material.sheen_color.value.begin(),
+             material.sheen_color.value.end(), unit) &&
+         unit(material.sheen_roughness.value) &&
+         ValidTextureInput(material.specular.texture, false) &&
+         ValidTextureInput(material.specular_color.texture, true) &&
+         ValidTextureInput(material.transmission.texture, false) &&
+         ValidTextureInput(material.clearcoat.texture, false) &&
+         ValidTextureInput(material.clearcoat_roughness.texture, false) &&
+         ValidTextureInput(material.clearcoat_normal_texture, true) &&
+         ValidTextureInput(material.sheen_color.texture, true) &&
+         ValidTextureInput(material.sheen_roughness.texture, false);
 }
 
 // Standard Surface and OpenPBR have no parameters until their tasks, so the
@@ -2039,6 +2055,20 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
             record.parameters[1]);
         record.parameters[1][3] = gltf->metallic.value;
         record.parameters[2][0] = gltf->emissive_strength;
+        // The dielectric's reflectance at normal incidence, in double so
+        // that the default index gives the float nearest 0.04.
+        const double root = (1.0 - double(gltf->ior)) / (1.0 + double(gltf->ior));
+        record.parameters[2][1] = static_cast<float>(root * root);
+        record.parameters[2][2] = gltf->specular.value;
+        record.parameters[2][3] = gltf->transmission.value;
+        std::copy(gltf->specular_color.value.begin(),
+            gltf->specular_color.value.end(), record.parameters[3]);
+        record.parameters[3][3] = gltf->clearcoat.value;
+        std::copy(gltf->sheen_color.value.begin(),
+            gltf->sheen_color.value.end(), record.parameters[4]);
+        record.parameters[4][3] = gltf->sheen_roughness.value;
+        record.parameters[5][0] = gltf->clearcoat_roughness.value;
+        record.parameters[5][1] = gltf->ior;
       } else {
         const PreviewSurface& preview = Preview(material);
         record.model_flags |=
@@ -2658,6 +2688,16 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
           gltf.emissive.value.begin());
       gltf.metallic.value = record.parameters[1][3];
       gltf.emissive_strength = record.parameters[2][0];
+      gltf.specular.value = record.parameters[2][2];
+      gltf.transmission.value = record.parameters[2][3];
+      std::copy(record.parameters[3], record.parameters[3] + 3,
+          gltf.specular_color.value.begin());
+      gltf.clearcoat.value = record.parameters[3][3];
+      std::copy(record.parameters[4], record.parameters[4] + 3,
+          gltf.sheen_color.value.begin());
+      gltf.sheen_roughness.value = record.parameters[4][3];
+      gltf.clearcoat_roughness.value = record.parameters[5][0];
+      gltf.ior = record.parameters[5][1];
     } else {
       PreviewSurface& preview = Preview(material);
       const std::uint32_t flags = record.model_flags >> kMaterialFlagShift;

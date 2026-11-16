@@ -136,11 +136,11 @@ struct TemporalBuffer {
 struct RestirSurfaceRecord {
   std::array<float, 4> origin, normal, shading_normal, outgoing;
   std::array<float, 4> base_alpha, dielectric_metallic, fresnel;
-  // The closure's model tag and glTF PBR's table values.
-  std::array<float, 4> model;
+  // The closure's model tag, and glTF PBR's terms beyond the lanes above.
+  std::array<float, 4> model, extension;
   std::uint64_t instance_id, material_id;
 };
-static_assert(sizeof(RestirSurfaceRecord) == 144);
+static_assert(sizeof(RestirSurfaceRecord) == 160);
 
 // The scene passes' uniform block, std140; mirrored in path_trace.slang.
 struct PathConstants {

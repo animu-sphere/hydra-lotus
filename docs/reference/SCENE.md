@@ -202,10 +202,13 @@ mesh throw `std::invalid_argument` without changing the world.
 ### glTF PBR
 
 `GltfPbr` is MaterialX's glTF PBR surface, `ND_gltf_pbr_surfaceshader`
-2.0.1, with its core inputs ([contract](../design/GLTF_PBR.md)). Each input
-but the strength is a `MaterialInput`: a constant `value` and an optional
-`texture` lookup that replaces it, as above. The defaults are the node
-definition's, so a default `GltfPbr` is a rough white metal:
+2.0.1, with its core inputs ([contract](../design/GLTF_PBR.md)) and its
+index, specular, transmission, clearcoat and sheen
+([extensions contract](../design/GLTF_PBR_EXTENSIONS.md)). Each input but
+the strength, the index and the coat's normal map is a `MaterialInput`: a
+constant `value` and an optional `texture` lookup that replaces it, as
+above. The defaults are the node definition's, so a default `GltfPbr` is a
+rough white metal:
 
 | Field | Default | Range | Meaning |
 | --- | --- | --- | --- |
@@ -214,9 +217,17 @@ definition's, so a default `GltfPbr` is a rough white metal:
 | `roughness` | `1` | [0, 1] | both reflection lobes' GGX roughness; alpha is its square, at least 10⁻³ |
 | `emissive` | `(0, 0, 0)` | finite, ≥ 0 | emitted colour before the strength, from both sides |
 | `emissive_strength` | `1` | finite, ≥ 0 | a constant factor on `emissive` |
+| `ior` | `1.5` | finite, ≥ 1 | the dielectric's index: its reflectance at normal incidence is `((1 − ior) / (1 + ior))²`. A constant |
+| `specular` | `1` | [0, 1] | the dielectric reflection's weight |
+| `specular_color` | `(1, 1, 1)` | finite, ≥ 0 | a factor on that reflectance at normal incidence; the product is clamped to 1 |
+| `transmission` | `0` | [0, 1] | the share of the dielectric's base that transmits instead of scattering diffusely: a thin surface that does not refract, tinted by `base_color` |
+| `clearcoat` | `0` | [0, 1] | the weight of a dielectric coat of index 1.5 over everything else |
+| `clearcoat_roughness` | `0` | [0, 1] | the coat's roughness; alpha is its square, at least 10⁻³ |
+| `clearcoat_normal_texture` | none | — | a tangent-space lookup for the coat's normal. Without one the coat lies about the mesh's shading normal, which the geometry's normal map does not move |
+| `sheen_color` | `(0, 0, 0)` | each in [0, 1] | the sheen's colour; its largest channel is the sheen's weight |
+| `sheen_roughness` | `0` | [0, 1] | the sheen's roughness; the lobe's is its square, at least 0.005 |
 
-Its normal and its coverage are the material's `MaterialGeometry`, and its
-dielectric has the definition's default index, 1.5. It is shaded by its own
+Its normal and its coverage are the material's `MaterialGeometry`. It is shaded by its own
 [closure](#path-tracing), not `UsdPreviewSurface`'s: nothing converts one
 model's parameters into the other's. `base_color_primvar` drives no glTF
 PBR input.
@@ -348,7 +359,7 @@ empty plan records no GPU work.
   without one), and the address and index of the colour set its base colour
   reads (zero and `kNoColors` without one). It grows when
   needed and is rewritten only when the instances change.
-- One device-local material table holds a 128-byte record per material
+- One device-local material table holds a 144-byte record per material
   ([material IR v2 §5](../design/MATERIAL_IR_V2.md#5-gpu-layout)): a
   16-byte header (the `ShadingModel` in the low byte of its first word and
   the model's flags above it, the first binding's index, and a 64-bit mask
@@ -358,15 +369,20 @@ empty plan records no GPU work.
   `UsdPreviewSurface` they are base colour and roughness, emission and
   metallic, specular colour and ior, transmission colour and weight, and
   its flags are the specular workflow (1) and thin walls (2); for glTF PBR,
-  base colour and roughness, emissive and metallic, and the emissive
-  strength. A binding
+  base colour and roughness; emissive and metallic; the emissive strength,
+  the dielectric's reflectance at normal incidence (computed from `ior` in
+  double precision), specular and transmission; specular colour and
+  clearcoat; sheen colour and roughness; clearcoat roughness and `ior`. The
+  stride is the largest model's block. A binding
   table of 96-byte lookups follows the records in the same buffer, one per
   set mask bit, each material's in slot order: slot *k*'s lookup is binding
   `lookup_base` plus the set bits below *k*. Slots 0 and 1 are opacity and
   normal in every model, so the any-hit test never reads the model;
   `UsdPreviewSurface` numbers base colour, roughness, metallic, emission
   and specular colour 2 to 6, and glTF PBR base colour, metallic, roughness
-  and emissive 2 to 5 (`TextureInputs` order). A lookup holds its
+  and emissive 2 to 5, then specular, specular colour, transmission,
+  clearcoat, its roughness and normal, and sheen colour and roughness 6 to
+  13 (`TextureInputs` order). A lookup holds its
   texture slot, its sampler (`wrap_s * 4 + wrap_t`), its channel, its mode
   (a lookup, or one whose key names no texture, which returns the
   fallback), scale, bias, fallback and the two rows of its coordinate
@@ -379,7 +395,7 @@ empty plan records no GPU work.
   is not resident.
 - One device-local buffer holds the composed closures'
   [directional albedo tables](../design/LAYERED_BSDF.md#56-directional-albedo-tables),
-  75,776 floats (303 KB) of committed data
+  76,800 floats (307 KB) of committed data
   (`backend/vulkan/bsdf-albedo-tables.inc`). It is renderer data, uploaded
   once when the scene is created on a device with acceleration structures
   and never rewritten; the scene passes read it through its device address
@@ -833,25 +849,51 @@ of compute kernels. Both call the same transport steps
   below-surface samples terminate without resampling. For pure metal,
   the GGX density cancels analytically in the weight for mirror precision.
   [Measured verification](../reports/2026-10-08-dielectric-specular.md).
-- **glTF PBR's closure** ([contract §6](../design/GLTF_PBR.md#6-the-closure))
+- **glTF PBR's closure** ([contract §6](../design/GLTF_PBR.md#6-the-closure),
+  [extensions §6](../design/GLTF_PBR_EXTENSIONS.md#6-the-closure))
   is the [composed closure](../design/LAYERED_BSDF.md) its node definition's
-  graph reduces to with its extensions at their defaults:
-  `mix(layer(GgxSchlick(0.04, 1), Lambert(base_color)), GgxSchlick(base_color, 1), metallic)`,
-  three lobes about the shading normal. Both reflection lobes are
-  compensated for multiple scattering, `1 + F0 (1 − E1) / E1`, and the
-  diffuse lobe is scaled by one minus the dielectric lobe's directional
-  albedo toward the viewer, so a white base colour reflects everything at
-  every metallic and roughness. `E1` and the Schlick share come from the
-  albedo tables, interpolated once per hit for both lobes. Alpha is
+  graph reduces to with iridescence and anisotropy at their defaults:
+  a clearcoat over a sheen over
+  `mix(layer(GgxSchlick(f0, f90), mix(Lambert(base_color), transmission, transmission)), GgxSchlick(base_color, 1), metallic)`,
+  at most six lobes, of which a material builds only those with a weight:
+  one with every extension at its default builds the core's three, with the
+  core's values bit for bit. The GGX lobes are compensated for multiple
+  scattering, `1 + F0 (1 − E1) / E1`, and each layer's base is scaled by
+  one minus its top's directional albedo toward the viewer, so a white
+  base colour returns everything at every metallic, roughness, transmission
+  and specular weight, under any untilted coat and any grey sheen.
+  - The dielectric's reflection has `f0 = min(specular_color · F0(ior), 1) · specular`
+    and `f90 = specular`. A coloured one dims its base by its largest
+    channel, as glTF's specular extension does.
+  - Transmission is glTF's thin surface: the reflection lobe mirrored
+    through the tangent plane with a Fresnel of 1, tinted by `base_color`,
+    without refraction and independent of `ior`. The node definition's
+    graph has a refracting `dielectric_bsdf` there; the
+    [contract](../design/GLTF_PBR_EXTENSIONS.md#62-transmission-is-thin)
+    states the difference. The integrators treat its samples as any
+    transmission event's.
+  - The clearcoat is a dielectric reflection of index 1.5 with the exact
+    Fresnel term, about its own normal, its alpha floored like the base's,
+    so it is never a delta. A reflecting lobe scatters into the shading
+    normal's hemisphere only: a tilted coat loses what it would send below
+    it, up to 5% at a 45° tilt.
+  - The sheen is MaterialX's `sheen_bsdf` in its `conty_kulla` mode,
+    sampled uniformly over the hemisphere. Its albedo exceeds 1 toward
+    grazing outgoing directions at small roughness, where the closure
+    scales the lobe to return exactly what it receives.
+
+  The albedos come from the tables, read once per hit: 32 values for the
+  base, 16 more under a sheen and 80 more under a coat. Alpha is
   `max(roughness², 0.001)`, where the definition clamps at 10⁻⁵: roughness
   0 is a near-mirror, never a delta. One lobe is chosen in proportion to
   its estimated contribution toward the viewer, at least 0.05, and a
   sample's weight is the closure's f·cos over the mixture density.
-  The scene passes compile the composed closure with three lobes and
-  without dielectric lobes, lobe normals and attenuation, which no
-  implemented model builds; `lotus-bsdf-test` compiles all of it, and holds
-  this closure to an independent evaluation of the node definition, a white
-  furnace and the closure a stored reservoir surface rebuilds.
+  The scene passes compile the composed closure with six lobes and without
+  a dielectric's refraction, thin wall and delta paths and without
+  attenuation, which no implemented model builds; `lotus-bsdf-test`
+  compiles all of it, and holds this closure to an independent evaluation
+  of the node definition, a white furnace and the closure a stored
+  reservoir surface rebuilds.
 - **Transmission.** With metal fraction `m` and `transmission` `t`, the
   surface is `m · metal + (1 − m) · [(1 − t) · coat + t · dielectric]`; the
   layered lobes above share `1 − (1 − m)t`, the metal's renormalized over
@@ -1253,21 +1295,43 @@ an `ND_gltf_pbr_surfaceshader`; images repeat.
 | Textures | Image, Factor, ColorImage, Packed, Rotated | the sRGB palette as usd-gltf-plugins authors a base colour, `ND_image_color4` through `ND_convert_color4_color3`; the same times (1, 0.5, 0.25) by `ND_multiply_color3`; `ND_gltf_colorimage` with that `color`, the same material; copper with roughness and metallic from `ND_extract_vector4` at 1 and 2 of `rgba.png` as `ND_image_vector4`; `ND_gltf_colorimage` with scale (2, 1), rotation 30 and offset (0.1, 0.2) |
 | Normals and emission | GltfNormal, NormalMap, NormalMetal, Emissive, EmissiveMap | `ND_gltf_normalmap` of `tilts.png` on a 0.7 grey of roughness 0.4; `ND_normalmap_float` of the same image, the same lookup but for its value without the image; the map on a copper metal sphere of roughness 0.25 with `st` longitude by latitude times (4, 2); `emissive` (1, 0.6, 0.2); the sRGB palette as `emissive` with `emissive_strength` 2 |
 | Alpha | Opaque, Mask, MaskZero, MaskAll, Blend | `alpha` 0.3 under the default `OPAQUE`, which does not read it; `cutout.png`'s colour with its alpha under `MASK` at the default cutoff 0.5; `alpha` 0.2 under `MASK` with cutoff 0, opaque; `MASK` with cutoff 1.5, which hides the card; the cut-out under `BLEND`, stochastic coverage |
-| Unrepresented inputs | Clearcoat, Transmission, Unlit, Ior, VertexColor | `clearcoat` 1 and `transmission` 1 over the Dielectric material, each raising `UnrepresentedInput` and rendering as it; a black base of roughness 1 that emits teal, with `specular` 0 as the plugin authors `KHR_materials_unlit`, which is not represented, so its default specular lobe stays; `ior` 1.8, likewise; a base colour of `ND_geompropvalue_color3` times a factor, which raises `UnsupportedNode` and keeps the default white |
+| Unrepresented inputs | Iridescence, Thickness, Unlit, Anisotropy, VertexColor | `iridescence` 1 and `thickness` 1 over the Dielectric material, each raising `UnrepresentedInput` and rendering as it; a black base of roughness 1 that emits teal, with `specular` 0 as the plugin authors `KHR_materials_unlit`, so without a reflection lobe; `anisotropy_strength` 1, as the first two; a base colour of `ND_geompropvalue_color3` times a factor, which raises `UnsupportedNode` and keeps the default white |
 
 Its negative control reads Packed's metallic from green and its roughness
 from blue. The Hydra test also requires Factor and ColorImage to translate
 to one material, GltfNormal and NormalMap to differ only in their fallback,
-and Clearcoat, Transmission and Ior to be Dielectric's material.
+and Iridescence, Thickness and Anisotropy to be Dielectric's material.
+
+**`material-gltf-extensions-v1`** covers the model's
+[extensions](../design/GLTF_PBR_EXTENSIONS.md#74-the-fixture) on the same
+grid, with spheres wrapped in `st`, longitude by latitude times (4, 2),
+where a lookup reads. Scalar lookups read channels of `rgba.png` as
+`ND_image_vector4` through `ND_extract_vector4`.
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Reflection, on spheres | IorOne, IorHigh, SpecularHalf, SpecularTint, SpecularMap | (0.8, 0.2, 0.1) at roughness 0.2 with `ior` 1, which reflects nothing, and 2.4; `specular` 0.5; 0.6 grey with `ior` 2.4 and `specular_color` (1, 0.3, 0.1); `ior` 2.4 with `specular` from the image's red |
+| Transmission, on cards | Glass, GlassRough, GlassTinted, GlassHalf, GlassMap | white with `transmission` 1 at roughness 0 and 0.4; teal at roughness 0; (0.9, 0.6, 0.2) with `transmission` 0.5 at roughness 0.3; `transmission` from the image's green |
+| Clearcoat, on spheres | Coat, CoatMetal, CoatRough, CoatOverBumps, CoatNormal | `clearcoat` 1 over the red dielectric at roughness 0.7; 0.5 over copper; with `clearcoat_roughness` 0.5; over a base with `ND_gltf_normalmap` of `tilts.png` as `normal`, the coat staying smooth; with that map as `clearcoat_normal` over a smooth base |
+| Sheen, on spheres | Sheen, SheenColor, SheenRough, SheenMap, SheenCoat | over a dark rough dielectric: white at `sheen_roughness` 0.7; (0.9, 0.4, 0.1) at 0.5; 0.5 grey at 1; the sRGB palette with roughness from the image's green; the coloured sheen under `clearcoat` 1 |
+| Together and unrepresented | All, CoatMap, SpecularColorMap, Thickness, Diagnosed | every extension on one metallic-0.3 material; `clearcoat` and its roughness from the image's red and blue; `specular_color` from the palette; GlassTinted with `thickness` 1, which raises `UnrepresentedInput` and stays thin; Coat with `iridescence` 1 and `anisotropy_strength` 1, each raising `UnrepresentedInput` |
+
+Its negative control exchanges CoatRough's `clearcoat` and
+`clearcoat_roughness`. The Hydra test also requires Thickness to be
+GlassTinted's material, Diagnosed to be Coat's, and the base's and the
+coat's normal maps to stay apart.
 
 - **glTF PBR furnace.** `renderer.path.gltf_furnace` renders a white glTF
-  PBR plane under a white constant environment through an orthographic
-  camera, at view cosines 1, 0.5 and 0.125, metallic 0 and 1 and roughness
-  0.2 and 1, under both integrators with BSDF sampling and NEE/MIS, at
-  32 spp. No reflected ray meets the plane again, so each image's mean is
-  the closure's albedo, which must be 1 within five standard errors and
-  the albedo tables' bound of 5·10⁻³. It crosses the table buffer, the
-  scene pass and the integrators with a known answer.
+  PBR plane in a white constant environment through an orthographic
+  camera, at view cosines 1, 0.5 and 0.125, under both integrators with
+  BSDF sampling and NEE/MIS, at 32 spp: metallic 0 and 1 at roughness 0.2
+  and 1, then a clearcoat, a rough half-weight clearcoat, a white sheen,
+  `transmission` 1 and 0.5, and every extension together, 120 planes. No
+  scattered ray meets the plane again, so each image's mean is the
+  closure's albedo, which must be 1 within five standard errors and the
+  albedo tables' bound of 8·10⁻³. It crosses the table buffer, the scene
+  pass and the integrators with a known answer, and the transmitting
+  planes cross a composed closure's transmitted sample.
 - **Analytic transmission.** `renderer.material.transmission` checks the
   dielectric lobe against independent double-precision oracles through
   both integrators, BSDF sampling and NEE/MIS, and the reference
@@ -2346,10 +2410,13 @@ compatibility table.
 | `alpha`, `alpha_mode`, `alpha_cutoff` | Supported | the geometry's coverage: `OPAQUE` (0) is opacity 1 and does not read `alpha`; `MASK` (1) is `alpha` against the cutoff as threshold; `BLEND` (2) is `alpha` as stochastic coverage. `MASK` with a cutoff of 0 or less is opacity 1, and with a cutoff above 1 opacity 0, since the threshold 0 means stochastic coverage. A connected mode or cutoff, or another mode, is `UnsupportedValue`, and the surface is opaque |
 | `occlusion` | Without effect | a path tracer computes occlusion; its graph is not read |
 | `tangent` | Without effect | while `anisotropy_strength` is 0 |
-| `ior` other than 1.5, `specular` other than 1, `specular_color` other than white | Unsupported | `UnrepresentedInput`; the dielectric keeps F0 0.04 and a white grazing limit |
-| `transmission`, `clearcoat`, `sheen_color` other than 0 | Unsupported | `UnrepresentedInput`; `clearcoat_roughness`, `clearcoat_normal` and `sheen_roughness` do nothing without them |
+| `ior` | Supported | a constant, clamped to at least 1; a connection is `UnrepresentedInput` and the index stays 1.5 |
+| `specular`, `specular_color` | Supported | the weight clamped to [0, 1], the colour to be non-negative. Partial under a coloured `specular_color`: the base is dimmed by the reflection's largest channel, a rule the definition's `layer` leaves to the renderer |
+| `transmission` | Partial | clamped to [0, 1]. A thin surface that does not refract and has no Fresnel term of its own, as glTF specifies without its volume extension, where the definition's graph has a refracting `dielectric_bsdf` |
+| `clearcoat`, `clearcoat_roughness`, `clearcoat_normal` | Supported | the weight and roughness clamped to [0, 1]; the normal an `ND_normalmap` or `ND_gltf_normalmap` of an image, and an authored constant `UnrepresentedInput`. The roughness and the normal are read only under a clearcoat. Partial at a roughness below 0.032, as the base's, and under a tilted normal, whose reflection below the shading normal is dropped |
+| `sheen_color`, `sheen_roughness` | Supported | the colour clamped to [0, 1], the roughness, read only under a sheen, to [0, 1]. Partial toward grazing views at a roughness below about 0.4, where the lobe is scaled to return no more than it receives |
 | `iridescence`, `anisotropy_strength` other than 0 | Unsupported | `UnrepresentedInput`; `iridescence_ior`, `iridescence_thickness` and `anisotropy_rotation` do nothing without them |
-| `thickness` above 0, an authored `attenuation_distance`, `attenuation_color` other than white, `dispersion` above 0 | Unsupported | `UnrepresentedInput`. The definition's own graph reads none of them |
+| `thickness` above 0, an authored `attenuation_distance`, `attenuation_color` other than white, `dispersion` above 0 | Unsupported | `UnrepresentedInput`. The definition's own graph reads none of them; a transmitting surface stays thin whatever its thickness |
 | Vertex colour: `ND_geompropvalue_color3` or `ND_geompropvalue_float` in a graph | Unsupported | `UnsupportedNode`; the input keeps its default |
 | A parameter or connection the definition does not name | — | `UnknownInput` |
 

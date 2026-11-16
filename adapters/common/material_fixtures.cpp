@@ -2060,7 +2060,171 @@ void ExchangedChannels(Lotus::RenderWorld& world) {
   world.SetMaterial(key, material);
 }
 
+// As a reader that took the clearcoat's roughness for its weight would.
+void ExchangedCoat(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialGltfExtensions/Looks/CoatRough";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  Lotus::GltfPbr& gltf = Lotus::Gltf(material);
+  std::swap(gltf.clearcoat.value, gltf.clearcoat_roughness.value);
+  world.SetMaterial(key, material);
+}
+
 } // namespace
+
+void SetMaterialGltfExtensions(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialGltfExtensions";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/rgba.png|raw", Image(4, kUnorm, Rgba));
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+
+  constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
+  constexpr std::array<float, 3> kRed{0.8F, 0.2F, 0.1F};
+  constexpr std::array<float, 3> kTeal{0.2F, 0.6F, 0.7F};
+  constexpr std::array<float, 3> kDark{0.05F, 0.05F, 0.08F};
+  constexpr std::array<float, 3> kWhite{1.0F, 1.0F, 1.0F};
+  // A colour-4 image's default is transparent black; so is a vector-4's,
+  // whose channels the scalar inputs read.
+  Lotus::TextureInput palette = Periodic("palette.png", "sRGB");
+  palette.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  Lotus::TextureInput scalars = Periodic("rgba.png", "raw");
+  scalars.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  // ND_gltf_normalmap of tilts.png.
+  Lotus::TextureInput bumps = Periodic("tilts.png", "raw");
+  bumps.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  bumps.bias = {-1.0F, -1.0F, -1.0F, 0.0F};
+  bumps.fallback = {0.0F, 0.0F, 1.0F, 1.0F};
+  const auto textured = [](Lotus::Material material) {
+    material.geometry.texcoords = "st";
+    return material;
+  };
+  const auto with = [](Lotus::Material material, auto&& edit) {
+    edit(Lotus::Gltf(material));
+    return material;
+  };
+
+  // The dielectric's reflection.
+  const Lotus::Material glossy = Gltf(kRed, 0.0F, 0.2F);
+  const Lotus::Material tinted = with(Gltf({0.6F, 0.6F, 0.6F}, 0.0F, 0.2F),
+      [](Lotus::GltfPbr& gltf) { gltf.ior = 2.4F; });
+  // Transmission: a white thin surface unless tinted.
+  const auto glass = [&](const std::array<float, 3>& base, float roughness,
+                         float transmission) {
+    return with(Gltf(base, 0.0F, roughness),
+        [&](Lotus::GltfPbr& gltf) { gltf.transmission.value = transmission; });
+  };
+  // Clearcoat over a rough red dielectric.
+  const auto coated = [&](float clearcoat, float roughness) {
+    return with(Gltf(kRed, 0.0F, 0.7F), [&](Lotus::GltfPbr& gltf) {
+      gltf.clearcoat.value = clearcoat;
+      gltf.clearcoat_roughness.value = roughness;
+    });
+  };
+  // Sheen over a dark rough dielectric.
+  const auto sheen = [&](const std::array<float, 3>& color, float roughness) {
+    return with(Gltf(kDark, 0.0F, 0.8F), [&](Lotus::GltfPbr& gltf) {
+      gltf.sheen_color.value = color;
+      gltf.sheen_roughness.value = roughness;
+    });
+  };
+  Lotus::Material coat_over_bumps = textured(coated(1.0F, 0.0F));
+  coat_over_bumps.geometry.normal_texture = bumps;
+
+  const std::array<std::pair<const char*, Lotus::Material>, 25> looks{{
+      {"IorOne", with(glossy, [](Lotus::GltfPbr& gltf) { gltf.ior = 1.0F; })},
+      {"IorHigh", with(glossy, [](Lotus::GltfPbr& gltf) { gltf.ior = 2.4F; })},
+      {"SpecularHalf",
+          with(glossy, [](Lotus::GltfPbr& gltf) { gltf.specular.value = 0.5F; })},
+      {"SpecularTint", with(tinted, [](Lotus::GltfPbr& gltf) {
+         gltf.specular_color.value = {1.0F, 0.3F, 0.1F};
+       })},
+      {"SpecularMap", textured(with(glossy, [&](Lotus::GltfPbr& gltf) {
+         gltf.ior = 2.4F;
+         gltf.specular.texture = Channel(scalars, 0);
+       }))},
+
+      {"Glass", glass(kWhite, 0.0F, 1.0F)},
+      {"GlassRough", glass(kWhite, 0.4F, 1.0F)},
+      {"GlassTinted", glass(kTeal, 0.0F, 1.0F)},
+      {"GlassHalf", glass({0.9F, 0.6F, 0.2F}, 0.3F, 0.5F)},
+      // A lookup replaces the constant, which stays the authored 1.
+      {"GlassMap", textured(with(glass(kWhite, 0.1F, 1.0F), [&](Lotus::GltfPbr& gltf) {
+         gltf.transmission.value = 0.0F;
+         gltf.transmission.texture = Channel(scalars, 1);
+       }))},
+
+      {"Coat", coated(1.0F, 0.0F)},
+      {"CoatMetal", with(Gltf(kCopper, 1.0F, 0.4F),
+                        [](Lotus::GltfPbr& gltf) { gltf.clearcoat.value = 0.5F; })},
+      {"CoatRough", coated(1.0F, 0.5F)},
+      {"CoatOverBumps", coat_over_bumps},
+      {"CoatNormal", textured(with(coated(1.0F, 0.0F), [&](Lotus::GltfPbr& gltf) {
+         gltf.clearcoat_normal_texture = bumps;
+       }))},
+
+      {"Sheen", sheen(kWhite, 0.7F)},
+      {"SheenColor", sheen({0.9F, 0.4F, 0.1F}, 0.5F)},
+      {"SheenRough", sheen({0.5F, 0.5F, 0.5F}, 1.0F)},
+      {"SheenMap", textured(with(Gltf(kDark, 0.0F, 0.8F), [&](Lotus::GltfPbr& gltf) {
+         gltf.sheen_color.texture = palette;
+         gltf.sheen_roughness.texture = Channel(scalars, 1);
+       }))},
+      {"SheenCoat", with(sheen({0.9F, 0.4F, 0.1F}, 0.5F),
+                        [](Lotus::GltfPbr& gltf) { gltf.clearcoat.value = 1.0F; })},
+
+      {"All", with(Gltf({0.9F, 0.6F, 0.2F}, 0.3F, 0.4F), [](Lotus::GltfPbr& gltf) {
+         gltf.ior = 1.8F;
+         gltf.specular.value = 0.8F;
+         gltf.specular_color.value = {1.0F, 0.8F, 0.6F};
+         gltf.transmission.value = 0.4F;
+         gltf.clearcoat.value = 0.7F;
+         gltf.clearcoat_roughness.value = 0.2F;
+         gltf.sheen_color.value = {0.3F, 0.5F, 0.8F};
+         gltf.sheen_roughness.value = 0.6F;
+       })},
+      {"CoatMap", textured(with(Gltf(kRed, 0.0F, 0.7F), [&](Lotus::GltfPbr& gltf) {
+         gltf.clearcoat.texture = Channel(scalars, 0);
+         gltf.clearcoat_roughness.texture = Channel(scalars, 2);
+       }))},
+      {"SpecularColorMap", textured(with(tinted, [&](Lotus::GltfPbr& gltf) {
+         gltf.specular_color.texture = palette;
+       }))},
+      // A thickness is not represented: the surface stays thin.
+      {"Thickness", glass(kTeal, 0.0F, 1.0F)},
+      // Nor are a thin film and anisotropy: the coat renders.
+      {"Diagnosed", coated(1.0F, 0.0F)},
+  }};
+
+  const Polygons sphere = CoarseSphere();
+  const auto corners = sphere.Corners();
+  Lotus::MeshGeometry smooth = sphere.Geometry();
+  for (const auto& corner : corners) smooth.normals.push_back(Fixed(sphere.points[corner.vertex]));
+  Lotus::MeshGeometry wrapped = smooth;
+  const auto latlong = LatLong({4.0, 2.0});
+  for (const auto& corner : corners) wrapped.texcoords["st"].push_back(latlong[corner.face_vertex]);
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < looks.size(); ++i) {
+    const std::string name = looks[i].first;
+    world.SetMaterial(root + "/Looks/" + name, looks[i].second);
+    const std::string mesh = root + "/Objects/" + name;
+    // The transmission row and the thickness are cards; the rest spheres,
+    // wrapped in (s, t) where a lookup reads.
+    const bool card = name.starts_with("Glass") || name == "Thickness";
+    const bool wrap = !card && !looks[i].second.geometry.texcoords.empty();
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = card ? 0.7F : 0.35F;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, card ? mapped : wrap ? wrapped : smooth, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + name);
+  }
+}
 
 void SetMaterialGltf(Lotus::RenderWorld& world) {
   const std::string root = "/MaterialGltf";
@@ -2126,8 +2290,10 @@ void SetMaterialGltf(Lotus::RenderWorld& world) {
   Lotus::Material hidden = Gltf(kTeal, 0.0F, 0.5F);
   hidden.geometry.opacity = 0.0F;
 
+  // As the plugin authors KHR_materials_unlit: no reflection lobe.
   Lotus::Material unlit = Gltf({0.0F, 0.0F, 0.0F}, 0.0F, 1.0F);
   Lotus::Gltf(unlit).emissive.value = kTeal;
+  Lotus::Gltf(unlit).specular.value = 0.0F;
 
   const std::array<std::pair<const char*, Lotus::Material>, 25> looks{{
       // The definition's defaults: a rough white metal.
@@ -2153,13 +2319,12 @@ void SetMaterialGltf(Lotus::RenderWorld& world) {
       {"MaskZero", Gltf(kTeal, 0.0F, 0.5F)},
       {"MaskAll", hidden},
       {"Blend", blend},
-      // Clearcoat, transmission and an index other than 1.5 are not
-      // represented: the rest of the material renders.
-      {"Clearcoat", Gltf(kRed, 0.0F, 0.5F)},
-      {"Transmission", Gltf(kRed, 0.0F, 0.5F)},
-      // specular 0 is not represented: the default specular lobe stays.
+      // A thin film, a thickness and anisotropy are not represented: the
+      // rest of the material renders.
+      {"Iridescence", Gltf(kRed, 0.0F, 0.5F)},
+      {"Thickness", Gltf(kRed, 0.0F, 0.5F)},
       {"Unlit", unlit},
-      {"Ior", Gltf(kRed, 0.0F, 0.5F)},
+      {"Anisotropy", Gltf(kRed, 0.0F, 0.5F)},
       // Vertex colour is not translated: base_color keeps its default.
       {"VertexColor", Gltf({1.0F, 1.0F, 1.0F}, 0.0F, 0.6F)},
   }};
@@ -2217,6 +2382,9 @@ std::span<const MaterialFixture> MaterialFixtures() {
       {"material-gltf-v1", "/MaterialGltf", 160, SetMaterialGltf,
           "the packed image's metallic and roughness channels exchanged",
           ExchangedChannels},
+      {"material-gltf-extensions-v1", "/MaterialGltfExtensions", 160,
+          SetMaterialGltfExtensions,
+          "the rough clearcoat's weight and roughness exchanged", ExchangedCoat},
   };
   return kFixtures;
 }

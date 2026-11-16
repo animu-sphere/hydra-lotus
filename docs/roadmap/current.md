@@ -56,8 +56,13 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    ([§12](../design/GLTF_PBR.md#12-changes-found-in-implementation)).
 7. **LOTUS-MATERIALX-06.** glTF PBR's P1 extensions: index of refraction,
    specular, transmission, clearcoat and sheen. Its
-   [contract](../design/GLTF_PBR_EXTENSIONS.md) is accepted;
-   implementation is next.
+   [contract](../design/GLTF_PBR_EXTENSIONS.md) is accepted and
+   implemented ([report](../reports/2026-11-17-gltf-pbr-extensions.md)):
+   the inputs, the sheen lobe and its table, the six-lobe closure under
+   both integrators, their translation and `material-gltf-extensions-v1`,
+   with every reference that holds no glTF material unchanged. Awaiting
+   review: seven
+   [changes found in implementation](../design/GLTF_PBR_EXTENSIONS.md#11-changes-found-in-implementation).
 8. **LOTUS-MATERIALX-07.** Standard Surface with its own composition.
 9. **LOTUS-MATERIALX-08.** OpenPBR, fuzz over coat over base.
 10. **LOTUS-MATERIALX-10.** The release gate and the per-model compatibility

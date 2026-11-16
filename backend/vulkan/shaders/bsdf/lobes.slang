@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // The primitive lobes composed closures are built from (docs/design/
-// LAYERED_BSDF.md section 5.1): Lambert, GGX with Schlick's Fresnel, and a
-// GGX dielectric interface that reflects, transmits or both. Each lobe has
+// LAYERED_BSDF.md section 5.1, GLTF_PBR_EXTENSIONS.md section 6): Lambert,
+// GGX with Schlick's Fresnel, reflected or mirrored through the tangent
+// plane, a GGX dielectric interface that reflects, transmits or both, and
+// the Conty-Kulla sheen. Each lobe has
 // its own unit normal in the shading frame and evaluates in the frame about
 // it (section 5.3); the functions here take directions already in that
 // frame, z along the lobe's normal. Values are f * |cos(theta_i)| about the
@@ -17,12 +19,13 @@ import sampling.sampling;
 import common.spectrum;
 
 // The scene passes compile only what an implemented model builds: glTF PBR
-// stacks Lambert and GgxSchlick lobes about the shading normal, without
-// attenuation. slangc inlines every call, so a dielectric lobe nobody
-// builds would still be compiled, and validated, at each evaluation. The
-// CPU probe compiles everything (LOTUS_COMPOSED_FULL), and the model task
-// that first needs a part turns it on for the scene passes
-// (docs/design/GLTF_PBR.md section 6.2).
+// stacks Lambert, GgxSchlick and Sheen lobes and a rough dielectric
+// reflection, each about its own normal, without attenuation. slangc inlines
+// every call, so a dielectric's refraction, thin wall and delta paths, which
+// nobody builds, would still be compiled, and validated, at each evaluation.
+// The CPU probe compiles everything (LOTUS_COMPOSED_FULL), and the model
+// task that first needs a part turns it on for the scene passes
+// (docs/design/GLTF_PBR_EXTENSIONS.md section 6.6).
 #ifndef LOTUS_COMPOSED_FULL
 #define LOTUS_COMPOSED_FULL 0
 #endif
@@ -30,6 +33,10 @@ import common.spectrum;
 public static const uint kLambertLobe = 0;
 public static const uint kGgxSchlickLobe = 1;
 public static const uint kGgxDielectricLobe = 2;
+public static const uint kSheenLobe = 3;
+
+// The sheen's roughness floor, as MaterialX's sheen_bsdf clamps it.
+public static const float kMinSheenRoughness = 0.005;
 
 // A dielectric's scatter mode, MaterialX's `R`, `T` and `RT`.
 public static const uint kScatterReflect = 1;
@@ -40,25 +47,31 @@ public struct Lobe {
   public uint type;
   // Unit, in the shading frame.
   public float3 normal;
-  // Lambert's albedo, GgxSchlick's f0, or GgxDielectric's tint, which
-  // scales what it reflects and transmits.
+  // Lambert's albedo, GgxSchlick's f0, Sheen's colour, or GgxDielectric's
+  // tint, which scales what it reflects and transmits.
   public Spectrum color;
   // GgxSchlick's f90.
   public Spectrum f90;
-  // GGX alpha, at least kMinAlpha.
+  // GGX alpha, at least kMinAlpha; Sheen's roughness, at least
+  // kMinSheenRoughness.
   public float alpha;
   // GgxDielectric's relative index eta_t / eta_i from the outgoing
   // direction's side, or a thin wall's index against its surroundings.
   public float eta;
   public uint scatter;
   public bool thin_walled;
+  // GgxSchlick scatters into the lower hemisphere: its reflection mirrored
+  // through the tangent plane, a thin surface's transmission without a
+  // Fresnel term of its own (GLTF_PBR_EXTENSIONS.md section 6.2).
+  public bool transmit;
   // GgxDielectric's alpha is below the floor or its index is 1: it reflects
   // and transmits along Dirac deltas.
   public bool smooth;
   // GGX reflection is compensated for multiple scattering.
   public bool compensate;
   // The compensation factor for the closure's outgoing direction, 1 when
-  // the lobe is not compensated. Set by the composed closure.
+  // the lobe is not compensated. Set by the composed closure. For Sheen it
+  // is the normalization 1 / E where the lobe's albedo E exceeds 1.
   public Spectrum compensation;
 };
 
@@ -72,6 +85,7 @@ Lobe MakeLobe(uint type, float3 normal) {
   lobe.eta = 1.0;
   lobe.scatter = kScatterReflect;
   lobe.thin_walled = false;
+  lobe.transmit = false;
   lobe.smooth = false;
   lobe.compensate = false;
   lobe.compensation = SpectrumConstant(1.0);
@@ -98,6 +112,16 @@ public Lobe MakeGgxSchlickLobe(Spectrum f0, Spectrum f90, float alpha,
   return lobe;
 }
 
+// MaterialX's sheen_bsdf in its conty_kulla mode (Estevez and Kulla,
+// "Production Friendly Microfacet Sheen BRDF", 2017), without Fresnel or
+// shadowing, over MaterialX's smoothed denominator.
+public Lobe MakeSheenLobe(Spectrum color, float roughness, float3 normal) {
+  Lobe lobe = MakeLobe(kSheenLobe, normal);
+  lobe.color = color;
+  lobe.alpha = max(roughness, kMinSheenRoughness);
+  return lobe;
+}
+
 // MaterialX's dielectric_bsdf. `compensate` applies to its reflection only
 // (section 4.2).
 public Lobe MakeGgxDielectricLobe(float eta, Spectrum tint, float alpha,
@@ -121,8 +145,18 @@ public bool LobeIsDelta(Lobe lobe) {
 #endif
 }
 
-// The lobe's frame and a direction in it. Without lobe normals of their
-// own, every lobe's frame is the shading frame, exactly.
+// Whether the lobe scatters into the shading frame's hemisphere of wi: a
+// reflecting lobe into the upper one only, whatever its own normal, so that
+// a tilted coat sends nothing through the surface.
+public bool LobeScattersToward(Lobe lobe, float3 wi) {
+  if (lobe.type == kGgxDielectricLobe) {
+    return wi.z > 0.0 ? (lobe.scatter & kScatterReflect) != 0
+                      : (lobe.scatter & kScatterTransmit) != 0;
+  }
+  return lobe.transmit ? wi.z < 0.0 : wi.z > 0.0;
+}
+
+// The lobe's frame and a direction in it.
 public struct LobeFrame {
   public float3 tangent;
   public float3 bitangent;
@@ -136,7 +170,6 @@ public struct LobeFrame {
 // it is the identity, exactly.
 public LobeFrame MakeLobeFrame(float3 normal) {
   LobeFrame frame;
-#if LOTUS_COMPOSED_FULL
   const float sign = normal.z >= 0.0 ? 1.0 : -1.0;
   const float a = -1.0 / (sign + normal.z);
   const float b = normal.x * normal.y * a;
@@ -144,29 +177,16 @@ public LobeFrame MakeLobeFrame(float3 normal) {
       -sign * normal.x);
   frame.bitangent = float3(b, sign + normal.y * normal.y * a, -normal.y);
   frame.normal = normal;
-#else
-  frame.tangent = float3(1.0, 0.0, 0.0);
-  frame.bitangent = float3(0.0, 1.0, 0.0);
-  frame.normal = float3(0.0, 0.0, 1.0);
-#endif
   return frame;
 }
 
 public float3 ToLobe(LobeFrame frame, float3 w) {
-#if LOTUS_COMPOSED_FULL
   return float3(dot(w, frame.tangent), dot(w, frame.bitangent),
       dot(w, frame.normal));
-#else
-  return w;
-#endif
 }
 
 public float3 FromLobe(LobeFrame frame, float3 w) {
-#if LOTUS_COMPOSED_FULL
   return w.x * frame.tangent + w.y * frame.bitangent + w.z * frame.normal;
-#else
-  return w;
-#endif
 }
 
 // --- Shared terms --------------------------------------------------------------
@@ -236,6 +256,20 @@ Refraction GgxRefraction(float3 wo, float3 wi, float alpha, float eta) {
 
 // --- Evaluation ----------------------------------------------------------------
 
+// The sheen's f * cos(theta_i): D / (4 (cos_i + cos_o - cos_i cos_o)) with
+// D = (2 + 1/r) sin(theta_h)^(1/r) / (2 pi).
+Spectrum SheenValue(Lobe lobe, float3 wo, float3 wi) {
+  if (!(wi.z > 0.0)) {
+    return SpectrumConstant(0.0);
+  }
+  const float3 h = normalize(wo + wi);
+  const float inverse = 1.0 / lobe.alpha;
+  const float sin2 = max(1.0 - h.z * h.z, 0.0);
+  const float d = (2.0 + inverse) * pow(sin2, 0.5 * inverse) / (2.0 * kPi);
+  return lobe.color * lobe.compensation *
+      (d * wi.z / (4.0 * (wi.z + wo.z - wi.z * wo.z)));
+}
+
 Spectrum DielectricValue(Lobe lobe, float3 wo, float3 wi) {
   if (lobe.smooth) {
     return SpectrumConstant(0.0);
@@ -249,6 +283,7 @@ Spectrum DielectricValue(Lobe lobe, float3 wo, float3 wi) {
         (DielectricReflectance(lobe, dot(wo, h)) *
          GgxReflection(wo, wi, h, lobe.alpha));
   }
+#if LOTUS_COMPOSED_FULL
   if (!(wi.z < 0.0) || (lobe.scatter & kScatterTransmit) == 0) {
     return SpectrumConstant(0.0);
   }
@@ -265,6 +300,9 @@ Spectrum DielectricValue(Lobe lobe, float3 wo, float3 wi) {
   }
   return lobe.color * ((1.0 - DielectricReflectance(lobe, refraction.cos_oh)) *
       refraction.value);
+#else
+  return SpectrumConstant(0.0);
+#endif
 }
 
 // f * |cos(theta_i)| of the lobe's non-delta components, in its frame.
@@ -276,19 +314,18 @@ public Spectrum LobeValue(Lobe lobe, float3 wo, float3 wi) {
   case kLambertLobe:
     return wi.z > 0.0 ? lobe.color * (wi.z / kPi) : SpectrumConstant(0.0);
   case kGgxSchlickLobe: {
-    if (!(wi.z > 0.0)) {
+    const float3 wr = lobe.transmit ? float3(wi.xy, -wi.z) : wi;
+    if (!(wr.z > 0.0)) {
       return SpectrumConstant(0.0);
     }
-    const float3 h = normalize(wo + wi);
+    const float3 h = normalize(wo + wr);
     return SchlickFresnel(lobe.color, lobe.f90, dot(wo, h)) *
-        lobe.compensation * GgxReflection(wo, wi, h, lobe.alpha);
+        lobe.compensation * GgxReflection(wo, wr, h, lobe.alpha);
   }
+  case kSheenLobe:
+    return SheenValue(lobe, wo, wi);
   default:
-#if LOTUS_COMPOSED_FULL
     return DielectricValue(lobe, wo, wi);
-#else
-    return SpectrumConstant(0.0);
-#endif
   }
 }
 
@@ -305,6 +342,7 @@ float DielectricPdf(Lobe lobe, float3 wo, float3 wi) {
     const float choice = both ? DielectricReflectance(lobe, dot(wo, h)) : 1.0;
     return choice * GgxReflectionPdf(wo, h, lobe.alpha);
   }
+#if LOTUS_COMPOSED_FULL
   if (!(wi.z < 0.0) || (lobe.scatter & kScatterTransmit) == 0) {
     return 0.0;
   }
@@ -322,6 +360,9 @@ float DielectricPdf(Lobe lobe, float3 wo, float3 wi) {
   const float choice =
       both ? 1.0 - DielectricReflectance(lobe, refraction.cos_oh) : 1.0;
   return choice * refraction.pdf;
+#else
+  return 0.0;
+#endif
 }
 
 // The solid-angle density with which LobeSample returns wi as a non-delta
@@ -333,15 +374,15 @@ public float LobePdf(Lobe lobe, float3 wo, float3 wi) {
   switch (lobe.type) {
   case kLambertLobe:
     return wi.z > 0.0 ? wi.z / kPi : 0.0;
-  case kGgxSchlickLobe:
-    return wi.z > 0.0 ? GgxReflectionPdf(wo, normalize(wo + wi), lobe.alpha)
+  case kGgxSchlickLobe: {
+    const float3 wr = lobe.transmit ? float3(wi.xy, -wi.z) : wi;
+    return wr.z > 0.0 ? GgxReflectionPdf(wo, normalize(wo + wr), lobe.alpha)
                       : 0.0;
+  }
+  case kSheenLobe:
+    return wi.z > 0.0 ? 1.0 / (2.0 * kPi) : 0.0;
   default:
-#if LOTUS_COMPOSED_FULL
     return DielectricPdf(lobe, wo, wi);
-#else
-    return 0.0;
-#endif
   }
 }
 
@@ -391,9 +432,11 @@ bool SampleSmoothDielectric(Lobe lobe, float3 wo, float u,
 
 bool SampleDielectric(Lobe lobe, float3 wo, float3 u,
     inout LobeSampleResult sample) {
+#if LOTUS_COMPOSED_FULL
   if (lobe.smooth) {
     return SampleSmoothDielectric(lobe, wo, u.z, sample);
   }
+#endif
   const float3 h = SampleGgxVisibleNormal(wo, lobe.alpha, u.xy);
   const float cos_oh = dot(wo, h);
   if (!(cos_oh > 0.0)) {
@@ -408,6 +451,7 @@ bool SampleDielectric(Lobe lobe, float3 wo, float3 u,
     sample.wi = reflected;
     return reflected.z > 0.0;
   }
+#if LOTUS_COMPOSED_FULL
   if (lobe.thin_walled) {
     sample.wi = float3(reflected.xy, -reflected.z);
     return reflected.z > 0.0;
@@ -419,6 +463,9 @@ bool SampleDielectric(Lobe lobe, float3 wo, float3 u,
   }
   sample.wi = -wo / lobe.eta + (cos_oh / lobe.eta - sqrt(1.0 - sin2_t)) * h;
   return sample.wi.z < 0.0;
+#else
+  return false;
+#endif
 }
 
 // Draws a direction in the lobe's frame from u.xy, and from u.z where the
@@ -439,13 +486,23 @@ public bool LobeSample(Lobe lobe, float3 wo, float3 u,
   case kGgxSchlickLobe: {
     const float3 h = SampleGgxVisibleNormal(wo, lobe.alpha, u.xy);
     sample.wi = 2.0 * dot(wo, h) * h - wo;
+    if (!(sample.wi.z > 0.0)) {
+      return false;
+    }
+    if (lobe.transmit) {
+      sample.wi.z = -sample.wi.z;
+    }
+    return true;
+  }
+  case kSheenLobe: {
+    // Uniform over the hemisphere: the lobe peaks toward grazing
+    // directions, where a cosine-weighted sampler is thinnest.
+    const float sin_theta = sqrt(max(1.0 - u.x * u.x, 0.0));
+    const float phi = 2.0 * kPi * u.y;
+    sample.wi = float3(sin_theta * cos(phi), sin_theta * sin(phi), u.x);
     return sample.wi.z > 0.0;
   }
   default:
-#if LOTUS_COMPOSED_FULL
     return SampleDielectric(lobe, wo, u, sample);
-#else
-    return false;
-#endif
   }
 }

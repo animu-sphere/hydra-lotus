@@ -102,10 +102,15 @@ struct GpuMaterialRecord {
   float geometry_normal[4];
   // The model's constants in its word order, zero beyond them. For
   // UsdPreviewSurface: base colour and roughness, emission and metallic,
-  // specular colour and ior, transmission colour and transmission.
-  float parameters[5][4];
+  // specular colour and ior, transmission colour and transmission. For glTF
+  // PBR: base colour and roughness; emissive and metallic; emissive
+  // strength, the dielectric's reflectance at normal incidence, specular
+  // and transmission; specular colour and clearcoat; sheen colour and
+  // roughness; clearcoat roughness and ior. The stride is the largest
+  // model's block (docs/design/GLTF_PBR_EXTENSIONS.md section 4).
+  float parameters[6][4];
 };
-static_assert(sizeof(GpuMaterialRecord) == 128);
+static_assert(sizeof(GpuMaterialRecord) == 144);
 
 // One light table element: an emissive triangle, chosen by the alias
 // method. Its mirror is `LightRecord` in shaders/common/scene.slang. The

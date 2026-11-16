@@ -5,7 +5,10 @@ owner: hydra-lotus
 
 # glTF PBR extensions
 
-> Status: **accepted**, 2026-11-16, as written. This is
+> Status: **accepted**, 2026-11-16, as written, and
+> [implemented](../reports/2026-11-17-gltf-pbr-extensions.md) with the
+> [changes found in implementation](#11-changes-found-in-implementation),
+> which await review. This is
 > LOTUS-MATERIALX-06's contract, written before any code: the
 > [P1 features](MATERIALX_SHADING_MODELS.md#phase-a--foundation-and-gltf-pbr)
 > of MaterialX's glTF PBR surface — index of refraction, specular weight
@@ -526,3 +529,46 @@ Accepted as written, 2026-11-16:
 6. **`material-gltf-v1`'s Diagnosed row and reference change** (§7.4).
 7. **A `thickness` above 0 renders thin, with a warning**, until volume
    is taken (§5).
+
+## 11. Changes found in implementation
+
+LOTUS-MATERIALX-06's implementation departs from the text above in these
+points, which await review; the
+[report](../reports/2026-11-17-gltf-pbr-extensions.md#changes-to-the-contract)
+gives the measurements.
+
+1. **The sheen is normalized where its albedo exceeds 1.** §6.4 took the
+   lobe's albedo to be at most 1. Its quadrature reaches 5.6 at a grazing
+   outgoing direction and the roughness floor, and exceeds 1 below an
+   outgoing cosine of about 0.09 for lobe roughnesses up to about 0.16:
+   the fit returns more light than it receives there, and MaterialX only
+   clamps the throughput it reports. Where the table value `E` exceeds 1
+   the closure scales the lobe by `1 / E` and dims the base fully, so the
+   energy bound holds. `Esheen`'s accuracy is held relative to the value
+   where it exceeds 1.
+2. **A reflecting lobe scatters into the shading normal's hemisphere
+   only.** §6.5 let a tilted coat follow the layered contract's rule about
+   its own normal alone. A coat's reflection that lands below the shading
+   normal would be taken for a transmission by the integrators and could
+   pass through an opaque surface, so it has no value, no density and is
+   not sampled. A coat tilted by 45° loses up to 5% this way; the layered
+   test's tilted coats assert that bound instead of a furnace.
+3. **One switch, not one per part** (§6.6). The scene passes always
+   compile lobe normals, the sheen and the dielectric's rough reflection;
+   `LOTUS_COMPOSED_FULL` keeps only the dielectric's refraction, thin wall
+   and delta paths and attenuation for the probe.
+4. **The stored surface keeps terms, not inputs** (§6.7). The coat is
+   stored as its weight times its compensation, that times its albedo, its
+   alpha and two components of its normal, and the sheen as its normalized
+   colour, its roughness and its weight times its albedo: 22 floats, as
+   counted. The terms travel with the hit, beside the closure, instead of
+   being read back from the closure's lobes. A coat normal in the shading
+   frame's lower hemisphere cannot be stored by two components; such a
+   coat lies about the base normal.
+5. **The dielectric's reflectance at normal incidence is computed on the
+   host**, in double precision, from the uniform `ior`, and the record
+   holds both: the default index then gives the float nearest 0.04, which
+   is what keeps a material at the defaults bit for bit the core's.
+6. **§6.6's fallback rule was not exercised.** Renderer creation time was
+   not measured against it; the shaders' sizes are in the report.
+7. **§7.7's sample-asset inventory was not run.**

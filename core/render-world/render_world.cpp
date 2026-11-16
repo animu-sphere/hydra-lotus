@@ -114,6 +114,38 @@ void ValidateGltfPbr(const GltfPbr& material) {
   ValidateTextureInput(material.roughness.texture, false);
   ValidateTextureInput(material.metallic.texture, false);
   ValidateTextureInput(material.emissive.texture, true);
+  if (!std::isfinite(material.ior) || material.ior < 1.0F) {
+    throw std::invalid_argument("ior must be finite and at least 1");
+  }
+  if (!Finite(material.specular_color.value) ||
+      !std::all_of(material.specular_color.value.begin(),
+          material.specular_color.value.end(),
+          [](float value) { return value >= 0.0F; })) {
+    throw std::invalid_argument(
+        "specular colour must be finite and non-negative");
+  }
+  if (!Finite(material.sheen_color.value) ||
+      !std::all_of(material.sheen_color.value.begin(),
+          material.sheen_color.value.end(), UnitInterval)) {
+    throw std::invalid_argument("sheen colour components must be in [0, 1]");
+  }
+  if (!UnitInterval(material.specular.value) ||
+      !UnitInterval(material.transmission.value) ||
+      !UnitInterval(material.clearcoat.value) ||
+      !UnitInterval(material.clearcoat_roughness.value) ||
+      !UnitInterval(material.sheen_roughness.value)) {
+    throw std::invalid_argument(
+        "specular, transmission, clearcoat, its roughness and the sheen's "
+        "must be in [0, 1]");
+  }
+  ValidateTextureInput(material.specular.texture, false);
+  ValidateTextureInput(material.specular_color.texture, true);
+  ValidateTextureInput(material.transmission.texture, false);
+  ValidateTextureInput(material.clearcoat.texture, false);
+  ValidateTextureInput(material.clearcoat_roughness.texture, false);
+  ValidateTextureInput(material.clearcoat_normal_texture, true);
+  ValidateTextureInput(material.sheen_color.texture, true);
+  ValidateTextureInput(material.sheen_roughness.texture, false);
 }
 
 void ValidateMaterial(const Material& material_ir) {

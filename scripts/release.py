@@ -49,6 +49,8 @@ REQUIRED = {
     "bin/reference/material-graphs-v1-variance.pfm",
     "bin/reference/material-gltf-v1-mean.pfm",
     "bin/reference/material-gltf-v1-variance.pfm",
+    "bin/reference/material-gltf-extensions-v1-mean.pfm",
+    "bin/reference/material-gltf-extensions-v1-variance.pfm",
     "bin/assets/StinsonBeach.hdr",
     "bin/assets/LICENSE.OpenUSD.txt",
     "bin/assets/manifest.json",

@@ -9,6 +9,13 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Changed
 
+- For glTF PBR's extensions the GPU material record grows from 128 to 144
+  bytes and the stored reservoir surface from 144 to 160,
+  `kMaterialTextureInputs` from 7 to 14, and the albedo tables from 75,776
+  to 76,800 floats. A reflecting lobe of a composed closure scatters into
+  the shading normal's hemisphere only. `material-gltf-v1`'s last row now
+  holds a thin film, a thickness and anisotropy, and its Unlit card renders
+  without a reflection lobe; its reference changes in that card alone.
 - The material IR is the [material IR v2](docs/design/MATERIAL_IR_V2.md)
   (LOTUS-MATERIALX-01): `Lotus::Material` holds a `MaterialGeometry` shared
   by every shading model and a tagged `surface` whose only model with
@@ -33,6 +40,16 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- MaterialX's glTF PBR extensions (LOTUS-MATERIALX-06,
+  [contract](docs/design/GLTF_PBR_EXTENSIONS.md)): `Lotus::GltfPbr` gains
+  `ior`, `specular`, `specular_color`, `transmission`, `clearcoat`,
+  `clearcoat_roughness`, a clearcoat normal map, `sheen_color` and
+  `sheen_roughness`, which the Hydra translator reads from
+  `ND_gltf_pbr_surfaceshader` instead of warning. Transmission is glTF's
+  thin surface, the clearcoat has a normal of its own, and the sheen is a
+  new lobe with its own albedo table. The fixture
+  `material-gltf-extensions-v1` and 72 more planes of
+  `renderer.path.gltf_furnace` cover them.
 - An OpenStrata Formation,
   [`formations/gltf-host-session`](formations/gltf-host-session/README.md),
   that composes the `lookdev` runtime, usd-gltf-plugins' glTF file format

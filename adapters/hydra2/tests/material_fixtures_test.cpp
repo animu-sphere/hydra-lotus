@@ -345,9 +345,26 @@ void ExpectGltfPairs(const Lotus::LotusScene& scene) {
       "material-gltf-v1: GltfNormal and NormalMap translate differently");
   // The materials whose unrepresented input leaves the rest: one red
   // dielectric.
-  Check(look("Clearcoat") == look("Dielectric") && look("Transmission") == look("Dielectric") &&
-            look("Ior") == look("Dielectric"),
+  Check(look("Iridescence") == look("Dielectric") && look("Thickness") == look("Dielectric") &&
+            look("Anisotropy") == look("Dielectric"),
       "material-gltf-v1: an unrepresented input changes the material");
+}
+
+// material-gltf-extensions-v1's (docs/design/GLTF_PBR_EXTENSIONS.md section
+// 7.4): an input the model does not represent leaves the rest.
+void ExpectGltfExtensionPairs(const Lotus::LotusScene& scene) {
+  const auto look = [&](const char* name) -> const Lotus::Material& {
+    return scene.materials.at(std::string("/MaterialGltfExtensions/Looks/") + name);
+  };
+  Check(look("Thickness") == look("GlassTinted"),
+      "material-gltf-extensions-v1: a thickness changes the material");
+  Check(look("Diagnosed") == look("Coat"),
+      "material-gltf-extensions-v1: a thin film or anisotropy changes the material");
+  Check(Lotus::Gltf(look("CoatNormal")).clearcoat_normal_texture.has_value() &&
+            !look("CoatNormal").geometry.normal_texture.has_value() &&
+            look("CoatOverBumps").geometry.normal_texture.has_value() &&
+            !Lotus::Gltf(look("CoatOverBumps")).clearcoat_normal_texture.has_value(),
+      "material-gltf-extensions-v1: the coat's and the base's normal maps are exchanged");
 }
 
 // The backend's deterministic image of the mirror, rendered in one call by a
@@ -432,6 +449,7 @@ int main(int argc, char** argv) try {
       const std::size_t inexact = ExpectMirror(snapshot, world.Commit());
       if (stem == "material-graphs-v1") ExpectGraphPairs(*snapshot.scene);
       if (stem == "material-gltf-v1") ExpectGltfPairs(*snapshot.scene);
+      if (stem == "material-gltf-extensions-v1") ExpectGltfExtensionPairs(*snapshot.scene);
       std::cout << stem << " extracts to its mirror; " << inexact
                 << " transform, camera, position or normal sets differ by rounding\n";
       continue;
