@@ -205,8 +205,8 @@ std::string MirrorKey(const std::string& key) {
 }
 
 Lotus::Material MirrorKeys(Lotus::Material material) {
-  for (auto* input : Lotus::PreviewTextureInputs(material))
-    if (*input) (*input)->texture = MirrorKey((*input)->texture);
+  for (auto* input : Lotus::MutableTextureInputs(material))
+    if (input != nullptr && *input) (*input)->texture = MirrorKey((*input)->texture);
   return material;
 }
 
@@ -328,6 +328,28 @@ void ExpectGraphPairs(const Lotus::LotusScene& scene) {
       "material-graphs-v1: GltfNormal and NormalMap translate differently");
 }
 
+// material-gltf-v1's likewise (docs/design/GLTF_PBR.md section 8.3): a base
+// colour factor through the plugin's primitive nodes and through
+// ND_gltf_colorimage, and the two normal-map nodes.
+void ExpectGltfPairs(const Lotus::LotusScene& scene) {
+  const auto look = [&](const char* name) -> const Lotus::Material& {
+    return scene.materials.at(std::string("/MaterialGltf/Looks/") + name);
+  };
+  Check(look("Factor") == look("ColorImage"),
+      "material-gltf-v1: Factor and ColorImage translate differently");
+  Lotus::Material gltf = look("GltfNormal");
+  Check(gltf.geometry.normal_texture && look("NormalMap").geometry.normal_texture,
+      "material-gltf-v1: a normal map is no lookup");
+  gltf.geometry.normal_texture->fallback = look("NormalMap").geometry.normal_texture->fallback;
+  Check(gltf == look("NormalMap"),
+      "material-gltf-v1: GltfNormal and NormalMap translate differently");
+  // The materials whose unrepresented input leaves the rest: one red
+  // dielectric.
+  Check(look("Clearcoat") == look("Dielectric") && look("Transmission") == look("Dielectric") &&
+            look("Ior") == look("Dielectric"),
+      "material-gltf-v1: an unrepresented input changes the material");
+}
+
 // The backend's deterministic image of the mirror, rendered in one call by a
 // renderer of its own as the headless check renders it, RGB with rows from
 // the top.
@@ -409,6 +431,7 @@ int main(int argc, char** argv) try {
       const Lotus::FrameSnapshot snapshot = session.Delegate().GetFrameSnapshot();
       const std::size_t inexact = ExpectMirror(snapshot, world.Commit());
       if (stem == "material-graphs-v1") ExpectGraphPairs(*snapshot.scene);
+      if (stem == "material-gltf-v1") ExpectGltfPairs(*snapshot.scene);
       std::cout << stem << " extracts to its mirror; " << inexact
                 << " transform, camera, position or normal sets differ by rounding\n";
       continue;

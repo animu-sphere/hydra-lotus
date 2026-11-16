@@ -624,8 +624,9 @@ int BenchmarkMain(int argc, char** argv) {
     const auto executable = std::filesystem::absolute(argv[0]).parent_path();
     std::vector<Result> results;
     FrameStatus status = FrameStatus::Pass;
-    for (const auto id : kWorkloadIds) {
-      if (options.workload.empty() ? id == "many-lights-v1" : id != options.workload) continue;
+    for (std::size_t index = 0; index < kWorkloadIds.size(); ++index) {
+      const auto id = kWorkloadIds[index];
+      if (options.workload.empty() ? index >= kDefaultWorkloads : id != options.workload) continue;
       auto result = Measure(id, options, executable);
       if (result.status == FrameStatus::Fail) status = FrameStatus::Fail;
       else if (result.status == FrameStatus::Skip && status == FrameStatus::Pass)

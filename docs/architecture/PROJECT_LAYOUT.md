@@ -109,7 +109,8 @@ real `bsdf.slang` on the CPU: `slangc -target cpp` compiles
 [composed closures'](../design/LAYERED_BSDF.md#7-tests), and the generated
 C++ links into the test without the project's warning set. The composed
 closures' albedo tables are committed data,
-`validation/bsdf-albedo-tables.inc`: `lotus-bsdf-tables` (not installed)
+`backend/vulkan/bsdf-albedo-tables.inc`, which the GPU scene embeds and
+uploads: `lotus-bsdf-tables` (not installed)
 regenerates them from the lobes through the same probe, and
 `lotus-bsdf-tables --check` compares every node and cell centre with a
 fresh quadrature.

@@ -34,6 +34,10 @@
 extern "C" {
 void LotusProbeEvaluate(float* material, float* wo, float* wi, float* result);
 std::int32_t LotusProbeSample(float* material, float* wo, float* u, float* result);
+void LotusProbeGltfEvaluate(float* material, float* tables, float* wo,
+    float* wi, std::int32_t stored, float* result);
+std::int32_t LotusProbeGltfSample(float* material, float* tables, float* wo,
+    float* u, float* result);
 }
 
 namespace {
@@ -1441,36 +1445,389 @@ double CheckStructure(const Composed& c, Result& r, const Target& t,
   return worst;
 }
 
+// --- glTF PBR (docs/design/GLTF_PBR.md section 8.1) --------------------------
+//
+// The closure the scene pass builds for MaterialX's glTF PBR surface, through
+// the shader's own builder and the BSDF API's dispatch: BSDF API section
+// 7.3's assertions, a white furnace and the energy bound, the value against
+// an independent evaluation of the node definition, and the closure a stored
+// reservoir surface rebuilds.
+
+struct Gltf {
+  std::string colour;
+  Rgb base{};
+  float metallic = 0.0f;
+  float roughness = 0.0f;
+  float cos_o = 1.0f;
+  std::array<float, 5> material{};
+
+  std::string Name() const {
+    char text[128];
+    std::snprintf(text, sizeof(text),
+        "gltf-pbr %s metallic %.1f roughness %.1f cos_o %.2f", colour.c_str(),
+        metallic, roughness, cos_o);
+    return text;
+  }
+};
+
+std::vector<Gltf> GltfGrid() {
+  struct Colour {
+    const char* name;
+    Rgb value;
+  };
+  const Colour colours[] = {{"white", kWhite}, {"grey", {0.5f, 0.5f, 0.5f}},
+      {"saturated", {0.9f, 0.3f, 0.05f}}};
+  std::vector<Gltf> grid;
+  for (const Colour& colour : colours) {
+    for (float metallic : {0.0f, 0.5f, 1.0f}) {
+      for (float roughness : {0.0f, 0.1f, 0.3f, 0.6f, 1.0f}) {
+        for (float cos_o : {1.0f, 0.7f, 0.3f, 0.05f}) {
+          Gltf c;
+          c.colour = colour.name;
+          c.base = colour.value;
+          c.metallic = metallic;
+          c.roughness = roughness;
+          c.cos_o = cos_o;
+          c.material = {c.base[0], c.base[1], c.base[2], roughness, metallic};
+          grid.push_back(c);
+        }
+      }
+    }
+  }
+  return grid;
+}
+
+Evaluation EvaluateGltf(const Gltf& c, Vec3 wi, bool stored = false) {
+  std::array<float, 5> material = c.material;
+  std::array<float, 3> wo = WoOf(c.cos_o);
+  std::array<float, 3> direction{float(wi.x), float(wi.y), float(wi.z)};
+  std::array<float, 4> result{};
+  LotusProbeGltfEvaluate(material.data(), AlbedoData(), wo.data(),
+      direction.data(), stored ? 1 : 0, result.data());
+  return {{result[0], result[1], result[2]}, result[3]};
+}
+
+Sample DrawGltf(const Gltf& c, std::array<float, 3> u) {
+  std::array<float, 5> material = c.material;
+  std::array<float, 3> wo = WoOf(c.cos_o);
+  std::array<float, 9> result{};
+  Sample s;
+  s.success = LotusProbeGltfSample(material.data(), AlbedoData(), wo.data(),
+      u.data(), result.data()) != 0;
+  s.wi_float = {result[0], result[1], result[2]};
+  s.wi = {result[0], result[1], result[2]};
+  s.weight = {result[3], result[4], result[5]};
+  s.pdf = result[6];
+  s.delta = result[7] != 0.0f;
+  s.transmitted = result[8] != 0.0f;
+  return s;
+}
+
+double GltfAlpha(const Gltf& c) {
+  return std::max(double(c.roughness) * c.roughness, double(kMinAlpha));
+}
+
+Target MakeGltfTarget(const Gltf& c) {
+  Target t;
+  t.name = c.Name();
+  const std::array<float, 3> wo = WoOf(c.cos_o);
+  t.wo = {wo[0], wo[1], wo[2]};
+  t.evaluate = [&c](Vec3 wi) { return EvaluateGltf(c, wi); };
+  t.draw = [&c](std::array<float, 3> u) { return DrawGltf(c, u); };
+  t.mixture_ratio = true;
+  t.alpha = GltfAlpha(c);
+  t.statistics = t.alpha >= 0.01;
+  t.peaks.push_back(std::atan2(t.wo.z, -t.wo.x));
+  return t;
+}
+
+// The white furnace and the energy bound. A white base colour reflects
+// everything at every metallic: the compensated metal alone, and the
+// compensated dielectric over a white diffuse lobe.
+double CheckGltfEnergy(const Gltf& c, Result& r, const Target& t) {
+  const bool furnace = c.colour == "white";
+  double worst = 0.0;
+  for (int k = 0; k < 3; ++k) {
+    const double a = r.albedo[k];
+    const double noise = 5.0 * r.albedo_se[k];
+    char text[160];
+    if (furnace) {
+      worst = std::max(worst, std::abs(a - 1.0));
+      if (std::abs(a - 1.0) > kCompensatedFurnace + noise) {
+        std::snprintf(text, sizeof(text), "furnace: albedo %.6f (se %.2g)", a,
+            r.albedo_se[k]);
+        Fail(r, t, text);
+        break;
+      }
+    } else {
+      worst = std::max(worst, a - 1.0);
+      if (a > 1.0 + kBoundTolerance + noise) {
+        std::snprintf(text, sizeof(text),
+            "energy bound: albedo %.6f (se %.2g)", a, r.albedo_se[k]);
+        Fail(r, t, text);
+        break;
+      }
+    }
+  }
+  return worst;
+}
+
+// The node definition's closure, written from ND_gltf_pbr_surfaceshader
+// 2.0.1's graph with its extensions at their defaults and the MaterialX
+// specification's lobes, in double precision and sharing no code with the
+// shaders:
+//
+//   mix(layer(generalized_schlick(0.04, 1), oren_nayar_diffuse(base)),
+//       generalized_schlick(base, 1), metallic)
+//
+// with GGX, the height-correlated Smith term, Schlick's Fresnel, multiple
+// scattering compensation 1 + F0 (1 - E1) / E1, and the layer's 1 - E_top.
+// The directional albedos are this file's own quadrature of the lobe over
+// the square of visible-normal sampling, not Lotus's tables.
+struct GltfOracle {
+  double alpha = 1.0;
+  Vec3 wo;
+  // The albedo of GGX with a Fresnel of 1, and with (1 - cos)^5.
+  double e1 = 0.0;
+  double e5 = 0.0;
+
+  // A visible normal for wo (Dupuy and Benyoub, 2023) and the reflected
+  // direction's weight G2 / G1; the weight is 0 below the horizon.
+  double Weight(double ux, double uy, double& schlick) const {
+    const Vec3 o = Normalize({alpha * wo.x, alpha * wo.y, wo.z});
+    const double phi = 2.0 * kPi * ux;
+    const double z = (1.0 - uy) * (1.0 + o.z) - o.z;
+    const double s = std::sqrt(std::clamp(1.0 - z * z, 0.0, 1.0));
+    const Vec3 cap{s * std::cos(phi) + o.x, s * std::sin(phi) + o.y, z + o.z};
+    const Vec3 h = Normalize({alpha * cap.x, alpha * cap.y, cap.z});
+    const double c = Dot(wo, h);
+    const Vec3 wi = 2.0 * c * h - wo;
+    schlick = 0.0;
+    if (!(wi.z > 0.0) || !(c > 0.0)) return 0.0;
+    const double lambda_o = SmithLambda(wo, alpha);
+    const double weight =
+        (1.0 + lambda_o) / (1.0 + lambda_o + SmithLambda(wi, alpha));
+    schlick = weight * std::pow(1.0 - c, 5.0);
+    return weight;
+  }
+
+  std::array<double, 2> Rule(double x0, double x1, double y0, double y1) const {
+    static constexpr double kNodes[4] = {-0.8611363115940526,
+        -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
+    static constexpr double kWeights[4] = {0.3478548451374538,
+        0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
+    const double cx = 0.5 * (x0 + x1), hx = 0.5 * (x1 - x0);
+    const double cy = 0.5 * (y0 + y1), hy = 0.5 * (y1 - y0);
+    std::array<double, 2> sum{};
+    for (int a = 0; a < 4; ++a) {
+      for (int b = 0; b < 4; ++b) {
+        double schlick = 0.0;
+        const double w = kWeights[a] * kWeights[b];
+        sum[0] += w * Weight(cx + hx * kNodes[a], cy + hy * kNodes[b], schlick);
+        sum[1] += w * schlick;
+      }
+    }
+    return {sum[0] * hx * hy, sum[1] * hx * hy};
+  }
+
+  std::array<double, 2> Adaptive(double x0, double x1, double y0, double y1,
+      std::array<double, 2> estimate, int depth) const {
+    const double xm = 0.5 * (x0 + x1), ym = 0.5 * (y0 + y1);
+    const std::array<double, 2> parts[4] = {Rule(x0, xm, y0, ym),
+        Rule(xm, x1, y0, ym), Rule(x0, xm, ym, y1), Rule(xm, x1, ym, y1)};
+    std::array<double, 2> fine{};
+    for (const auto& part : parts) {
+      fine[0] += part[0];
+      fine[1] += part[1];
+    }
+    const double tolerance = 1.0e-5 * (x1 - x0) * (y1 - y0);
+    if ((depth >= 1 && std::abs(fine[0] - estimate[0]) <= tolerance &&
+            std::abs(fine[1] - estimate[1]) <= tolerance) ||
+        depth >= 8) {
+      return fine;
+    }
+    const std::array<double, 2> a =
+        Adaptive(x0, xm, y0, ym, parts[0], depth + 1);
+    const std::array<double, 2> b =
+        Adaptive(xm, x1, y0, ym, parts[1], depth + 1);
+    const std::array<double, 2> c2 =
+        Adaptive(x0, xm, ym, y1, parts[2], depth + 1);
+    const std::array<double, 2> d =
+        Adaptive(xm, x1, ym, y1, parts[3], depth + 1);
+    return {a[0] + b[0] + c2[0] + d[0], a[1] + b[1] + c2[1] + d[1]};
+  }
+
+  GltfOracle(double alpha_in, Vec3 wo_in) : alpha(alpha_in), wo(wo_in) {
+    constexpr int kPanels = 4;
+    const double h = 1.0 / kPanels;
+    for (int i = 0; i < kPanels; ++i) {
+      for (int j = 0; j < kPanels; ++j) {
+        const double x0 = i * h, x1 = (i + 1) * h;
+        const double y0 = j * h, y1 = (j + 1) * h;
+        const std::array<double, 2> part =
+            Adaptive(x0, x1, y0, y1, Rule(x0, x1, y0, y1), 0);
+        e1 += part[0];
+        e5 += part[1];
+      }
+    }
+  }
+
+  // GGX reflection's f * cos(theta_i) with Schlick's Fresnel from f0 to 1.
+  double Specular(double f0, Vec3 wi) const {
+    if (!(wi.z > 0.0)) return 0.0;
+    const Vec3 h = Normalize(wo + wi);
+    const double fresnel =
+        f0 + (1.0 - f0) * std::pow(std::clamp(1.0 - Dot(wo, h), 0.0, 1.0), 5.0);
+    const double g2 =
+        1.0 / (1.0 + SmithLambda(wo, alpha) + SmithLambda(wi, alpha));
+    return fresnel * GgxDistribution(h, alpha) * g2 / (4.0 * wo.z);
+  }
+
+  double Compensation(double f0) const { return 1.0 + f0 * (1.0 - e1) / e1; }
+
+  // The directional albedo of the compensated lobe.
+  double Albedo(double f0) const {
+    return Compensation(f0) * (f0 * e1 + (1.0 - f0) * e5);
+  }
+
+  double Value(double base, double metallic, Vec3 wi) const {
+    constexpr double kF0 = 0.04;
+    const double diffuse = wi.z > 0.0 ? base * wi.z / kPi : 0.0;
+    const double dielectric = Compensation(kF0) * Specular(kF0, wi) +
+        std::clamp(1.0 - Albedo(kF0), 0.0, 1.0) * diffuse;
+    const double metal = Compensation(base) * Specular(base, wi);
+    return (1.0 - metallic) * dielectric + metallic * metal;
+  }
+};
+
+// The oracle comparison's tolerance: the tables' interpolation error in
+// the compensation and the layer's factor, relative to the value, and float
+// rounding where the value is small.
+constexpr double kOracleRelative = 5.0e-3;
+constexpr double kOracleAbsolute = 2.0e-5;
+
+// Returns the worst relative deviation from the oracle. Directions are
+// uniform over the sphere and, where the lobes are wide enough for float
+// arithmetic to resolve their peak, the closure's own samples.
+double CheckGltfOracle(const Gltf& c, Result& r, const Target& t,
+    std::uint64_t seed) {
+  const double alpha = GltfAlpha(c);
+  const GltfOracle oracle(alpha, t.wo);
+  Random random(seed);
+  double worst = 0.0;
+  for (int i = 0; i < 96; ++i) {
+    Vec3 wi = UniformSphere(random);
+    if (i % 2 == 1 && alpha >= 0.01) {
+      const Sample s = DrawGltf(c,
+          {random.Uniform(), random.Uniform(), random.Uniform()});
+      if (!s.success) continue;
+      wi = s.wi;
+    }
+    // Near a near-mirror's peak, single precision does not resolve the
+    // half vector the distribution depends on.
+    if (alpha < 0.01 && wi.z > 0.0 &&
+        GgxDistribution(Normalize(t.wo + wi), alpha) > 10.0) {
+      continue;
+    }
+    const Evaluation actual = EvaluateGltf(c, wi);
+    for (int k = 0; k < 3; ++k) {
+      const double expected = oracle.Value(c.base[k], c.metallic, wi);
+      const double error = std::abs(actual.value[k] - expected);
+      const double allowed =
+          kOracleRelative * std::abs(expected) + kOracleAbsolute;
+      worst = std::max(worst,
+          error / std::max(std::abs(expected), kOracleAbsolute / kOracleRelative));
+      if (error > allowed) {
+        char text[224];
+        std::snprintf(text, sizeof(text),
+            "oracle: value %.6g, definition %.6g at wi (%.4f %.4f %.4f)",
+            actual.value[k], expected, wi.x, wi.y, wi.z);
+        Fail(r, t, text);
+        return worst;
+      }
+    }
+  }
+  return worst;
+}
+
+// A stored surface's closure: rebuilt from the terms read back from the
+// closure, it has the original's value and density.
+double CheckGltfStored(const Gltf& c, Result& r, const Target& t,
+    std::uint64_t seed) {
+  Random random(seed);
+  double worst = 0.0;
+  for (int i = 0; i < 64; ++i) {
+    Vec3 wi = UniformSphere(random);
+    if (i % 2 == 1) {
+      const Sample s = DrawGltf(c,
+          {random.Uniform(), random.Uniform(), random.Uniform()});
+      if (!s.success) continue;
+      wi = s.wi;
+    }
+    const Evaluation built = EvaluateGltf(c, wi);
+    const Evaluation stored = EvaluateGltf(c, wi, true);
+    double error = std::abs(stored.pdf - built.pdf) /
+        std::max(std::abs(built.pdf), 1.0e-6);
+    for (int k = 0; k < 3; ++k) {
+      error = std::max(error, std::abs(stored.value[k] - built.value[k]) /
+          std::max(std::abs(built.value[k]), 1.0e-6));
+    }
+    worst = std::max(worst, error);
+    if (error > 1.0e-5) {
+      char text[224];
+      std::snprintf(text, sizeof(text),
+          "stored: value %.6g pdf %.6g, built %.6g %.6g at wi (%.4f %.4f %.4f)",
+          stored.value[0], stored.pdf, built.value[0], built.pdf, wi.x, wi.y,
+          wi.z);
+      Fail(r, t, text);
+      return worst;
+    }
+  }
+  return worst;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   const std::vector<Config> full = Grid();
   const std::vector<Composed> composed_full = ComposedGrid();
+  const std::vector<Gltf> gltf_full = GltfGrid();
   // Targets refer to their configurations, which stay in place from here.
   std::vector<std::size_t> indices(full.size());
   for (std::size_t i = 0; i < indices.size(); ++i) indices[i] = i;
   std::vector<std::size_t> composed(composed_full.size());
   for (std::size_t i = 0; i < composed.size(); ++i) composed[i] = i;
+  std::vector<std::size_t> gltf(gltf_full.size());
+  for (std::size_t i = 0; i < gltf.size(); ++i) gltf[i] = i;
   bool tables = true;
   // --only <index>: one preview configuration with its bins, for diagnosis.
   // --composed <family>: the composed configurations of one family.
   if (argc == 3 && std::string(argv[1]) == "--only") {
     indices = {std::stoul(argv[2])};
     composed.clear();
+    gltf.clear();
     tables = false;
     g_dump_bins = true;
   }
   if (argc == 3 && std::string(argv[1]) == "--composed") {
     indices.clear();
     composed.clear();
+    gltf.clear();
     tables = false;
     for (std::size_t i = 0; i < composed_full.size(); ++i) {
       if (composed_full[i].family == argv[2]) composed.push_back(i);
     }
   }
+  // --gltf: the glTF PBR configurations.
+  if (argc == 2 && std::string(argv[1]) == "--gltf") {
+    indices.clear();
+    composed.clear();
+    tables = false;
+  }
   if (argc == 2 && std::string(argv[1]) == "--tables") {
     indices.clear();
     composed.clear();
+    gltf.clear();
   }
   // The significance is section 7.3's, corrected for every configuration
   // with statistics in the full run, so a partial run tests the same.
@@ -1480,6 +1837,9 @@ int main(int argc, char** argv) {
   }
   for (const Composed& c : composed_full) {
     statistics_configs += MakeComposedTarget(c).statistics ? 1 : 0;
+  }
+  for (const Gltf& c : gltf_full) {
+    statistics_configs += MakeGltfTarget(c).statistics ? 1 : 0;
   }
   const double chi2_significance = 0.01 / statistics_configs;
   // Each configuration's sequence is seeded by its index: the preview grid's
@@ -1494,6 +1854,12 @@ int main(int argc, char** argv) {
   for (std::size_t i : composed) {
     targets.push_back(MakeComposedTarget(composed_full[i]));
     seeds.push_back(0x10705B5DFull * (full.size() + i + 1));
+  }
+  const std::size_t first_gltf = targets.size();
+  for (std::size_t i : gltf) {
+    targets.push_back(MakeGltfTarget(gltf_full[i]));
+    seeds.push_back(
+        0x10705B5DFull * (full.size() + composed_full.size() + i + 1));
   }
   if (targets.size() == 1) {
     std::printf("%s\n", targets[0].name.c_str());
@@ -1511,7 +1877,14 @@ int main(int argc, char** argv) {
     pool.emplace_back([&] {
       for (std::size_t i; (i = next.fetch_add(1)) < targets.size();) {
         Result r = Run(targets[i], seeds[i], chi2_significance);
-        if (i >= first_composed) {
+        if (i >= first_gltf) {
+          const Gltf& c = gltf_full[gltf[i - first_gltf]];
+          measures[i].energy = CheckGltfEnergy(c, r, targets[i]);
+          measures[i].structure =
+              CheckGltfOracle(c, r, targets[i], seeds[i] + 1);
+          measures[i].reciprocity =
+              CheckGltfStored(c, r, targets[i], seeds[i] + 2);
+        } else if (i >= first_composed) {
           const Composed& c = composed_full[composed[i - first_composed]];
           measures[i].energy = CheckEnergy(c, r, targets[i]);
           measures[i].reciprocity =
@@ -1549,10 +1922,10 @@ int main(int argc, char** argv) {
     evaluations += r.evaluations;
     capped += r.capped;
   }
-  std::printf("lotus-bsdf-test: %zu configurations (%zu preview, %zu composed; "
-      "%d with statistics), %d samples each\n",
-      targets.size(), first_composed, targets.size() - first_composed,
-      with_statistics, kSamples);
+  std::printf("lotus-bsdf-test: %zu configurations (%zu preview, %zu composed, "
+      "%zu glTF PBR; %d with statistics), %d samples each\n",
+      targets.size(), first_composed, first_gltf - first_composed,
+      targets.size() - first_gltf, with_statistics, kSamples);
   std::printf("  1 pointwise: max relative pdf error %.3g, max mixture-ratio error %.3g\n",
       max_pdf_error, max_ratio_error);
   std::printf("  2 estimator: max |mean - integral| / se %.2f\n", max_sigma);
@@ -1570,7 +1943,7 @@ int main(int argc, char** argv) {
     Energy kind = Energy::kBound;
   };
   std::vector<Family> families;
-  for (std::size_t i = first_composed; i < targets.size(); ++i) {
+  for (std::size_t i = first_composed; i < first_gltf; ++i) {
     const Composed& c = composed_full[composed[i - first_composed]];
     auto it = std::find_if(families.begin(), families.end(),
         [&](const Family& f) { return f.name == c.family; });
@@ -1585,7 +1958,7 @@ int main(int argc, char** argv) {
     it->structure = std::max(it->structure, measures[i].structure);
   }
   // The measured losses by family and roughness.
-  for (std::size_t i = first_composed; i < targets.size(); ++i) {
+  for (std::size_t i = first_composed; i < first_gltf; ++i) {
     const Composed& c = composed_full[composed[i - first_composed]];
     if (c.energy != Energy::kLoss) continue;
     std::printf("    loss %-22s roughness %.1f cos_o %.2f: %.4f (%s)\n",
@@ -1596,6 +1969,21 @@ int main(int argc, char** argv) {
         : f.kind == Energy::kLoss ? "loss" : "albedo - 1";
     std::printf("  %-22s %4d: max %s %.3g, reciprocity %.2g, structure %.2g\n",
         f.name.c_str(), f.count, kind, f.energy, f.reciprocity, f.structure);
+  }
+
+  // glTF PBR's measures (docs/design/GLTF_PBR.md section 8.1).
+  if (first_gltf < targets.size()) {
+    double furnace = 0.0, bound = 0.0, oracle = 0.0, stored = 0.0;
+    for (std::size_t i = first_gltf; i < targets.size(); ++i) {
+      const Gltf& c = gltf_full[gltf[i - first_gltf]];
+      (c.colour == "white" ? furnace : bound) =
+          std::max(c.colour == "white" ? furnace : bound, measures[i].energy);
+      oracle = std::max(oracle, measures[i].structure);
+      stored = std::max(stored, measures[i].reciprocity);
+    }
+    std::printf("  gltf-pbr               %4zu: max |albedo - 1| %.3g (white), "
+        "albedo - 1 %.3g, definition oracle %.3g, stored closure %.2g\n",
+        targets.size() - first_gltf, furnace, bound, oracle, stored);
   }
 
   // Section 7's assertion 6: the tables.

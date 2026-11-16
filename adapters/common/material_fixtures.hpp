@@ -135,6 +135,20 @@ void SetMaterialPrimvars(Lotus::RenderWorld& world);
 // which keep the input's default.
 void SetMaterialGraphs(Lotus::RenderWorld& world);
 
+// Replaces the world's camera and scene with material-gltf-v1: a 5x5 grid
+// of coarse spheres and cards under material-basics-v1's camera, lights and
+// backdrop, every material MaterialX's glTF PBR (docs/design/GLTF_PBR.md
+// section 8.3). Rows from the top: the definition's defaults, dielectrics
+// and metals on spheres; a base colour image as usd-gltf-plugins authors
+// it, its factor by a product and by ND_gltf_colorimage, a packed
+// metallic-roughness image and a rotated one; the same normal map through
+// ND_gltf_normalmap and ND_normalmap, on a metal sphere, and constant and
+// mapped emission with a strength; OPAQUE over an alpha it does not read,
+// MASK from an image's alpha and at cutoffs of 0 and above 1, and BLEND;
+// then an unlit material and clearcoat, transmission, an index and a vertex
+// colour, none of which the model represents.
+void SetMaterialGltf(Lotus::RenderWorld& world);
+
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.
   std::string_view id;

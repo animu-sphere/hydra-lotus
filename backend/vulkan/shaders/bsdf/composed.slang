@@ -11,19 +11,33 @@
 // closure is built, so a closure is evaluated, given a density and sampled
 // only for the wo it was built for, and those functions read no table.
 //
+// A model builds its closure in a ComposedBuilder, which also holds what
+// only the operations need, and ComposedFinalize hands over the closure the
+// three functions read (docs/design/GLTF_PBR.md section 6.2).
+//
 // Directions are in the shading frame of the BSDF API (docs/design/
 // BSDF_API.md section 4); each lobe evaluates in the frame about its own
 // normal (section 5.3).
 module composed;
 
-import bsdf.bsdf;
+import bsdf.preview;
 import bsdf.lobes;
 import bsdf.albedo;
 import common.spectrum;
 
-// The largest list a model needs: OpenPBR's fuzz, coat, specular, metal,
-// transmission and diffuse. LOTUS-MATERIALX-05 measures its register cost.
-public static const uint kMaxLobes = 6;
+// The largest list an implemented model builds: glTF PBR's dielectric
+// reflection, diffuse and metal. The CPU probe compiles with six, the list
+// OpenPBR's fuzz, coat, specular, metal, transmission and diffuse make, so
+// its tests cover deeper stacks than the scene passes carry yet.
+#ifndef LOTUS_MAX_LOBES
+#define LOTUS_MAX_LOBES 3
+#endif
+public static const uint kMaxLobes = LOTUS_MAX_LOBES;
+// Dielectric lobes, lobe normals and attenuation, which the scene passes
+// leave out until a model builds them (lobes.slang).
+#ifndef LOTUS_COMPOSED_FULL
+#define LOTUS_COMPOSED_FULL 0
+#endif
 
 // A lobe with a positive estimate is chosen at least this often, before
 // renormalization (section 5.5).
@@ -46,6 +60,14 @@ public struct ComposedClosure {
   public Lobe lobes[kMaxLobes];
   public Spectrum weights[kMaxLobes];
   public Attenuation attenuations[kMaxLobes];
+  // Set by ComposedFinalize.
+  public float probabilities[kMaxLobes];
+};
+
+// A closure under construction, and what the operations need of each lobe
+// beside it.
+public struct ComposedBuilder {
+  public ComposedClosure closure;
   // The lobe's albedo toward wo as a layer above it sees it: the energy it
   // reflects, compensation included, before a dielectric's tint (as
   // MaterialX's dielectric_bsdf leaves its tint out of a layer's
@@ -54,17 +76,15 @@ public struct ComposedClosure {
   // Its estimated contribution toward wo, tint included, every scatter
   // mode counted: the basis of its selection probability.
   public Spectrum estimates[kMaxLobes];
-  // Set by ComposedFinalize.
-  public float probabilities[kMaxLobes];
 };
 
 public ComposedClosure ComposedEmpty() {
   ComposedClosure closure;
   closure.count = 0;
   for (uint k = 0; k < kMaxLobes; ++k) {
+    closure.lobes[k] = MakeLambertLobe(SpectrumConstant(0.0),
+        float3(0.0, 0.0, 1.0));
     closure.weights[k] = SpectrumConstant(0.0);
-    closure.albedos[k] = SpectrumConstant(0.0);
-    closure.estimates[k] = SpectrumConstant(0.0);
     closure.probabilities[k] = 0.0;
     closure.attenuations[k].active = false;
     closure.attenuations[k].transmittance = SpectrumConstant(1.0);
@@ -72,6 +92,16 @@ public ComposedClosure ComposedEmpty() {
     closure.attenuations[k].eta = 1.0;
   }
   return closure;
+}
+
+public ComposedBuilder ComposedBegin() {
+  ComposedBuilder builder;
+  builder.closure = ComposedEmpty();
+  for (uint k = 0; k < kMaxLobes; ++k) {
+    builder.albedos[k] = SpectrumConstant(0.0);
+    builder.estimates[k] = SpectrumConstant(0.0);
+  }
+  return builder;
 }
 
 // The path length through an attenuating layer along w.
@@ -84,104 +114,137 @@ float PathLength(Attenuation attenuation, float3 w) {
 
 public Spectrum AttenuationFactor(Attenuation attenuation, float3 wo,
     float3 wi) {
+#if LOTUS_COMPOSED_FULL
   if (!attenuation.active) {
     return SpectrumConstant(1.0);
   }
   return SpectrumPow(attenuation.transmittance,
       PathLength(attenuation, wo) + PathLength(attenuation, wi));
+#else
+  return SpectrumConstant(1.0);
+#endif
+}
+
+// Appends a lobe of weight 1 with its albedo and estimate, and returns its
+// position.
+uint ComposedPush(inout ComposedBuilder builder, Lobe lobe, Spectrum albedo,
+    Spectrum estimate) {
+  const uint k = builder.closure.count;
+  if (k >= kMaxLobes) {
+    return k;
+  }
+  builder.closure.count = k + 1;
+  builder.closure.weights[k] = SpectrumConstant(1.0);
+  builder.closure.lobes[k] = lobe;
+  builder.albedos[k] = albedo;
+  builder.estimates[k] = estimate;
+  return k;
+}
+
+// Adds a Lambert lobe of weight 1 and returns its position.
+public uint ComposedAddLambert(inout ComposedBuilder builder, Lobe lobe,
+    float3 wo) {
+  const Spectrum albedo = dot(wo, lobe.normal) > 0.0
+      ? lobe.color : SpectrumConstant(0.0);
+  return ComposedPush(builder, lobe, albedo, albedo);
+}
+
+// Adds a GgxSchlick lobe of weight 1 and returns its position. `e1` and
+// `share` are AlbedoGgx and AlbedoSchlickShare at the lobe's alpha and wo's
+// cosine about its normal, so lobes that share both share one lookup, and a
+// closure is rebuilt from stored values without a table.
+public uint ComposedAddSchlick(inout ComposedBuilder builder, Lobe added,
+    float3 wo, float e1, float share) {
+  Lobe lobe = added;
+  Spectrum albedo = SpectrumConstant(0.0);
+  if (dot(wo, lobe.normal) > 0.0) {
+    if (lobe.compensate && e1 > 0.0) {
+      lobe.compensation =
+          SpectrumConstant(1.0) + lobe.color * ((1.0 - e1) / e1);
+    }
+    albedo = (lobe.color * (e1 - share) + lobe.f90 * share) *
+        lobe.compensation;
+  }
+  return ComposedPush(builder, lobe, albedo, albedo);
 }
 
 // Adds a lobe of weight 1 and returns its position. Computes its
 // compensation, albedo and estimate for wo from the tables.
-public uint ComposedAdd<T : IAlbedoTables>(inout ComposedClosure closure,
+public uint ComposedAdd<T : IAlbedoTables>(inout ComposedBuilder builder,
     Lobe added, float3 wo, T tables) {
   Lobe lobe = added;
-  const uint k = closure.count;
-  if (k >= kMaxLobes) {
-    return k;
-  }
-  closure.count = k + 1;
-  closure.weights[k] = SpectrumConstant(1.0);
   const float mu = dot(wo, lobe.normal);
+  switch (lobe.type) {
+  case kLambertLobe:
+    return ComposedAddLambert(builder, lobe, wo);
+  case kGgxSchlickLobe: {
+    float e1 = 0.0;
+    float share = 0.0;
+    if (mu > 0.0) {
+      e1 = AlbedoGgx(tables, mu, lobe.alpha);
+      share = AlbedoSchlickShare(tables, mu, lobe.alpha);
+    }
+    return ComposedAddSchlick(builder, lobe, wo, e1, share);
+  }
+  default:
+    break;
+  }
   Spectrum albedo = SpectrumConstant(0.0);
   Spectrum estimate = SpectrumConstant(0.0);
   if (mu > 0.0) {
-    switch (lobe.type) {
-    case kLambertLobe:
-      albedo = lobe.color;
-      estimate = lobe.color;
-      break;
-    case kGgxSchlickLobe: {
+    const bool reflects = (lobe.scatter & kScatterReflect) != 0;
+    const bool transmits = (lobe.scatter & kScatterTransmit) != 0;
+    float reflected = 0.0;
+    if (lobe.smooth) {
+      reflected = DielectricReflectance(lobe, mu);
+    } else {
+      reflected = AlbedoDielectric(tables, mu, lobe.alpha, lobe.eta,
+          lobe.thin_walled);
       const float e1 = AlbedoGgx(tables, mu, lobe.alpha);
-      const float share = AlbedoSchlickShare(tables, mu, lobe.alpha);
       if (lobe.compensate && e1 > 0.0) {
-        lobe.compensation =
-            SpectrumConstant(1.0) + lobe.color * ((1.0 - e1) / e1);
+        const float f0 = DielectricReflectance(lobe, 1.0);
+        lobe.compensation = SpectrumConstant(1.0 + f0 * (1.0 - e1) / e1);
       }
-      albedo = (lobe.color * (e1 - share) + lobe.f90 * share) *
-          lobe.compensation;
-      estimate = albedo;
-      break;
     }
-    default: {
-      const bool reflects = (lobe.scatter & kScatterReflect) != 0;
-      const bool transmits = (lobe.scatter & kScatterTransmit) != 0;
-      float reflected = 0.0;
-      if (lobe.smooth) {
-        reflected = DielectricReflectance(lobe, mu);
-      } else {
-        reflected = AlbedoDielectric(tables, mu, lobe.alpha, lobe.eta,
-            lobe.thin_walled);
-        const float e1 = AlbedoGgx(tables, mu, lobe.alpha);
-        if (lobe.compensate && e1 > 0.0) {
-          const float f0 = DielectricReflectance(lobe, 1.0);
-          lobe.compensation = SpectrumConstant(1.0 + f0 * (1.0 - e1) / e1);
-        }
-      }
-      const Spectrum reflected_albedo = lobe.compensation * reflected;
-      if (reflects) {
-        albedo = reflected_albedo;
-        estimate = reflected_albedo;
-      }
-      if (transmits) {
-        estimate = estimate + SpectrumConstant(max(1.0 - reflected, 0.0));
-      }
-      estimate = estimate * lobe.color;
-      break;
+    const Spectrum reflected_albedo = lobe.compensation * reflected;
+    if (reflects) {
+      albedo = reflected_albedo;
+      estimate = reflected_albedo;
     }
+    if (transmits) {
+      estimate = estimate + SpectrumConstant(max(1.0 - reflected, 0.0));
     }
+    estimate = estimate * lobe.color;
   }
-  closure.lobes[k] = lobe;
-  closure.albedos[k] = albedo;
-  closure.estimates[k] = estimate;
-  return k;
+  return ComposedPush(builder, lobe, albedo, estimate);
 }
 
 // MaterialX's multiply: scales the weights of lobes [begin, end).
-public void ComposedScale(inout ComposedClosure closure, uint begin, uint end,
+public void ComposedScale(inout ComposedBuilder builder, uint begin, uint end,
     Spectrum scale) {
-  for (uint k = begin; k < min(end, closure.count); ++k) {
-    closure.weights[k] = closure.weights[k] * scale;
+  for (uint k = begin; k < min(end, builder.closure.count); ++k) {
+    builder.closure.weights[k] = builder.closure.weights[k] * scale;
   }
 }
 
 // MaterialX's mix, bg * (1 - m) + fg * m, of the background lobes
 // [begin, split) and the foreground lobes [split, end). Concatenating two
 // ranges is MaterialX's add.
-public void ComposedMix(inout ComposedClosure closure, uint begin, uint split,
+public void ComposedMix(inout ComposedBuilder builder, uint begin, uint split,
     uint end, float mix) {
-  ComposedScale(closure, begin, split, SpectrumConstant(1.0 - mix));
-  ComposedScale(closure, split, end, SpectrumConstant(mix));
+  ComposedScale(builder, begin, split, SpectrumConstant(1.0 - mix));
+  ComposedScale(builder, split, end, SpectrumConstant(mix));
 }
 
 // The total albedo toward wo of lobes [begin, end), as a layer above them
 // sees it: sum_k W_k * A_k(wo, wo) * E_k(wo).
-public Spectrum ComposedAlbedo(ComposedClosure closure, uint begin, uint end,
+public Spectrum ComposedAlbedo(ComposedBuilder builder, uint begin, uint end,
     float3 wo) {
   Spectrum albedo = SpectrumConstant(0.0);
-  for (uint k = begin; k < min(end, closure.count); ++k) {
-    albedo = albedo + closure.weights[k] *
-        AttenuationFactor(closure.attenuations[k], wo, wo) * closure.albedos[k];
+  for (uint k = begin; k < min(end, builder.closure.count); ++k) {
+    albedo = albedo + builder.closure.weights[k] *
+        AttenuationFactor(builder.closure.attenuations[k], wo, wo) *
+        builder.albedos[k];
   }
   return albedo;
 }
@@ -189,39 +252,41 @@ public Spectrum ComposedAlbedo(ComposedClosure closure, uint begin, uint end,
 // MaterialX's layer of the top lobes [begin, split) over the base lobes
 // [split, end) (section 4.1): every base weight is scaled by
 // 1 - E_top(wo).
-public void ComposedLayer(inout ComposedClosure closure, uint begin,
+public void ComposedLayer(inout ComposedBuilder builder, uint begin,
     uint split, uint end, float3 wo) {
-  const Spectrum top = ComposedAlbedo(closure, begin, split, wo);
-  ComposedScale(closure, split, end,
+  const Spectrum top = ComposedAlbedo(builder, begin, split, wo);
+  ComposedScale(builder, split, end,
       SpectrumSaturate(SpectrumConstant(1.0) - top));
 }
 
 // Attaches a layer's absorption (section 5.4) to lobes [begin, end),
 // replacing any they had: a lobe has at most one.
-public void ComposedAttenuate(inout ComposedClosure closure, uint begin,
+public void ComposedAttenuate(inout ComposedBuilder builder, uint begin,
     uint end, Spectrum transmittance, float3 normal, float eta) {
-  for (uint k = begin; k < min(end, closure.count); ++k) {
-    closure.attenuations[k].active = true;
-    closure.attenuations[k].transmittance = SpectrumSaturate(transmittance);
-    closure.attenuations[k].normal = normal;
-    closure.attenuations[k].eta = eta;
+  for (uint k = begin; k < min(end, builder.closure.count); ++k) {
+    builder.closure.attenuations[k].active = true;
+    builder.closure.attenuations[k].transmittance =
+        SpectrumSaturate(transmittance);
+    builder.closure.attenuations[k].normal = normal;
+    builder.closure.attenuations[k].eta = eta;
   }
 }
 
-// Sets the selection probabilities once the closure is complete (section
-// 5.5): proportional to each lobe's estimated contribution toward wo, at
-// least the floor for every lobe with a positive estimate, renormalized.
-public void ComposedFinalize(inout ComposedClosure closure, float3 wo) {
+// The finished closure, with its selection probabilities (section 5.5):
+// proportional to each lobe's estimated contribution toward wo, at least
+// the floor for every lobe with a positive estimate, renormalized.
+public ComposedClosure ComposedFinalize(ComposedBuilder builder, float3 wo) {
+  ComposedClosure closure = builder.closure;
   float total = 0.0;
   for (uint k = 0; k < closure.count; ++k) {
     const float estimate = MaxComponent(closure.weights[k] *
         AttenuationFactor(closure.attenuations[k], wo, wo) *
-        closure.estimates[k]);
+        builder.estimates[k]);
     closure.probabilities[k] = estimate > 0.0 ? estimate : 0.0;
     total += closure.probabilities[k];
   }
   if (!(total > 0.0)) {
-    return;
+    return closure;
   }
   float floored = 0.0;
   for (uint k = 0; k < closure.count; ++k) {
@@ -234,6 +299,7 @@ public void ComposedFinalize(inout ComposedClosure closure, float3 wo) {
   for (uint k = 0; k < closure.count; ++k) {
     closure.probabilities[k] /= floored;
   }
+  return closure;
 }
 
 // f(wo, wi) * |cos(theta_i)| of the non-delta lobes, each about its normal.

@@ -16,7 +16,12 @@ endif()
 
 # The modules the path tracer's entry points and the wavefront kernels import.
 set(_scene_modules
+  bsdf/albedo.slang
   bsdf/bsdf.slang
+  bsdf/composed.slang
+  bsdf/gltf_pbr.slang
+  bsdf/lobes.slang
+  bsdf/preview.slang
   common/path_state.slang
   common/restir.slang
   common/temporal.slang

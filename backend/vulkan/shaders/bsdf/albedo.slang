@@ -14,7 +14,7 @@
 // generator asks for the parameters at each node.
 module albedo;
 
-import bsdf.bsdf;
+import bsdf.preview;
 
 // The table data, one float per node.
 public interface IAlbedoTables {

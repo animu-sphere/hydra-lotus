@@ -72,12 +72,60 @@ void ValidateTextureInput(const std::optional<TextureInput>& input,
   }
 }
 
+// The fields every shading model shares.
+void ValidateGeometry(const MaterialGeometry& geometry) {
+  if (!Finite(geometry.normal) ||
+      !std::all_of(geometry.normal.begin(), geometry.normal.end(),
+          [](float value) { return value >= -1.0F && value <= 1.0F; })) {
+    throw std::invalid_argument("tangent normal components must be in [-1, 1]");
+  }
+  ValidateTextureInput(geometry.normal_texture, true);
+  if (!UnitInterval(geometry.opacity) ||
+      !UnitInterval(geometry.opacity_threshold)) {
+    throw std::invalid_argument("opacity and threshold must be in [0, 1]");
+  }
+  ValidateTextureInput(geometry.opacity_texture, false);
+  if (!std::isfinite(geometry.texcoord_fallback[0]) ||
+      !std::isfinite(geometry.texcoord_fallback[1])) {
+    throw std::invalid_argument("texture coordinate fallback must be finite");
+  }
+}
+
+void ValidateGltfPbr(const GltfPbr& material) {
+  if (!Finite(material.base_color.value) ||
+      !std::all_of(material.base_color.value.begin(),
+          material.base_color.value.end(), UnitInterval)) {
+    throw std::invalid_argument("base colour components must be in [0, 1]");
+  }
+  if (!UnitInterval(material.roughness.value) ||
+      !UnitInterval(material.metallic.value)) {
+    throw std::invalid_argument("roughness and metallic must be in [0, 1]");
+  }
+  if (!Finite(material.emissive.value) ||
+      !std::all_of(material.emissive.value.begin(),
+          material.emissive.value.end(),
+          [](float value) { return value >= 0.0F; }) ||
+      !std::isfinite(material.emissive_strength) ||
+      material.emissive_strength < 0.0F) {
+    throw std::invalid_argument(
+        "emissive and its strength must be finite and non-negative");
+  }
+  ValidateTextureInput(material.base_color.texture, true);
+  ValidateTextureInput(material.roughness.texture, false);
+  ValidateTextureInput(material.metallic.texture, false);
+  ValidateTextureInput(material.emissive.texture, true);
+}
+
 void ValidateMaterial(const Material& material_ir) {
+  ValidateGeometry(material_ir.geometry);
+  if (const auto* gltf = std::get_if<GltfPbr>(&material_ir.surface)) {
+    ValidateGltfPbr(*gltf);
+    return;
+  }
   if (material_ir.Model() != ShadingModel::UsdPreviewSurface) {
     throw std::invalid_argument(
-        "only UsdPreviewSurface materials have parameters yet");
+        "Standard Surface and OpenPBR materials have no parameters yet");
   }
-  const MaterialGeometry& geometry = material_ir.geometry;
   const PreviewSurface& material = Preview(material_ir);
   if (!Finite(material.base_color) ||
       !std::all_of(material.base_color.begin(), material.base_color.end(),
@@ -96,17 +144,6 @@ void ValidateMaterial(const Material& material_ir) {
   ValidateTextureInput(material.roughness_texture, false);
   ValidateTextureInput(material.metallic_texture, false);
   ValidateTextureInput(material.emission_texture, true);
-  if (!Finite(geometry.normal) ||
-      !std::all_of(geometry.normal.begin(), geometry.normal.end(),
-          [](float value) { return value >= -1.0F && value <= 1.0F; })) {
-    throw std::invalid_argument("tangent normal components must be in [-1, 1]");
-  }
-  ValidateTextureInput(geometry.normal_texture, true);
-  if (!UnitInterval(geometry.opacity) ||
-      !UnitInterval(geometry.opacity_threshold)) {
-    throw std::invalid_argument("opacity and threshold must be in [0, 1]");
-  }
-  ValidateTextureInput(geometry.opacity_texture, false);
   if (!std::isfinite(material.ior) || material.ior < 1.0F) {
     throw std::invalid_argument("ior must be finite and >= 1");
   }
@@ -126,10 +163,6 @@ void ValidateMaterial(const Material& material_ir) {
   if (material.use_specular_workflow && material.transmission > 0.0F) {
     throw std::invalid_argument(
         "transmission needs the metallic workflow's ior");
-  }
-  if (!std::isfinite(geometry.texcoord_fallback[0]) ||
-      !std::isfinite(geometry.texcoord_fallback[1])) {
-    throw std::invalid_argument("texture coordinate fallback must be finite");
   }
 }
 

@@ -126,32 +126,55 @@ std::vector<GeometrySection> ChangedSections(const MeshGeometry& previous,
   return sections;
 }
 
+// The directional albedo tables of the composed closures, in albedo.slang's
+// layout: committed data that lotus-bsdf-tables generates from the lobes
+// and lotus-bsdf-test holds to them. The literals are doubles; the shaders
+// read floats.
+constexpr double kAlbedoTables[] = {
+#include "bsdf-albedo-tables.inc"
+};
+constexpr VkDeviceSize kAlbedoTableBytes =
+    std::size(kAlbedoTables) * sizeof(float);
+
 // The light table's estimate of a material's emitted radiance per unit
 // area: the mean of its RGB emission. A texture lookup is estimated by its
 // bound for texels in [0, 1], a missing texture by its fallback. The
 // estimate only steers which triangles next event estimation samples;
 // emission it misses is still found by BSDF sampling.
 double EmissionEstimate(const SceneMaterial& entry) {
-  // Only UsdPreviewSurface has parameters, and the table holds no other
-  // model (ValidMaterial).
-  const PreviewSurface* material =
-      std::get_if<PreviewSurface>(&entry.material.surface);
-  if (material == nullptr) {
+  // The model's emission input, its lookup's slot, and a constant factor.
+  const std::array<float, 3>* constant = nullptr;
+  const std::optional<TextureInput>* texture = nullptr;
+  std::size_t slot = 0;
+  double factor = 1.0;
+  if (const auto* preview =
+          std::get_if<PreviewSurface>(&entry.material.surface)) {
+    constant = &preview->emission;
+    texture = &preview->emission_texture;
+    slot = kPreviewEmissionSlot;
+  } else if (const auto* gltf =
+                 std::get_if<GltfPbr>(&entry.material.surface)) {
+    constant = &gltf->emissive.value;
+    texture = &gltf->emissive.texture;
+    slot = kGltfEmissiveSlot;
+    factor = gltf->emissive_strength;
+  } else {
     return 0.0;
   }
   std::array<double, 3> emission{};
-  if (!material->emission_texture) {
+  if (!*texture) {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = material->emission[c];
-  } else if (entry.textures[kPreviewEmissionSlot] == nullptr) {
+      emission[c] = (*constant)[c];
+  } else if (entry.textures[slot] == nullptr) {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = std::max(0.0F, material->emission_texture->fallback[c]);
+      emission[c] = std::max(0.0F, (*texture)->fallback[c]);
   } else {
     for (std::size_t c = 0; c < 3; ++c)
-      emission[c] = std::max(0.0F, material->emission_texture->scale[c]) +
-                    std::max(0.0F, material->emission_texture->bias[c]);
+      emission[c] = std::max(0.0F, (*texture)->scale[c]) +
+                    std::max(0.0F, (*texture)->bias[c]);
   }
-  const double mean = (emission[0] + emission[1] + emission[2]) / 3.0;
+  const double mean =
+      factor * (emission[0] + emission[1] + emission[2]) / 3.0;
   return std::isfinite(mean) && mean > 0.0 ? mean : 0.0;
 }
 
@@ -827,13 +850,34 @@ bool ValidPreview(const PreviewSurface& material) {
          !(material.use_specular_workflow && material.transmission > 0.0F);
 }
 
-// The models other than UsdPreviewSurface have no parameters until their
-// tasks, so the scene passes cannot shade them yet.
+bool ValidGltfPbr(const GltfPbr& material) {
+  const auto unit = UnitInterval;
+  return std::all_of(material.base_color.value.begin(),
+             material.base_color.value.end(), unit) &&
+         unit(material.roughness.value) && unit(material.metallic.value) &&
+         ValidRadiance(material.emissive.value) &&
+         std::isfinite(material.emissive_strength) &&
+         material.emissive_strength >= 0.0F &&
+         ValidTextureInput(material.base_color.texture, true) &&
+         ValidTextureInput(material.roughness.texture, false) &&
+         ValidTextureInput(material.metallic.texture, false) &&
+         ValidTextureInput(material.emissive.texture, true);
+}
+
+// Standard Surface and OpenPBR have no parameters until their tasks, so the
+// scene passes cannot shade them yet.
 bool ValidMaterial(const SceneMaterial& entry) {
-  const PreviewSurface* preview =
-      std::get_if<PreviewSurface>(&entry.material.surface);
-  return preview != nullptr && ValidGeometry(entry.material.geometry) &&
-         ValidPreview(*preview);
+  if (!ValidGeometry(entry.material.geometry)) {
+    return false;
+  }
+  if (const auto* preview =
+          std::get_if<PreviewSurface>(&entry.material.surface)) {
+    return ValidPreview(*preview);
+  }
+  if (const auto* gltf = std::get_if<GltfPbr>(&entry.material.surface)) {
+    return ValidGltfPbr(*gltf);
+  }
+  return false;
 }
 
 // The binding table's lookups for a material table.
@@ -1014,8 +1058,34 @@ bool GpuScene::Initialize(VkPhysicalDevice physical_device, VkDevice device,
   }
   stats_.timestamps_available = timestamps_ != VK_NULL_HANDLE;
   VkFenceCreateInfo fence_create{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  return VulkanOk(vkCreateFence(device_, &fence_create, nullptr, &fence_),
-      "vkCreateFence(scene)", detail);
+  if (!VulkanOk(vkCreateFence(device_, &fence_create, nullptr, &fence_),
+          "vkCreateFence(scene)", detail)) {
+    return false;
+  }
+  // Only the scene passes read the tables, and they need acceleration
+  // structures.
+  return !acceleration_ || UploadAlbedoTables(detail);
+}
+
+bool GpuScene::UploadAlbedoTables(std::string& detail) {
+  if (!CreateDeviceBuffer(kAlbedoTableBytes,
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+          albedo_tables_, detail) ||
+      !EnsureStaging(kAlbedoTableBytes, detail)) {
+    return false;
+  }
+  auto* values = static_cast<float*>(staging_.mapped);
+  for (std::size_t index = 0; index < std::size(kAlbedoTables); ++index) {
+    values[index] = static_cast<float>(kAlbedoTables[index]);
+  }
+  if (!Flush(staging_, detail) || !BeginCommands(detail)) {
+    return false;
+  }
+  const VkBufferCopy copy{0, 0, kAlbedoTableBytes};
+  vkCmdCopyBuffer(command_, staging_.buffer, albedo_tables_.buffer, 1, &copy);
+  return SubmitAndWait(detail);
 }
 
 void GpuScene::Destroy() {
@@ -1043,6 +1113,7 @@ void GpuScene::Destroy() {
   DestroyBuffer(memory_, device_, materials_);
   DestroyBuffer(memory_, device_, lights_);
   DestroyBuffer(memory_, device_, environment_buffer_);
+  DestroyBuffer(memory_, device_, albedo_tables_);
   environment_map_.reset();
   environment_lit_ = false;
   environment_mean_ = 0.0;
@@ -1951,13 +2022,8 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       const SceneMaterial& entry = material_table_[index];
       const Material& material = entry.material;
       const MaterialGeometry& geometry = material.geometry;
-      const PreviewSurface& preview = Preview(material);
       GpuMaterialRecord record{};
-      record.model_flags =
-          static_cast<std::uint32_t>(material.Model()) |
-          ((preview.use_specular_workflow ? kPreviewSpecularWorkflow : 0U) |
-              (preview.thin_walled ? kPreviewThinWalled : 0U))
-              << kMaterialFlagShift;
+      record.model_flags = static_cast<std::uint32_t>(material.Model());
       record.lookup_base = binding;
       record.geometry_coverage[0] = geometry.texcoord_fallback[0];
       record.geometry_coverage[1] = geometry.texcoord_fallback[1];
@@ -1965,18 +2031,33 @@ bool GpuScene::Apply(const SceneUpdate& update, std::string& detail) {
       record.geometry_coverage[3] = geometry.opacity_threshold;
       std::copy(geometry.normal.begin(), geometry.normal.end(),
           record.geometry_normal);
-      std::copy(preview.base_color.begin(), preview.base_color.end(),
-          record.parameters[0]);
-      record.parameters[0][3] = preview.roughness;
-      std::copy(preview.emission.begin(), preview.emission.end(),
-          record.parameters[1]);
-      record.parameters[1][3] = preview.metallic;
-      std::copy(preview.specular_color.begin(), preview.specular_color.end(),
-          record.parameters[2]);
-      record.parameters[2][3] = preview.ior;
-      std::copy(preview.transmission_color.begin(),
-          preview.transmission_color.end(), record.parameters[3]);
-      record.parameters[3][3] = preview.transmission;
+      if (const auto* gltf = std::get_if<GltfPbr>(&material.surface)) {
+        std::copy(gltf->base_color.value.begin(),
+            gltf->base_color.value.end(), record.parameters[0]);
+        record.parameters[0][3] = gltf->roughness.value;
+        std::copy(gltf->emissive.value.begin(), gltf->emissive.value.end(),
+            record.parameters[1]);
+        record.parameters[1][3] = gltf->metallic.value;
+        record.parameters[2][0] = gltf->emissive_strength;
+      } else {
+        const PreviewSurface& preview = Preview(material);
+        record.model_flags |=
+            ((preview.use_specular_workflow ? kPreviewSpecularWorkflow : 0U) |
+                (preview.thin_walled ? kPreviewThinWalled : 0U))
+            << kMaterialFlagShift;
+        std::copy(preview.base_color.begin(), preview.base_color.end(),
+            record.parameters[0]);
+        record.parameters[0][3] = preview.roughness;
+        std::copy(preview.emission.begin(), preview.emission.end(),
+            record.parameters[1]);
+        record.parameters[1][3] = preview.metallic;
+        std::copy(preview.specular_color.begin(),
+            preview.specular_color.end(), record.parameters[2]);
+        record.parameters[2][3] = preview.ior;
+        std::copy(preview.transmission_color.begin(),
+            preview.transmission_color.end(), record.parameters[3]);
+        record.parameters[3][3] = preview.transmission;
+      }
       const auto inputs = TextureInputs(material);
       for (std::size_t input = 0; input < inputs.size(); ++input) {
         if (!inputs[input]->has_value()) {
@@ -2557,34 +2638,49 @@ bool GpuScene::ReadBack(GpuSceneContents& contents, std::string& detail) {
         kMaterialBytes);
     GpuMaterialContents& entry = contents.materials.emplace_back();
     Material& material = entry.material;
-    // Only UsdPreviewSurface reaches the table (ValidMaterial).
+    // Only UsdPreviewSurface and glTF PBR reach the table (ValidMaterial).
     MaterialGeometry& geometry = material.geometry;
-    PreviewSurface& preview = Preview(material);
-    const std::uint32_t flags = record.model_flags >> kMaterialFlagShift;
-    preview.use_specular_workflow = (flags & kPreviewSpecularWorkflow) != 0;
-    preview.thin_walled = (flags & kPreviewThinWalled) != 0;
+    const bool is_gltf =
+        (record.model_flags & ((1U << kMaterialFlagShift) - 1U)) ==
+        static_cast<std::uint32_t>(ShadingModel::GltfPbr);
     geometry.texcoord_fallback = {record.geometry_coverage[0],
         record.geometry_coverage[1]};
     geometry.opacity = record.geometry_coverage[2];
     geometry.opacity_threshold = record.geometry_coverage[3];
     std::copy(record.geometry_normal, record.geometry_normal + 3,
         geometry.normal.begin());
-    std::copy(record.parameters[0], record.parameters[0] + 3,
-        preview.base_color.begin());
-    preview.roughness = record.parameters[0][3];
-    std::copy(record.parameters[1], record.parameters[1] + 3,
-        preview.emission.begin());
-    preview.metallic = record.parameters[1][3];
-    std::copy(record.parameters[2], record.parameters[2] + 3,
-        preview.specular_color.begin());
-    preview.ior = record.parameters[2][3];
-    std::copy(record.parameters[3], record.parameters[3] + 3,
-        preview.transmission_color.begin());
-    preview.transmission = record.parameters[3][3];
-    const auto inputs = PreviewTextureInputs(material);
+    if (is_gltf) {
+      GltfPbr& gltf = material.surface.emplace<GltfPbr>();
+      std::copy(record.parameters[0], record.parameters[0] + 3,
+          gltf.base_color.value.begin());
+      gltf.roughness.value = record.parameters[0][3];
+      std::copy(record.parameters[1], record.parameters[1] + 3,
+          gltf.emissive.value.begin());
+      gltf.metallic.value = record.parameters[1][3];
+      gltf.emissive_strength = record.parameters[2][0];
+    } else {
+      PreviewSurface& preview = Preview(material);
+      const std::uint32_t flags = record.model_flags >> kMaterialFlagShift;
+      preview.use_specular_workflow = (flags & kPreviewSpecularWorkflow) != 0;
+      preview.thin_walled = (flags & kPreviewThinWalled) != 0;
+      std::copy(record.parameters[0], record.parameters[0] + 3,
+          preview.base_color.begin());
+      preview.roughness = record.parameters[0][3];
+      std::copy(record.parameters[1], record.parameters[1] + 3,
+          preview.emission.begin());
+      preview.metallic = record.parameters[1][3];
+      std::copy(record.parameters[2], record.parameters[2] + 3,
+          preview.specular_color.begin());
+      preview.ior = record.parameters[2][3];
+      std::copy(record.parameters[3], record.parameters[3] + 3,
+          preview.transmission_color.begin());
+      preview.transmission = record.parameters[3][3];
+    }
+    const auto inputs = MutableTextureInputs(material);
     std::uint32_t binding = record.lookup_base;
     for (std::size_t input = 0; input < inputs.size(); ++input) {
-      if ((record.textured[input / 32] & (1U << (input % 32))) == 0) {
+      if ((record.textured[input / 32] & (1U << (input % 32))) == 0 ||
+          inputs[input] == nullptr) {
         continue;
       }
       GpuTextureInputRecord lookup{};

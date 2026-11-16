@@ -136,9 +136,11 @@ struct TemporalBuffer {
 struct RestirSurfaceRecord {
   std::array<float, 4> origin, normal, shading_normal, outgoing;
   std::array<float, 4> base_alpha, dielectric_metallic, fresnel;
+  // The closure's model tag and glTF PBR's table values.
+  std::array<float, 4> model;
   std::uint64_t instance_id, material_id;
 };
-static_assert(sizeof(RestirSurfaceRecord) == 128);
+static_assert(sizeof(RestirSurfaceRecord) == 144);
 
 // The scene passes' uniform block, std140; mirrored in path_trace.slang.
 struct PathConstants {
@@ -187,8 +189,11 @@ struct PathConstants {
   std::uint32_t environment_background;
   // The GPU scene's material binding table, which follows its records.
   std::uint64_t material_bindings;
+  // The composed closures' directional albedo tables.
+  std::uint64_t albedo_tables;
 };
-static_assert(sizeof(PathConstants) == 216 &&
+static_assert(sizeof(PathConstants) == 224 &&
+              offsetof(PathConstants, albedo_tables) == 216 &&
               offsetof(PathConstants, material_bindings) == 208 &&
               offsetof(PathConstants, restir_proposal) == 180 &&
               offsetof(PathConstants, light_nodes) == 184 &&
@@ -2407,6 +2412,7 @@ public:
     constants.instances = scene_.InstanceAddress();
     constants.materials = scene_.MaterialAddress();
     constants.material_bindings = scene_.MaterialBindingAddress();
+    constants.albedo_tables = scene_.AlbedoTableAddress();
     constants.light_sampling = settings.light_sampling == LightSampling::Mis
                                    ? kMisLightSampling
                                : settings.light_sampling == LightSampling::RestirInitial

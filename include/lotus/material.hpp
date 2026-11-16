@@ -73,14 +73,26 @@ struct TextureInput {
   bool operator==(const TextureInput&) const = default;
 };
 
+// One input of a shading model (docs/design/MATERIAL_IR_V2.md section 4.2):
+// a constant, or the model's default, and an optional lookup that replaces
+// it.
+template <class T>
+struct MaterialInput {
+  T value{};
+  std::optional<TextureInput> texture;
+
+  bool operator==(const MaterialInput&) const = default;
+};
+
 // The shading model a material's parameters belong to
 // (docs/design/MATERIAL_IR_V2.md). Same-named parameters of different models
 // stay distinct, and nothing converts one model's parameters into another's.
 enum class ShadingModel : std::uint32_t {
   UsdPreviewSurface,
-  // Tags reserved for LOTUS-MATERIALX-05, -07 and -08. A material with one
-  // of them has no parameters yet, and the GPU scene rejects it.
+  // MaterialX's glTF PBR surface, its core (docs/design/GLTF_PBR.md).
   GltfPbr,
+  // Tags reserved for LOTUS-MATERIALX-07 and -08. A material with one of
+  // them has no parameters yet, and the GPU scene rejects it.
   StandardSurface,
   OpenPbr,
 };
@@ -159,10 +171,28 @@ struct PreviewSurface {
   bool operator==(const PreviewSurface&) const = default;
 };
 
-// Reserved: their parameters arrive with LOTUS-MATERIALX-05, -07 and -08.
+// MaterialX's glTF PBR surface (ND_gltf_pbr_surfaceshader 2.0.1), its core
+// inputs with the definition's defaults: a rough white metal
+// (docs/design/GLTF_PBR.md section 4). The dielectric's index is the
+// definition's default 1.5; the surface's normal and alpha are the
+// material's geometry. Colours are linear RGB.
 struct GltfPbr {
+  // The diffuse lobe's albedo, and the metal's reflectance at normal
+  // incidence. Each component in [0, 1].
+  MaterialInput<std::array<float, 3>> base_color{{1.0F, 1.0F, 1.0F}, {}};
+  // The mix between the dielectric over the diffuse lobe and the metal, in
+  // [0, 1].
+  MaterialInput<float> metallic{1.0F, {}};
+  // Both reflection lobes' GGX roughness in [0, 1]; alpha is its square.
+  MaterialInput<float> roughness{1.0F, {}};
+  // Emitted colour before the strength, non-negative, from both sides.
+  MaterialInput<std::array<float, 3>> emissive{{0.0F, 0.0F, 0.0F}, {}};
+  // A constant factor on `emissive`, finite and non-negative.
+  float emissive_strength = 1.0F;
+
   bool operator==(const GltfPbr&) const = default;
 };
+// Reserved: their parameters arrive with LOTUS-MATERIALX-07 and -08.
 struct StandardSurface {
   bool operator==(const StandardSurface&) const = default;
 };
@@ -195,6 +225,14 @@ struct Material {
   return std::get<PreviewSurface>(material.surface);
 }
 
+// The glTF PBR parameters of a material that has that model.
+[[nodiscard]] inline GltfPbr& Gltf(Material& material) {
+  return std::get<GltfPbr>(material.surface);
+}
+[[nodiscard]] inline const GltfPbr& Gltf(const Material& material) {
+  return std::get<GltfPbr>(material.surface);
+}
+
 // A material's texture-input slots, the numbering of the GPU material
 // table's binding mask. Slots 0 and 1 are the geometry's in every model, so
 // the any-hit coverage test never asks for the model; the model's own
@@ -208,6 +246,11 @@ inline constexpr std::size_t kPreviewRoughnessSlot = 3;
 inline constexpr std::size_t kPreviewMetallicSlot = 4;
 inline constexpr std::size_t kPreviewEmissionSlot = 5;
 inline constexpr std::size_t kPreviewSpecularColorSlot = 6;
+// glTF PBR's slots.
+inline constexpr std::size_t kGltfBaseColorSlot = 2;
+inline constexpr std::size_t kGltfMetallicSlot = 3;
+inline constexpr std::size_t kGltfRoughnessSlot = 4;
+inline constexpr std::size_t kGltfEmissiveSlot = 5;
 
 // A material's texture inputs in slot order. A slot the model does not have
 // is an empty input.
@@ -225,19 +268,35 @@ TextureInputs(const Material& material) {
     inputs[kPreviewMetallicSlot] = &preview->metallic_texture;
     inputs[kPreviewEmissionSlot] = &preview->emission_texture;
     inputs[kPreviewSpecularColorSlot] = &preview->specular_color_texture;
+  } else if (const auto* gltf = std::get_if<GltfPbr>(&material.surface)) {
+    inputs[kGltfBaseColorSlot] = &gltf->base_color.texture;
+    inputs[kGltfMetallicSlot] = &gltf->metallic.texture;
+    inputs[kGltfRoughnessSlot] = &gltf->roughness.texture;
+    inputs[kGltfEmissiveSlot] = &gltf->emissive.texture;
   }
   return inputs;
 }
 
-// The same, writable, for a UsdPreviewSurface material.
+// The same, writable; null for a slot the model does not have.
 [[nodiscard]] inline std::array<std::optional<TextureInput>*,
     kMaterialTextureInputs>
-PreviewTextureInputs(Material& material) {
-  PreviewSurface& preview = Preview(material);
-  return {&material.geometry.opacity_texture,
-      &material.geometry.normal_texture, &preview.base_color_texture,
-      &preview.roughness_texture, &preview.metallic_texture,
-      &preview.emission_texture, &preview.specular_color_texture};
+MutableTextureInputs(Material& material) {
+  std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
+      &material.geometry.opacity_texture, &material.geometry.normal_texture,
+      nullptr, nullptr, nullptr, nullptr, nullptr};
+  if (auto* preview = std::get_if<PreviewSurface>(&material.surface)) {
+    inputs[kPreviewBaseColorSlot] = &preview->base_color_texture;
+    inputs[kPreviewRoughnessSlot] = &preview->roughness_texture;
+    inputs[kPreviewMetallicSlot] = &preview->metallic_texture;
+    inputs[kPreviewEmissionSlot] = &preview->emission_texture;
+    inputs[kPreviewSpecularColorSlot] = &preview->specular_color_texture;
+  } else if (auto* gltf = std::get_if<GltfPbr>(&material.surface)) {
+    inputs[kGltfBaseColorSlot] = &gltf->base_color.texture;
+    inputs[kGltfMetallicSlot] = &gltf->metallic.texture;
+    inputs[kGltfRoughnessSlot] = &gltf->roughness.texture;
+    inputs[kGltfEmissiveSlot] = &gltf->emissive.texture;
+  }
+  return inputs;
 }
 
 // Whether any of the material's inputs is a texture lookup.

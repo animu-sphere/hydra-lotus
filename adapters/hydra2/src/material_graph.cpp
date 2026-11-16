@@ -101,6 +101,29 @@ std::vector<InputDef> StandardSurfaceInputs() {
       Unbound("tangent", Type::Vector3)};
 }
 
+// ND_gltf_pbr_surfaceshader 2.0.1.
+std::vector<InputDef> GltfPbrInputs() {
+  const auto f = [](const char* name, double value) {
+    return Uniform(name, Type::Float, value);
+  };
+  const auto c = [](const char* name, double value) {
+    return Uniform(name, Type::Color3, value);
+  };
+  return {c("base_color", 1.0), f("metallic", 1.0), f("roughness", 1.0),
+      Unbound("normal", Type::Vector3), Unbound("tangent", Type::Vector3),
+      f("occlusion", 1.0), f("transmission", 0.0), f("specular", 1.0),
+      c("specular_color", 1.0), f("ior", 1.5), f("alpha", 1.0),
+      Uniform("alpha_mode", Type::Integer, 0.0), f("alpha_cutoff", 0.5),
+      f("iridescence", 0.0), f("iridescence_ior", 1.3),
+      f("iridescence_thickness", 100.0), c("sheen_color", 0.0),
+      f("sheen_roughness", 0.0), f("clearcoat", 0.0),
+      f("clearcoat_roughness", 0.0), Unbound("clearcoat_normal", Type::Vector3),
+      c("emissive", 0.0), f("emissive_strength", 1.0), f("thickness", 0.0),
+      Unbound("attenuation_distance", Type::Float), c("attenuation_color", 1.0),
+      f("anisotropy_strength", 0.0), f("anisotropy_rotation", 0.0),
+      f("dispersion", 0.0)};
+}
+
 std::vector<NodeDef> BuildNodeDefs() {
   std::vector<NodeDef> defs;
   const auto add = [&](const std::string& id, Family family, Type type,
@@ -109,6 +132,8 @@ std::vector<NodeDef> BuildNodeDefs() {
   };
   add("ND_standard_surface_surfaceshader", Family::Surface, Type::Float,
       StandardSurfaceInputs());
+  add("ND_gltf_pbr_surfaceshader", Family::Surface, Type::Float,
+      GltfPbrInputs());
 
   struct BinaryNode {
     const char* name;

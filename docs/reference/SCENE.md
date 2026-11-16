@@ -70,11 +70,11 @@ every shading model shares (`texcoords`, `texcoord_fallback`, `opacity`,
 `base_color_primvar`), and a `surface` variant holding one model's
 parameters, whose index `Model()` returns as a `ShadingModel`.
 `UsdPreviewSurface` (`PreviewSurface`, reached through `Preview(material)`)
-is the only model with parameters; the `GltfPbr`, `StandardSurface` and
-`OpenPbr` tags are reserved, and the render world and the GPU scene reject
-a material that has one. A default `Material` is a default
-`UsdPreviewSurface`. Values are linear RGB, and the fields and defaults are
-`UsdPreviewSurface`'s:
+and [MaterialX's glTF PBR](#gltf-pbr) (`GltfPbr`, through `Gltf(material)`)
+have parameters; the `StandardSurface` and `OpenPbr` tags are reserved, and
+the render world and the GPU scene reject a material that has one. A
+default `Material` is a default `UsdPreviewSurface`. Values are linear RGB,
+and `UsdPreviewSurface`'s fields and defaults are:
 
 | Field | Default | Range | Meaning |
 | --- | --- | --- | --- |
@@ -198,6 +198,28 @@ independent, a texture input without a key, with a channel out of range or
 with a non-finite scale, bias or fallback, a texture whose texels do not
 match its size and format or are not finite, and a binding for a missing
 mesh throw `std::invalid_argument` without changing the world.
+
+### glTF PBR
+
+`GltfPbr` is MaterialX's glTF PBR surface, `ND_gltf_pbr_surfaceshader`
+2.0.1, with its core inputs ([contract](../design/GLTF_PBR.md)). Each input
+but the strength is a `MaterialInput`: a constant `value` and an optional
+`texture` lookup that replaces it, as above. The defaults are the node
+definition's, so a default `GltfPbr` is a rough white metal:
+
+| Field | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `base_color` | `(1, 1, 1)` | each in [0, 1] | the diffuse lobe's albedo, and the metal's reflectance at normal incidence |
+| `metallic` | `1` | [0, 1] | the mix between the dielectric over the diffuse lobe and the metal |
+| `roughness` | `1` | [0, 1] | both reflection lobes' GGX roughness; alpha is its square, at least 10⁻³ |
+| `emissive` | `(0, 0, 0)` | finite, ≥ 0 | emitted colour before the strength, from both sides |
+| `emissive_strength` | `1` | finite, ≥ 0 | a constant factor on `emissive` |
+
+Its normal and its coverage are the material's `MaterialGeometry`, and its
+dielectric has the definition's default index, 1.5. It is shaded by its own
+[closure](#path-tracing), not `UsdPreviewSurface`'s: nothing converts one
+model's parameters into the other's. `base_color_primvar` drives no glTF
+PBR input.
 
 ## Analytic lights
 
@@ -335,13 +357,16 @@ empty plan records no GPU work.
   normal), then the model's parameters, zero beyond them. For
   `UsdPreviewSurface` they are base colour and roughness, emission and
   metallic, specular colour and ior, transmission colour and weight, and
-  its flags are the specular workflow (1) and thin walls (2). A binding
+  its flags are the specular workflow (1) and thin walls (2); for glTF PBR,
+  base colour and roughness, emissive and metallic, and the emissive
+  strength. A binding
   table of 96-byte lookups follows the records in the same buffer, one per
   set mask bit, each material's in slot order: slot *k*'s lookup is binding
   `lookup_base` plus the set bits below *k*. Slots 0 and 1 are opacity and
   normal in every model, so the any-hit test never reads the model;
   `UsdPreviewSurface` numbers base colour, roughness, metallic, emission
-  and specular colour 2 to 6 (`TextureInputs` order). A lookup holds its
+  and specular colour 2 to 6, and glTF PBR base colour, metallic, roughness
+  and emissive 2 to 5 (`TextureInputs` order). A lookup holds its
   texture slot, its sampler (`wrap_s * 4 + wrap_t`), its channel, its mode
   (a lookup, or one whose key names no texture, which returns the
   fallback), scale, bias, fallback and the two rows of its coordinate
@@ -352,6 +377,13 @@ empty plan records no GPU work.
   leaves unchanged, when an instance reads a texture-coordinate set its
   geometry lacks, and when the table after the plan samples a texture that
   is not resident.
+- One device-local buffer holds the composed closures'
+  [directional albedo tables](../design/LAYERED_BSDF.md#56-directional-albedo-tables),
+  75,776 floats (303 KB) of committed data
+  (`backend/vulkan/bsdf-albedo-tables.inc`). It is renderer data, uploaded
+  once when the scene is created on a device with acceleration structures
+  and never rewritten; the scene passes read it through its device address
+  when they shade a glTF PBR surface.
 - One device-local light table holds, for each instance record, a uint32:
   its first entry or `kNoLights`, padded to 16 bytes; then a 16-byte entry
   per triangle of every instance whose material's emission estimate is
@@ -801,6 +833,25 @@ of compute kernels. Both call the same transport steps
   below-surface samples terminate without resampling. For pure metal,
   the GGX density cancels analytically in the weight for mirror precision.
   [Measured verification](../reports/2026-10-08-dielectric-specular.md).
+- **glTF PBR's closure** ([contract §6](../design/GLTF_PBR.md#6-the-closure))
+  is the [composed closure](../design/LAYERED_BSDF.md) its node definition's
+  graph reduces to with its extensions at their defaults:
+  `mix(layer(GgxSchlick(0.04, 1), Lambert(base_color)), GgxSchlick(base_color, 1), metallic)`,
+  three lobes about the shading normal. Both reflection lobes are
+  compensated for multiple scattering, `1 + F0 (1 − E1) / E1`, and the
+  diffuse lobe is scaled by one minus the dielectric lobe's directional
+  albedo toward the viewer, so a white base colour reflects everything at
+  every metallic and roughness. `E1` and the Schlick share come from the
+  albedo tables, interpolated once per hit for both lobes. Alpha is
+  `max(roughness², 0.001)`, where the definition clamps at 10⁻⁵: roughness
+  0 is a near-mirror, never a delta. One lobe is chosen in proportion to
+  its estimated contribution toward the viewer, at least 0.05, and a
+  sample's weight is the closure's f·cos over the mixture density.
+  The scene passes compile the composed closure with three lobes and
+  without dielectric lobes, lobe normals and attenuation, which no
+  implemented model builds; `lotus-bsdf-test` compiles all of it, and holds
+  this closure to an independent evaluation of the node definition, a white
+  furnace and the closure a stored reservoir surface rebuilds.
 - **Transmission.** With metal fraction `m` and `transmission` `t`, the
   surface is `m · metal + (1 − m) · [(1 − t) · coat + t · dielectric]`; the
   layered lobes above share `1 − (1 − m)t`, the metal's renormalized over
@@ -958,7 +1009,7 @@ The reference path tracer's images are of one fixed scene, rendered by
 ### Material fixtures
 
 LOTUS-MATERIAL-01's `UsdPreviewSurface` fixtures and the MaterialX fixtures
-of LOTUS-MTLX-01, LOTUS-TRANSMISSION-01 and LOTUS-MATERIALX-04 are committed USD files in
+of LOTUS-MTLX-01, LOTUS-TRANSMISSION-01, LOTUS-MATERIALX-04 and LOTUS-MATERIALX-05 are committed USD files in
 `validation/materials/`, each with reference images in
 `validation/reference/`. `scripts/material_fixtures.py write` generates the
 USD files and the images in `validation/materials/textures/`: 8-bit PNG
@@ -1190,6 +1241,33 @@ the mesh's binding would.
 
 Its negative control swaps Vertex's red and blue.
 
+**`material-gltf-v1`** covers [MaterialX's glTF PBR](#materialx-gltf-pbr)
+([contract §8.3](../design/GLTF_PBR.md#83-the-fixture)) at 160×160 under
+the same camera, lights and backdrop, on a 5×5 grid of coarse spheres with
+vertex normals and cards with `st` over the unit square. Every material is
+an `ND_gltf_pbr_surfaceshader`; images repeat.
+
+| Row | Objects | Authored inputs and expected translation |
+| --- | --- | --- |
+| Constants, on spheres | Defaults, Dielectric, Glossy, Metal, Mixed | no input, the definition's rough white metal; (0.8, 0.2, 0.1) at metallic 0 and roughness 0.5; 0.5 grey at metallic 0 and roughness 0.1; copper at metallic 1 and roughness 0.3; (0.9, 0.6, 0.2) at metallic 0.5 and roughness 0.3 |
+| Textures | Image, Factor, ColorImage, Packed, Rotated | the sRGB palette as usd-gltf-plugins authors a base colour, `ND_image_color4` through `ND_convert_color4_color3`; the same times (1, 0.5, 0.25) by `ND_multiply_color3`; `ND_gltf_colorimage` with that `color`, the same material; copper with roughness and metallic from `ND_extract_vector4` at 1 and 2 of `rgba.png` as `ND_image_vector4`; `ND_gltf_colorimage` with scale (2, 1), rotation 30 and offset (0.1, 0.2) |
+| Normals and emission | GltfNormal, NormalMap, NormalMetal, Emissive, EmissiveMap | `ND_gltf_normalmap` of `tilts.png` on a 0.7 grey of roughness 0.4; `ND_normalmap_float` of the same image, the same lookup but for its value without the image; the map on a copper metal sphere of roughness 0.25 with `st` longitude by latitude times (4, 2); `emissive` (1, 0.6, 0.2); the sRGB palette as `emissive` with `emissive_strength` 2 |
+| Alpha | Opaque, Mask, MaskZero, MaskAll, Blend | `alpha` 0.3 under the default `OPAQUE`, which does not read it; `cutout.png`'s colour with its alpha under `MASK` at the default cutoff 0.5; `alpha` 0.2 under `MASK` with cutoff 0, opaque; `MASK` with cutoff 1.5, which hides the card; the cut-out under `BLEND`, stochastic coverage |
+| Unrepresented inputs | Clearcoat, Transmission, Unlit, Ior, VertexColor | `clearcoat` 1 and `transmission` 1 over the Dielectric material, each raising `UnrepresentedInput` and rendering as it; a black base of roughness 1 that emits teal, with `specular` 0 as the plugin authors `KHR_materials_unlit`, which is not represented, so its default specular lobe stays; `ior` 1.8, likewise; a base colour of `ND_geompropvalue_color3` times a factor, which raises `UnsupportedNode` and keeps the default white |
+
+Its negative control reads Packed's metallic from green and its roughness
+from blue. The Hydra test also requires Factor and ColorImage to translate
+to one material, GltfNormal and NormalMap to differ only in their fallback,
+and Clearcoat, Transmission and Ior to be Dielectric's material.
+
+- **glTF PBR furnace.** `renderer.path.gltf_furnace` renders a white glTF
+  PBR plane under a white constant environment through an orthographic
+  camera, at view cosines 1, 0.5 and 0.125, metallic 0 and 1 and roughness
+  0.2 and 1, under both integrators with BSDF sampling and NEE/MIS, at
+  32 spp. No reflected ray meets the plane again, so each image's mean is
+  the closure's albedo, which must be 1 within five standard errors and
+  the albedo tables' bound of 5·10⁻³. It crosses the table buffer, the
+  scene pass and the integrators with a known answer.
 - **Analytic transmission.** `renderer.material.transmission` checks the
   dielectric lobe against independent double-precision oracles through
   both integrators, BSDF sampling and NEE/MIS, and the reference
@@ -1551,7 +1629,10 @@ executable.
 | `environment-v1` | The Cornell box's blocks on its floor scaled to 120 units: 26 triangles in 3 placements under the Stinson Beach image, its sun behind the camera, which looks 25° down. |
 
 `--benchmark-workload <id>` selects one fixture; omitting it retains the
-original six. The additional `many-lights-v1` fixture retains the Cornell
+original six. `cornell-gltf-v1` is `cornell-v1` with every material
+[glTF PBR](#gltf-pbr) of the same base colour, roughness and emission: what
+the second shading model costs beside the first on one scene. Its image is
+not `cornell-v1`'s, since the closures differ. The additional `many-lights-v1` fixture retains the Cornell
 ceiling, removes its emissive panel (34 triangles, 7 placements), and places
 256 sphere lights in a 16×16 grid at y=0.85, radius 0.025, radiance
 (12, 10, 8), under a black environment. Its ID fixes those parameters.
@@ -2197,8 +2278,9 @@ A `UsdPrimvarReader_float3` on `diffuseColor` names the base colour's colour
 set, and its fallback, clamped, is the constant on a mesh without that set.
 On other inputs it is a connection like any other.
 A `UsdUVTexture` without a file is a lookup whose key names no image, which
-returns its fallback. A surface shader other than these and the
-[Standard Surface](#materialx-standard-surface), or a network without a
+returns its fallback. A surface shader other than these, the
+[Standard Surface](#materialx-standard-surface) and
+[glTF PBR](#materialx-gltf-pbr), or a network without a
 surface, warns and leaves the default material.
 Texture-driven `ior` and `opacityThreshold`, which the specification makes
 interface-only, are diagnosed the same way. `opacityMode`,
@@ -2246,6 +2328,34 @@ Beside those above:
 
 Other MaterialX surfaces, OpenPBR's included, raise `UnsupportedSurface`
 and leave the default material.
+
+#### MaterialX glTF PBR
+
+An `ND_gltf_pbr_surfaceshader` surface translates into the
+[glTF PBR model](#gltf-pbr) ([contract §5](../design/GLTF_PBR.md#5-translation)),
+each input an authored constant or a [node graph](#materialx-node-graphs).
+The reader names all 29 inputs of the definition; this is the model's
+compatibility table.
+
+| Input | Status | Translation |
+| --- | --- | --- |
+| `base_color` | Supported | `base_color`; each component clamped to [0, 1] |
+| `metallic`, `roughness` | Supported | clamped to [0, 1]. Partial at roughness below 0.032: alpha is at least 10⁻³, where the definition's is 10⁻⁵ |
+| `emissive`, `emissive_strength` | Supported | each component clamped to be non-negative; the strength a non-negative constant, and a connection on it `UnrepresentedInput` |
+| `normal` | Supported | an `ND_normalmap` or `ND_gltf_normalmap` of an image, or of its default, into the geometry's normal. An authored constant, which is in world space, is `UnrepresentedInput` |
+| `alpha`, `alpha_mode`, `alpha_cutoff` | Supported | the geometry's coverage: `OPAQUE` (0) is opacity 1 and does not read `alpha`; `MASK` (1) is `alpha` against the cutoff as threshold; `BLEND` (2) is `alpha` as stochastic coverage. `MASK` with a cutoff of 0 or less is opacity 1, and with a cutoff above 1 opacity 0, since the threshold 0 means stochastic coverage. A connected mode or cutoff, or another mode, is `UnsupportedValue`, and the surface is opaque |
+| `occlusion` | Without effect | a path tracer computes occlusion; its graph is not read |
+| `tangent` | Without effect | while `anisotropy_strength` is 0 |
+| `ior` other than 1.5, `specular` other than 1, `specular_color` other than white | Unsupported | `UnrepresentedInput`; the dielectric keeps F0 0.04 and a white grazing limit |
+| `transmission`, `clearcoat`, `sheen_color` other than 0 | Unsupported | `UnrepresentedInput`; `clearcoat_roughness`, `clearcoat_normal` and `sheen_roughness` do nothing without them |
+| `iridescence`, `anisotropy_strength` other than 0 | Unsupported | `UnrepresentedInput`; `iridescence_ior`, `iridescence_thickness` and `anisotropy_rotation` do nothing without them |
+| `thickness` above 0, an authored `attenuation_distance`, `attenuation_color` other than white, `dispersion` above 0 | Unsupported | `UnrepresentedInput`. The definition's own graph reads none of them |
+| Vertex colour: `ND_geompropvalue_color3` or `ND_geompropvalue_float` in a graph | Unsupported | `UnsupportedNode`; the input keeps its default |
+| A parameter or connection the definition does not name | — | `UnknownInput` |
+
+A material with an unsupported input renders with every input that
+translates. The surface's lookups share one texture-coordinate set, as
+every material's do.
 
 #### MaterialX node graphs
 
@@ -2317,8 +2427,11 @@ every held definition against the runtime's through `SdrRegistry`, and the
 three surface definitions' versions against
 [the pinned ones](../design/MATERIAL_IR_V2.md#3-versions-contract-103);
 every Standard Surface input as translated, diagnosed or without effect;
-and `validation/materials/graph-stage-v1.usda`, whose UsdShade network and
-referenced `.mtlx` document translate to one material.
+glTF PBR's input table, alpha modes, the networks usd-gltf-plugins authors
+and each of its 29 inputs likewise;
+and `validation/materials/graph-stage-v1.usda` and `gltf-stage-v1.usda`,
+whose UsdShade networks and referenced `.mtlx` documents translate to one
+material each.
 
 #### Material diagnostics
 

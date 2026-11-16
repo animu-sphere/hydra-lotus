@@ -2029,6 +2029,166 @@ void SetMaterialPrimvars(Lotus::RenderWorld& world) {
   }
 }
 
+namespace {
+
+// A glTF PBR material of constants.
+Lotus::Material Gltf(const std::array<float, 3>& base, float metallic, float roughness) {
+  Lotus::Material material;
+  Lotus::GltfPbr& gltf = material.surface.emplace<Lotus::GltfPbr>();
+  gltf.base_color.value = base;
+  gltf.metallic.value = metallic;
+  gltf.roughness.value = roughness;
+  return material;
+}
+
+// A rough glTF PBR dielectric whose base colour is `lookup`, at st.
+Lotus::Material GltfTextured(Lotus::TextureInput lookup) {
+  Lotus::Material material = Gltf({1.0F, 1.0F, 1.0F}, 0.0F, 0.6F);
+  Lotus::Gltf(material).base_color.texture = std::move(lookup);
+  material.geometry.texcoords = "st";
+  return material;
+}
+
+// As a reader that took glTF's packed image for occlusion-metallic-roughness
+// in another order would: metallic from green, roughness from blue.
+void ExchangedChannels(Lotus::RenderWorld& world) {
+  const std::string key = "/MaterialGltf/Looks/Packed";
+  Lotus::Material material = world.Commit().scene->materials.at(key);
+  Lotus::GltfPbr& gltf = Lotus::Gltf(material);
+  gltf.metallic.texture->channel = 1;
+  gltf.roughness.texture->channel = 2;
+  world.SetMaterial(key, material);
+}
+
+} // namespace
+
+void SetMaterialGltf(Lotus::RenderWorld& world) {
+  const std::string root = "/MaterialGltf";
+  SetStudio(world, root);
+
+  constexpr auto kSrgb = Lotus::TextureFormat::Rgba8Srgb;
+  constexpr auto kUnorm = Lotus::TextureFormat::Rgba8Unorm;
+  world.SetTexture("textures/palette.png|sRGB", Image(4, kSrgb, Palette));
+  world.SetTexture("textures/rgba.png|raw", Image(4, kUnorm, Rgba));
+  world.SetTexture("textures/tilts.png|raw", Image(4, kUnorm, Tilts));
+  world.SetTexture("textures/cutout.png|sRGB", Image(8, kSrgb, Cutout));
+
+  constexpr std::array<float, 3> kCopper{0.95F, 0.64F, 0.54F};
+  constexpr std::array<float, 3> kRed{0.8F, 0.2F, 0.1F};
+  constexpr std::array<float, 3> kTeal{0.2F, 0.6F, 0.7F};
+  constexpr std::array<float, 3> kGrey{0.7F, 0.7F, 0.7F};
+  // A colour-4 image's default is transparent black.
+  Lotus::TextureInput palette = Periodic("palette.png", "sRGB");
+  palette.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  // The image times glTF's base colour factor, by a product and by
+  // ND_gltf_colorimage's colour.
+  Lotus::TextureInput tinted = palette;
+  tinted.scale = {1.0F, 0.5F, 0.25F, 1.0F};
+  // Roughness from green and metallic from blue of one vector-4 image.
+  Lotus::TextureInput orm = Periodic("rgba.png", "raw");
+  orm.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  Lotus::Material packed = Gltf(kCopper, 1.0F, 1.0F);
+  Lotus::Gltf(packed).metallic.texture = Channel(orm, 2);
+  Lotus::Gltf(packed).roughness.texture = Channel(orm, 1);
+  packed.geometry.texcoords = "st";
+  Lotus::TextureInput rotated = palette;
+  rotated.st_transform = Float(GltfPlace(kPlacedScale, kPlacedDegrees, kPlacedOffset));
+
+  // ND_gltf_normalmap's default is the flat normal, where ND_image's is
+  // black: the two differ only without their image.
+  Lotus::TextureInput bumps = Periodic("tilts.png", "raw");
+  bumps.scale = {2.0F, 2.0F, 2.0F, 1.0F};
+  bumps.bias = {-1.0F, -1.0F, -1.0F, 0.0F};
+  bumps.fallback = {-1.0F, -1.0F, -1.0F, 1.0F};
+  Lotus::TextureInput gltf_bumps = bumps;
+  gltf_bumps.fallback = {0.0F, 0.0F, 1.0F, 1.0F};
+  const auto bumpy = [&](Lotus::Material material, const Lotus::TextureInput& normal) {
+    material.geometry.normal_texture = normal;
+    material.geometry.texcoords = "st";
+    return material;
+  };
+  Lotus::Material emissive = Gltf(kGrey, 0.0F, 0.4F);
+  Lotus::Gltf(emissive).emissive.value = {1.0F, 0.6F, 0.2F};
+  Lotus::Material emissive_map = Gltf(kGrey, 0.0F, 0.4F);
+  Lotus::Gltf(emissive_map).emissive.texture = Periodic("palette.png", "sRGB");
+  Lotus::Gltf(emissive_map).emissive_strength = 2.0F;
+  emissive_map.geometry.texcoords = "st";
+
+  // The cut-out's colour and, under MASK and BLEND, its alpha as coverage.
+  Lotus::TextureInput cutout = Periodic("cutout.png", "sRGB");
+  cutout.fallback = {0.0F, 0.0F, 0.0F, 0.0F};
+  Lotus::Material mask = GltfTextured(cutout);
+  mask.geometry.opacity_texture = Channel(cutout, 3);
+  mask.geometry.opacity_threshold = 0.5F;
+  Lotus::Material blend = mask;
+  blend.geometry.opacity_threshold = 0.0F;
+  // No alpha passes a cutoff above 1.
+  Lotus::Material hidden = Gltf(kTeal, 0.0F, 0.5F);
+  hidden.geometry.opacity = 0.0F;
+
+  Lotus::Material unlit = Gltf({0.0F, 0.0F, 0.0F}, 0.0F, 1.0F);
+  Lotus::Gltf(unlit).emissive.value = kTeal;
+
+  const std::array<std::pair<const char*, Lotus::Material>, 25> looks{{
+      // The definition's defaults: a rough white metal.
+      {"Defaults", Gltf({1.0F, 1.0F, 1.0F}, 1.0F, 1.0F)},
+      {"Dielectric", Gltf(kRed, 0.0F, 0.5F)},
+      {"Glossy", Gltf({0.5F, 0.5F, 0.5F}, 0.0F, 0.1F)},
+      {"Metal", Gltf(kCopper, 1.0F, 0.3F)},
+      {"Mixed", Gltf({0.9F, 0.6F, 0.2F}, 0.5F, 0.3F)},
+      {"Image", GltfTextured(palette)},
+      {"Factor", GltfTextured(tinted)},
+      {"ColorImage", GltfTextured(tinted)},
+      {"Packed", packed},
+      {"Rotated", GltfTextured(rotated)},
+      {"GltfNormal", bumpy(Gltf(kGrey, 0.0F, 0.4F), gltf_bumps)},
+      {"NormalMap", bumpy(Gltf(kGrey, 0.0F, 0.4F), bumps)},
+      {"NormalMetal", bumpy(Gltf(kCopper, 1.0F, 0.25F), gltf_bumps)},
+      {"Emissive", emissive},
+      {"EmissiveMap", emissive_map},
+      // OPAQUE does not read its alpha of 0.3.
+      {"Opaque", Gltf(kTeal, 0.0F, 0.5F)},
+      {"Mask", mask},
+      // Every alpha passes a cutoff of 0.
+      {"MaskZero", Gltf(kTeal, 0.0F, 0.5F)},
+      {"MaskAll", hidden},
+      {"Blend", blend},
+      // Clearcoat, transmission and an index other than 1.5 are not
+      // represented: the rest of the material renders.
+      {"Clearcoat", Gltf(kRed, 0.0F, 0.5F)},
+      {"Transmission", Gltf(kRed, 0.0F, 0.5F)},
+      // specular 0 is not represented: the default specular lobe stays.
+      {"Unlit", unlit},
+      {"Ior", Gltf(kRed, 0.0F, 0.5F)},
+      // Vertex colour is not translated: base_color keeps its default.
+      {"VertexColor", Gltf({1.0F, 1.0F, 1.0F}, 0.0F, 0.6F)},
+  }};
+
+  const Polygons sphere = CoarseSphere();
+  const auto corners = sphere.Corners();
+  Lotus::MeshGeometry smooth = sphere.Geometry();
+  for (const auto& corner : corners) smooth.normals.push_back(Fixed(sphere.points[corner.vertex]));
+  Lotus::MeshGeometry wrapped = smooth;
+  const auto latlong = LatLong({4.0, 2.0});
+  for (const auto& corner : corners) wrapped.texcoords["st"].push_back(latlong[corner.face_vertex]);
+  const Lotus::MeshGeometry mapped = Card({{"st", Corners(kUnit)}});
+  constexpr std::array<float, 5> kColumns{-1.6F, -0.8F, 0.0F, 0.8F, 1.6F};
+  constexpr std::array<float, 5> kRows{1.6F, 0.8F, 0.0F, -0.8F, -1.6F};
+  for (std::size_t i = 0; i < looks.size(); ++i) {
+    const std::string name = looks[i].first;
+    world.SetMaterial(root + "/Looks/" + name, looks[i].second);
+    const std::string mesh = root + "/Objects/" + name;
+    const bool ball = i < 5 || name == "NormalMetal";
+    Lotus::MeshInstance placed;
+    placed.world_from_object[0] = placed.world_from_object[5] =
+        placed.world_from_object[10] = ball ? 0.35F : 0.7F;
+    placed.world_from_object[12] = kColumns[i % 5];
+    placed.world_from_object[13] = kRows[i / 5];
+    world.SetMesh(mesh, name == "NormalMetal" ? wrapped : ball ? smooth : mapped, placed);
+    world.BindMaterial(mesh, root + "/Looks/" + name);
+  }
+}
+
 std::span<const MaterialFixture> MaterialFixtures() {
   static constexpr MaterialFixture kFixtures[] = {
       {"material-basics-v1", "/MaterialBasics", 128, SetMaterialBasics,
@@ -2054,6 +2214,9 @@ std::span<const MaterialFixture> MaterialFixtures() {
           "the vertex colours' red and blue swapped", SwappedColors},
       {"material-graphs-v1", "/MaterialGraphs", 160, SetMaterialGraphs,
           "the glTF image's rotation reversed", ReversedGltfRotation},
+      {"material-gltf-v1", "/MaterialGltf", 160, SetMaterialGltf,
+          "the packed image's metallic and roughness channels exchanged",
+          ExchangedChannels},
   };
   return kFixtures;
 }

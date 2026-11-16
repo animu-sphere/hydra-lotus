@@ -37,7 +37,9 @@ Three points depart from the contract's text; review accepted them
   `E1`, `Eschlick` and `Edielectric` behind an `IAlbedoTables` interface,
   so a storage buffer on the GPU and a pointer in the probe bind the same
   data. The data is
-  [`validation/bsdf-albedo-tables.inc`](../../validation/bsdf-albedo-tables.inc),
+  [`bsdf-albedo-tables.inc`](../../backend/vulkan/bsdf-albedo-tables.inc)
+  (in `validation/` until LOTUS-MATERIALX-05 moved it beside the backend
+  that uploads it),
   75,776 floats (716 KB of text), written by the new `lotus-bsdf-tables`.
 - **Spectrum.** `operator-`, `SpectrumSaturate` and `SpectrumPow`.
 - **Probe.** `validation/bsdf-probe.slang` exports the composed closure's

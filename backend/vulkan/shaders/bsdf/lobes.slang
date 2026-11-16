@@ -12,9 +12,20 @@
 // computes for its outgoing direction (section 4.2) and stores in the lobe.
 module lobes;
 
-import bsdf.bsdf;
+import bsdf.preview;
 import sampling.sampling;
 import common.spectrum;
+
+// The scene passes compile only what an implemented model builds: glTF PBR
+// stacks Lambert and GgxSchlick lobes about the shading normal, without
+// attenuation. slangc inlines every call, so a dielectric lobe nobody
+// builds would still be compiled, and validated, at each evaluation. The
+// CPU probe compiles everything (LOTUS_COMPOSED_FULL), and the model task
+// that first needs a part turns it on for the scene passes
+// (docs/design/GLTF_PBR.md section 6.2).
+#ifndef LOTUS_COMPOSED_FULL
+#define LOTUS_COMPOSED_FULL 0
+#endif
 
 public static const uint kLambertLobe = 0;
 public static const uint kGgxSchlickLobe = 1;
@@ -103,39 +114,59 @@ public Lobe MakeGgxDielectricLobe(float eta, Spectrum tint, float alpha,
 }
 
 public bool LobeIsDelta(Lobe lobe) {
+#if LOTUS_COMPOSED_FULL
   return lobe.type == kGgxDielectricLobe && lobe.smooth;
+#else
+  return false;
+#endif
 }
 
-// --- Frames ------------------------------------------------------------------
-
-// An orthonormal basis about a unit normal (Duff et al., "Building an
-// Orthonormal Basis, Revisited", 2017). For the shading normal (0, 0, 1)
-// it is the identity, exactly.
+// The lobe's frame and a direction in it. Without lobe normals of their
+// own, every lobe's frame is the shading frame, exactly.
 public struct LobeFrame {
   public float3 tangent;
   public float3 bitangent;
   public float3 normal;
 };
 
+// --- Frames ------------------------------------------------------------------
+
+// An orthonormal basis about a unit normal (Duff et al., "Building an
+// Orthonormal Basis, Revisited", 2017). For the shading normal (0, 0, 1)
+// it is the identity, exactly.
 public LobeFrame MakeLobeFrame(float3 normal) {
+  LobeFrame frame;
+#if LOTUS_COMPOSED_FULL
   const float sign = normal.z >= 0.0 ? 1.0 : -1.0;
   const float a = -1.0 / (sign + normal.z);
   const float b = normal.x * normal.y * a;
-  LobeFrame frame;
   frame.tangent = float3(1.0 + sign * normal.x * normal.x * a, sign * b,
       -sign * normal.x);
   frame.bitangent = float3(b, sign + normal.y * normal.y * a, -normal.y);
   frame.normal = normal;
+#else
+  frame.tangent = float3(1.0, 0.0, 0.0);
+  frame.bitangent = float3(0.0, 1.0, 0.0);
+  frame.normal = float3(0.0, 0.0, 1.0);
+#endif
   return frame;
 }
 
 public float3 ToLobe(LobeFrame frame, float3 w) {
+#if LOTUS_COMPOSED_FULL
   return float3(dot(w, frame.tangent), dot(w, frame.bitangent),
       dot(w, frame.normal));
+#else
+  return w;
+#endif
 }
 
 public float3 FromLobe(LobeFrame frame, float3 w) {
+#if LOTUS_COMPOSED_FULL
   return w.x * frame.tangent + w.y * frame.bitangent + w.z * frame.normal;
+#else
+  return w;
+#endif
 }
 
 // --- Shared terms --------------------------------------------------------------
@@ -253,7 +284,11 @@ public Spectrum LobeValue(Lobe lobe, float3 wo, float3 wi) {
         lobe.compensation * GgxReflection(wo, wi, h, lobe.alpha);
   }
   default:
+#if LOTUS_COMPOSED_FULL
     return DielectricValue(lobe, wo, wi);
+#else
+    return SpectrumConstant(0.0);
+#endif
   }
 }
 
@@ -302,7 +337,11 @@ public float LobePdf(Lobe lobe, float3 wo, float3 wi) {
     return wi.z > 0.0 ? GgxReflectionPdf(wo, normalize(wo + wi), lobe.alpha)
                       : 0.0;
   default:
+#if LOTUS_COMPOSED_FULL
     return DielectricPdf(lobe, wo, wi);
+#else
+    return 0.0;
+#endif
   }
 }
 
@@ -403,6 +442,10 @@ public bool LobeSample(Lobe lobe, float3 wo, float3 u,
     return sample.wi.z > 0.0;
   }
   default:
+#if LOTUS_COMPOSED_FULL
     return SampleDielectric(lobe, wo, u, sample);
+#else
+    return false;
+#endif
   }
 }
