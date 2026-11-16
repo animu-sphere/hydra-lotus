@@ -1,0 +1,197 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "hydra-lotus formation fixture"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "Cards",
+   "mesh": 0
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Cards",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 2,
+      "NORMAL": 1
+     },
+     "indices": 0,
+     "material": 0
+    },
+    {
+     "attributes": {
+      "POSITION": 3,
+      "NORMAL": 1
+     },
+     "indices": 0,
+     "material": 1
+    },
+    {
+     "attributes": {
+      "POSITION": 4,
+      "NORMAL": 1
+     },
+     "indices": 0,
+     "material": 2
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "RedDielectric",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.05,
+     0.05,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "GreenMetal",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.05,
+     0.9,
+     0.05,
+     1.0
+    ],
+    "metallicFactor": 1.0,
+    "roughnessFactor": 0.4
+   }
+  },
+  {
+   "name": "BlueEmitter",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   },
+   "emissiveFactor": [
+    0.05,
+    0.1,
+    1.0
+   ]
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -1.75,
+    -0.5,
+    0.0
+   ],
+   "max": [
+    -0.75,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.5,
+    -0.5,
+    0.0
+   ],
+   "max": [
+    0.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    0.75,
+    -0.5,
+    0.0
+   ],
+   "max": [
+    1.75,
+    0.5,
+    0.0
+   ]
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 12,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 12,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 60,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 108,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 156,
+   "byteLength": 48,
+   "target": 34962
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 204,
+   "uri": "data:application/octet-stream;base64,AAABAAIAAAACAAMAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AADgvwAAAL8AAAAAAABAvwAAAL8AAAAAAABAvwAAAD8AAAAAAADgvwAAAD8AAAAAAAAAvwAAAL8AAAAAAAAAPwAAAL8AAAAAAAAAPwAAAD8AAAAAAAAAvwAAAD8AAAAAAABAPwAAAL8AAAAAAADgPwAAAL8AAAAAAADgPwAAAD8AAAAAAABAPwAAAD8AAAAA"
+  }
+ ]
+}

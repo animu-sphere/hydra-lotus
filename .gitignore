@@ -16,6 +16,13 @@
 /strata.lock
 /strata.*.lock
 
+# A Formation's instantiated manifest, lock, captures and run evidence record
+# this workstation's artifacts (formations/*/README.md).
+/formations/*/formation.toml
+/formations/*/formation.lock
+/formations/*/.strata/
+/formations/*/*.png
+
 # Accidental in-source CMake and Ninja products.
 /CMakeCache.txt
 /CMakeFiles/

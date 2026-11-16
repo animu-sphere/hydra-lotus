@@ -33,6 +33,11 @@ version will have a record in [docs/releases/](docs/releases/README.md).
 
 ### Added
 
+- An OpenStrata Formation,
+  [`formations/gltf-host-session`](formations/gltf-host-session/README.md),
+  that composes the `lookdev` runtime, usd-gltf-plugins' glTF file format
+  plugin and the Lotus Hydra package, and opens a glTF file in `usdview`
+  with Lotus; its smoke test renders a committed synthetic fixture.
 - MaterialX's glTF PBR surface, its core (LOTUS-MATERIALX-05,
   [contract](docs/design/GLTF_PBR.md)): `Lotus::GltfPbr` holds base colour,
   metallic, roughness, emissive and its strength, and the Hydra translator
