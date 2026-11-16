@@ -1,14 +1,15 @@
 ---
-status: proposed
+status: accepted
 owner: hydra-lotus
 ---
 
 # glTF PBR core
 
-> Status: **proposed**, 2026-11-15, awaiting review;
-> [implemented](../reports/2026-11-16-gltf-pbr-core.md) as proposed, with
-> the [changes found in implementation](#12-changes-found-in-implementation)
-> also awaiting review. This is
+> Status: **accepted**, 2026-11-16, and
+> [implemented](../reports/2026-11-16-gltf-pbr-core.md); the review
+> accepted its [points](#11-points-settled-in-review) and the
+> [changes found in implementation](#12-changes-found-in-implementation)
+> as written. This is
 > LOTUS-MATERIALX-05's contract, written before any code: the first
 > MaterialX shading model, MaterialX's glTF PBR surface with its
 > [P0 features](MATERIALX_SHADING_MODELS.md#phase-a--foundation-and-gltf-pbr),
@@ -490,7 +491,9 @@ evidence LOTUS-MATERIALX-06 and the deferred work are ordered by.
    starts with glTF PBR's rows: supported, partial (the alpha floor) and
    unsupported inputs.
 
-## 11. Points for review
+## 11. Points settled in review
+
+Accepted as written, 2026-11-16:
 
 1. **`ior`, `specular` and `specular_color` wait for 06** (§5.2). Until
    then a glTF material that authors them — every `KHR_materials_unlit`
@@ -507,7 +510,8 @@ evidence LOTUS-MATERIALX-06 and the deferred work are ordered by.
 ## 12. Changes found in implementation
 
 LOTUS-MATERIALX-05's implementation departs from the text above in these
-points, which await review with §11; the
+points. They were accepted in review, 2026-11-16, and supersede the text
+they amend; the
 [report](../reports/2026-11-16-gltf-pbr-core.md#changes-to-the-contract)
 gives the measurements.
 

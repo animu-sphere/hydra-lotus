@@ -48,17 +48,19 @@ LOTUS-MATERIALX-09 runs from each stage on rather than at the end.
    five accepted changes to the contract's text
    ([§11](../design/MATERIALX_TRANSLATION.md#11-changes-found-in-implementation)).
 6. **LOTUS-MATERIALX-05.** glTF PBR core, the smallest end-to-end slice.
-   Its [contract](../design/GLTF_PBR.md) is proposed and implemented as
-   proposed ([report](../reports/2026-11-16-gltf-pbr-core.md)): the model,
-   its closure under both integrators, its translation and
-   `material-gltf-v1`, with every existing reference unchanged. Awaiting
-   review: the contract's five
-   [points](../design/GLTF_PBR.md#11-points-for-review) and six
-   [changes found in implementation](../design/GLTF_PBR.md#12-changes-found-in-implementation).
-7. **LOTUS-MATERIALX-06 and 07.** glTF PBR's P1 extensions, and Standard
-   Surface with its own composition.
-8. **LOTUS-MATERIALX-08.** OpenPBR, fuzz over coat over base.
-9. **LOTUS-MATERIALX-10.** The release gate and the per-model compatibility
+   Its [contract](../design/GLTF_PBR.md) is accepted. Done: the model, its
+   closure under both integrators, its translation and `material-gltf-v1`,
+   with every existing reference unchanged
+   ([report](../reports/2026-11-16-gltf-pbr-core.md)), with six accepted
+   changes to the contract's text
+   ([§12](../design/GLTF_PBR.md#12-changes-found-in-implementation)).
+7. **LOTUS-MATERIALX-06.** glTF PBR's P1 extensions: index of refraction,
+   specular, transmission, clearcoat and sheen. Its
+   [contract](../design/GLTF_PBR_EXTENSIONS.md) is accepted;
+   implementation is next.
+8. **LOTUS-MATERIALX-07.** Standard Surface with its own composition.
+9. **LOTUS-MATERIALX-08.** OpenPBR, fuzz over coat over base.
+10. **LOTUS-MATERIALX-10.** The release gate and the per-model compatibility
    table.
 
 The [asset gap survey](../reports/2026-10-29-asset-gap-survey.md#decision) also found that `usdrecord --renderer Storm` creates the Lotus
