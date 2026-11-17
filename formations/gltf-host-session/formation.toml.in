@@ -1,0 +1,22 @@
+schema = "openstrata.formation/v1alpha1"
+
+[formation]
+name = "lotus-gltf-host-session"
+
+# OpenUSD 26.08, Windows x86_64, cy2026 lookdev (OpenGL host).
+[runtime]
+artifact = "sha256:b982656c07dd9147973e3c7197d9b050ee48dd1ac291988f7e6025c76c4a785b"
+
+[[components]]
+id = "usd-gltf"
+kind = "plugin"
+artifact = "@USD_GLTF_ARTIFACT@"
+
+[[components]]
+id = "lotus"
+kind = "renderer"
+artifact = "@LOTUS_ARTIFACT@"
+
+[command]
+program = "testusdview"
+args = ["sample.gltf", "--defaultsettings", "--renderer", "Lotus", "--testScript", "gltf_check.py"]

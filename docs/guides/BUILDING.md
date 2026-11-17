@@ -402,6 +402,12 @@ the window is closed.
 bundles. It needs an `openstrata.plugin.yaml`, which this renderer project
 does not have, so here it stops with "no openstrata.plugin.yaml".
 
+To open a file format a plugin provides, compose the plugin with the
+renderer in an OpenStrata Formation: the
+[glTF host session](../../formations/gltf-host-session/README.md) pins the
+`lookdev` runtime, usd-gltf-plugins' file format plugin and the Lotus Hydra
+package, and opens a glTF file in `usdview` with Lotus.
+
 ## The standalone viewport
 
 `lotus-viewport` path-traces a scene progressively and presents each frame
