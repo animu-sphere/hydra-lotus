@@ -1023,9 +1023,12 @@ MTLX_INPUT_TYPES = {
         "transmission_scatter": "color3f"},
     "ND_gltf_pbr_surfaceshader": {
         "alpha": "float", "alpha_cutoff": "float", "alpha_mode": "int",
-        "base_color": "color3f", "clearcoat": "float", "emissive": "color3f",
-        "emissive_strength": "float", "ior": "float", "metallic": "float",
-        "normal": "float3", "roughness": "float", "specular": "float",
+        "anisotropy_strength": "float", "base_color": "color3f", "clearcoat": "float",
+        "clearcoat_normal": "float3", "clearcoat_roughness": "float",
+        "emissive": "color3f", "emissive_strength": "float", "ior": "float",
+        "iridescence": "float", "metallic": "float", "normal": "float3",
+        "roughness": "float", "sheen_color": "color3f", "sheen_roughness": "float",
+        "specular": "float", "specular_color": "color3f", "thickness": "float",
         "transmission": "float"},
     "ND_image_vector4": {"file": "asset"},
     "ND_extract_vector4": {"in": "float4", "index": "int"},
@@ -1465,7 +1468,8 @@ GLTF_CUTOUT = {"Image": image("color4", "cutout.png", "srgb_texture"),
                "A": ("ND_extract_color4", {"in": output("Image", OUT), "index": 3})}
 # material-gltf-v1's materials (docs/design/GLTF_PBR.md section 8.3), a row
 # of five to each subject: constants; textures; normals and emission; alpha;
-# then an unlit material and inputs the model does not represent.
+# then an unlit material and inputs the model does not represent
+# (docs/design/GLTF_PBR_EXTENSIONS.md section 7.4).
 GLTF_LOOKS = [
     ("Defaults", gltf({})),
     ("Dielectric", gltf(GLTF_RED)),
@@ -1518,13 +1522,12 @@ GLTF_LOOKS = [
                     "alpha": output("A", OUT), "alpha_mode": 2}, **GLTF_CUTOUT)),
 
     # Inputs the model does not represent leave the rest of the material.
-    ("Clearcoat", gltf({**GLTF_RED, "clearcoat": 1})),
-    ("Transmission", gltf({**GLTF_RED, "transmission": 1})),
-    # As the plugin authors KHR_materials_unlit; specular 0 is not
-    # represented, so the default specular lobe stays.
+    ("Iridescence", gltf({**GLTF_RED, "iridescence": 1})),
+    ("Thickness", gltf({**GLTF_RED, "thickness": 1})),
+    # As the plugin authors KHR_materials_unlit: without a reflection lobe.
     ("Unlit", gltf({"base_color": (0, 0, 0), "metallic": 0, "roughness": 1,
                     "specular": 0, "emissive": TEAL})),
-    ("Ior", gltf({**GLTF_RED, "ior": 1.8})),
+    ("Anisotropy", gltf({**GLTF_RED, "anisotropy_strength": 1})),
     # Vertex colour is not translated: base_color keeps its default.
     ("VertexColor", gltf({**GLTF_DIELECTRIC, "base_color": output("Tint", OUT)},
                          Tint=("ND_multiply_color3", {"in1": output("Color", OUT),
@@ -1533,17 +1536,119 @@ GLTF_LOOKS = [
 ]
 
 
+# One scalar image for every textured weight: rgba.png's channels.
+GLTF_SCALARS = {"Scalars": image("vector4", "rgba.png")}
+
+
+def gltf_scalar(index):
+    return ("ND_extract_vector4", {"in": output("Scalars", OUT), "index": index})
+
+
+GLTF_COAT_NORMAL = {"CoatNormal": ("ND_gltf_normalmap_vector3_1_0",
+                                   {"file": "./textures/tilts.png"})}
+GLTF_DARK = {"base_color": (0.05, 0.05, 0.08), "metallic": 0, "roughness": 0.8}
+GLTF_GLASS = {"base_color": (1, 1, 1), "metallic": 0, "transmission": 1}
+# material-gltf-extensions-v1's materials (docs/design/GLTF_PBR_EXTENSIONS.md
+# section 7.4), a row of five to each subject: the dielectric's reflection;
+# transmission; clearcoat; sheen; then everything together, textured
+# weights and inputs the model does not represent.
+GLTF_EXTENSION_LOOKS = [
+    # An index of 1 reflects nothing; 2.4 four times the default's.
+    ("IorOne", gltf({**GLTF_RED, "roughness": 0.2, "ior": 1})),
+    ("IorHigh", gltf({**GLTF_RED, "roughness": 0.2, "ior": 2.4})),
+    ("SpecularHalf", gltf({**GLTF_RED, "roughness": 0.2, "specular": 0.5})),
+    # A coloured reflection dims the base by its largest channel.
+    ("SpecularTint", gltf({"base_color": (0.6, 0.6, 0.6), "metallic": 0, "roughness": 0.2,
+                           "ior": 2.4, "specular_color": (1, 0.3, 0.1)})),
+    ("SpecularMap", gltf({**GLTF_RED, "roughness": 0.2, "ior": 2.4,
+                          "specular": output("Specular", OUT)},
+                         Specular=gltf_scalar(0), **GLTF_SCALARS)),
+
+    # A thin surface: light passes straight through, tinted by base_color.
+    ("Glass", gltf({**GLTF_GLASS, "roughness": 0})),
+    ("GlassRough", gltf({**GLTF_GLASS, "roughness": 0.4})),
+    ("GlassTinted", gltf({**GLTF_GLASS, "base_color": TEAL, "roughness": 0})),
+    ("GlassHalf", gltf({**GLTF_GLASS, "base_color": (0.9, 0.6, 0.2), "roughness": 0.3,
+                        "transmission": 0.5})),
+    ("GlassMap", gltf({**GLTF_GLASS, "roughness": 0.1,
+                       "transmission": output("Transmission", OUT)},
+                      Transmission=gltf_scalar(1), **GLTF_SCALARS)),
+
+    ("Coat", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": 1})),
+    ("CoatMetal", gltf({"base_color": COPPER, "metallic": 1, "roughness": 0.4,
+                        "clearcoat": 0.5})),
+    ("CoatRough", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": 1,
+                        "clearcoat_roughness": 0.5})),
+    # A normal-mapped base under a smooth coat: the coat keeps the mesh's
+    # normal.
+    ("CoatOverBumps", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": 1,
+                            "normal": output("Normal", OUT)},
+                           Normal=("ND_gltf_normalmap_vector3_1_0",
+                                   {"file": "./textures/tilts.png"}))),
+    # And a smooth base under a coat with a map of its own.
+    ("CoatNormal", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": 1,
+                         "clearcoat_normal": output("CoatNormal", OUT)},
+                        **GLTF_COAT_NORMAL)),
+
+    ("Sheen", gltf({**GLTF_DARK, "sheen_color": (1, 1, 1), "sheen_roughness": 0.7})),
+    ("SheenColor", gltf({**GLTF_DARK, "sheen_color": (0.9, 0.4, 0.1),
+                         "sheen_roughness": 0.5})),
+    ("SheenRough", gltf({**GLTF_DARK, "sheen_color": (0.5, 0.5, 0.5),
+                         "sheen_roughness": 1})),
+    ("SheenMap", gltf({**GLTF_DARK, "sheen_color": output("Rgb", OUT),
+                       "sheen_roughness": output("Roughness", OUT)},
+                      Roughness=gltf_scalar(1), **GLTF_SCALARS, **GLTF_PALETTE)),
+    ("SheenCoat", gltf({**GLTF_DARK, "sheen_color": (0.9, 0.4, 0.1), "sheen_roughness": 0.5,
+                        "clearcoat": 1})),
+
+    ("All", gltf({"base_color": (0.9, 0.6, 0.2), "metallic": 0.3, "roughness": 0.4,
+                  "ior": 1.8, "specular": 0.8, "specular_color": (1, 0.8, 0.6),
+                  "transmission": 0.4, "clearcoat": 0.7, "clearcoat_roughness": 0.2,
+                  "sheen_color": (0.3, 0.5, 0.8), "sheen_roughness": 0.6})),
+    ("CoatMap", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": output("Coat", OUT),
+                      "clearcoat_roughness": output("CoatRoughness", OUT)},
+                     Coat=gltf_scalar(0), CoatRoughness=gltf_scalar(2), **GLTF_SCALARS)),
+    ("SpecularColorMap", gltf({"base_color": (0.6, 0.6, 0.6), "metallic": 0,
+                               "roughness": 0.2, "ior": 2.4,
+                               "specular_color": output("Rgb", OUT)}, **GLTF_PALETTE)),
+    # Volume is not represented: the surface stays thin.
+    ("Thickness", gltf({**GLTF_GLASS, "base_color": TEAL, "roughness": 0, "thickness": 1})),
+    # Nor are a thin film and anisotropy, under a coat that is.
+    ("Diagnosed", gltf({**GLTF_RED, "roughness": 0.7, "clearcoat": 1, "iridescence": 1,
+                        "anisotropy_strength": 1})),
+]
+# The looks drawn on coarse spheres; those with a lookup wrap the sphere in
+# (s, t). The rest are cards at the unit square.
+GLTF_SPHERES = {"Defaults", "Dielectric", "Glossy", "Metal", "Mixed", "NormalMetal"}
+GLTF_WRAPPED = {"NormalMetal"}
+GLTF_EXTENSION_SPHERES = {
+    "IorOne", "IorHigh", "SpecularHalf", "SpecularTint", "SpecularMap", "Coat", "CoatMetal",
+    "CoatRough", "CoatOverBumps", "CoatNormal", "Sheen", "SheenColor", "SheenRough",
+    "SheenMap", "SheenCoat", "All", "CoatMap", "SpecularColorMap", "Diagnosed"}
+GLTF_EXTENSION_WRAPPED = {"SpecularMap", "CoatOverBumps", "CoatNormal", "SheenMap", "CoatMap",
+                          "SpecularColorMap"}
+
+
 def gltf_pbr():
+    return gltf_grid("MaterialGltf", "SetMaterialGltf", GLTF_LOOKS, GLTF_SPHERES,
+                     GLTF_WRAPPED)
+
+
+def gltf_extensions():
+    return gltf_grid("MaterialGltfExtensions", "SetMaterialGltfExtensions",
+                     GLTF_EXTENSION_LOOKS, GLTF_EXTENSION_SPHERES, GLTF_EXTENSION_WRAPPED)
+
+
+def gltf_grid(root, mirror, materials, spheres, wrapped):
     unit_st = primvar("st", UNIT)
     sphere_scale, card_scale = (0.35, 0.35, 0.35), (0.7, 0.7, 0.7)
     smooth = normal_attribute("normals", sphere(COARSE_SEGMENTS, COARSE_RINGS)[0])
-    spheres = {"Defaults", "Dielectric", "Glossy", "Metal", "Mixed", "NormalMetal"}
-    lines = header("MaterialGltf", "SetMaterialGltf", sphere_class() + CARD_CLASS)
-    lines += mtlx_looks("MaterialGltf", GLTF_LOOKS)
+    lines = header(root, mirror, sphere_class() + CARD_CLASS)
+    lines += mtlx_looks(root, materials)
     lines += ["", '    def Scope "Objects"', "    {"]
-    for index, (name, _) in enumerate(GLTF_LOOKS):
+    for index, (name, _) in enumerate(materials):
         x, y = CARD_COLUMNS[index % 5], CARD_ROWS[index // 5]
-        if name == "NormalMetal":
+        if name in wrapped:
             extra = smooth + primvar("st", latlong((4, 2)))
         else:
             extra = smooth if name in spheres else unit_st
@@ -1554,14 +1659,14 @@ def gltf_pbr():
             f"            prepend inherits = </{'_Sphere' if name in spheres else '_Card'}>",
             "        )",
             "        {",
-            f"            rel material:binding = </MaterialGltf/Looks/{name}>",
+            f"            rel material:binding = </{root}/Looks/{name}>",
             *extra,
             f"            float3 xformOp:scale = ({', '.join(number(c) for c in scale)})",
             f"            double3 xformOp:translate = ({number(x)}, {number(y)}, 0)",
             '            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]',
             "        }",
         ]
-        if index + 1 < len(GLTF_LOOKS):
+        if index + 1 < len(materials):
             lines.append("")
     lines += ["    }", "}", ""]
     return "\n".join(lines)
@@ -1921,6 +2026,7 @@ FIXTURES = {
     "material-mtlx-v1.usda": materialx,
     "material-graphs-v1.usda": graphs,
     "material-gltf-v1.usda": gltf_pbr,
+    "material-gltf-extensions-v1.usda": gltf_extensions,
     "material-transmission-v1.usda": transmission,
     "material-transforms-v1.usda": transforms,
     "material-subsets-v1.usda": subsets,

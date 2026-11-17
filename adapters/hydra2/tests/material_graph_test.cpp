@@ -1198,6 +1198,98 @@ void GltfPbr() {
   Check(t.material.geometry.normal_texture.has_value(),
       "ND_gltf_normalmap on glTF PBR is no lookup");
 
+  // The extensions (docs/design/GLTF_PBR_EXTENSIONS.md section 5): constants
+  // clamped into their ranges.
+  t = TranslateGltf(P({{"ior", F(1.8F)}, {"specular", F(0.5F)},
+      {"specular_color", V3(2.0F, 0.5F, 0.25F)}, {"transmission", F(0.75F)},
+      {"clearcoat", F(0.6F)}, {"clearcoat_roughness", F(0.2F)},
+      {"sheen_color", V3(0.2F, 0.4F, 0.8F)}, {"sheen_roughness", F(0.3F)}}));
+  Clean("the extensions' constants", t);
+  ExpectValues("specular_color", gltf(t).specular_color.value, {2.0F, 0.5F, 0.25F});
+  ExpectValues("sheen_color", gltf(t).sheen_color.value, {0.2F, 0.4F, 0.8F});
+  Check(gltf(t).ior == 1.8F && gltf(t).specular.value == 0.5F &&
+            gltf(t).transmission.value == 0.75F && gltf(t).clearcoat.value == 0.6F &&
+            gltf(t).clearcoat_roughness.value == 0.2F &&
+            gltf(t).sheen_roughness.value == 0.3F,
+      "the extensions' constants are not the authored ones");
+  t = TranslateGltf(P({{"ior", F(0.5F)}, {"specular", F(1.5F)},
+      {"specular_color", V3(-1.0F, 0.5F, 3.0F)}, {"transmission", F(-0.5F)},
+      {"clearcoat", F(2.0F)}, {"clearcoat_roughness", F(-1.0F)},
+      {"sheen_color", V3(1.5F, 0.5F, -0.5F)}, {"sheen_roughness", F(4.0F)}}));
+  Clean("the extensions' constants out of range", t);
+  ExpectValues("clamped specular_color", gltf(t).specular_color.value, {0.0F, 0.5F, 3.0F});
+  ExpectValues("clamped sheen_color", gltf(t).sheen_color.value, {1.0F, 0.5F, 0.0F});
+  Check(gltf(t).ior == 1.0F && gltf(t).specular.value == 1.0F &&
+            gltf(t).transmission.value == 0.0F && gltf(t).clearcoat.value == 1.0F &&
+            gltf(t).clearcoat_roughness.value == 0.0F &&
+            gltf(t).sheen_roughness.value == 1.0F,
+      "the extensions' constants are not clamped");
+  // The index is a uniform of the definition: a lookup is not read.
+  t = TranslateGltf({}, {kScalar}, {{"Scalar", "out", "Surface", "ior"}});
+  Diagnosed("a connected ior", t, Kind::UnrepresentedInput, "ior", "Scalar");
+  Check(gltf(t).ior == 1.5F, "a connected ior does not keep the default index");
+  // A lookup on each textured input.
+  for (const char* input : {"specular", "transmission", "clearcoat"}) {
+    t = TranslateGltf({}, {kScalar}, {{"Scalar", "out", "Surface", input}});
+    Clean(std::string("a lookup on ") + input, t);
+    const Lotus::GltfPbr& read = gltf(t);
+    const std::optional<Lotus::TextureInput>& lookup =
+        std::string(input) == "specular" ? read.specular.texture
+        : std::string(input) == "transmission" ? read.transmission.texture
+                                                 : read.clearcoat.texture;
+    Check(lookup.has_value(), std::string(input) + " takes no lookup");
+  }
+  for (const char* input : {"specular_color", "sheen_color"}) {
+    t = TranslateGltf({}, {kColour}, {{"Image", "out", "Surface", input}});
+    Clean(std::string("a lookup on ") + input, t);
+    Check((std::string(input) == "specular_color" ? gltf(t).specular_color.texture
+                                                   : gltf(t).sheen_color.texture)
+              .has_value(),
+        std::string(input) + " takes no lookup");
+  }
+  // A lobe's other inputs are read with its weight: under a textured
+  // clearcoat, its roughness and its normal map; under a sheen, its
+  // roughness.
+  t = TranslateGltf(P({{"sheen_color", V3(0.5F, 0.5F, 0.5F)}}),
+      {kScalar, kPacked,
+          {"CoatNormal", "ND_normalmap_float", {}}},
+      {{"Scalar", "out", "Surface", "clearcoat"},
+          {"Scalar", "out", "Surface", "clearcoat_roughness"},
+          {"Scalar", "out", "Surface", "sheen_roughness"},
+          {"Packed", "out", "CoatNormal", "in"},
+          {"CoatNormal", "out", "Surface", "clearcoat_normal"}});
+  Clean("a clearcoat with a roughness lookup and a normal map", t);
+  Check(gltf(t).clearcoat_roughness.texture.has_value() &&
+            gltf(t).clearcoat_normal_texture.has_value() &&
+            gltf(t).sheen_roughness.texture.has_value() &&
+            !t.material.geometry.normal_texture.has_value(),
+      "the clearcoat's and the sheen's inputs are not lookups");
+  // Without the weight they are not read at all.
+  t = TranslateGltf({}, {kScalar, kPacked, {"CoatNormal", "ND_normalmap_float", {}}},
+      {{"Scalar", "out", "Surface", "clearcoat_roughness"},
+          {"Scalar", "out", "Surface", "sheen_roughness"},
+          {"Packed", "out", "CoatNormal", "in"},
+          {"CoatNormal", "out", "Surface", "clearcoat_normal"}});
+  Clean("a clearcoat's inputs without a clearcoat", t);
+  Check(t.material == defaults.material, "a lobe's inputs are read without its weight");
+  // The coat's normal is a normal map, never an authored constant, and a
+  // normal map reaches no other input.
+  t = TranslateGltf(P({{"clearcoat", F(1.0F)}, {"clearcoat_normal", V3(0.0F, 1.0F, 0.0F)}}));
+  Diagnosed("a constant clearcoat normal", t, Kind::UnrepresentedInput, "clearcoat_normal",
+      "Surface");
+  // Transmission is a thin surface whatever the thickness, which is
+  // reported.
+  t = TranslateGltf(P({{"transmission", F(1.0F)}, {"thickness", F(0.5F)}}));
+  Diagnosed("a thickness beside a transmission", t, Kind::UnrepresentedInput, "thickness",
+      "Surface");
+  Check(gltf(t).transmission.value == 1.0F, "a thickness removes the transmission");
+  // usd-gltf-plugins' KHR_materials_unlit: a black base that only emits,
+  // without a reflection lobe.
+  t = TranslateGltf(P({{"base_color", V3(0.0F, 0.0F, 0.0F)}, {"specular", F(0.0F)},
+      {"metallic", F(0.0F)}, {"emissive", V3(1.0F, 0.5F, 0.25F)}}));
+  Clean("the plugin's unlit material", t);
+  Check(gltf(t).specular.value == 0.0F, "the unlit material keeps a reflection lobe");
+
   // The networks usd-gltf-plugins authors: a colour-4 base colour image
   // whose alpha is the coverage, times a factor; a vector-4 image packing
   // roughness in green and metallic in blue; a vector-4 normal map; an sRGB
@@ -1289,9 +1381,9 @@ void GltfPbr() {
       "the translator holds no glTF PBR definition of 29 inputs");
   // alpha_mode alone is MASK at the default cutoff, over an alpha of 1.
   const std::set<std::string> translated{"base_color", "metallic", "roughness", "emissive",
-      "emissive_strength", "alpha_mode"};
-  const std::set<std::string> unrepresented{"transmission", "specular", "specular_color",
-      "ior", "sheen_color", "clearcoat", "iridescence", "anisotropy_strength", "thickness",
+      "emissive_strength", "alpha_mode", "transmission", "specular", "specular_color", "ior",
+      "sheen_color", "clearcoat"};
+  const std::set<std::string> unrepresented{"iridescence", "anisotropy_strength", "thickness",
       "attenuation_distance", "attenuation_color", "dispersion", "normal"};
   // Inputs that do nothing alone, and what turns them on; occlusion never
   // does anything.
@@ -1351,7 +1443,9 @@ void GltfPbr() {
     Check(seen.insert(diagnostic.input).second,
         diagnostic.input.GetString() + " is diagnosed twice: " + Describe(all));
   }
-  Check(seen.size() == unrepresented.size(),
+  // Beside the unrepresented inputs, the coat's constant normal, which is
+  // read under a clearcoat.
+  Check(seen.size() == unrepresented.size() + 1 && seen.contains(TfToken("clearcoat_normal")),
       "everything at once raises " + std::to_string(seen.size()) + " diagnostics: " +
           Describe(all));
   t = TranslateGltf(P({{"baseColor", V3(1.0F, 0.0F, 0.0F)}}));

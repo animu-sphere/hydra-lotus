@@ -76,6 +76,9 @@ static const int kOpLayer = 5;       // pops base, then top
 static const int kOpScale = 6;       // rgb: the range on top
 static const int kOpAttenuate = 7;   // transmittance rgb, normal xyz, eta: the range on top
 static const int kOpAdd = 8;         // pops two ranges
+static const int kOpSheen = 9;       // colour rgb, roughness, normal xyz
+static const int kOpTransmit = 10;   // kOpSchlick's operands: the lobe mirrored
+static const int kOpLayerScalar = 11;  // pops base, then top
 
 ComposedBuilder ProbeBuilder(float* program, float* table_data, float3 wo) {
   ProbeTables tables;
@@ -99,6 +102,27 @@ ComposedBuilder ProbeBuilder(float* program, float* table_data, float3 wo) {
           Load3(program + at + 8), program[at + 11] != 0.0), wo, tables);
       stack[depth++] = uint2(k, k + 1);
       at += 12;
+    } else if (op == kOpTransmit) {
+      Lobe lobe = MakeGgxSchlickLobe(
+          SpectrumFromRgb(Load3(program + at + 1)),
+          SpectrumFromRgb(Load3(program + at + 4)), program[at + 7],
+          Load3(program + at + 8), program[at + 11] != 0.0);
+      lobe.transmit = true;
+      const uint k = ComposedAdd(closure, lobe, wo, tables);
+      stack[depth++] = uint2(k, k + 1);
+      at += 12;
+    } else if (op == kOpSheen) {
+      const uint k = ComposedAdd(closure, MakeSheenLobe(
+          SpectrumFromRgb(Load3(program + at + 1)), program[at + 4],
+          Load3(program + at + 5)), wo, tables);
+      stack[depth++] = uint2(k, k + 1);
+      at += 8;
+    } else if (op == kOpLayerScalar) {
+      const uint2 base = stack[--depth];
+      const uint2 top = stack[--depth];
+      ComposedLayerScalar(closure, top.x, base.x, base.y, wo);
+      stack[depth++] = uint2(top.x, base.y);
+      at += 1;
     } else if (op == kOpDielectric) {
       const uint k = ComposedAdd(closure, MakeGgxDielectricLobe(
           program[at + 1], SpectrumFromRgb(Load3(program + at + 2)),
@@ -178,24 +202,47 @@ __extern_cpp export void LotusProbeComposedAlbedo(float* program,
 
 // --- glTF PBR (docs/design/GLTF_PBR.md section 8.1) --------------------------
 
-// m: base colour rgb, roughness, metallic. The closure the scene pass builds
-// at a hit, through the BSDF API's dispatch.
-BsdfClosure ProbeGltf(float* m, float* table_data, float3 wo) {
+// m: kGltfFloats floats in the order of GltfMaterial in bsdf-test.cpp: base
+// colour rgb, roughness, metallic, the dielectric's F0, specular, specular
+// colour rgb, transmission, clearcoat, its roughness and normal xyz, sheen
+// colour rgb and roughness.
+GltfPbrTerms ProbeGltfTerms(float* m, float* table_data, float3 wo) {
   ProbeTables tables;
   tables.data = table_data;
-  return MakeBsdfClosure(kGltfPbrClosure, MakeGltfPbrClosure(
-      MakeGltfPbrTerms(SpectrumFromRgb(Load3(m)), m[3], m[4], wo, tables),
-      wo));
+  GltfPbrInputs inputs =
+      MakeGltfPbrInputs(SpectrumFromRgb(Load3(m)), m[3], m[4]);
+  inputs.dielectric_f0 = m[5];
+  inputs.specular = m[6];
+  inputs.specular_color = SpectrumFromRgb(Load3(m + 7));
+  inputs.transmission = m[10];
+  inputs.clearcoat = m[11];
+  inputs.clearcoat_roughness = m[12];
+  inputs.clearcoat_normal = Load3(m + 13);
+  inputs.sheen_color = SpectrumFromRgb(Load3(m + 16));
+  inputs.sheen_roughness = m[19];
+  return MakeGltfPbrTerms(inputs, wo, tables);
+}
+
+// The closure the scene pass builds at a hit, through the BSDF API's
+// dispatch.
+BsdfClosure ProbeGltf(float* m, float* table_data, float3 wo) {
+  return MakeBsdfClosure(kGltfPbrClosure,
+      MakeGltfPbrClosure(ProbeGltfTerms(m, table_data, wo), wo));
 }
 
 // The same closure as a stored reservoir surface rebuilds it: from the
-// terms read back from the closure, without a table.
+// terms as the surface packs them, without a table.
 BsdfClosure ProbeGltfStored(float* m, float* table_data, float3 wo) {
-  ProbeTables tables;
-  tables.data = table_data;
-  const BsdfClosure built = ProbeGltf(m, table_data, wo);
-  return MakeBsdfClosure(kGltfPbrClosure, MakeGltfPbrClosure(
-      GltfPbrTermsOf(built.composed, wo, tables), wo));
+  float lanes[kGltfPbrLanes];
+  PackGltfPbrTerms(ProbeGltfTerms(m, table_data, wo), lanes);
+  return MakeBsdfClosure(kGltfPbrClosure,
+      MakeGltfPbrClosure(UnpackGltfPbrTerms(lanes), wo));
+}
+
+// The number of lobes the closure has.
+__extern_cpp export int LotusProbeGltfLobes(float* material, float* tables,
+    float* wo) {
+  return int(ProbeGltf(material, tables, Load3(wo)).composed.count);
 }
 
 // result: BsdfEvaluate's RGB, then BsdfPdf.
@@ -265,6 +312,9 @@ __extern_cpp export float LotusProbeAlbedoLookup(float* table_data, int table,
   }
   if (table == int(kAlbedoSchlickShare)) {
     return AlbedoSchlickShare(tables, cos_theta, alpha);
+  }
+  if (table == int(kAlbedoSheen)) {
+    return AlbedoSheen(tables, cos_theta, alpha);
   }
   return AlbedoDielectric(tables, cos_theta, alpha, eta, thin != 0);
 }

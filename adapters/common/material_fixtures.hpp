@@ -145,9 +145,21 @@ void SetMaterialGraphs(Lotus::RenderWorld& world);
 // ND_gltf_normalmap and ND_normalmap, on a metal sphere, and constant and
 // mapped emission with a strength; OPAQUE over an alpha it does not read,
 // MASK from an image's alpha and at cutoffs of 0 and above 1, and BLEND;
-// then an unlit material and clearcoat, transmission, an index and a vertex
-// colour, none of which the model represents.
+// then an unlit material and a thin film, a thickness, anisotropy and a
+// vertex colour, none of which the model represents.
 void SetMaterialGltf(Lotus::RenderWorld& world);
+
+// Replaces the world's camera and scene with material-gltf-extensions-v1:
+// the same grid and studio, every material MaterialX's glTF PBR with its
+// extensions (docs/design/GLTF_PBR_EXTENSIONS.md section 7.4). Rows from the
+// top: the dielectric's reflection by its index, weight and colour; thin
+// transmission on cards, smooth, rough, tinted, partial and from an image;
+// clearcoat over a dielectric and a metal, rough, over a normal-mapped base
+// and with a normal map of its own; sheen, white, coloured, rough, from
+// images and under a coat; then every extension together, textured weights,
+// and a thickness, a thin film and anisotropy, which the model does not
+// represent.
+void SetMaterialGltfExtensions(Lotus::RenderWorld& world);
 
 struct MaterialFixture {
   // Its USD file's and reference images' file name stem.

@@ -1630,18 +1630,70 @@ std::string BsdfFailure(PathScenes& scenes) {
 }
 
 // A white furnace for MaterialX's glTF PBR (docs/design/GLTF_PBR.md section
-// 8.4): a white plane under a white constant environment, seen by an
-// orthographic camera at one angle, reflects the environment whatever its
-// metallic and roughness, since the compensated metal and the compensated
-// dielectric over a white diffuse lobe both reflect everything. No reflected
-// ray meets the plane again, so each pixel's mean is the closure's albedo:
-// 1 within five standard errors and the albedo tables' error. It crosses the
-// GPU table binding, the scene pass and both integrators with a known
-// answer.
+// 8.4, GLTF_PBR_EXTENSIONS.md section 7.5): a white plane in a white
+// constant environment, seen by an orthographic camera at one angle,
+// returns the environment whatever its metallic and roughness, under a
+// clearcoat or a grey sheen, and where it transmits: every compensated lobe
+// returns what it receives and every layer passes on what its top does not
+// reflect. No scattered ray meets the plane again, so each pixel's mean is
+// the closure's albedo: 1 within five standard errors and the albedo
+// tables' error. It crosses the GPU table binding, the scene pass and both
+// integrators with a known answer; the transmitting planes also cross a
+// composed closure's transmitted sample and the integrators' unweighted
+// light.
 std::string GltfFurnaceFailure(PathScenes& scenes) {
   constexpr std::uint32_t kSamples = 32;
-  // lotus-bsdf-test's bound on a compensated lobe's furnace.
-  constexpr double kTableError = 5.0e-3;
+  // lotus-bsdf-test's bound on the furnace of a compensated lobe under two
+  // layers.
+  constexpr double kTableError = 8.0e-3;
+  struct Plane {
+    const char* name;
+    Lotus::GltfPbr gltf;
+  };
+  std::vector<Plane> planes;
+  for (const float metallic : {0.0F, 1.0F}) {
+    for (const float roughness : {0.2F, 1.0F}) {
+      Lotus::GltfPbr gltf;
+      gltf.metallic.value = metallic;
+      gltf.roughness.value = roughness;
+      planes.push_back({metallic == 0.0F ? (roughness == 1.0F ? "rough dielectric" : "dielectric")
+                                         : (roughness == 1.0F ? "rough metal" : "metal"),
+          gltf});
+    }
+  }
+  const auto extension = [&](const char* name, auto&& edit) {
+    Lotus::GltfPbr gltf;
+    gltf.metallic.value = 0.0F;
+    gltf.roughness.value = 0.5F;
+    edit(gltf);
+    planes.push_back({name, gltf});
+  };
+  extension("clearcoat", [](Lotus::GltfPbr& gltf) { gltf.clearcoat.value = 1.0F; });
+  extension("rough clearcoat", [](Lotus::GltfPbr& gltf) {
+    gltf.clearcoat.value = 0.5F;
+    gltf.clearcoat_roughness.value = 0.4F;
+  });
+  extension("sheen", [](Lotus::GltfPbr& gltf) {
+    gltf.sheen_color.value = {1.0F, 1.0F, 1.0F};
+    gltf.sheen_roughness.value = 0.7F;
+  });
+  extension("transmission", [](Lotus::GltfPbr& gltf) {
+    gltf.transmission.value = 1.0F;
+    gltf.roughness.value = 0.2F;
+  });
+  extension("half transmission", [](Lotus::GltfPbr& gltf) {
+    gltf.transmission.value = 0.5F;
+    gltf.specular.value = 0.5F;
+  });
+  extension("every extension", [](Lotus::GltfPbr& gltf) {
+    gltf.ior = 1.8F;
+    gltf.transmission.value = 0.4F;
+    gltf.clearcoat.value = 0.7F;
+    gltf.clearcoat_roughness.value = 0.2F;
+    gltf.sheen_color.value = {0.5F, 0.5F, 0.5F};
+    gltf.sheen_roughness.value = 0.6F;
+    gltf.metallic.value = 0.3F;
+  });
   Lotus::RenderWorld& world = scenes.World();
   Lotus::Camera ortho = BootstrapCamera();
   ortho.projection = Lotus::IdentityMatrix();
@@ -1666,12 +1718,10 @@ std::string GltfFurnaceFailure(PathScenes& scenes) {
         tilted.world_from_object[9] = -tilted.world_from_object[6];
         tilted.world_from_object[10] = cos_view;
         world.SetMesh("/plane", plane, tilted);
-        for (const float metallic : {0.0F, 1.0F}) {
-          for (const float roughness : {0.2F, 1.0F}) {
+        for (const Plane& entry : planes) {
+          {
             Lotus::Material material;
-            Lotus::GltfPbr& gltf = material.surface.emplace<Lotus::GltfPbr>();
-            gltf.metallic.value = metallic;
-            gltf.roughness.value = roughness;
+            material.surface = entry.gltf;
             Paint(world, "/plane", material);
             Lotus::GpuFrameEvidence frame;
             if (auto failure = scenes.Render({}, frame, kSamples); !failure.empty())
@@ -1701,8 +1751,7 @@ std::string GltfFurnaceFailure(PathScenes& scenes) {
                 std::ostringstream text;
                 text << (integrator == Lotus::Integrator::Wavefront ? "wavefront" : "reference")
                      << (sampling == Lotus::LightSampling::Mis ? " NEE/MIS" : " BSDF")
-                     << " metallic " << metallic << " roughness " << roughness
-                     << " cos " << cos_view << ": mean " << mean
+                     << " " << entry.name << " cos " << cos_view << ": mean " << mean
                      << " instead of 1 +- " << tolerance << " in channel " << c;
                 return text.str();
               }
@@ -1713,8 +1762,8 @@ std::string GltfFurnaceFailure(PathScenes& scenes) {
     }
   }
   std::ostringstream line;
-  line << std::fixed << std::setprecision(4)
-       << "48 white glTF PBR planes under both integrators and light samplings: "
+  line << std::fixed << std::setprecision(4) << planes.size() * 12
+       << " white glTF PBR planes under both integrators and light samplings: "
           "max |mean - 1| " << worst;
   scenes.Summarize(line.str());
   return {};

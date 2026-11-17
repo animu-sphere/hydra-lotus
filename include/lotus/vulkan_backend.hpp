@@ -573,9 +573,18 @@ inline constexpr std::uint32_t kNoTextureSlot =
 // TextureInputs slot, the slot of the texture it samples.
 struct GpuMaterialContents {
   Material material;
-  std::array<std::uint32_t, kMaterialTextureInputs> texture_slots{
-      kNoTextureSlot, kNoTextureSlot, kNoTextureSlot, kNoTextureSlot,
-      kNoTextureSlot, kNoTextureSlot, kNoTextureSlot};
+  std::array<std::uint32_t, kMaterialTextureInputs> texture_slots =
+      NoTextureSlots();
+
+  [[nodiscard]] static constexpr std::array<std::uint32_t,
+      kMaterialTextureInputs>
+  NoTextureSlots() {
+    std::array<std::uint32_t, kMaterialTextureInputs> slots{};
+    for (std::uint32_t& slot : slots) {
+      slot = kNoTextureSlot;
+    }
+    return slots;
+  }
 };
 
 // One TLAS build input, decoded. `object_to_world` holds the first three

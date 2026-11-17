@@ -25,16 +25,15 @@ import bsdf.lobes;
 import bsdf.albedo;
 import common.spectrum;
 
-// The largest list an implemented model builds: glTF PBR's dielectric
-// reflection, diffuse and metal. The CPU probe compiles with six, the list
-// OpenPBR's fuzz, coat, specular, metal, transmission and diffuse make, so
-// its tests cover deeper stacks than the scene passes carry yet.
+// The largest list an implemented model builds: glTF PBR's coat, sheen,
+// dielectric reflection, diffuse, transmission and metal
+// (docs/design/GLTF_PBR_EXTENSIONS.md section 6.1).
 #ifndef LOTUS_MAX_LOBES
-#define LOTUS_MAX_LOBES 3
+#define LOTUS_MAX_LOBES 6
 #endif
 public static const uint kMaxLobes = LOTUS_MAX_LOBES;
-// Dielectric lobes, lobe normals and attenuation, which the scene passes
-// leave out until a model builds them (lobes.slang).
+// A dielectric's refraction, thin wall and delta paths, and attenuation,
+// which the scene passes leave out until a model builds them (lobes.slang).
 #ifndef LOTUS_COMPOSED_FULL
 #define LOTUS_COMPOSED_FULL 0
 #endif
@@ -165,7 +164,41 @@ public uint ComposedAddSchlick(inout ComposedBuilder builder, Lobe added,
     albedo = (lobe.color * (e1 - share) + lobe.f90 * share) *
         lobe.compensation;
   }
-  return ComposedPush(builder, lobe, albedo, albedo);
+  // A mirrored lobe reflects nothing a layer above it would lose.
+  return ComposedPush(builder, lobe,
+      lobe.transmit ? SpectrumConstant(0.0) : albedo, albedo);
+}
+
+// Adds a Sheen lobe of weight 1 and returns its position. `e` is
+// AlbedoSheen at the lobe's roughness and wo's cosine about its normal. A
+// layer below a sheen is dimmed by that albedo uncoloured, as MaterialX's
+// sheen_bsdf reports its throughput.
+// Where the fit's albedo exceeds 1, toward grazing outgoing directions at
+// small roughness, the lobe is scaled to reflect exactly what it receives.
+public uint ComposedAddSheen(inout ComposedBuilder builder, Lobe added,
+    float3 wo, float e) {
+  Lobe lobe = added;
+  float albedo = 0.0;
+  if (dot(wo, lobe.normal) > 0.0) {
+    albedo = min(e, 1.0);
+    if (e > 1.0) {
+      lobe.compensation = SpectrumConstant(1.0 / e);
+    }
+  }
+  return ComposedPush(builder, lobe, SpectrumConstant(albedo),
+      lobe.color * albedo);
+}
+
+// Adds a lobe whose weight, compensation and albedo toward wo the caller
+// has computed, and returns its position: `albedo` is the lobe's as a layer
+// above it sees it, before the weight.
+public uint ComposedAddWeighted(inout ComposedBuilder builder, Lobe lobe,
+    Spectrum weight, Spectrum albedo) {
+  const uint k = ComposedPush(builder, lobe, albedo, albedo * lobe.color);
+  if (k < kMaxLobes) {
+    builder.closure.weights[k] = weight;
+  }
+  return k;
 }
 
 // Adds a lobe of weight 1 and returns its position. Computes its
@@ -186,6 +219,9 @@ public uint ComposedAdd<T : IAlbedoTables>(inout ComposedBuilder builder,
     }
     return ComposedAddSchlick(builder, lobe, wo, e1, share);
   }
+  case kSheenLobe:
+    return ComposedAddSheen(builder, lobe, wo,
+        mu > 0.0 ? AlbedoSheen(tables, mu, lobe.alpha) : 0.0);
   default:
     break;
   }
@@ -259,6 +295,17 @@ public void ComposedLayer(inout ComposedBuilder builder, uint begin,
       SpectrumSaturate(SpectrumConstant(1.0) - top));
 }
 
+// The same under a coloured top whose reflectance dims the base by its
+// largest channel, as glTF's specular extension defines its Fresnel mix
+// (docs/design/GLTF_PBR_EXTENSIONS.md section 6.3). For a grey top it is
+// ComposedLayer exactly.
+public void ComposedLayerScalar(inout ComposedBuilder builder, uint begin,
+    uint split, uint end, float3 wo) {
+  const Spectrum top = ComposedAlbedo(builder, begin, split, wo);
+  ComposedScale(builder, split, end,
+      SpectrumSaturate(SpectrumConstant(1.0 - MaxComponent(top))));
+}
+
 // Attaches a layer's absorption (section 5.4) to lobes [begin, end),
 // replacing any they had: a lobe has at most one.
 public void ComposedAttenuate(inout ComposedBuilder builder, uint begin,
@@ -308,7 +355,7 @@ public Spectrum ComposedEvaluate(ComposedClosure closure, float3 wo,
   Spectrum value = SpectrumConstant(0.0);
   for (uint k = 0; k < closure.count; ++k) {
     const Lobe lobe = closure.lobes[k];
-    if (LobeIsDelta(lobe)) {
+    if (LobeIsDelta(lobe) || !LobeScattersToward(lobe, wi)) {
       continue;
     }
     const LobeFrame frame = MakeLobeFrame(lobe.normal);
@@ -325,7 +372,8 @@ public float ComposedPdf(ComposedClosure closure, float3 wo, float3 wi) {
   float pdf = 0.0;
   for (uint k = 0; k < closure.count; ++k) {
     const Lobe lobe = closure.lobes[k];
-    if (LobeIsDelta(lobe) || !(closure.probabilities[k] > 0.0)) {
+    if (LobeIsDelta(lobe) || !(closure.probabilities[k] > 0.0) ||
+        !LobeScattersToward(lobe, wi)) {
       continue;
     }
     const LobeFrame frame = MakeLobeFrame(lobe.normal);
@@ -375,6 +423,11 @@ public bool ComposedSample(ComposedClosure closure, float3 wo, float3 u,
     return false;
   }
   sample.wi = FromLobe(frame, local.wi);
+  // A tilted lobe's reflection can land below the shading normal: no lobe
+  // has a value there, so the sample fails.
+  if (!LobeScattersToward(lobe, sample.wi)) {
+    return false;
+  }
   sample.transmitted = sample.wi.z < 0.0;
   if (local.delta) {
     sample.delta = true;

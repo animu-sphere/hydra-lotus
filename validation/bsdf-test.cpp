@@ -36,6 +36,7 @@ void LotusProbeEvaluate(float* material, float* wo, float* wi, float* result);
 std::int32_t LotusProbeSample(float* material, float* wo, float* u, float* result);
 void LotusProbeGltfEvaluate(float* material, float* tables, float* wo,
     float* wi, std::int32_t stored, float* result);
+std::int32_t LotusProbeGltfLobes(float* material, float* tables, float* wo);
 std::int32_t LotusProbeGltfSample(float* material, float* tables, float* wo,
     float* u, float* result);
 }
@@ -835,9 +836,9 @@ Target MakePreviewTarget(const Config& c) {
 // `lotus-bsdf-tables --check` compares every point.
 constexpr double kNodeTolerance = 1.0e-4;
 constexpr double kInterpolationTolerance[lotus::kAlbedoParts] = {1.0e-3, 1.0e-3,
-    1.0e-3, 1.2e-2, 1.2e-3};
-constexpr std::array<int, lotus::kAlbedoTables> kNodeStrides = {17, 17, 383};
-constexpr std::array<int, lotus::kAlbedoTables> kCentreStrides = {5, 5, 109};
+    1.0e-3, 1.2e-2, 1.2e-3, 1.0e-3};
+constexpr std::array<int, lotus::kAlbedoTables> kNodeStrides = {17, 17, 383, 17};
+constexpr std::array<int, lotus::kAlbedoTables> kCentreStrides = {5, 5, 109, 5};
 constexpr double kCentreQuadrature = 1.0e-4;
 
 // The committed albedo tables, as the probe binds them. The literals are
@@ -917,6 +918,27 @@ Piece Dielectric(float eta, Rgb tint, float roughness, int scatter, bool thin,
   return p;
 }
 
+// A GgxSchlick lobe mirrored through the tangent plane: for the test, a
+// thin wall that only transmits.
+Piece Transmit(Rgb f0, Rgb f90, float roughness, bool compensate) {
+  Piece p;
+  const float alpha = roughness * roughness;
+  p.program.Transmit(f0, f90, alpha, compensate);
+  p.lobes.push_back({lotus::kOpTransmit,
+      std::max(double(alpha), double(kMinAlpha)), 1.0, lotus::kScatterTransmit,
+      true, false, ToVec(lotus::kShadingNormal)});
+  return p;
+}
+
+// The sheen, by its own roughness: wide, without a peak to resolve.
+Piece Sheen(Rgb color, float roughness, Normal n = lotus::kShadingNormal) {
+  Piece p;
+  p.program.Sheen(color, roughness, n);
+  p.lobes.push_back({lotus::kOpSheen, 1.0, 1.0, lotus::kScatterReflect, false,
+      false, ToVec(n)});
+  return p;
+}
+
 Piece Join(const Piece& a, const Piece& b) {
   Piece p = a;
   p.program.code.insert(p.program.code.end(), b.program.code.begin(),
@@ -934,6 +956,12 @@ Piece Mix(const Piece& bg, const Piece& fg, float m) {
 Piece LayerOf(const Piece& top, const Piece& base) {
   Piece p = Join(top, base);
   p.program.Layer();
+  return p;
+}
+
+Piece LayerScalarOf(const Piece& top, const Piece& base) {
+  Piece p = Join(top, base);
+  p.program.LayerScalar();
   return p;
 }
 
@@ -969,6 +997,10 @@ constexpr double kExactFurnace = 1.0e-5;
 constexpr double kLayerFurnace = 1.5e-3;
 constexpr double kCompensatedFurnace = 5.0e-3;
 constexpr double kBoundTolerance = 5.0e-3;
+// The largest share a coat tilted by up to 45 degrees reflects below the
+// shading normal, where it has no value (measured 0.052 at normal
+// incidence).
+constexpr double kTiltedCoatLoss = 0.07;
 
 struct Composed {
   std::string family;
@@ -1058,7 +1090,10 @@ Target MakeComposedTarget(const Composed& c) {
   t.alpha = 1.0;
   for (const LobeInfo& lobe : c.piece.lobes) {
     const Vec3 n = lobe.n;
-    if (lobe.type == lotus::kOpLambert || Dot(t.wo, n) <= 0.0) continue;
+    if (lobe.type == lotus::kOpLambert || lobe.type == lotus::kOpSheen ||
+        Dot(t.wo, n) <= 0.0) {
+      continue;
+    }
     const Vec3 mirror = 2.0 * Dot(t.wo, n) * n - t.wo;
     const bool reflects = (lobe.scatter & lotus::kScatterReflect) != 0;
     const bool transmits = (lobe.scatter & lotus::kScatterTransmit) != 0;
@@ -1213,15 +1248,64 @@ std::vector<Composed> ComposedGrid() {
     }
   }
 
-  // A coat with its own normal.
+  // A coat with its own normal. A reflecting lobe scatters into the
+  // shading frame's upper hemisphere only, so a tilted coat loses what it
+  // would send below it: nothing passes through the surface.
   for (double tilt : {0.0, 15.0, 45.0, -45.0}) {
     for (float coat : {0.0f, 0.3f}) {
       std::snprintf(text, sizeof(text), "tilt %.0f coat roughness %.1f", tilt,
           coat);
-      layered("coat-normal", text,
-          Dielectric(1.5f, kWhite, coat, lotus::kScatterReflect, false, true,
-              Tilted(tilt)),
-          Lambert(kWhite), Energy::kFurnace, kLayerFurnace);
+      const Piece top = Dielectric(1.5f, kWhite, coat, lotus::kScatterReflect,
+          false, true, Tilted(tilt));
+      if (tilt == 0.0) {
+        layered("coat-normal", text, top, Lambert(kWhite), Energy::kFurnace,
+            kLayerFurnace);
+      } else {
+        layered("coat-tilted", text, top, Lambert(kWhite), Energy::kLoss,
+            kTiltedCoatLoss);
+      }
+    }
+  }
+
+  // The sheen alone, and over a white base. Its roughness is the lobe's
+  // own. At 0.02 its albedo exceeds 1 toward grazing outgoing directions,
+  // where the closure normalizes it.
+  for (float r : {0.02f, 0.1f, 0.3f, 0.6f, 1.0f}) {
+    std::snprintf(text, sizeof(text), "roughness %.2f", r);
+    add("sheen", std::string(text) + " white", Sheen(kWhite, r), Energy::kBound,
+        kBoundTolerance, r >= 0.25f);
+    add("sheen", std::string(text) + " tinted", Sheen(kTint, r), Energy::kBound,
+        kBoundTolerance, false);
+    layered("sheen-layer", text, Sheen(kWhite, r), Lambert(kWhite),
+        Energy::kFurnace, kLayerFurnace);
+  }
+
+  // GgxSchlick mirrored through the tangent plane: a thin surface's
+  // transmission, which passes everything when white and compensated.
+  for (float r : roughnesses) {
+    loss_roughness = r;
+    std::snprintf(text, sizeof(text), "roughness %.1f", r);
+    add("transmit", std::string(text) + " white compensated",
+        Transmit(kWhite, kWhite, r, true), Energy::kFurnace,
+        kCompensatedFurnace, false);
+    add("transmit-uncompensated", std::string(text) + " white",
+        Transmit(kWhite, kWhite, r, false), Energy::kLoss, LossBound(r), true);
+  }
+
+  // A coloured top that dims its base by its largest channel, over a mix
+  // of diffuse and transmitted light: the glTF PBR dielectric's shape.
+  for (float r : {0.1f, 0.6f}) {
+    for (float m : {0.0f, 0.5f, 1.0f}) {
+      std::snprintf(text, sizeof(text), "roughness %.1f transmission %.1f", r,
+          m);
+      const Piece under =
+          Mix(Lambert(kWhite), Transmit(kWhite, kWhite, r, true), m);
+      add("scalar-layer", std::string(text) + " white",
+          LayerScalarOf(Schlick({0.04f, 0.04f, 0.04f}, kWhite, r, true), under),
+          Energy::kFurnace, kLayerFurnace + kCompensatedFurnace, false);
+      add("scalar-layer", std::string(text) + " coloured",
+          LayerScalarOf(Schlick({1.0f, 0.2f, 0.04f}, kWhite, r, true), under),
+          Energy::kBound, kBoundTolerance, false);
     }
   }
 
@@ -1345,10 +1429,11 @@ double MaxOf(const std::array<double, 3>& v) {
 // The program with every dielectric's index inverted: the closure seen from
 // the other side of its interface.
 std::vector<float> Reversed(std::vector<float> code) {
-  static constexpr std::size_t kLength[] = {1, 7, 12, 12, 2, 1, 4, 8, 1};
+  static constexpr std::size_t kLength[] = {1, 7, 12, 12, 2, 1, 4, 8, 1, 8, 12,
+      1};
   for (std::size_t at = 0; at < code.size();) {
     const int op = int(code[at]);
-    if (op <= 0 || op > 8) break;
+    if (op <= 0 || op > 11) break;
     if (op == lotus::kOpDielectric) code[at + 1] = 1.0f / code[at + 1];
     at += kLength[op];
   }
@@ -1445,27 +1530,72 @@ double CheckStructure(const Composed& c, Result& r, const Target& t,
   return worst;
 }
 
-// --- glTF PBR (docs/design/GLTF_PBR.md section 8.1) --------------------------
+// --- glTF PBR (docs/design/GLTF_PBR.md section 8.1, ---------------------------
+// GLTF_PBR_EXTENSIONS.md section 7.2)
 //
 // The closure the scene pass builds for MaterialX's glTF PBR surface, through
 // the shader's own builder and the BSDF API's dispatch: BSDF API section
 // 7.3's assertions, a white furnace and the energy bound, the value against
-// an independent evaluation of the node definition, and the closure a stored
-// reservoir surface rebuilds.
+// an independent evaluation of the node definition, the closure a stored
+// reservoir surface rebuilds, and, with the extensions at their defaults,
+// the core's closure bit for bit.
+
+constexpr std::size_t kGltfFloats = 20;
 
 struct Gltf {
   std::string colour;
+  // The extensions' variant, empty for the core's grid.
+  std::string variant;
   Rgb base{};
   float metallic = 0.0f;
   float roughness = 0.0f;
   float cos_o = 1.0f;
-  std::array<float, 5> material{};
+  double ior = 1.5;
+  float specular = 1.0f;
+  Rgb specular_color = kWhite;
+  float transmission = 0.0f;
+  float clearcoat = 0.0f;
+  float clearcoat_roughness = 0.0f;
+  double coat_tilt = 0.0;  // degrees, in the plane of incidence
+  Rgb sheen_color{0.0f, 0.0f, 0.0f};
+  float sheen_roughness = 0.0f;
+  // The probe's ProbeGltfTerms order.
+  std::array<float, kGltfFloats> material{};
+
+  // The dielectric's reflectance at normal incidence, as the host computes
+  // it from the index.
+  double DielectricF0() const {
+    const double root = (1.0 - ior) / (1.0 + ior);
+    return root * root;
+  }
+
+  void Pack() {
+    const Normal n = Tilted(coat_tilt);
+    material = {base[0], base[1], base[2], roughness, metallic,
+        float(DielectricF0()), specular, specular_color[0], specular_color[1],
+        specular_color[2], transmission, clearcoat, clearcoat_roughness, n[0],
+        n[1], n[2], sheen_color[0], sheen_color[1], sheen_color[2],
+        sheen_roughness};
+  }
+
+  bool Core() const { return variant.empty(); }
+
+  // A white furnace is promised: nothing coloured, and the coat untilted.
+  bool Furnace() const {
+    const bool grey_sheen =
+        sheen_color[0] == sheen_color[1] && sheen_color[1] == sheen_color[2];
+    const bool white_specular = specular_color[0] == 1.0f &&
+        specular_color[1] == 1.0f && specular_color[2] == 1.0f;
+    return colour == "white" && grey_sheen && white_specular &&
+        coat_tilt == 0.0;
+  }
 
   std::string Name() const {
-    char text[128];
+    char text[192];
     std::snprintf(text, sizeof(text),
-        "gltf-pbr %s metallic %.1f roughness %.1f cos_o %.2f", colour.c_str(),
-        metallic, roughness, cos_o);
+        "gltf-pbr %s%s%s metallic %.1f roughness %.1f cos_o %.2f",
+        colour.c_str(), variant.empty() ? "" : " ", variant.c_str(), metallic,
+        roughness, cos_o);
     return text;
   }
 };
@@ -1478,6 +1608,7 @@ std::vector<Gltf> GltfGrid() {
   const Colour colours[] = {{"white", kWhite}, {"grey", {0.5f, 0.5f, 0.5f}},
       {"saturated", {0.9f, 0.3f, 0.05f}}};
   std::vector<Gltf> grid;
+  // The core: every extension at its default.
   for (const Colour& colour : colours) {
     for (float metallic : {0.0f, 0.5f, 1.0f}) {
       for (float roughness : {0.0f, 0.1f, 0.3f, 0.6f, 1.0f}) {
@@ -1488,8 +1619,97 @@ std::vector<Gltf> GltfGrid() {
           c.metallic = metallic;
           c.roughness = roughness;
           c.cos_o = cos_o;
-          c.material = {c.base[0], c.base[1], c.base[2], roughness, metallic};
+          c.Pack();
           grid.push_back(c);
+        }
+      }
+    }
+  }
+  // Each extension alone, and all together.
+  const Rgb saturated{0.9f, 0.3f, 0.05f};
+  std::vector<Gltf> variants;
+  const auto variant = [&](const char* name) -> Gltf& {
+    Gltf c;
+    c.variant = name;
+    variants.push_back(c);
+    return variants.back();
+  };
+  variant("ior 1").ior = 1.0;
+  variant("ior 1.33").ior = 1.33;
+  variant("ior 2.4").ior = 2.4;
+  variant("specular 0").specular = 0.0f;
+  variant("specular 0.5").specular = 0.5f;
+  variant("specular colour").specular_color = {1.0f, 0.3f, 0.1f};
+  {
+    // A product above 1, which the definition clamps.
+    Gltf& c = variant("specular colour clamped");
+    c.ior = 2.4;
+    c.specular_color = {8.0f, 1.0f, 0.25f};
+  }
+  variant("transmission 0.5").transmission = 0.5f;
+  variant("transmission 1").transmission = 1.0f;
+  variant("clearcoat 1").clearcoat = 1.0f;
+  {
+    Gltf& c = variant("clearcoat 0.5 rough 0.3");
+    c.clearcoat = 0.5f;
+    c.clearcoat_roughness = 0.3f;
+  }
+  {
+    Gltf& c = variant("clearcoat 1 rough 1");
+    c.clearcoat = 1.0f;
+    c.clearcoat_roughness = 1.0f;
+  }
+  for (double tilt : {15.0, 45.0}) {
+    char name[48];
+    std::snprintf(name, sizeof(name), "clearcoat tilt %.0f", tilt);
+    Gltf& c = variant(name);
+    c.clearcoat = 1.0f;
+    c.clearcoat_roughness = 0.3f;
+    c.coat_tilt = tilt;
+  }
+  {
+    Gltf& c = variant("sheen white");
+    c.sheen_color = kWhite;
+    c.sheen_roughness = 0.7f;
+  }
+  {
+    Gltf& c = variant("sheen saturated");
+    c.sheen_color = saturated;
+    c.sheen_roughness = 0.3f;
+  }
+  {
+    Gltf& c = variant("sheen half rough");
+    c.sheen_color = {0.5f, 0.5f, 0.5f};
+    c.sheen_roughness = 1.0f;
+  }
+  {
+    Gltf& c = variant("all");
+    c.ior = 1.8;
+    c.specular = 0.8f;
+    c.specular_color = {1.0f, 0.8f, 0.6f};
+    c.transmission = 0.4f;
+    c.clearcoat = 0.7f;
+    c.clearcoat_roughness = 0.2f;
+    c.coat_tilt = 10.0;
+    c.sheen_color = {0.3f, 0.5f, 0.8f};
+    c.sheen_roughness = 0.6f;
+  }
+  const Colour extension_colours[] = {{"white", kWhite},
+      {"saturated", saturated}};
+  for (const Gltf& v : variants) {
+    for (const Colour& colour : extension_colours) {
+      for (float metallic : {0.0f, 0.5f}) {
+        for (float roughness : {0.1f, 0.6f}) {
+          for (float cos_o : {1.0f, 0.3f, 0.05f}) {
+            Gltf c = v;
+            c.colour = colour.name;
+            c.base = colour.value;
+            c.metallic = metallic;
+            c.roughness = roughness;
+            c.cos_o = cos_o;
+            c.Pack();
+            grid.push_back(c);
+          }
         }
       }
     }
@@ -1498,7 +1718,7 @@ std::vector<Gltf> GltfGrid() {
 }
 
 Evaluation EvaluateGltf(const Gltf& c, Vec3 wi, bool stored = false) {
-  std::array<float, 5> material = c.material;
+  std::array<float, kGltfFloats> material = c.material;
   std::array<float, 3> wo = WoOf(c.cos_o);
   std::array<float, 3> direction{float(wi.x), float(wi.y), float(wi.z)};
   std::array<float, 4> result{};
@@ -1508,7 +1728,7 @@ Evaluation EvaluateGltf(const Gltf& c, Vec3 wi, bool stored = false) {
 }
 
 Sample DrawGltf(const Gltf& c, std::array<float, 3> u) {
-  std::array<float, 5> material = c.material;
+  std::array<float, kGltfFloats> material = c.material;
   std::array<float, 3> wo = WoOf(c.cos_o);
   std::array<float, 9> result{};
   Sample s;
@@ -1527,6 +1747,11 @@ double GltfAlpha(const Gltf& c) {
   return std::max(double(c.roughness) * c.roughness, double(kMinAlpha));
 }
 
+double GltfCoatAlpha(const Gltf& c) {
+  return std::max(double(c.clearcoat_roughness) * c.clearcoat_roughness,
+      double(kMinAlpha));
+}
+
 Target MakeGltfTarget(const Gltf& c) {
   Target t;
   t.name = c.Name();
@@ -1536,16 +1761,30 @@ Target MakeGltfTarget(const Gltf& c) {
   t.draw = [&c](std::array<float, 3> u) { return DrawGltf(c, u); };
   t.mixture_ratio = true;
   t.alpha = GltfAlpha(c);
+  const Vec3 mirror{-t.wo.x, -t.wo.y, t.wo.z};
+  t.peaks.push_back(Psi(mirror));
+  if (c.transmission > 0.0f) {
+    t.peaks.push_back(Psi({mirror.x, mirror.y, -mirror.z}));
+  }
+  const Vec3 n = ToVec(Tilted(c.coat_tilt));
+  if (c.clearcoat > 0.0f && Dot(t.wo, n) > 0.0) {
+    t.alpha = std::min(t.alpha, GltfCoatAlpha(c));
+    t.peaks.push_back(Psi(2.0 * Dot(t.wo, n) * n - t.wo));
+  }
   t.statistics = t.alpha >= 0.01;
-  t.peaks.push_back(std::atan2(t.wo.z, -t.wo.x));
   return t;
 }
 
-// The white furnace and the energy bound. A white base colour reflects
-// everything at every metallic: the compensated metal alone, and the
-// compensated dielectric over a white diffuse lobe.
+// The furnace's tolerance: the compensated lobes' and each layer's table
+// error.
+constexpr double kGltfFurnace = 2.0 * kLayerFurnace + kCompensatedFurnace;
+
+// The white furnace and the energy bound. A white base colour reflects or
+// transmits everything at every metallic, transmission and specular weight,
+// under any untilted coat and any grey sheen: every compensated lobe returns
+// what it receives, and every layer passes on what its top does not reflect.
 double CheckGltfEnergy(const Gltf& c, Result& r, const Target& t) {
-  const bool furnace = c.colour == "white";
+  const bool furnace = c.Furnace();
   double worst = 0.0;
   for (int k = 0; k < 3; ++k) {
     const double a = r.albedo[k];
@@ -1553,7 +1792,8 @@ double CheckGltfEnergy(const Gltf& c, Result& r, const Target& t) {
     char text[160];
     if (furnace) {
       worst = std::max(worst, std::abs(a - 1.0));
-      if (std::abs(a - 1.0) > kCompensatedFurnace + noise) {
+      if (std::abs(a - 1.0) >
+          (c.Core() ? kCompensatedFurnace : kGltfFurnace) + noise) {
         std::snprintf(text, sizeof(text), "furnace: albedo %.6f (se %.2g)", a,
             r.albedo_se[k]);
         Fail(r, t, text);
@@ -1572,28 +1812,36 @@ double CheckGltfEnergy(const Gltf& c, Result& r, const Target& t) {
   return worst;
 }
 
-// The node definition's closure, written from ND_gltf_pbr_surfaceshader
-// 2.0.1's graph with its extensions at their defaults and the MaterialX
-// specification's lobes, in double precision and sharing no code with the
-// shaders:
-//
-//   mix(layer(generalized_schlick(0.04, 1), oren_nayar_diffuse(base)),
-//       generalized_schlick(base, 1), metallic)
-//
-// with GGX, the height-correlated Smith term, Schlick's Fresnel, multiple
-// scattering compensation 1 + F0 (1 - E1) / E1, and the layer's 1 - E_top.
-// The directional albedos are this file's own quadrature of the lobe over
-// the square of visible-normal sampling, not Lotus's tables.
-struct GltfOracle {
+// The unpolarized reflectance of a dielectric interface of relative index
+// eta at the cosine c (Pharr et al., Physically Based Rendering, 4th
+// edition, section 9.3).
+double DielectricFresnel(double c, double eta) {
+  c = std::clamp(c, 0.0, 1.0);
+  const double sin2_t = (1.0 - c * c) / (eta * eta);
+  if (sin2_t >= 1.0) return 1.0;
+  const double ct = std::sqrt(1.0 - sin2_t);
+  const double parallel = (eta * c - ct) / (eta * c + ct);
+  const double perpendicular = (c - eta * ct) / (c + eta * ct);
+  return 0.5 * (parallel * parallel + perpendicular * perpendicular);
+}
+
+// A GGX lobe of one alpha seen from one direction, in the frame about its
+// normal, with its directional albedos by this file's own quadrature over
+// the square of visible-normal sampling, not Lotus's tables: for a Fresnel
+// of 1 (e1), of (1 - cos)^5 (e5) and of a dielectric of index 1.5 (ed).
+struct GgxOracle {
   double alpha = 1.0;
   Vec3 wo;
-  // The albedo of GGX with a Fresnel of 1, and with (1 - cos)^5.
   double e1 = 0.0;
   double e5 = 0.0;
+  double ed = 0.0;
+
+  using Triple = std::array<double, 3>;
 
   // A visible normal for wo (Dupuy and Benyoub, 2023) and the reflected
-  // direction's weight G2 / G1; the weight is 0 below the horizon.
-  double Weight(double ux, double uy, double& schlick) const {
+  // direction's weight G2 / G1, alone and times each Fresnel term; 0 below
+  // the horizon.
+  Triple Weight(double ux, double uy) const {
     const Vec3 o = Normalize({alpha * wo.x, alpha * wo.y, wo.z});
     const double phi = 2.0 * kPi * ux;
     const double z = (1.0 - uy) * (1.0 + o.z) - o.z;
@@ -1602,136 +1850,274 @@ struct GltfOracle {
     const Vec3 h = Normalize({alpha * cap.x, alpha * cap.y, cap.z});
     const double c = Dot(wo, h);
     const Vec3 wi = 2.0 * c * h - wo;
-    schlick = 0.0;
-    if (!(wi.z > 0.0) || !(c > 0.0)) return 0.0;
+    if (!(wi.z > 0.0) || !(c > 0.0)) return {0.0, 0.0, 0.0};
     const double lambda_o = SmithLambda(wo, alpha);
     const double weight =
         (1.0 + lambda_o) / (1.0 + lambda_o + SmithLambda(wi, alpha));
-    schlick = weight * std::pow(1.0 - c, 5.0);
-    return weight;
+    return {weight, weight * std::pow(1.0 - c, 5.0),
+        weight * DielectricFresnel(c, 1.5)};
   }
 
-  std::array<double, 2> Rule(double x0, double x1, double y0, double y1) const {
+  Triple Rule(double x0, double x1, double y0, double y1) const {
     static constexpr double kNodes[4] = {-0.8611363115940526,
         -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
     static constexpr double kWeights[4] = {0.3478548451374538,
         0.6521451548625461, 0.6521451548625461, 0.3478548451374538};
     const double cx = 0.5 * (x0 + x1), hx = 0.5 * (x1 - x0);
     const double cy = 0.5 * (y0 + y1), hy = 0.5 * (y1 - y0);
-    std::array<double, 2> sum{};
+    Triple sum{};
     for (int a = 0; a < 4; ++a) {
       for (int b = 0; b < 4; ++b) {
-        double schlick = 0.0;
-        const double w = kWeights[a] * kWeights[b];
-        sum[0] += w * Weight(cx + hx * kNodes[a], cy + hy * kNodes[b], schlick);
-        sum[1] += w * schlick;
+        const Triple w = Weight(cx + hx * kNodes[a], cy + hy * kNodes[b]);
+        for (int k = 0; k < 3; ++k) sum[k] += kWeights[a] * kWeights[b] * w[k];
       }
     }
-    return {sum[0] * hx * hy, sum[1] * hx * hy};
+    for (double& v : sum) v *= hx * hy;
+    return sum;
   }
 
-  std::array<double, 2> Adaptive(double x0, double x1, double y0, double y1,
-      std::array<double, 2> estimate, int depth) const {
+  Triple Adaptive(double x0, double x1, double y0, double y1, Triple estimate,
+      int depth) const {
     const double xm = 0.5 * (x0 + x1), ym = 0.5 * (y0 + y1);
-    const std::array<double, 2> parts[4] = {Rule(x0, xm, y0, ym),
-        Rule(xm, x1, y0, ym), Rule(x0, xm, ym, y1), Rule(xm, x1, ym, y1)};
-    std::array<double, 2> fine{};
-    for (const auto& part : parts) {
-      fine[0] += part[0];
-      fine[1] += part[1];
-    }
+    const Triple parts[4] = {Rule(x0, xm, y0, ym), Rule(xm, x1, y0, ym),
+        Rule(x0, xm, ym, y1), Rule(xm, x1, ym, y1)};
+    Triple fine{};
+    bool converged = depth >= 1;
     const double tolerance = 1.0e-5 * (x1 - x0) * (y1 - y0);
-    if ((depth >= 1 && std::abs(fine[0] - estimate[0]) <= tolerance &&
-            std::abs(fine[1] - estimate[1]) <= tolerance) ||
-        depth >= 8) {
-      return fine;
+    for (int k = 0; k < 3; ++k) {
+      for (const Triple& part : parts) fine[k] += part[k];
+      converged = converged && std::abs(fine[k] - estimate[k]) <= tolerance;
     }
-    const std::array<double, 2> a =
-        Adaptive(x0, xm, y0, ym, parts[0], depth + 1);
-    const std::array<double, 2> b =
-        Adaptive(xm, x1, y0, ym, parts[1], depth + 1);
-    const std::array<double, 2> c2 =
-        Adaptive(x0, xm, ym, y1, parts[2], depth + 1);
-    const std::array<double, 2> d =
-        Adaptive(xm, x1, ym, y1, parts[3], depth + 1);
-    return {a[0] + b[0] + c2[0] + d[0], a[1] + b[1] + c2[1] + d[1]};
+    if (converged || depth >= 8) return fine;
+    const double xs[3] = {x0, xm, x1}, ys[3] = {y0, ym, y1};
+    Triple sum{};
+    for (int j = 0; j < 2; ++j) {
+      for (int i = 0; i < 2; ++i) {
+        const Triple part = Adaptive(xs[i], xs[i + 1], ys[j], ys[j + 1],
+            parts[2 * j + i], depth + 1);
+        for (int k = 0; k < 3; ++k) sum[k] += part[k];
+      }
+    }
+    return sum;
   }
 
-  GltfOracle(double alpha_in, Vec3 wo_in) : alpha(alpha_in), wo(wo_in) {
+  GgxOracle(double alpha_in, Vec3 wo_in) : alpha(alpha_in), wo(wo_in) {
+    if (!(wo.z > 0.0)) return;
     constexpr int kPanels = 4;
     const double h = 1.0 / kPanels;
     for (int i = 0; i < kPanels; ++i) {
       for (int j = 0; j < kPanels; ++j) {
         const double x0 = i * h, x1 = (i + 1) * h;
         const double y0 = j * h, y1 = (j + 1) * h;
-        const std::array<double, 2> part =
-            Adaptive(x0, x1, y0, y1, Rule(x0, x1, y0, y1), 0);
+        const Triple part = Adaptive(x0, x1, y0, y1, Rule(x0, x1, y0, y1), 0);
         e1 += part[0];
         e5 += part[1];
+        ed += part[2];
       }
     }
   }
 
-  // GGX reflection's f * cos(theta_i) with Schlick's Fresnel from f0 to 1.
-  double Specular(double f0, Vec3 wi) const {
-    if (!(wi.z > 0.0)) return 0.0;
+  // GGX reflection's D G2 / (4 cos_o), the f * cos(theta_i) of a Fresnel of
+  // 1, and the cosine between wo and the half vector.
+  double Reflection(Vec3 wi, double& cos_oh) const {
+    cos_oh = 0.0;
+    if (!(wi.z > 0.0) || !(wo.z > 0.0)) return 0.0;
     const Vec3 h = Normalize(wo + wi);
-    const double fresnel =
-        f0 + (1.0 - f0) * std::pow(std::clamp(1.0 - Dot(wo, h), 0.0, 1.0), 5.0);
+    cos_oh = Dot(wo, h);
     const double g2 =
         1.0 / (1.0 + SmithLambda(wo, alpha) + SmithLambda(wi, alpha));
-    return fresnel * GgxDistribution(h, alpha) * g2 / (4.0 * wo.z);
+    return GgxDistribution(h, alpha) * g2 / (4.0 * wo.z);
+  }
+
+  // With Schlick's Fresnel from f0 to f90.
+  double Specular(double f0, double f90, Vec3 wi) const {
+    double c = 0.0;
+    const double reflection = Reflection(wi, c);
+    return (f0 + (f90 - f0) * std::pow(std::clamp(1.0 - c, 0.0, 1.0), 5.0)) *
+        reflection;
   }
 
   double Compensation(double f0) const { return 1.0 + f0 * (1.0 - e1) / e1; }
 
-  // The directional albedo of the compensated lobe.
-  double Albedo(double f0) const {
-    return Compensation(f0) * (f0 * e1 + (1.0 - f0) * e5);
+  // The directional albedo of the compensated Schlick lobe.
+  double Albedo(double f0, double f90) const {
+    return Compensation(f0) * (f0 * e1 + (f90 - f0) * e5);
+  }
+};
+
+// The sheen's albedo for a white colour, by the midpoint rule over the
+// hemisphere in (cos theta, phi).
+double SheenValue(double roughness, Vec3 wo, Vec3 wi) {
+  if (!(wi.z > 0.0) || !(wo.z > 0.0)) return 0.0;
+  const Vec3 h = Normalize(wo + wi);
+  const double inverse = 1.0 / roughness;
+  const double sin2 = std::max(1.0 - h.z * h.z, 0.0);
+  const double d =
+      (2.0 + inverse) * std::pow(sin2, 0.5 * inverse) / (2.0 * kPi);
+  return d * wi.z / (4.0 * (wi.z + wo.z - wi.z * wo.z));
+}
+
+double SheenAlbedo(double roughness, Vec3 wo) {
+  constexpr int kCosines = 384;
+  constexpr int kAzimuths = 384;
+  double sum = 0.0;
+  for (int i = 0; i < kCosines; ++i) {
+    const double z = (i + 0.5) / kCosines;
+    const double s = std::sqrt(1.0 - z * z);
+    for (int j = 0; j < kAzimuths; ++j) {
+      const double phi = 2.0 * kPi * (j + 0.5) / kAzimuths;
+      sum += SheenValue(roughness, wo, {s * std::cos(phi), s * std::sin(phi), z});
+    }
+  }
+  return sum * 2.0 * kPi / (double(kCosines) * kAzimuths);
+}
+
+// The node definition's closure, written from ND_gltf_pbr_surfaceshader
+// 2.0.1's graph with iridescence and anisotropy at their defaults and the
+// MaterialX specification's lobes, in double precision and sharing no code
+// with the shaders:
+//
+//   layer(dielectric_bsdf(R, weight = clearcoat, 1.5),
+//     layer(sheen_bsdf(max(sheen), sheen / max(sheen), sheen_roughness^2),
+//       mix(layer(generalized_schlick(f0, f90),
+//                 mix(oren_nayar_diffuse(base), transmission, transmission)),
+//           generalized_schlick(base, 1), metallic)))
+//
+// with GGX, the height-correlated Smith term, Schlick's and the dielectric's
+// Fresnel, multiple scattering compensation 1 + F0 (1 - E1) / E1, and each
+// layer's 1 - E_top, in the readings the contract states: transmission is
+// the reflection lobe mirrored through the tangent plane with a Fresnel of
+// 1 (section 6.2), the dielectric's coloured top dims its base by its
+// largest channel (section 6.3), the coat's alpha has Lotus's floor, a
+// reflecting lobe sends nothing below the shading normal, and the sheen is
+// normalized where its albedo exceeds 1.
+struct GltfOracle {
+  const Gltf& c;
+  Vec3 wo;
+  GgxOracle base;
+  // The coat's frame: its normal, and the tangent in the plane of
+  // incidence.
+  Vec3 coat_normal;
+  Vec3 coat_tangent;
+  GgxOracle coat;
+  double coat_scale = 0.0;
+  double coat_dim = 0.0;
+  double sheen_roughness = 1.0;
+  double sheen_scale = 0.0;  // the normalization; 0 without a sheen
+  double sheen_dim = 0.0;
+
+  Vec3 ToCoat(Vec3 w) const {
+    return {Dot(w, coat_tangent), w.y, Dot(w, coat_normal)};
   }
 
-  double Value(double base, double metallic, Vec3 wi) const {
-    constexpr double kF0 = 0.04;
-    const double diffuse = wi.z > 0.0 ? base * wi.z / kPi : 0.0;
-    const double dielectric = Compensation(kF0) * Specular(kF0, wi) +
-        std::clamp(1.0 - Albedo(kF0), 0.0, 1.0) * diffuse;
-    const double metal = Compensation(base) * Specular(base, wi);
-    return (1.0 - metallic) * dielectric + metallic * metal;
+  static Vec3 CoatTangent(double degrees) {
+    const double t = degrees * kPi / 180.0;
+    return {std::cos(t), 0.0, -std::sin(t)};
+  }
+
+  GltfOracle(const Gltf& c_in, Vec3 wo_in)
+      : c(c_in), wo(wo_in), base(GltfAlpha(c_in), wo_in),
+        coat_normal(ToVec(Tilted(c_in.coat_tilt))),
+        coat_tangent(CoatTangent(c_in.coat_tilt)),
+        coat(GltfCoatAlpha(c_in),
+            c_in.clearcoat > 0.0f ? ToCoat(wo_in) : Vec3{0.0, 0.0, -1.0}) {
+    if (c.clearcoat > 0.0f && coat.wo.z > 0.0) {
+      coat_scale = c.clearcoat * coat.Compensation(0.04);
+      coat_dim = std::clamp(coat_scale * coat.ed, 0.0, 1.0);
+    }
+    const double sheen =
+        std::max({c.sheen_color[0], c.sheen_color[1], c.sheen_color[2]});
+    if (sheen > 0.0) {
+      sheen_roughness =
+          std::max(double(c.sheen_roughness) * c.sheen_roughness, 0.005);
+      const double e = SheenAlbedo(sheen_roughness, wo);
+      sheen_scale = e > 1.0 ? 1.0 / e : 1.0;
+      sheen_dim = std::clamp(sheen * std::min(e, 1.0), 0.0, 1.0);
+    }
+  }
+
+  // The dielectric reflection's f0 in channel k.
+  double F0(int k) const {
+    return std::min(c.specular_color[k] * c.DielectricF0(), 1.0) * c.specular;
+  }
+
+  double Value(int k, Vec3 wi) const {
+    const double albedo = c.base[k];
+    const bool up = wi.z > 0.0;
+    const Vec3 mirrored{wi.x, wi.y, -wi.z};
+    const double diffuse = up ? albedo * wi.z / kPi : 0.0;
+    const double transmitted = up ? 0.0
+        : albedo * base.Compensation(1.0) * base.Specular(1.0, 1.0, mirrored);
+    double top = 0.0;
+    for (int j = 0; j < 3; ++j) {
+      top = std::max(top, base.Albedo(F0(j), c.specular));
+    }
+    const double dielectric =
+        base.Compensation(F0(k)) * base.Specular(F0(k), c.specular, wi) +
+        std::clamp(1.0 - top, 0.0, 1.0) *
+            ((1.0 - c.transmission) * diffuse + c.transmission * transmitted);
+    const double metal =
+        base.Compensation(albedo) * base.Specular(albedo, 1.0, wi);
+    double value = (1.0 - c.metallic) * dielectric + c.metallic * metal;
+    value = (1.0 - sheen_dim) * value;
+    if (sheen_scale > 0.0) {
+      value += c.sheen_color[k] * sheen_scale *
+          SheenValue(sheen_roughness, wo, wi);
+    }
+    value = (1.0 - coat_dim) * value;
+    if (coat_scale > 0.0 && up) {
+      double cos_oh = 0.0;
+      const double reflection = coat.Reflection(ToCoat(wi), cos_oh);
+      value += coat_scale * DielectricFresnel(cos_oh, 1.5) * reflection;
+    }
+    return value;
   }
 };
 
 // The oracle comparison's tolerance: the tables' interpolation error in
-// the compensation and the layer's factor, relative to the value, and float
-// rounding where the value is small.
+// the compensations and the layers' factors, relative to the value, and
+// float rounding where the value is small.
 constexpr double kOracleRelative = 5.0e-3;
 constexpr double kOracleAbsolute = 2.0e-5;
+
+// Whether single precision resolves a near-mirror lobe's value at wi: near
+// its peak it does not resolve the half vector the distribution depends on.
+bool GltfResolved(const Gltf& c, const GltfOracle& oracle, Vec3 wi) {
+  const Vec3 up{wi.x, wi.y, std::abs(wi.z)};
+  if (oracle.base.alpha < 0.01 &&
+      GgxDistribution(Normalize(oracle.wo + up), oracle.base.alpha) > 10.0) {
+    return false;
+  }
+  if (c.clearcoat > 0.0f && oracle.coat.alpha < 0.01 && oracle.coat.wo.z > 0.0) {
+    const Vec3 local = oracle.ToCoat(wi);
+    if (local.z > 0.0 && GgxDistribution(Normalize(oracle.coat.wo + local),
+                             oracle.coat.alpha) > 10.0) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // Returns the worst relative deviation from the oracle. Directions are
 // uniform over the sphere and, where the lobes are wide enough for float
 // arithmetic to resolve their peak, the closure's own samples.
 double CheckGltfOracle(const Gltf& c, Result& r, const Target& t,
     std::uint64_t seed) {
-  const double alpha = GltfAlpha(c);
-  const GltfOracle oracle(alpha, t.wo);
+  const GltfOracle oracle(c, t.wo);
   Random random(seed);
   double worst = 0.0;
   for (int i = 0; i < 96; ++i) {
     Vec3 wi = UniformSphere(random);
-    if (i % 2 == 1 && alpha >= 0.01) {
+    if (i % 2 == 1 && t.alpha >= 0.01) {
       const Sample s = DrawGltf(c,
           {random.Uniform(), random.Uniform(), random.Uniform()});
       if (!s.success) continue;
       wi = s.wi;
     }
-    // Near a near-mirror's peak, single precision does not resolve the
-    // half vector the distribution depends on.
-    if (alpha < 0.01 && wi.z > 0.0 &&
-        GgxDistribution(Normalize(t.wo + wi), alpha) > 10.0) {
-      continue;
-    }
+    if (!GltfResolved(c, oracle, wi)) continue;
     const Evaluation actual = EvaluateGltf(c, wi);
     for (int k = 0; k < 3; ++k) {
-      const double expected = oracle.Value(c.base[k], c.metallic, wi);
+      const double expected = oracle.Value(k, wi);
       const double error = std::abs(actual.value[k] - expected);
       const double allowed =
           kOracleRelative * std::abs(expected) + kOracleAbsolute;
@@ -1750,10 +2136,13 @@ double CheckGltfOracle(const Gltf& c, Result& r, const Target& t,
   return worst;
 }
 
-// A stored surface's closure: rebuilt from the terms read back from the
-// closure, it has the original's value and density.
+// A stored surface's closure: rebuilt from the terms as the surface packs
+// them, it has the original's value and density. The coat's normal is
+// stored by two of its components, so a near-mirror coat's value is
+// compared away from its peak.
 double CheckGltfStored(const Gltf& c, Result& r, const Target& t,
     std::uint64_t seed) {
+  const GltfOracle oracle(c, t.wo);
   Random random(seed);
   double worst = 0.0;
   for (int i = 0; i < 64; ++i) {
@@ -1764,6 +2153,7 @@ double CheckGltfStored(const Gltf& c, Result& r, const Target& t,
       if (!s.success) continue;
       wi = s.wi;
     }
+    if (c.coat_tilt != 0.0 && !GltfResolved(c, oracle, wi)) continue;
     const Evaluation built = EvaluateGltf(c, wi);
     const Evaluation stored = EvaluateGltf(c, wi, true);
     double error = std::abs(stored.pdf - built.pdf) /
@@ -1773,7 +2163,7 @@ double CheckGltfStored(const Gltf& c, Result& r, const Target& t,
           std::max(std::abs(built.value[k]), 1.0e-6));
     }
     worst = std::max(worst, error);
-    if (error > 1.0e-5) {
+    if (error > (c.coat_tilt != 0.0 ? 1.0e-4 : 1.0e-5)) {
       char text[224];
       std::snprintf(text, sizeof(text),
           "stored: value %.6g pdf %.6g, built %.6g %.6g at wi (%.4f %.4f %.4f)",
@@ -1784,6 +2174,60 @@ double CheckGltfStored(const Gltf& c, Result& r, const Target& t,
     }
   }
   return worst;
+}
+
+// With every extension at its default the closure is the core's: at most
+// its three lobes, and bit for bit the value and density of
+//
+//   mix(layer(generalized_schlick(0.04, 1), oren_nayar_diffuse(base)),
+//       generalized_schlick(base, 1), metallic)
+//
+// built from the composed closure's own operations.
+void CheckGltfDefaults(const Gltf& c, Result& r, const Target& t,
+    std::uint64_t seed) {
+  if (!c.Core()) return;
+  std::array<float, kGltfFloats> material = c.material;
+  std::array<float, 3> wo = WoOf(c.cos_o);
+  const int lobes =
+      LotusProbeGltfLobes(material.data(), AlbedoData(), wo.data());
+  if (lobes > 3) {
+    char text[96];
+    std::snprintf(text, sizeof(text), "defaults: %d lobes", lobes);
+    Fail(r, t, text);
+    return;
+  }
+  const float alpha = c.roughness * c.roughness;
+  lotus::Program core;
+  core.Schlick({0.04f, 0.04f, 0.04f}, kWhite, alpha, true)
+      .Lambert(c.base)
+      .Layer()
+      .Schlick(c.base, kWhite, alpha, true)
+      .Mix(c.metallic);
+  const std::vector<float> code = core.Code();
+  Random random(seed);
+  for (int i = 0; i < 64; ++i) {
+    Vec3 wi = UniformSphere(random);
+    if (i % 2 == 1) {
+      const Sample s = DrawGltf(c,
+          {random.Uniform(), random.Uniform(), random.Uniform()});
+      if (!s.success) continue;
+      wi = s.wi;
+    }
+    const Evaluation actual = EvaluateGltf(c, wi);
+    const Evaluation expected = EvaluateCode(code, wo, wi);
+    // The probe returns floats: equal doubles are equal floats.
+    if (actual.value[0] != expected.value[0] ||
+        actual.value[1] != expected.value[1] ||
+        actual.value[2] != expected.value[2] || actual.pdf != expected.pdf) {
+      char text[224];
+      std::snprintf(text, sizeof(text),
+          "defaults: value %.9g pdf %.9g, core %.9g %.9g at wi (%.4f %.4f %.4f)",
+          actual.value[0], actual.pdf, expected.value[0], expected.pdf, wi.x,
+          wi.y, wi.z);
+      Fail(r, t, text);
+      return;
+    }
+  }
 }
 
 }  // namespace
@@ -1884,6 +2328,7 @@ int main(int argc, char** argv) {
               CheckGltfOracle(c, r, targets[i], seeds[i] + 1);
           measures[i].reciprocity =
               CheckGltfStored(c, r, targets[i], seeds[i] + 2);
+          CheckGltfDefaults(c, r, targets[i], seeds[i] + 3);
         } else if (i >= first_composed) {
           const Composed& c = composed_full[composed[i - first_composed]];
           measures[i].energy = CheckEnergy(c, r, targets[i]);
@@ -1976,12 +2421,12 @@ int main(int argc, char** argv) {
     double furnace = 0.0, bound = 0.0, oracle = 0.0, stored = 0.0;
     for (std::size_t i = first_gltf; i < targets.size(); ++i) {
       const Gltf& c = gltf_full[gltf[i - first_gltf]];
-      (c.colour == "white" ? furnace : bound) =
-          std::max(c.colour == "white" ? furnace : bound, measures[i].energy);
+      (c.Furnace() ? furnace : bound) =
+          std::max(c.Furnace() ? furnace : bound, measures[i].energy);
       oracle = std::max(oracle, measures[i].structure);
       stored = std::max(stored, measures[i].reciprocity);
     }
-    std::printf("  gltf-pbr               %4zu: max |albedo - 1| %.3g (white), "
+    std::printf("  gltf-pbr               %4zu: max |albedo - 1| %.3g (furnace), "
         "albedo - 1 %.3g, definition oracle %.3g, stored closure %.2g\n",
         targets.size() - first_gltf, furnace, bound, oracle, stored);
   }

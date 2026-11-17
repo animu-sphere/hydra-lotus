@@ -89,7 +89,8 @@ struct MaterialInput {
 // stay distinct, and nothing converts one model's parameters into another's.
 enum class ShadingModel : std::uint32_t {
   UsdPreviewSurface,
-  // MaterialX's glTF PBR surface, its core (docs/design/GLTF_PBR.md).
+  // MaterialX's glTF PBR surface (docs/design/GLTF_PBR.md and
+  // GLTF_PBR_EXTENSIONS.md).
   GltfPbr,
   // Tags reserved for LOTUS-MATERIALX-07 and -08. A material with one of
   // them has no parameters yet, and the GPU scene rejects it.
@@ -171,11 +172,11 @@ struct PreviewSurface {
   bool operator==(const PreviewSurface&) const = default;
 };
 
-// MaterialX's glTF PBR surface (ND_gltf_pbr_surfaceshader 2.0.1), its core
-// inputs with the definition's defaults: a rough white metal
-// (docs/design/GLTF_PBR.md section 4). The dielectric's index is the
-// definition's default 1.5; the surface's normal and alpha are the
-// material's geometry. Colours are linear RGB.
+// MaterialX's glTF PBR surface (ND_gltf_pbr_surfaceshader 2.0.1) with the
+// definition's defaults: a rough white metal (docs/design/GLTF_PBR.md
+// section 4, GLTF_PBR_EXTENSIONS.md section 4). The surface's normal and
+// alpha are the material's geometry; iridescence, anisotropy, volume and
+// dispersion are not represented. Colours are linear RGB.
 struct GltfPbr {
   // The diffuse lobe's albedo, and the metal's reflectance at normal
   // incidence. Each component in [0, 1].
@@ -189,6 +190,30 @@ struct GltfPbr {
   MaterialInput<std::array<float, 3>> emissive{{0.0F, 0.0F, 0.0F}, {}};
   // A constant factor on `emissive`, finite and non-negative.
   float emissive_strength = 1.0F;
+  // The dielectric's index, finite and at least 1: its reflectance at
+  // normal incidence is ((1 - ior) / (1 + ior))^2. Constant-only.
+  float ior = 1.5F;
+  // The dielectric reflection's weight in [0, 1].
+  MaterialInput<float> specular{1.0F, {}};
+  // A factor on the dielectric's reflectance at normal incidence, finite and
+  // non-negative; the product is clamped to 1.
+  MaterialInput<std::array<float, 3>> specular_color{{1.0F, 1.0F, 1.0F}, {}};
+  // The share in [0, 1] of the dielectric's base that transmits instead of
+  // scattering diffusely: a thin surface that does not refract, tinted by
+  // `base_color`, with `roughness`.
+  MaterialInput<float> transmission{0.0F, {}};
+  // The clearcoat's weight and roughness in [0, 1]: a dielectric of index
+  // 1.5 over everything else.
+  MaterialInput<float> clearcoat{0.0F, {}};
+  MaterialInput<float> clearcoat_roughness{0.0F, {}};
+  // A tangent-space lookup for the coat's normal, as `geometry.normal_texture`
+  // is the base's. Without one the coat lies about the mesh's shading
+  // normal, which `geometry.normal` does not move.
+  std::optional<TextureInput> clearcoat_normal_texture;
+  // The sheen's colour, each component in [0, 1], whose largest is its
+  // weight, and its roughness in [0, 1]; the lobe's is its square.
+  MaterialInput<std::array<float, 3>> sheen_color{{0.0F, 0.0F, 0.0F}, {}};
+  MaterialInput<float> sheen_roughness{0.0F, {}};
 
   bool operator==(const GltfPbr&) const = default;
 };
@@ -237,7 +262,7 @@ struct Material {
 // table's binding mask. Slots 0 and 1 are the geometry's in every model, so
 // the any-hit coverage test never asks for the model; the model's own
 // inputs follow. A slot the model does not have reads no lookup.
-inline constexpr std::size_t kMaterialTextureInputs = 7;
+inline constexpr std::size_t kMaterialTextureInputs = 14;
 inline constexpr std::size_t kOpacitySlot = 0;
 inline constexpr std::size_t kNormalSlot = 1;
 // UsdPreviewSurface's slots.
@@ -251,6 +276,14 @@ inline constexpr std::size_t kGltfBaseColorSlot = 2;
 inline constexpr std::size_t kGltfMetallicSlot = 3;
 inline constexpr std::size_t kGltfRoughnessSlot = 4;
 inline constexpr std::size_t kGltfEmissiveSlot = 5;
+inline constexpr std::size_t kGltfSpecularSlot = 6;
+inline constexpr std::size_t kGltfSpecularColorSlot = 7;
+inline constexpr std::size_t kGltfTransmissionSlot = 8;
+inline constexpr std::size_t kGltfClearcoatSlot = 9;
+inline constexpr std::size_t kGltfClearcoatRoughnessSlot = 10;
+inline constexpr std::size_t kGltfClearcoatNormalSlot = 11;
+inline constexpr std::size_t kGltfSheenColorSlot = 12;
+inline constexpr std::size_t kGltfSheenRoughnessSlot = 13;
 
 // A material's texture inputs in slot order. A slot the model does not have
 // is an empty input.
@@ -259,9 +292,10 @@ inline constexpr std::size_t kGltfEmissiveSlot = 5;
 TextureInputs(const Material& material) {
   static const std::optional<TextureInput> kNone;
   std::array<const std::optional<TextureInput>*, kMaterialTextureInputs>
-      inputs{&material.geometry.opacity_texture,
-          &material.geometry.normal_texture, &kNone, &kNone, &kNone, &kNone,
-          &kNone};
+      inputs;
+  inputs.fill(&kNone);
+  inputs[kOpacitySlot] = &material.geometry.opacity_texture;
+  inputs[kNormalSlot] = &material.geometry.normal_texture;
   if (const auto* preview = std::get_if<PreviewSurface>(&material.surface)) {
     inputs[kPreviewBaseColorSlot] = &preview->base_color_texture;
     inputs[kPreviewRoughnessSlot] = &preview->roughness_texture;
@@ -273,6 +307,14 @@ TextureInputs(const Material& material) {
     inputs[kGltfMetallicSlot] = &gltf->metallic.texture;
     inputs[kGltfRoughnessSlot] = &gltf->roughness.texture;
     inputs[kGltfEmissiveSlot] = &gltf->emissive.texture;
+    inputs[kGltfSpecularSlot] = &gltf->specular.texture;
+    inputs[kGltfSpecularColorSlot] = &gltf->specular_color.texture;
+    inputs[kGltfTransmissionSlot] = &gltf->transmission.texture;
+    inputs[kGltfClearcoatSlot] = &gltf->clearcoat.texture;
+    inputs[kGltfClearcoatRoughnessSlot] = &gltf->clearcoat_roughness.texture;
+    inputs[kGltfClearcoatNormalSlot] = &gltf->clearcoat_normal_texture;
+    inputs[kGltfSheenColorSlot] = &gltf->sheen_color.texture;
+    inputs[kGltfSheenRoughnessSlot] = &gltf->sheen_roughness.texture;
   }
   return inputs;
 }
@@ -281,9 +323,9 @@ TextureInputs(const Material& material) {
 [[nodiscard]] inline std::array<std::optional<TextureInput>*,
     kMaterialTextureInputs>
 MutableTextureInputs(Material& material) {
-  std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{
-      &material.geometry.opacity_texture, &material.geometry.normal_texture,
-      nullptr, nullptr, nullptr, nullptr, nullptr};
+  std::array<std::optional<TextureInput>*, kMaterialTextureInputs> inputs{};
+  inputs[kOpacitySlot] = &material.geometry.opacity_texture;
+  inputs[kNormalSlot] = &material.geometry.normal_texture;
   if (auto* preview = std::get_if<PreviewSurface>(&material.surface)) {
     inputs[kPreviewBaseColorSlot] = &preview->base_color_texture;
     inputs[kPreviewRoughnessSlot] = &preview->roughness_texture;
@@ -295,6 +337,14 @@ MutableTextureInputs(Material& material) {
     inputs[kGltfMetallicSlot] = &gltf->metallic.texture;
     inputs[kGltfRoughnessSlot] = &gltf->roughness.texture;
     inputs[kGltfEmissiveSlot] = &gltf->emissive.texture;
+    inputs[kGltfSpecularSlot] = &gltf->specular.texture;
+    inputs[kGltfSpecularColorSlot] = &gltf->specular_color.texture;
+    inputs[kGltfTransmissionSlot] = &gltf->transmission.texture;
+    inputs[kGltfClearcoatSlot] = &gltf->clearcoat.texture;
+    inputs[kGltfClearcoatRoughnessSlot] = &gltf->clearcoat_roughness.texture;
+    inputs[kGltfClearcoatNormalSlot] = &gltf->clearcoat_normal_texture;
+    inputs[kGltfSheenColorSlot] = &gltf->sheen_color.texture;
+    inputs[kGltfSheenRoughnessSlot] = &gltf->sheen_roughness.texture;
   }
   return inputs;
 }

@@ -531,24 +531,24 @@ def Xform "MaterialGltf"
             }
         }
 
-        def Material "Clearcoat"
+        def Material "Iridescence"
         {
-            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Clearcoat/Surface.outputs:out>
+            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Iridescence/Surface.outputs:out>
 
             def Shader "Surface"
             {
                 uniform token info:id = "ND_gltf_pbr_surfaceshader"
                 color3f inputs:base_color = (0.8, 0.2, 0.1)
-                float inputs:clearcoat = 1
+                float inputs:iridescence = 1
                 float inputs:metallic = 0
                 float inputs:roughness = 0.5
                 token outputs:out
             }
         }
 
-        def Material "Transmission"
+        def Material "Thickness"
         {
-            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Transmission/Surface.outputs:out>
+            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Thickness/Surface.outputs:out>
 
             def Shader "Surface"
             {
@@ -556,7 +556,7 @@ def Xform "MaterialGltf"
                 color3f inputs:base_color = (0.8, 0.2, 0.1)
                 float inputs:metallic = 0
                 float inputs:roughness = 0.5
-                float inputs:transmission = 1
+                float inputs:thickness = 1
                 token outputs:out
             }
         }
@@ -577,15 +577,15 @@ def Xform "MaterialGltf"
             }
         }
 
-        def Material "Ior"
+        def Material "Anisotropy"
         {
-            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Ior/Surface.outputs:out>
+            token outputs:mtlx:surface.connect = </MaterialGltf/Looks/Anisotropy/Surface.outputs:out>
 
             def Shader "Surface"
             {
                 uniform token info:id = "ND_gltf_pbr_surfaceshader"
+                float inputs:anisotropy_strength = 1
                 color3f inputs:base_color = (0.8, 0.2, 0.1)
-                float inputs:ior = 1.8
                 float inputs:metallic = 0
                 float inputs:roughness = 0.5
                 token outputs:out
@@ -895,12 +895,12 @@ def Xform "MaterialGltf"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
 
-        def Mesh "Clearcoat" (
+        def Mesh "Iridescence" (
             prepend apiSchemas = ["MaterialBindingAPI"]
             prepend inherits = </_Card>
         )
         {
-            rel material:binding = </MaterialGltf/Looks/Clearcoat>
+            rel material:binding = </MaterialGltf/Looks/Iridescence>
             texCoord2f[] primvars:st = [(0.000000, 0.000000), (1.000000, 0.000000), (1.000000, 1.000000), (0.000000, 1.000000)] (
                 interpolation = "faceVarying"
             )
@@ -909,12 +909,12 @@ def Xform "MaterialGltf"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
 
-        def Mesh "Transmission" (
+        def Mesh "Thickness" (
             prepend apiSchemas = ["MaterialBindingAPI"]
             prepend inherits = </_Card>
         )
         {
-            rel material:binding = </MaterialGltf/Looks/Transmission>
+            rel material:binding = </MaterialGltf/Looks/Thickness>
             texCoord2f[] primvars:st = [(0.000000, 0.000000), (1.000000, 0.000000), (1.000000, 1.000000), (0.000000, 1.000000)] (
                 interpolation = "faceVarying"
             )
@@ -937,12 +937,12 @@ def Xform "MaterialGltf"
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         }
 
-        def Mesh "Ior" (
+        def Mesh "Anisotropy" (
             prepend apiSchemas = ["MaterialBindingAPI"]
             prepend inherits = </_Card>
         )
         {
-            rel material:binding = </MaterialGltf/Looks/Ior>
+            rel material:binding = </MaterialGltf/Looks/Anisotropy>
             texCoord2f[] primvars:st = [(0.000000, 0.000000), (1.000000, 0.000000), (1.000000, 1.000000), (0.000000, 1.000000)] (
                 interpolation = "faceVarying"
             )

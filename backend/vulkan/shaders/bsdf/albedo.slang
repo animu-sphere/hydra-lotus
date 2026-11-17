@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Directional albedo tables (docs/design/LAYERED_BSDF.md section 5.6): the
-// single-scattering albedos of lobes.slang's GGX lobes, which layering and
+// single-scattering albedos of lobes.slang's GGX lobes and the albedo of its
+// sheen (docs/design/GLTF_PBR_EXTENSIONS.md section 6.4), which layering and
 // multiple-scattering compensation need at a closure's outgoing direction.
 // The data is generated from the lobes' own functions by lotus-bsdf-tables
 // and read through IAlbedoTables, so the GPU (a storage buffer) and the CPU
@@ -25,7 +26,8 @@ public interface IAlbedoTables {
 public static const uint kAlbedoGgx = 0;           // E1: a Fresnel of 1
 public static const uint kAlbedoSchlickShare = 1;  // Eschlick: (1 - cos)^5
 public static const uint kAlbedoDielectric = 2;    // Edielectric, reflected
-public static const uint kAlbedoTableCount = 3;
+public static const uint kAlbedoSheen = 3;         // Esheen
+public static const uint kAlbedoTableCount = 4;
 
 // The dielectric table's sheets.
 public static const uint kDielectricEntering = 0;
@@ -55,7 +57,8 @@ public uint AlbedoTableOffset(uint table) {
   if (table <= kAlbedoDielectric) {
     return table * ggx;
   }
-  return 2 * ggx +
+  // The sheen's table, and the data's end, follow the dielectric's.
+  return (table - 1) * ggx +
       kDielectricSheets * kAlbedoIndices * kDielectricCosines * kAlbedoAlphas;
 }
 
@@ -123,6 +126,18 @@ float AlphaCoordinate(float alpha) {
 
 float AlphaAt(float x) {
   return LogLinearAt(x, kMinAlpha, 1.0, kAlphaSlope);
+}
+
+// The sheen's roughness axis, from MaterialX's floor of 0.005 (lobes.slang's
+// kMinSheenRoughness): its lobe narrows toward grazing directions as 1 / r.
+static const float kMinSheenAxis = 0.005;
+
+float SheenCoordinate(float roughness) {
+  return LogLinearCoordinate(roughness, kMinSheenAxis, 1.0, kAlphaSlope);
+}
+
+float SheenAt(float x) {
+  return LogLinearAt(x, kMinSheenAxis, 1.0, kAlphaSlope);
 }
 
 float IndexCoordinate(float index) {
@@ -203,6 +218,9 @@ float LeavingAt(float x, float index) {
 // leaving sheet.
 public float3 AlbedoTablePoint(uint table, float x_cosine, float x_alpha,
     uint sheet, float x_index) {
+  if (table == kAlbedoSheen) {
+    return float3(CosineAt(x_cosine), SheenAt(x_alpha), 1.0);
+  }
   if (table != kAlbedoDielectric) {
     return float3(CosineAt(x_cosine), AlphaAt(x_alpha), 1.0);
   }
@@ -301,6 +319,16 @@ public float AlbedoSchlickShare<T : IAlbedoTables>(T tables, float cos_theta,
     float alpha) {
   return FetchSlice(tables, AlbedoTableOffset(kAlbedoSchlickShare),
       kGgxCosines, CosineCoordinate(cos_theta), AlphaCoordinate(alpha), false);
+}
+
+// The sheen lobe's albedo for a white colour, at the outgoing cosine and
+// its roughness. The lobe is an empirical fit and reflects more than it
+// receives toward grazing outgoing directions at small roughness: the value
+// exceeds 1 there, and the composed closure normalizes the lobe by it.
+public float AlbedoSheen<T : IAlbedoTables>(T tables, float cos_theta,
+    float roughness) {
+  return max(FetchSlice(tables, AlbedoTableOffset(kAlbedoSheen), kGgxCosines,
+      CosineCoordinate(cos_theta), SheenCoordinate(roughness), false), 0.0);
 }
 
 // A rough dielectric's reflected albedo, with relative index eta from the

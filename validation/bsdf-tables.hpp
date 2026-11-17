@@ -34,11 +34,12 @@ float LotusProbeAlbedoLookup(float* tables, std::int32_t table, float cos_theta,
 
 namespace lotus {
 
-// albedo.slang's tables: E1, Eschlick and Edielectric.
+// albedo.slang's tables: E1, Eschlick, Edielectric and Esheen.
 constexpr int kAlbedoGgx = 0;
 constexpr int kAlbedoSchlickShare = 1;
 constexpr int kAlbedoDielectric = 2;
-constexpr int kAlbedoTables = 3;
+constexpr int kAlbedoSheen = 3;
+constexpr int kAlbedoTables = 4;
 
 // The quadrature's initial panels per axis of the sampler's square, each
 // refined adaptively (AlbedoQuadrature).
@@ -88,6 +89,9 @@ enum Op : int {
   kOpScale = 6,
   kOpAttenuate = 7,
   kOpAdd = 8,
+  kOpSheen = 9,
+  kOpTransmit = 10,
+  kOpLayerScalar = 11,
 };
 
 constexpr int kScatterReflect = 1;
@@ -109,6 +113,21 @@ struct Program {
       Normal n = kShadingNormal) {
     Push(kOpSchlick, {f0[0], f0[1], f0[2], f90[0], f90[1], f90[2], alpha, n[0],
         n[1], n[2], compensate ? 1.0f : 0.0f});
+    return *this;
+  }
+  // A GgxSchlick lobe mirrored through the tangent plane.
+  Program& Transmit(Rgb f0, Rgb f90, float alpha, bool compensate,
+      Normal n = kShadingNormal) {
+    Push(kOpTransmit, {f0[0], f0[1], f0[2], f90[0], f90[1], f90[2], alpha,
+        n[0], n[1], n[2], compensate ? 1.0f : 0.0f});
+    return *this;
+  }
+  Program& Sheen(Rgb color, float roughness, Normal n = kShadingNormal) {
+    Push(kOpSheen, {color[0], color[1], color[2], roughness, n[0], n[1], n[2]});
+    return *this;
+  }
+  Program& LayerScalar() {
+    Push(kOpLayerScalar, {});
     return *this;
   }
   Program& Dielectric(float eta, Rgb tint, float alpha, int scatter, bool thin,
@@ -159,6 +178,8 @@ inline Program TableLobe(int table, const AlbedoNode& node) {
     p.Schlick({1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, node.alpha, false);
   } else if (table == kAlbedoSchlickShare) {
     p.Schlick({0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, node.alpha, false);
+  } else if (table == kAlbedoSheen) {
+    p.Sheen({1.0f, 1.0f, 1.0f}, node.alpha);
   } else {
     p.Dielectric(node.eta, {1.0f, 1.0f, 1.0f}, node.alpha, kScatterReflect,
         node.thin, false);
@@ -275,18 +296,23 @@ inline AlbedoNode ReadAlbedoPoint(int table, float x_cosine, float x_alpha,
   return {raw[0], raw[1], raw[2], raw[3] != 0.0f};
 }
 
-// The parts whose accuracy is reported separately: E1, Eschlick, and the
-// dielectric table's entering, leaving and thin-wall sheets.
-constexpr int kAlbedoParts = 5;
+// The parts whose accuracy is reported separately: E1, Eschlick, the
+// dielectric table's entering, leaving and thin-wall sheets, and Esheen.
+constexpr int kAlbedoParts = 6;
 constexpr const char* kAlbedoPartNames[kAlbedoParts] = {"E1", "Eschlick",
-    "Edielectric entering", "Edielectric leaving", "Edielectric thin"};
+    "Edielectric entering", "Edielectric leaving", "Edielectric thin",
+    "Esheen"};
 
 inline int AlbedoPart(int table, int sheet) {
+  if (table == kAlbedoSheen) return kAlbedoParts - 1;
   return table == kAlbedoDielectric ? kAlbedoDielectric + sheet : table;
 }
 
 struct TableError {
-  double error = 0.0;  // the largest |interpolated - fresh quadrature|
+  // The largest |interpolated - fresh quadrature|, relative to the value
+  // where it exceeds 1: the sheen's albedo does toward grazing directions,
+  // and is used there only as the lobe's normalization.
+  double error = 0.0;
   std::string where;
   long long points = 0;
 };
@@ -297,7 +323,7 @@ struct TableError {
 // where interpolation is least accurate; at every strides[table]-th point.
 inline std::array<TableError, kAlbedoParts> CheckTables(const float* data,
     bool at_nodes, double tolerance = kTableTolerance,
-    std::array<int, kAlbedoTables> strides = {1, 1, 1}) {
+    std::array<int, kAlbedoTables> strides = {1, 1, 1, 1}) {
   const AlbedoLayout layout = ReadAlbedoLayout();
   struct Point {
     int table, sheet;
@@ -345,7 +371,7 @@ inline std::array<TableError, kAlbedoParts> CheckTables(const float* data,
         const double fresh = IntegrateAlbedo(p.table, node, tolerance);
         const double lookup = LotusProbeAlbedoLookup(table_data.data(), p.table,
             node.cos_theta, node.alpha, node.eta, node.thin ? 1 : 0);
-        errors[i] = std::abs(lookup - fresh);
+        errors[i] = std::abs(lookup - fresh) / std::max(1.0, fresh);
       }
     });
   }

@@ -83,7 +83,10 @@ TF_DEFINE_PRIVATE_TOKENS(Tokens,
     (alpha_mode)
     (alpha_cutoff)
     (sheen_color)
+    (sheen_roughness)
     (clearcoat)
+    (clearcoat_roughness)
+    (clearcoat_normal)
     (iridescence)
     (anisotropy_strength)
     (thickness)
@@ -278,7 +281,8 @@ protected:
       reading.diagnostic->input = input;
       Report(translation_, *reading.diagnostic);
     }
-    if (reading.value.normal_map && input != Tokens->normal) {
+    if (reading.value.normal_map && input != Tokens->normal &&
+        input != Tokens->clearcoat_normal) {
       Diagnose(Kind::UnsupportedGraph, input, reading,
           "a normal map on an input that is no normal");
       reading.value = Default(input);
@@ -377,31 +381,48 @@ protected:
   // world-space normal is not represented.
   void Normal() {
     Lotus::Material& material = translation_.material;
-    if (Connection(node_, Tokens->normal) == nullptr) {
-      if (Parameter(node_, Tokens->normal) != nullptr) {
-        Report(translation_, {Kind::UnrepresentedInput, Tokens->normal, path_,
+    NormalInput(Tokens->normal, material.geometry.normal_texture,
+        &material.geometry.normal);
+  }
+
+  // The same for any normal input: its lookup goes to `texture`, and a
+  // normal map's constant to `constant`. Without a `constant` to hold it,
+  // one that tilts the normal is reported.
+  void NormalInput(const TfToken& input,
+      std::optional<Lotus::TextureInput>& texture,
+      std::array<float, 3>* constant) {
+    if (Connection(node_, input) == nullptr) {
+      if (Parameter(node_, input) != nullptr) {
+        Report(translation_, {Kind::UnrepresentedInput, input, path_,
                                  node_.nodeTypeId,
                                  "a constant normal: only a normal map is read"});
       }
       return;
     }
-    const Graph::Reading reading = Get(Tokens->normal);
+    const Graph::Reading reading = Get(input);
     if (reading.failed) {
       return;
     }
     if (!reading.value.normal_map) {
-      Diagnose(Kind::UnsupportedGraph, Tokens->normal, reading,
+      Diagnose(Kind::UnsupportedGraph, input, reading,
           "a normal that is not a normal map");
       return;
     }
     if (reading.value.IsLookup()) {
-      if (const auto placed = Lookup(Tokens->normal, reading, reading.value, true)) {
-        material.geometry.normal_texture = placed;
+      if (const auto placed = Lookup(input, reading, reading.value, true)) {
+        texture = placed;
+      }
+      return;
+    }
+    if (constant == nullptr) {
+      if (reading.value.constant[0] != 0.0 || reading.value.constant[1] != 0.0) {
+        Diagnose(Kind::UnrepresentedInput, input, reading,
+            "a normal map without an image that tilts the normal");
       }
       return;
     }
     for (std::size_t c = 0; c < 3; ++c) {
-      material.geometry.normal[c] =
+      (*constant)[c] =
           static_cast<float>(std::clamp(reading.value.constant[c], -1.0, 1.0));
     }
   }
@@ -611,18 +632,38 @@ public:
     }
     Normal();
     Alpha();
-    // The extensions' weights; their other inputs do nothing without them.
-    Neutral(Tokens->transmission, 0.0, "the material has no transmission");
-    Neutral(Tokens->sheen_color, 0.0, "the material has no sheen");
-    Neutral(Tokens->clearcoat, 0.0, "the material has no clearcoat");
+    // The extensions (docs/design/GLTF_PBR_EXTENSIONS.md section 5). The
+    // index is a uniform of the definition.
+    if (const auto ior = ConstantOnly(Tokens->ior)) {
+      gltf.ior = static_cast<float>(std::clamp(ior->constant[0], 1.0, kLargest));
+    }
+    Scalar(Tokens->specular, gltf.specular.value, &gltf.specular.texture, 0.0,
+        1.0);
+    Color(Tokens->specular_color, gltf.specular_color, 0.0, kLargest);
+    Scalar(Tokens->transmission, gltf.transmission.value,
+        &gltf.transmission.texture, 0.0, 1.0);
+    Scalar(Tokens->clearcoat, gltf.clearcoat.value, &gltf.clearcoat.texture,
+        0.0, 1.0);
+    // A lobe's other inputs do nothing while its weight is a constant 0, and
+    // are not read.
+    if (gltf.clearcoat.value > 0.0F || gltf.clearcoat.texture) {
+      Scalar(Tokens->clearcoat_roughness, gltf.clearcoat_roughness.value,
+          &gltf.clearcoat_roughness.texture, 0.0, 1.0);
+      NormalInput(Tokens->clearcoat_normal, gltf.clearcoat_normal_texture,
+          nullptr);
+    }
+    Color(Tokens->sheen_color, gltf.sheen_color, 0.0, 1.0);
+    if (gltf.sheen_color.texture ||
+        gltf.sheen_color.value != std::array<float, 3>{0.0F, 0.0F, 0.0F}) {
+      Scalar(Tokens->sheen_roughness, gltf.sheen_roughness.value,
+          &gltf.sheen_roughness.texture, 0.0, 1.0);
+    }
     Neutral(Tokens->iridescence, 0.0, "the material has no thin film");
     Neutral(Tokens->anisotropy_strength, 0.0,
         "the material's lobes are isotropic");
-    Neutral(Tokens->specular, 1.0, "a specular weight other than 1");
-    Neutral(Tokens->specular_color, 1.0, "a specular tint");
-    Neutral(Tokens->ior, 1.5, "the dielectric's index is the definition's 1.5");
     // The definition's own graph reads none of these; glTF gives them a
-    // meaning, so they are not dropped in silence.
+    // meaning, so they are not dropped in silence. Transmission renders as
+    // a thin surface whatever the thickness.
     Neutral(Tokens->thickness, 0.0, "the material encloses no medium");
     Neutral(Tokens->attenuation_color, 1.0, "the material encloses no medium");
     Neutral(Tokens->dispersion, 0.0, "the material has no dispersion");
