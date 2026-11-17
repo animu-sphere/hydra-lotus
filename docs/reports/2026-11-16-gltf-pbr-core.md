@@ -13,8 +13,9 @@ under both integrators and agrees between Hydra and headless, and every
 existing committed reference is unchanged
 ([acceptance](../design/GLTF_PBR.md#10-acceptance-for-lotus-materialx-05)).
 The contract was implemented as proposed, before its review; its five
-[points for review](../design/GLTF_PBR.md#11-points-for-review) and the
-[changes found in implementation](#changes-to-the-contract) are open.
+[points](../design/GLTF_PBR.md#11-points-settled-in-review) and the
+[changes found in implementation](#changes-to-the-contract) were accepted
+as written, 2026-11-16.
 
 ## What changed
 
@@ -106,7 +107,7 @@ from 608 to 640 bytes a pixel with readback, spatial from 768 to 800.
 
 Listed in the
 [contract](../design/GLTF_PBR.md#12-changes-found-in-implementation),
-awaiting review.
+accepted in review, 2026-11-16.
 
 1. **The scene passes compile a reduced composed closure.** Beside
    `kMaxLobes` 3, they leave out dielectric lobes, lobe normals and
